@@ -41,6 +41,7 @@ This project contains reverse-engineered analysis of the PS2 game "Orphen: Scion
 ## Functions Analyzed
 
 See the `analyzed/` directory for completed function analysis. Each file contains:
+
 - Original `FUN_*` address in comments
 - Detailed technical documentation
 - Cross-references to related functions
@@ -49,6 +50,7 @@ See the `analyzed/` directory for completed function analysis. Each file contain
 ## Contributing
 
 When analyzing functions:
+
 1. Keep original `FUN_*` names in comments for reference
 2. Use descriptive variable names based on functionality
 3. Document PS2-specific patterns and hardware interactions
