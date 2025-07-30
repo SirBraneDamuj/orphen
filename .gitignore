@@ -1,5 +1,4 @@
 # Raw decompilation files - keep locally but don't track in git
-archive/
 src/
 
 # Ghidra project files (if any)
