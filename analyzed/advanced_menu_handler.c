@@ -1,15 +1,15 @@
 #include "orphen_globals.h"
 
 // Forward declarations for referenced functions
-extern uint *get_text_resource(int text_index);                                              // Get text resource by index (FUN_0025b9e8)
-extern short calculate_text_width(char *text_string, int scale);                             // Calculate text width (FUN_00238e68)
-extern void FUN_00238608(int x, int y, undefined8 text, uint color, int param5, int param6); // Likely: render text at position
-extern long FUN_0023b9f8(int flags, int param2);                                             // Likely: check controller input flags
-extern void FUN_00232058(undefined1 action_id, undefined1 flags);                            // Likely: handle menu action
-extern void FUN_002256c0(void);                                                              // Likely: play menu sound
-extern void FUN_002256b0(void);                                                              // Unknown function
-extern void FUN_0023b8e0(int error_code);                                                    // Likely: sound error handler
-extern void FUN_00231e60(int slot, int text_id);                                             // Likely: render menu item
+extern uint *get_text_resource(int text_index);                                                       // Get text resource by index (FUN_0025b9e8)
+extern short calculate_text_width(char *text_string, int scale);                                      // Calculate text width (FUN_00238e68)
+extern void render_text_with_scaling(int x, int y, char *text, uint color, int scale_x, int scale_y); // Render text with scaling (FUN_00238608)
+extern long FUN_0023b9f8(int flags, int param2);                                                      // Likely: check controller input flags
+extern void FUN_00232058(undefined1 action_id, undefined1 flags);                                     // Likely: handle menu action
+extern void FUN_002256c0(void);                                                                       // Likely: play menu sound
+extern void FUN_002256b0(void);                                                                       // Unknown function
+extern void FUN_0023b8e0(int error_code);                                                             // Likely: sound error handler
+extern void FUN_00231e60(int slot, int text_id);                                                      // Likely: render menu item
 
 /**
  * Advanced menu system handler with multi-state functionality
@@ -245,13 +245,13 @@ int advanced_menu_handler(int menu_state)
     // Render instructional text in active state
     text_resource = (undefined8)get_text_resource(0x55); // Get instruction text 1
     text_width = calculate_text_width((char *)text_resource, 0x14);
-    FUN_00238608(0x130 - text_width, y_position + -0x78, text_resource,
-                 0xffffffff80808080, 0x14, 0x16); // Right-aligned text
+    render_text_with_scaling(0x130 - text_width, y_position + -0x78, (char *)text_resource,
+                             0xffffffff80808080, 0x14, 0x16); // Right-aligned text
 
     text_resource = (undefined8)get_text_resource(0x56); // Get instruction text 2
     text_width = calculate_text_width((char *)text_resource, 0x14);
-    FUN_00238608(0x130 - text_width, y_position + -0x8e, text_resource,
-                 0xffffffff80808080, 0x14, 0x16); // Right-aligned text
+    render_text_with_scaling(0x130 - text_width, y_position + -0x8e, (char *)text_resource,
+                             0xffffffff80808080, 0x14, 0x16); // Right-aligned text
 
     // Render menu items
     FUN_00231e60(4, 0x50); // Render menu item 0
