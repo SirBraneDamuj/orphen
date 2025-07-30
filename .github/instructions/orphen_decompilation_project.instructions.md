@@ -10,7 +10,8 @@ Take cryptic FUN* function names and convert them to meaningful names based on f
 Replace DAT* variables with proper descriptive names
 Add comprehensive documentation explaining PS2-specific implementation details
 Track function call hierarchies and cross-references
-Keep track of the original `FUN_*` names in comments for reference
+Keep track of the original `FUN_*` names in comments for reference.
+When analyzing a new file, extern the un-analyzed functions as-is. Do not change the function name unless we actually have analyzed it and have a meaningful name to replace it with.
 
 Key Technical Context:
 
