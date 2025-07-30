@@ -31,13 +31,15 @@ The workflow we have been using so far is:
 All decompiled functions have been exported to the `src` directory using a Ghidra automation script. The `src` directory contains the raw decompiled code for reference during analysis.
 
 Additionally, we have exported global variables metadata to `globals.json` using the `export_globals.py` script. This file contains:
-- All global variables (DAT_* and named globals) with their addresses, types, and sizes
+
+- All global variables (DAT\_\* and named globals) with their addresses, types, and sizes
 - Cross-references showing which functions access each global variable
 - Pointer relationships showing what globals point to other addresses
 - Initial values for primitive data types
 
 When analyzing a new function, reference `globals.json` to:
-- Quickly identify what DAT_* variables represent based on their usage patterns
+
+- Quickly identify what DAT\_\* variables represent based on their usage patterns
 - Understand data flow between functions through shared global access
 - Determine appropriate variable names based on which functions use them
 - Identify potential data structures through grouped variable access

@@ -25,12 +25,14 @@ This project contains reverse-engineered analysis of the PS2 game "Orphen: Scion
 ### Exporting Data from Ghidra
 
 **Export Functions:**
+
 1. Open your Orphen binary in Ghidra
 2. Go to **Window → Script Manager**
 3. Load and run `scripts/export_funs.py` (Jython script)
 4. All `FUN_*` functions will be exported to `src/` directory
 
 **Export Global Variables:**
+
 1. In Ghidra Script Manager, load and run `scripts/export_globals.py`
 2. Global variables metadata will be exported to `globals.json`
 3. This includes variable addresses, types, sizes, and cross-references
