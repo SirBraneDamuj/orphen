@@ -27,6 +27,7 @@ typedef unsigned char undefined;
 typedef unsigned char undefined1;
 typedef unsigned short undefined2;
 typedef unsigned int undefined4;
+typedef unsigned int uint;
 
 // Function prototypes for referenced functions
 extern void strcpy_custom(char *dest, char *src);
@@ -38,7 +39,7 @@ extern void sprintf_variadic(char *buffer, char *format, int index, int state); 
 extern void render_simple_primitive(int x, int y, int w, int h, int color);     // Draw colored box
 extern int read_controller_input(int button_mask, int enable_sticky_input);     // Read controller input
 extern uint toggle_flag_state(uint flag_id);                                    // Toggle flag state
-extern void FUN_002686a0(void);                                                 // Refresh display
+extern void refresh_display(void);                                              // Refresh display
 
 undefined4 SceneFlagManager_WithGlobals(void)
 {
@@ -215,7 +216,7 @@ EXIT_CONTINUE:
       }
       toggle_flag_state(finalFlagIndex); // Toggle the flag
     }
-    FUN_002686a0();     // Refresh display
+    refresh_display();  // Refresh display
     shouldContinue = 1; // Continue running
   }
   // If Start pressed, shouldContinue remains 0 (exit)
