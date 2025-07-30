@@ -22,13 +22,11 @@ Fixed-point graphics using 4096.0 scaling for coordinate transformation
 
 The workflow we have been using so far is:
 
-1. I identify a function to analyze in Ghidra.
-2. I put the decompiled source code into a file under the `src` directory.
-3. I ask you to help analyze the function - creating a meaningful name, and putting the legible code into the `analyzed` directory.
-4. You find references to the analyzed function in the existing `analyzed` code and update the callsites to use the new name/signature.
-5. I eventually move already-analyzed `src` files to the `archive` directory for posterity.
-6. We repeat this process as needed.
+1. I identify a function to analyze from the `src` directory (all 2922 decompiled functions exported via Ghidra script).
+2. I ask you to help analyze the function - creating a meaningful name, and putting the legible code into the `analyzed` directory.
+3. You find references to the analyzed function in the existing `analyzed` code and update the callsites to use the new name/signature.
+4. We repeat this process as needed.
 
-There is no need to analyze anything in the `archive` directory, as it is already complete. I'm just keeping the files there for reference.
+All decompiled functions have been exported to the `src` directory using a Ghidra automation script. The `src` directory contains the raw decompiled code for reference during analysis.
 
 Please help me continue this reverse engineering workflow with the same systematic approach we've been using.
