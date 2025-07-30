@@ -144,4 +144,33 @@ extern int gpu_command_buffer_end;
  */
 extern int gpu_interrupt_counter;
 
+// ===== MENU SYSTEM GLOBALS =====
+
+/*
+ * Menu availability check function pointer array
+ *
+ * This array contains 7 function pointers used by the menu system to determine
+ * which menu items should be available to the player. Each function performs
+ * specific availability checks based on game state, progression, flags, etc.
+ *
+ * Array layout (PTR_FUN_0031c3c0):
+ * [0] = FUN_002320a8  - Advanced menu handler (complex multi-state menu system)
+ * [1] = FUN_002324e0  - Menu availability check function 1 (unknown criteria)
+ * [2] = FUN_00232870  - Menu availability check function 2 (unknown criteria)
+ * [3] = FUN_00232c08  - Menu availability check function 3 (unknown criteria)
+ * [4] = FUN_00232fa8  - Menu availability check function 4 (unknown criteria)
+ * [5] = LAB_00233240  - Menu availability check function 5 (unknown criteria)
+ * [6] = LAB_00233250  - Menu availability check function 6 (unknown criteria)
+ *
+ * Usage:
+ * - initialize_menu_system() iterates through this array to check availability
+ * - Results are stored in menu_availability_mask as a bitfield
+ * - NULL function pointers automatically mark items as unavailable
+ * - Menu item 6 has special handling based on game_mode_state
+ *
+ * Memory address: 0x0031c3c0 - 0x0031c3d8 (7 pointers * 4 bytes each)
+ * Original: PTR_FUN_0031c3c0
+ */
+extern undefined *menu_availability_functions[7];
+
 #endif // ORPHEN_GLOBALS_H

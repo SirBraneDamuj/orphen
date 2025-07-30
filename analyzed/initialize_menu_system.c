@@ -37,9 +37,9 @@ void initialize_menu_system(void)
   long64 max_text_width;
   int y_position;
 
-  y_position = 0x70;                                // Starting Y position (112 pixels)
-  max_text_width = 0;                               // Track maximum text width
-  availability_check_functions = &PTR_FUN_0031c3c0; // Function pointer array
+  y_position = 0x70;                                          // Starting Y position (112 pixels)
+  max_text_width = 0;                                         // Track maximum text width
+  availability_check_functions = menu_availability_functions; // Function pointer array
   menu_item_index = 0;
   menu_availability_mask = 0xffff; // Initially all items available
   menu_display_state = 0;          // Reset display state
@@ -140,9 +140,10 @@ extern int game_mode_state;
 
 /**
  * Array of function pointers for checking menu item availability
+ * See orphen_globals.h for detailed documentation of each function
  * Original: PTR_FUN_0031c3c0
  */
-extern undefined *PTR_FUN_0031c3c0;
+extern undefined *menu_availability_functions[7];
 
 /**
  * Menu color array - stores color values for each menu item
