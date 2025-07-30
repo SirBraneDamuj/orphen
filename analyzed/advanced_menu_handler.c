@@ -4,12 +4,12 @@
 extern uint *get_text_resource(int text_index);                                                       // Get text resource by index (FUN_0025b9e8)
 extern short calculate_text_width(char *text_string, int scale);                                      // Calculate text width (FUN_00238e68)
 extern void render_text_with_scaling(int x, int y, char *text, uint color, int scale_x, int scale_y); // Render text with scaling (FUN_00238608)
-extern long FUN_0023b9f8(int flags, int param2);                                                      // Likely: check controller input flags
-extern void FUN_00232058(undefined1 action_id, undefined1 flags);                                     // Likely: handle menu action
-extern void FUN_002256c0(void);                                                                       // Likely: play menu sound
-extern void FUN_002256b0(void);                                                                       // Unknown function
-extern void FUN_0023b8e0(int error_code);                                                             // Likely: sound error handler
-extern void FUN_00231e60(int slot, int text_id);                                                      // Likely: render menu item
+extern unsigned int read_controller_input(unsigned short button_mask, long enable_sticky_input);      // Controller input reader with repeat handling (FUN_0023b9f8)
+extern void swap_action_mapping(char param1, char param2);                                            // Swap action mapping values in controller button mapping table (FUN_00232058)
+extern void play_menu_sound(void);                                                                    // Play menu navigation sound effect (FUN_002256c0)
+extern void play_menu_back_sound(void);                                                               // Play menu back/cancel sound effect (FUN_002256b0)
+extern void process_audio_data(unsigned long audio_data);                                             // Process audio data and generate sound pattern (FUN_0023b8e0)
+extern void render_menu_item(long slot, unsigned long text_id);                                       // Render menu item with text and visual elements (FUN_00231e60)
 
 /**
  * Advanced menu system handler with multi-state functionality
@@ -125,8 +125,8 @@ int advanced_menu_handler(int menu_state)
     // Check scroll boundary
     if (menu_current_y_position - menu_item_y_positions < 0x1f)
     {
-      FUN_0023b8e0(0x355608); // Play error sound
-      return 0;               // Exit on boundary
+      process_audio_data(0x355608); // Process boundary error audio
+      return 0;                     // Exit on boundary
     }
 
     // Update positions for downward scroll
@@ -172,7 +172,7 @@ int advanced_menu_handler(int menu_state)
     }
 
     // State 2: Active menu processing
-    input_flags = FUN_0023b9f8(0x5000, 1); // Check for input
+    input_flags = read_controller_input(0x5000, 1); // Check for input with button mask 0x5000
     if (input_flags != 0)
     {
       // Handle D-pad navigation
@@ -192,7 +192,7 @@ int advanced_menu_handler(int menu_state)
           current_menu_selection = 4; // Wrap to bottom
         }
       }
-      FUN_002256c0(); // Audio feedback
+      play_menu_sound(); // Audio feedback
     }
 
     // Handle menu item selection
@@ -211,30 +211,30 @@ int advanced_menu_handler(int menu_state)
             {
               if ((controller_2_input & 0x80) != 0) // Button 0x80 pressed
               {
-                FUN_00232058(action_value, 0x80); // Execute action with flag
+                swap_action_mapping(action_value, 0x80); // Execute action with flag
               }
             }
             else
             {
-              FUN_00232058(action_value, 0x40); // Execute action with flag
+              swap_action_mapping(action_value, 0x40); // Execute action with flag
             }
           }
           else
           {
-            FUN_00232058(action_value, 0x20); // Execute action with flag
+            swap_action_mapping(action_value, 0x20); // Execute action with flag
           }
         }
         else
         {
-          FUN_00232058(action_value, 0x10); // Execute action with flag
+          swap_action_mapping(action_value, 0x10); // Execute action with flag
         }
-        FUN_002256c0(); // Audio feedback
+        play_menu_sound(); // Audio feedback
       }
     }
     else if ((controller_2_input & 0x40) != 0) // Special case for selection 4+
     {
       current_menu_selection = 0; // Reset selection
-      FUN_002256b0();             // Call unknown function
+      play_menu_back_sound();     // Play back/cancel sound
       return 3;                   // Transition to scroll down state
     }
   }
@@ -254,11 +254,11 @@ int advanced_menu_handler(int menu_state)
                              0xffffffff80808080, 0x14, 0x16); // Right-aligned text
 
     // Render menu items
-    FUN_00231e60(4, 0x50); // Render menu item 0
-    FUN_00231e60(5, 0x52); // Render menu item 1
-    FUN_00231e60(6, 0x51); // Render menu item 2
-    FUN_00231e60(7, 0x53); // Render menu item 3
-    FUN_00231e60(8, 0x54); // Render menu item 4
+    render_menu_item(4, 0x50); // Render menu item 0
+    render_menu_item(5, 0x52); // Render menu item 1
+    render_menu_item(6, 0x51); // Render menu item 2
+    render_menu_item(7, 0x53); // Render menu item 3
+    render_menu_item(8, 0x54); // Render menu item 4
   }
   return menu_state;
 }

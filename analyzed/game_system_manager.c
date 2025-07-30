@@ -15,7 +15,7 @@ extern long FUN_00206238(int index);                                            
 extern undefined4 FUN_002061f8(int index);                                                            // Unknown function - get entity data?
 extern void FUN_00206260(int index, int param2, int param3);                                          // Unknown function - set entity data?
 extern void FUN_002063c8(int index, int param2);                                                      // Unknown function
-extern void FUN_002256b0(void);                                                                       // Unknown function
+extern void play_menu_back_sound(void);                                                               // Play menu back/cancel sound effect (FUN_002256b0)
 extern void FUN_002241d8(void);                                                                       // Unknown function
 
 /**
@@ -260,7 +260,7 @@ undefined4 game_system_manager(void)
         main_state = 2;
       }
 
-      FUN_002256b0();
+      play_menu_back_sound();
       return 1;
     }
   }
