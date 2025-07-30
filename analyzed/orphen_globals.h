@@ -11,6 +11,22 @@
 #define ORPHEN_GLOBALS_H
 
 #include <stdint.h>
+#include <stdbool.h>
+
+// ===== PS2 TYPE DEFINITIONS =====
+// Common type definitions from Ghidra decompilation output
+
+typedef unsigned char undefined;
+typedef unsigned char undefined1;
+typedef unsigned short undefined2;
+typedef unsigned int undefined4;
+typedef unsigned long long undefined8;
+typedef unsigned short ushort;
+typedef unsigned int uint;
+typedef char cchar;
+typedef unsigned char byte;
+typedef short sshort;
+typedef long long long64;
 
 // ===== DEBUG/FLAG SYSTEM GLOBALS =====
 
