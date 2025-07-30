@@ -7,8 +7,8 @@ extern int get_flag_state(int flag_id);                                         
 extern bool is_system_busy(void);                                                                     // Check if system is busy/blocked (FUN_00237c60)
 extern void initialize_menu_system(void);                                                             // Initialize menu system (FUN_00231a98)
 extern void FUN_00213ef0(void);                                                                       // Unknown function
-extern undefined8 FUN_0025b9e8(int param);                                                            // Unknown function
-extern int FUN_00238e68(undefined8 param1, int param2);                                               // Unknown function
+extern int get_text_resource(int text_index);                                                         // Get text resource by index (FUN_0025b9e8)
+extern short calculate_text_width(char *text_string, int scale);                                      // Calculate text width (FUN_00238e68)
 extern void FUN_00238608(int x, int y, undefined8 param3, unsigned int color, int width, int height); // Unknown function
 extern long FUN_00206218(int index);                                                                  // Unknown function - check entity status?
 extern long FUN_00206238(int index);                                                                  // Unknown function - check entity state?
@@ -119,8 +119,8 @@ undefined4 game_system_manager(void)
   // Handle text rendering in state 1
   if (system_state == '\x01')
   {
-    text_resource = FUN_0025b9e8(0x26);                                                   // Get text resource
-    entity_index = FUN_00238e68(text_resource, 0x20);                                     // Calculate text width?
+    text_resource = get_text_resource(0x26);                                              // Get text resource
+    entity_index = calculate_text_width((char *)text_resource, 0x20);                     // Calculate text width
     FUN_00238608(-entity_index / 2, 0x10, text_resource, 0xffffffff80808080, 0x20, 0x20); // Render centered text
   }
 

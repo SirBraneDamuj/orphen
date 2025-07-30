@@ -2,8 +2,8 @@
 
 // Forward declarations for referenced functions
 extern undefined4 map_menu_item_to_index(undefined4 menu_item_id); // Map menu ID to index (FUN_002298d0)
-extern undefined8 FUN_0025b9e8(uint text_id);                      // Get text resource (likely)
-extern long64 FUN_00238e68(undefined8 text_resource, uint width);  // Calculate text width
+extern int get_text_resource(int text_index);                      // Get text resource by index (FUN_0025b9e8)
+extern short calculate_text_width(char *text_string, int scale);   // Calculate text width (FUN_00238e68)
 extern void activate_menu_with_audio(void);                        // Activate menu with audio (FUN_00237ad8)
 
 /**
@@ -72,10 +72,10 @@ void initialize_menu_system(void)
   do
   {
     // Get text resource for this menu item (text IDs 0x3f to 0x45)
-    text_resource = FUN_0025b9e8(menu_item_index + 0x3f);
+    text_resource = get_text_resource(menu_item_index + 0x3f);
 
     // Calculate text width with specific parameters
-    text_width = FUN_00238e68(text_resource, 0x14);
+    text_width = calculate_text_width((char *)text_resource, 0x14);
 
     // Track maximum width for centering
     if (max_text_width < text_width)
