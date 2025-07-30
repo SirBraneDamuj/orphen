@@ -1,6 +1,9 @@
 # Raw decompilation files - keep locally but don't track in git
 src/
 
+# Generated analysis files - recreate with scripts as needed
+globals.json
+
 # Ghidra project files (if any)
 *.ghidra
 *.gpr
