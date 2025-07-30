@@ -1,0 +1,21 @@
+# Raw decompilation files - keep locally but don't track in git
+archive/
+src/
+
+# Ghidra project files (if any)
+*.ghidra
+*.gpr
+*.rep/
+
+# VS Code settings (optional - uncomment if you don't want to share)
+# .vscode/
+
+# Build outputs (if any)
+*.o
+*.exe
+*.dll
+
+# Temporary files
+*.tmp
+*.bak
+*~
