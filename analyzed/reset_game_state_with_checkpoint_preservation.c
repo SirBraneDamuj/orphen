@@ -51,8 +51,8 @@ void reset_game_state_with_mode_preservation(void)
   // This byte tracks the current interaction mode and must be preserved
   saved_game_mode = g_game_mode_state;
 
-  // Build bitmask of critical flags (0x50c-0x50f) that must survive the reset
-  // These flags likely control essential game progression or system state
+  // Build bitmask of critical SFLG system flags (0x50c-0x50f) that must survive the reset
+  // These are Story/System flags (1292-1295) that control essential system state
   critical_flags_mask = 0;
   loop_counter = 0;
   do
@@ -66,7 +66,7 @@ void reset_game_state_with_mode_preservation(void)
   // This is a complete reset of all game state flags
   memset_zero(game_flags_array, 0x900);
 
-  // Restore the critical flags that were preserved
+  // Restore the critical SFLG system flags that were preserved
   loop_counter = 3;
   do
   {

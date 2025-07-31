@@ -72,7 +72,7 @@ extern uint16_t g_controller2Input;
 
 typedef enum
 {
-  FLAG_TYPE_MFLG = 0, // Main flags (offset: 0, max: 1024)
+  FLAG_TYPE_MFLG = 0, // Map flags (offset: 0, max: 1024) - puzzles, interactions, cutscene progress
   FLAG_TYPE_BFLG = 1, // Battle flags (offset: 800, max: 224)
   FLAG_TYPE_TFLG = 2, // Treasure flags (offset: 1024, max: 256) - user theory
   FLAG_TYPE_SFLG = 3  // Story/System flags (offset: 1280, max: 1024)
@@ -80,15 +80,43 @@ typedef enum
 
 // ===== FLAG SYSTEM CONSTANTS =====
 
-#define FLAG_OFFSET_MFLG 0     // Main flags base offset
+#define FLAG_OFFSET_MFLG 0     // Map flags base offset
 #define FLAG_OFFSET_BFLG 800   // Battle flags base offset
 #define FLAG_OFFSET_TFLG 0x400 // Treasure flags base offset (1024) - user theory
 #define FLAG_OFFSET_SFLG 0x500 // Story/System flags base offset (1280)
 
-#define FLAG_MAX_MFLG 0x400 // 1024 main flags
+#define FLAG_MAX_MFLG 0x400 // 1024 map flags - map-specific puzzle/interaction state
 #define FLAG_MAX_BFLG 0xe0  // 224 battle flags
 #define FLAG_MAX_TFLG 0x100 // 256 treasure flags - user theory
 #define FLAG_MAX_SFLG 0x400 // 1024 story/system flags
+
+// ===== MFLG CUTSCENE PROGRESS TRACKING =====
+
+/*
+ * Cutscene Progress Tracking Flags (observed during runtime analysis)
+ *
+ * These MFLG flags appear to track cutscene progression within maps.
+ * Observed incrementing during cutscenes, suggesting they mark completion
+ * of cutscene segments/beats for resume/skip functionality.
+ *
+ * Memory location: 00342B7C (byte offset 12 from flags array base)
+ * Flag range: 96-111 (flags in bytes 12-13 of game_flags_array)
+ *
+ * Observed patterns:
+ * - Flags 96-103: Sequential progression markers (seen as 0xF0, 0xC3, 0xFF)
+ * - Flags 104-111: Current position/next segment (seen as 0x01, 0x03)
+ * - Values increment over time during cutscene playback
+ *
+ * Potential uses:
+ * - Cutscene resume after interruption
+ * - Cutscene skip to previously viewed segments
+ * - Branching dialog/cutscene state tracking
+ * - Map-specific cutscene completion state
+ */
+#define CUTSCENE_PROGRESS_FLAGS_START 96         // First flag in cutscene progress range
+#define CUTSCENE_PROGRESS_FLAGS_END 111          // Last flag in cutscene progress range
+#define CUTSCENE_PROGRESS_BYTE_OFFSET 12         // Byte offset in game_flags_array
+#define CUTSCENE_PROGRESS_MEMORY_ADDR 0x00342B7C // Direct memory address
 
 // ===== CONTROLLER INPUT CONSTANTS =====
 
@@ -110,6 +138,12 @@ typedef enum
  * Game flags bit array - stores all game state flags
  * Capacity: ~18,424 flags (2,303 bytes * 8 bits per byte)
  * Used by get_flag_state() and flag management system
+ *
+ * Special regions (runtime analysis):
+ * - Bytes 12-13: Cutscene progress tracking flags (flags 96-111)
+ *   Values observed: 0xF0 0xC3 0xFF 0x01 during cutscene playback
+ *   Address: 0x00342B7C (base + 12 bytes)
+ *
  * Original address: DAT_00342b70
  */
 extern unsigned char game_flags_array[2303];
