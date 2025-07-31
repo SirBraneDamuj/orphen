@@ -74,7 +74,7 @@ typedef enum
 {
   FLAG_TYPE_MFLG = 0, // Main flags (offset: 0, max: 1024)
   FLAG_TYPE_BFLG = 1, // Battle flags (offset: 800, max: 224)
-  FLAG_TYPE_TFLG = 2, // Town/Trigger flags (offset: 1024, max: 256)
+  FLAG_TYPE_TFLG = 2, // Treasure flags (offset: 1024, max: 256) - user theory
   FLAG_TYPE_SFLG = 3  // Story/System flags (offset: 1280, max: 1024)
 } FlagType;
 
@@ -82,12 +82,12 @@ typedef enum
 
 #define FLAG_OFFSET_MFLG 0     // Main flags base offset
 #define FLAG_OFFSET_BFLG 800   // Battle flags base offset
-#define FLAG_OFFSET_TFLG 0x400 // Town/Trigger flags base offset (1024)
+#define FLAG_OFFSET_TFLG 0x400 // Treasure flags base offset (1024) - user theory
 #define FLAG_OFFSET_SFLG 0x500 // Story/System flags base offset (1280)
 
 #define FLAG_MAX_MFLG 0x400 // 1024 main flags
 #define FLAG_MAX_BFLG 0xe0  // 224 battle flags
-#define FLAG_MAX_TFLG 0x100 // 256 town/trigger flags
+#define FLAG_MAX_TFLG 0x100 // 256 treasure flags - user theory
 #define FLAG_MAX_SFLG 0x400 // 1024 story/system flags
 
 // ===== CONTROLLER INPUT CONSTANTS =====
@@ -114,7 +114,27 @@ typedef enum
  */
 extern unsigned char game_flags_array[2303];
 
-// ===== GRAPHICS/GPU SYSTEM GLOBALS =====
+/*
+ * Game mode state indicator byte
+ *
+ * This single byte tracks the current game interaction mode and must survive
+ * complete game state resets. Known values:
+ * - 0x0C (12) = Normal gameplay/field exploration mode
+ * - 0x00 (0)  = Dialog/conversation mode with NPCs
+ * - Other values likely represent battle, menu, cutscene modes
+ *
+ * Value is preserved across flag system resets and major state transitions
+ * to ensure the game can return to the correct mode after initialization.
+ * Changes dynamically during gameplay based on player interactions.
+ *
+ * Original address: DAT_00342c8f
+ */
+extern unsigned char g_game_mode_state;
+
+// ===== GAME MODE CONSTANTS =====
+
+#define GAME_MODE_DIALOG 0x00 // Dialog/conversation with NPCs
+#define GAME_MODE_FIELD 0x0C  // Normal field exploration/gameplay// ===== GRAPHICS/GPU SYSTEM GLOBALS =====
 
 /*
  * GPU command buffer start pointer
@@ -154,13 +174,13 @@ extern int gpu_interrupt_counter;
  * specific availability checks based on game state, progression, flags, etc.
  *
  * Array layout (PTR_FUN_0031c3c0):
- * [0] = FUN_002320a8  - Advanced menu handler (complex multi-state menu system)
- * [1] = FUN_002324e0  - Menu availability check function 1 (unknown criteria)
- * [2] = FUN_00232870  - Menu availability check function 2 (unknown criteria)
- * [3] = FUN_00232c08  - Menu availability check function 3 (unknown criteria)
- * [4] = FUN_00232fa8  - Menu availability check function 4 (unknown criteria)
- * [5] = LAB_00233240  - Menu availability check function 5 (unknown criteria)
- * [6] = LAB_00233250  - Menu availability check function 6 (unknown criteria)
+ * [0] = FUN_002320a8  - Button Configuration menu handler ✅ CONFIRMED
+ * [1] = FUN_002324e0  - Screen Ratio menu handler (unknown criteria)
+ * [2] = FUN_00232870  - Analog Controller Vibration menu handler (unknown criteria)
+ * [3] = FUN_00232c08  - World Map Display menu handler (unknown criteria)
+ * [4] = FUN_00232fa8  - Return to Title Screen menu handler (unknown criteria)
+ * [5] = LAB_00233240  - Item menu handler (unknown criteria)
+ * [6] = LAB_00233250  - Equip menu handler (unknown criteria)
  *
  * Usage:
  * - initialize_menu_system() iterates through this array to check availability

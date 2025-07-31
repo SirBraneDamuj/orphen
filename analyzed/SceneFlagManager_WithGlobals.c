@@ -8,7 +8,7 @@
  * It handles 4 different types of flags:
  * - MFLG (Main Flags) - General game state
  * - BFLG (Battle Flags) - Combat-related flags
- * - TFLG (Town/Trigger Flags) - Location and event triggers
+ * - TFLG (Treasure Flags) - Treasure chest collection status (user theory)
  * - SFLG (Story/System Flags) - Story progression and system state
  *
  * Original function: FUN_0026a1b8

@@ -44,4 +44,14 @@ When analyzing a new function, reference `globals.json` to:
 - Determine appropriate variable names based on which functions use them
 - Identify potential data structures through grouped variable access
 
+**Important Note on File Access:**
+
+The `src/` directory and `globals.json` are gitignored to prevent committing large amounts of generated code. However, they are essential for analysis work. The built-in search tools (grep_search, file_search) respect gitignore and cannot find files in these directories.
+
+**When searching gitignored files, use `run_in_terminal` with direct grep commands:**
+
+- `grep -r "pattern" src/` to search source files
+- `grep "pattern" globals.json` to search global metadata
+- This bypasses gitignore restrictions and allows full text search
+
 Please help me continue this reverse engineering workflow with the same systematic approach we've been using.

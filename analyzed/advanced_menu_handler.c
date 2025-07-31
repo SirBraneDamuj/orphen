@@ -12,9 +12,10 @@ extern void process_audio_data(unsigned long audio_data);                       
 extern void render_menu_item(long slot, unsigned long text_id);                                       // Render menu item with text and visual elements (FUN_00231e60)
 
 /**
- * Advanced menu system handler with multi-state functionality
+ * Button Configuration/Remapping Menu Handler
  *
- * This function manages a complex menu system with multiple operational states:
+ * This function manages the in-game button configuration menu that allows players
+ * to remap controller actions. The menu has multiple operational states:
  * - State 0: Initialize menu layout and calculate text widths for 5 menu items (text IDs 0x50-0x54)
  * - State 1: Handle upward scrolling/animation with position updates
  * - State 2: Active menu state with controller input processing and text rendering
@@ -24,12 +25,20 @@ extern void render_menu_item(long slot, unsigned long text_id);                 
  * - Dynamic text width calculation and layout
  * - Controller input for navigation (D-pad) and selection
  * - Visual feedback and audio cues
- * - Menu item actions based on controller button mapping
+ * - Button remapping via swap_action_mapping() function
  * - Text rendering for instructions and menu items
  * - Scroll boundaries and error handling
  *
+ * Menu items correspond to game actions:
+ * - Spell (Triangle button)
+ * - Weapon Attack (Circle button)
+ * - Talk Action (X button)
+ * - Jump (Square button)
+ * - Exit (finalize configuration)
+ *
  * Text rendering includes instructional text (IDs 0x55, 0x56) and menu items (0x50-0x54).
  * Controller mapping uses button flags (0x10, 0x20, 0x40, 0x80) for different actions.
+ * Each menu selection corresponds to a game action that can be remapped to different buttons.
  *
  * Original function: FUN_002320a8
  * Address: 0x002320a8
