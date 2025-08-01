@@ -3,6 +3,7 @@ src/
 
 # Generated analysis files - recreate with scripts as needed
 globals.json
+strings.json
 
 # Ghidra project files (if any)
 *.ghidra
