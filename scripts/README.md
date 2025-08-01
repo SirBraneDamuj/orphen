@@ -5,11 +5,13 @@ This directory contains tools for analyzing scene data from the Orphen PS2 disc 
 ## Scripts
 
 ### Ghidra Tools (`ghidra/`)
+
 - `export_funs.py` - Export decompiled functions from Ghidra
-- `export_globals.py` - Export global variables metadata 
+- `export_globals.py` - Export global variables metadata
 - `export_strings.py` - Export string data and references
 
 ### Scene Analysis Tools
+
 - `scene_data_parser.py` - Main scene data parser for BIN files
 - `test_scene_parser.py` - Test script to analyze disc image files
 
@@ -56,21 +58,25 @@ The scene command interpreter processes bytecode with these formats:
 ## Usage
 
 ### Analyze a single BIN file:
+
 ```bash
 python scripts/scene_data_parser.py path/to/file.bin
 ```
 
 ### Analyze with JSON output:
+
 ```bash
 python scripts/scene_data_parser.py path/to/MCB1.BIN -o mcb1_analysis.json
 ```
 
 ### Test on disc image files:
+
 ```bash
 python scripts/test_scene_parser.py
 ```
 
 This will automatically find and analyze:
+
 - `MCB1.BIN` - Primary scene data (295 MB)
 - `MAP.BIN` - Map/level data (17.7 MB)
 - `SCR.BIN` - Script data (1.26 MB)
@@ -81,22 +87,24 @@ This will automatically find and analyze:
 
 Based on disc image analysis, these files likely contain scene data:
 
-| File | Size | Purpose |
-|------|------|---------|
-| MCB1.BIN | 295 MB | **Primary scene archive** - Main scene data, models, bytecode |
-| MAP.BIN | 17.7 MB | **Map data** - Scene layout, collision, positioning |
-| SCR.BIN | 1.26 MB | **Scripts** - Scene scripts, dialogue, events |
-| MCB0.BIN | 12 KB | **Scene headers** - Small scene metadata |
-| TEX.BIN | 25.4 MB | **Textures** - Referenced by scene objects |
+| File     | Size    | Purpose                                                       |
+| -------- | ------- | ------------------------------------------------------------- |
+| MCB1.BIN | 295 MB  | **Primary scene archive** - Main scene data, models, bytecode |
+| MAP.BIN  | 17.7 MB | **Map data** - Scene layout, collision, positioning           |
+| SCR.BIN  | 1.26 MB | **Scripts** - Scene scripts, dialogue, events                 |
+| MCB0.BIN | 12 KB   | **Scene headers** - Small scene metadata                      |
+| TEX.BIN  | 25.4 MB | **Textures** - Referenced by scene objects                    |
 
 ## Output
 
 The parser generates:
+
 - Console output showing discovered scene structures
 - JSON analysis files with detailed breakdowns
 - Statistics on command usage and scene composition
 
 Example output shows:
+
 - Potential scene headers and their locations
 - Scene object arrays with valid command sequences
 - Command statistics and bytecode analysis
@@ -105,6 +113,7 @@ Example output shows:
 ## Integration with Reverse Engineering
 
 This tool complements the decompiled code analysis:
+
 - Validates scene structure assumptions from code analysis
 - Provides real scene data to test against interpreted functions
 - Helps identify scene file formats and encoding
