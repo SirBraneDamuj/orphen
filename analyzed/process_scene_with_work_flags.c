@@ -22,10 +22,10 @@
 #include "orphen_globals.h"
 
 // Forward declarations for functions not yet analyzed
-extern void FUN_0025bc68(int scene_data_ptr);   // process_scene_object
-extern void FUN_0025ce30(void);                 // scene_preprocessing
-extern void FUN_0025cfb8(void);                 // scene_postprocessing
-extern void FUN_002681c0(int format_addr, ...); // debug_output_formatter
+extern void scene_command_interpreter(int scene_data_ptr); // FUN_0025bc68 - now analyzed
+extern void FUN_0025ce30(void);                            // scene_preprocessing
+extern void FUN_0025cfb8(void);                            // scene_postprocessing
+extern void FUN_002681c0(int format_addr, ...);            // debug_output_formatter
 
 // Scene processing globals (not yet in orphen_globals.h)
 extern int DAT_0035503c;             // Scene processing state
@@ -66,7 +66,7 @@ void process_scene_with_work_flags(void)
   DAT_0035503c = 0;
 
   // Process main scene data
-  FUN_0025bc68(*(int *)(DAT_00355058 + 8) + DAT_00355058);
+  scene_command_interpreter(*(int *)(DAT_00355058 + 8) + DAT_00355058);
 
   // Run scene preprocessing
   FUN_0025ce30();
@@ -88,7 +88,7 @@ void process_scene_with_work_flags(void)
 
         // Set current object index and process
         DAT_00355cf8 = object_index;
-        FUN_0025bc68(*(unsigned int *)(object_index * 4 + DAT_00355cf4));
+        scene_command_interpreter(*(unsigned int *)(object_index * 4 + DAT_00355cf4));
       }
       object_index = object_index + 1;
     } while (object_index < 0x3e); // Process up to 62 objects
@@ -101,7 +101,7 @@ void process_scene_with_work_flags(void)
     {
       DAT_00355044 = (void *)0x0058beb0;
       DAT_00355048 = (void *)0x0058beb0;
-      FUN_0025bc68();
+      scene_command_interpreter(0); // Special buffer processing with null command sequence
     }
   }
 

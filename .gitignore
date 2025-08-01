@@ -4,6 +4,13 @@ src/
 # Generated analysis files - recreate with scripts as needed
 globals.json
 strings.json
+*_analysis.json
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # Ghidra project files (if any)
 *.ghidra
