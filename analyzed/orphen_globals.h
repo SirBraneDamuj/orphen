@@ -227,4 +227,34 @@ extern int gpu_interrupt_counter;
  */
 extern undefined *menu_availability_functions[7];
 
+// ===== DEBUG MENU SYSTEM GLOBALS =====
+
+/*
+ * Debug menu display text pointers
+ * These point to strings that show "ON " or "OFF" status for debug options
+ */
+extern char *PTR_s_ON__POSITION_DISP_0031e7ac;    // Position display toggle text
+extern char *PTR_s_ON__MINI_MAP_DISP_0031e7b0;    // Mini-map display toggle text
+extern char *PTR_s_ON__SCR_SUBPROC_DISP_0031e7a8; // Screen subprocess display toggle text
+
+/*
+ * Debug menu color settings
+ */
+extern int DAT_0031e84c; // Menu item color
+extern int DAT_0031e858; // Disabled/highlight color
+
+/*
+ * Debug menu state variables
+ */
+extern unsigned int uGpffffb128;  // Position display enable flag
+extern unsigned char bGpffffb66d; // Debug display flags (bit 2=minimap, bit 7=subproc)
+extern char cGpffffb663;          // Debug mode state flag
+extern unsigned int uGpffffb124;  // Current menu selection
+extern unsigned int uGpffffb11c;  // Selection processed flag
+extern unsigned int uGpffffbdd8;  // Menu active flag
+extern unsigned int uGpffffbdd0;  // Previous menu state
+extern unsigned int uGpffffbdd4;  // Menu action value
+extern unsigned int uGpffffb284;  // Saved action value
+extern unsigned int uGpffffb12c;  // Action counter
+
 #endif // ORPHEN_GLOBALS_H
