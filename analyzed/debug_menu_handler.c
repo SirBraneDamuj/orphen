@@ -8,7 +8,7 @@
  * Debug display options controlled:
  * - POSITION_DISP: Shows position information on screen
  * - MINI_MAP_DISP: Shows mini-map display
- * - SCR_SUBPROC_DISP: Shows screen subprocess display
+ * - SCR_SUBPROC_DISP: Non-functional debug option (no implementation found)
  *
  * The function sets up text strings to show "ON " or "OFF" status for each option
  * based on flag bits in global variables.
@@ -29,7 +29,7 @@ extern void clear_controller_input_state(void);                                 
  * Sets up debug option text displays based on current flag states:
  * - Position display toggle (controlled by uGpffffb128)
  * - Mini-map display toggle (controlled by bGpffffb66d bit 2)
- * - Screen subprocess display toggle (controlled by bGpffffb66d bit 7)
+ * - SCR_SUBPROC_DISP toggle (controlled by bGpffffb66d bit 7, but appears non-functional)
  *
  * Manages menu navigation state and processes user input for selection.
  *
@@ -50,7 +50,7 @@ long debug_menu_handler(void)
   // Mini-map display - controlled by bit 2 of flag byte
   set_debug_option_text(PTR_s_ON__MINI_MAP_DISP_0031e7b0, bGpffffb66d & 4);
 
-  // Screen subprocess display - controlled by bit 7 of flag byte
+  // SCR_SUBPROC_DISP - controlled by bit 7 of flag byte (appears non-functional)
   set_debug_option_text(PTR_s_ON__SCR_SUBPROC_DISP_0031e7a8, bGpffffb66d & 0x80);
 
   // Set up menu display colors/highlighting based on debug mode state
