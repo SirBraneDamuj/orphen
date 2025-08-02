@@ -42,15 +42,4 @@ When analyzing functions with string references (like debug output), reference `
 - Trace debug output messages back to their usage locations
 - Analyze string usage patterns across the codebase
 
-**Important Note on File Access:**
-
-The `src/` directory, `globals.json`, and `strings.json` are gitignored to prevent committing large amounts of generated code. However, they are essential for analysis work. The built-in search tools (grep_search, file_search) respect gitignore and cannot find files in these directories.
-
-**When searching gitignored files, use `run_in_terminal` with direct grep commands:**
-
-- `grep -r "pattern" src/` to search source files
-- `grep "pattern" globals.json` to search global metadata
-- `grep "pattern" strings.json` to search string data
-- This bypasses gitignore restrictions and allows full text search
-
 Please keep responses somewhat terse and avoid sensationalizing discoveries and progress.

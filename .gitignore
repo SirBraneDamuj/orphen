@@ -29,3 +29,6 @@ __pycache__/
 *.tmp
 *.bak
 *~
+
+*.BIN
+*.BIN.backup
