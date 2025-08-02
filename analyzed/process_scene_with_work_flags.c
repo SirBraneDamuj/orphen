@@ -22,7 +22,7 @@
 #include "orphen_globals.h"
 
 // Forward declarations for functions not yet analyzed
-extern void scene_command_interpreter(int scene_data_ptr); // FUN_0025bc68 - now analyzed
+extern void scene_command_interpreter(int scene_data_ptr); // FUN_0025bc68 - Bytecode interpreter for NPC actions/scripts
 extern void FUN_0025ce30(void);                            // scene_preprocessing
 extern void FUN_0025cfb8(void);                            // scene_postprocessing
 extern void FUN_002681c0(int format_addr, ...);            // debug_output_formatter
@@ -80,7 +80,10 @@ void process_scene_with_work_flags(void)
       scene_object_ptr = *(int *)(object_index * 4 + DAT_00355cf4);
       if (scene_object_ptr != 0)
       {
-        // Debug output for scene object processing
+        // Debug output for scene object processing (Subproc debug info)
+        // Format: "Subproc:%3d [%5d]\n"
+        // First value: object_index (0-61)
+        // Second value: *(scene_object_ptr + -4) - likely current script instruction pointer or action state ID
         if ((DAT_003555dd & 0x80) != 0)
         {
           FUN_002681c0(0x34ca60, object_index, *(unsigned int *)(scene_object_ptr + -4));
