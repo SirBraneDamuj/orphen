@@ -27,6 +27,25 @@ Tracking document for analysis methodology and progress:
 ### 🗺️ [Memory Map](memory_map.md)
 
 Reference guide for important memory addresses and data structures:
+- Global variable locations and purposes
+- Debug system memory layout
+- Function pointer tables and callbacks
+
+### 📄 [Disc File System Analysis](disc_file_system_analysis.md)
+
+Documentation of the game's file formats and disc structure:
+- BIN archive formats and extraction methods
+- File type identification and purposes
+- Asset organization and loading systems
+
+### 📝 [SCR.BIN Text Archive Analysis](scr_bin_text_archive_analysis.md)
+
+Analysis of the game's text database (SCR.BIN):
+- Text content categorization (UI, system messages, game content)
+- Archive structure and extraction methods
+- Complete catalog of game text assets
+
+### ⚔️ [Battle Mode Activation](battle_mode_activation.md)
 
 - Debug system memory locations
 - Controller input bit masks
