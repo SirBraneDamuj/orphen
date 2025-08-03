@@ -42,4 +42,6 @@ When analyzing functions with string references (like debug output), reference `
 - Trace debug output messages back to their usage locations
 - Analyze string usage patterns across the codebase
 
-Please keep responses somewhat terse and avoid sensationalizing discoveries and progress.
+Please do not use information in the `scripts` directory as a source of any truth for analysis. These scripts are tools that we have written to test hypotheses and are _NOT_ 100% accurate representations of the real logic in the codebase.
+
+Keep responses somewhat terse and avoid sensationalizing discoveries and progress.
