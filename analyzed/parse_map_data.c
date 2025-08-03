@@ -15,7 +15,7 @@
  *
  * Verified section processing (from code analysis):
  * - 0x04: Processes entities with 32-byte structures (6 uint32 values + padding, ID set to 0xffff)
- * - 0x08: Processes vertex data with coordinates and indices 
+ * - 0x08: Processes vertex data with coordinates and indices
  * - 0x30: Processes 3D coordinate triplets (x,y,z) in 16-byte structures
  * - Other offsets: 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x2C, 0x34, 0x38 (processing not analyzed)
  *
@@ -24,18 +24,18 @@
  */
 
 // Map data buffer and offset globals (loaded by FUN_00223268)
-extern unsigned int DAT_01849a00;  // Map data buffer base - magic header location
-extern unsigned int DAT_01849a04;  // Offset to section 1 (32-byte entity structures)
-extern unsigned int DAT_01849a08;  // Offset to section 2 (vertex data with coordinates/indices)
-extern unsigned int DAT_01849a0c;  // Offset to section 3 (unanalyzed)
-extern unsigned int DAT_01849a10;  // Offset to section 4 (unanalyzed)
-extern unsigned int DAT_01849a14;  // Offset to section 5 (unanalyzed)
-extern unsigned int DAT_01849a18;  // Offset to section 6 (unanalyzed)
-extern unsigned int DAT_01849a1c;  // Offset to section 7 (unanalyzed)
-extern unsigned int DAT_01849a2c;  // Offset to section 8 (unanalyzed)
-extern unsigned int DAT_01849a30;  // Offset to section 9 (3D coordinate triplets)
-extern unsigned int DAT_01849a34;  // Offset to section 10 (unanalyzed)
-extern unsigned int DAT_01849a38;  // Offset to section 11 (unanalyzed)
+extern unsigned int DAT_01849a00; // Map data buffer base - magic header location
+extern unsigned int DAT_01849a04; // Offset to section 1 (32-byte entity structures)
+extern unsigned int DAT_01849a08; // Offset to section 2 (vertex data with coordinates/indices)
+extern unsigned int DAT_01849a0c; // Offset to section 3 (unanalyzed)
+extern unsigned int DAT_01849a10; // Offset to section 4 (unanalyzed)
+extern unsigned int DAT_01849a14; // Offset to section 5 (unanalyzed)
+extern unsigned int DAT_01849a18; // Offset to section 6 (unanalyzed)
+extern unsigned int DAT_01849a1c; // Offset to section 7 (unanalyzed)
+extern unsigned int DAT_01849a2c; // Offset to section 8 (unanalyzed)
+extern unsigned int DAT_01849a30; // Offset to section 9 (3D coordinate triplets)
+extern unsigned int DAT_01849a34; // Offset to section 10 (unanalyzed)
+extern unsigned int DAT_01849a38; // Offset to section 11 (unanalyzed)
 
 // Parsed map data globals (populated by this function)
 extern unsigned int DAT_003556d8;   // Entity data base address

@@ -33,3 +33,5 @@ __pycache__/
 *.BIN
 *.BIN.backup
 *.dat
+*.p2s
+*.psm2
