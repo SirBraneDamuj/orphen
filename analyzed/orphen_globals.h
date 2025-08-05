@@ -240,4 +240,14 @@ extern unsigned int uGpffffbdd4;  // Menu action value
 extern unsigned int uGpffffb284;  // Saved action value
 extern unsigned int uGpffffb12c;  // Action counter
 
+// ===== BYTECODE EXECUTION SYSTEM =====
+
+/*
+ * Bytecode interpreter for script execution
+ * Executes stack-based virtual machine instructions from script data
+ * Supports arithmetic, logical, and control flow operations
+ * Original function: FUN_0025c258
+ */
+extern void bytecode_interpreter(uint *result_param);
+
 #endif // ORPHEN_GLOBALS_H
