@@ -28,7 +28,7 @@ extern void FUN_0022e528(void);                       // minimap_post_processing
 extern void FUN_0020bc78(int src_addr, int dst_addr); // copy_minimap_buffer
 
 // Debug logging function (already identified)
-extern void FUN_002681c0(int format_addr, ...); // debug_print_formatted
+extern void debug_output_formatter(int format_addr, ...); // debug_output_formatter (FUN_002681c0)
 
 // Mini-map system globals (not yet in orphen_globals.h)
 extern unsigned int uGpffffb7bc; // Memory pointer/offset for mini-map data
@@ -106,7 +106,7 @@ void minimap_display_controller(int mode)
     // Update and render mini-map display
 
     // Debug log mini-map update
-    FUN_002681c0(0x34c1c8, 0x32); // Print debug message
+    debug_output_formatter(0x34c1c8, 0x32); // Print debug message
 
     // Update mini-map coordinate calculation
     DAT_0031c21c = -(fGpffffb6d4 - fGpffff8580);

@@ -21,21 +21,21 @@
 #include "orphen_globals.h"
 
 // Forward declarations for unanalyzed functions
-extern void FUN_00225bf0(undefined8 entity, uint state, uint substate); // Set entity state
-extern void FUN_00206260(int index, int param2, int param3);            // System command/trigger
-extern void FUN_00267da0(byte *buffer, void *source, int size);         // Memory copy/buffer operation
-extern void FUN_00257b00(void);                                         // Unknown subsystem call
-extern void FUN_00265ec0(uint param);                                   // Audio/sound related function
-extern void FUN_00205938(int param1, int param2, int param3);           // System trigger
-extern void FUN_002536a8(undefined8 entity);                            // Entity state handler
-extern void FUN_00257c10(undefined8 entity);                            // Entity finalization
-extern void FUN_00257c40(undefined8 entity);                            // Entity state handler alt
-extern byte FUN_00266008(void);                                         // Get next available slot/index
-extern void FUN_00252658(undefined8 entity);                            // Entity subsystem update
-extern void FUN_00253080(undefined8 entity);                            // Entity processing
-extern long FUN_002298d0(short value);                                  // Value lookup/validation
-extern int FUN_00305130(undefined4 param);                              // Math/trigonometric function
-extern int FUN_00305218(undefined4 param);                              // Math/trigonometric function
+extern void FUN_00225bf0(undefined8 entity, uint state, uint substate);                          // Set entity state
+extern void calculate_sound_envelope_fade(int sound_id, long distance, undefined8 target_level); // Sound envelope fade calculation
+extern void FUN_00267da0(byte *buffer, void *source, int size);                                  // Memory copy/buffer operation
+extern void FUN_00257b00(void);                                                                  // Unknown subsystem call
+extern void FUN_00265ec0(uint param);                                                            // Audio/sound related function
+extern void FUN_00205938(int param1, int param2, int param3);                                    // System trigger
+extern void FUN_002536a8(undefined8 entity);                                                     // Entity state handler
+extern void FUN_00257c10(undefined8 entity);                                                     // Entity finalization
+extern void FUN_00257c40(undefined8 entity);                                                     // Entity state handler alt
+extern byte FUN_00266008(void);                                                                  // Get next available slot/index
+extern void FUN_00252658(undefined8 entity);                                                     // Entity subsystem update
+extern void FUN_00253080(undefined8 entity);                                                     // Entity processing
+extern long FUN_002298d0(short value);                                                           // Value lookup/validation
+extern int FUN_00305130(undefined4 param);                                                       // Math/trigonometric function
+extern int FUN_00305218(undefined4 param);                                                       // Math/trigonometric function
 
 // Global variables (original names preserved until analyzed)
 extern uint uGpffffbd54;   // State flag related to param_2 & 0x20
@@ -195,7 +195,7 @@ void update_player_field_mode(undefined8 player_entity, uint input_flags, undefi
        result * 0x10000 < 1))
   {
     uGpffffbd5e = 0;
-    FUN_00206260(7, 0x19, 0); // Trigger system event
+    calculate_sound_envelope_fade(7, 0x19, 0); // Trigger system event
   }
 
   // Handle entity-specific countdown
@@ -273,10 +273,10 @@ void update_player_field_mode(undefined8 player_entity, uint input_flags, undefi
       cGpffffb6d0 = '\x01';                                       // Set global death flag
 
       // Trigger death effects and cleanup
-      FUN_00265ec0(0x58cd70);   // Play death sound
-      FUN_00205938(7, 0x2f, 0); // System trigger
-      FUN_00206260(0, 0x19, 0); // System event
-      FUN_00206260(1, 0x19, 0); // System event
+      FUN_00265ec0(0x58cd70);                    // Play death sound
+      FUN_00205938(7, 0x2f, 0);                  // System trigger
+      calculate_sound_envelope_fade(0, 0x19, 0); // System event
+      calculate_sound_envelope_fade(1, 0x19, 0); // System event
 
       if (entity[0x30] == 0x19)
       { // If already in death state

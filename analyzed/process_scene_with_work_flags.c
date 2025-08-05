@@ -22,10 +22,11 @@
 #include "orphen_globals.h"
 
 // Forward declarations for functions not yet analyzed
-extern void scene_command_interpreter(int scene_data_ptr); // FUN_0025bc68 - Bytecode interpreter for NPC actions/scripts
-extern void FUN_0025ce30(void);                            // scene_preprocessing
-extern void FUN_0025cfb8(void);                            // scene_postprocessing
-extern void FUN_002681c0(int format_addr, ...);            // debug_output_formatter
+extern void scene_command_interpreter(int scene_data_ptr);                     // FUN_0025bc68 - Bytecode interpreter for NPC actions/scripts
+extern void scene_loader_and_initializer(long scene_data_ptr, long load_mode); // FUN_0025b390 - Scene loading and initialization
+extern void FUN_0025ce30(void);                                                // scene_preprocessing
+extern void FUN_0025cfb8(void);                                                // scene_postprocessing
+extern void debug_output_formatter(int format_addr, ...);                      // debug_output_formatter (FUN_002681c0)
 
 // Scene processing globals (not yet in orphen_globals.h)
 extern int DAT_0035503c;             // Scene processing state
@@ -86,7 +87,7 @@ void process_scene_with_work_flags(void)
         // Second value: *(scene_object_ptr + -4) - likely current script instruction pointer or action state ID
         if ((DAT_003555dd & 0x80) != 0)
         {
-          FUN_002681c0(0x34ca60, object_index, *(unsigned int *)(scene_object_ptr + -4));
+          debug_output_formatter(0x34ca60, object_index, *(unsigned int *)(scene_object_ptr + -4));
         }
 
         // Set current object index and process
@@ -133,9 +134,9 @@ void process_scene_with_work_flags(void)
       // If this scene work flag is enabled, output debug info
       if (flag_value != 0)
       {
-        FUN_002681c0(0x34ca78, global_flag_index,
-                     *(unsigned int *)(scene_data_index + DAT_00355060),
-                     *(unsigned int *)(scene_data_index + DAT_00355060));
+        debug_output_formatter(0x34ca78, global_flag_index,
+                               *(unsigned int *)(scene_data_index + DAT_00355060),
+                               *(unsigned int *)(scene_data_index + DAT_00355060));
       }
 
       scene_data_index = scene_data_index + 4; // Move to next data element
