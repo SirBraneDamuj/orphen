@@ -250,4 +250,12 @@ extern unsigned int uGpffffb12c;  // Action counter
  */
 extern void bytecode_interpreter(uint *result_param);
 
+/*
+ * Script instruction for reading game state flags or work memory
+ * Two modes: array lookup (opcode 0x36) vs bitfield access (other opcodes)
+ * Used by bytecode interpreter to access persistent game state data
+ * Original function: FUN_0025d768
+ */
+extern uint script_read_flag_or_work_memory(void);
+
 #endif // ORPHEN_GLOBALS_H
