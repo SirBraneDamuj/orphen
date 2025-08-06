@@ -40,14 +40,6 @@ Documentation of the game's file formats and disc structure:
 - File type identification and purposes
 - Asset organization and loading systems
 
-### 📝 [SCR.BIN Text Archive Analysis](scr_bin_text_archive_analysis.md)
-
-Analysis of the game's text database (SCR.BIN):
-
-- Text content categorization (UI, system messages, game content)
-- Archive structure and extraction methods
-- Complete catalog of game text assets
-
 ### ⚔️ [Battle Mode Activation](battle_mode_activation.md)
 
 - Debug system memory locations

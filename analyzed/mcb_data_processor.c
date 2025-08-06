@@ -50,11 +50,11 @@
 #include "orphen_globals.h"
 
 // Forward declarations for unanalyzed functions
-extern int FUN_0022a300(int section_index);         // Returns entry count for MCB data section
-extern short *FUN_0022a238(int section_index);      // Returns pointer to MCB data section
-extern void FUN_0026c088(void *format_string, ...); // Debug output formatter
-extern void FUN_0022a1f8(void);                     // MCB cleanup function
-extern void FUN_00206640(int param);                // Display system reset
+extern int count_mcb_section_entries(int section_index);       // Returns entry count for MCB data section (FUN_0022a300)
+extern short *get_mcb_data_section_pointer(int section_index); // Returns pointer to MCB data section (FUN_0022a238)
+extern void FUN_0026c088(void *format_string, ...);            // Debug output formatter
+extern void FUN_0022a1f8(void);                                // MCB cleanup function
+extern void FUN_00206640(int param);                           // Display system reset
 
 // Global variables (keeping original DAT_ names)
 extern int DAT_00355bd0;    // Current MCB data section index (0-14)
@@ -112,8 +112,8 @@ void FUN_0022b300(long reset_flag) // MCB Data Processor
           }
 
           // Load new data section
-          DAT_00355bd4 = FUN_0022a300(DAT_00355bd0);
-          DAT_00355bd8 = (short *)FUN_0022a238(DAT_00355bd0);
+          DAT_00355bd4 = count_mcb_section_entries(DAT_00355bd0);
+          DAT_00355bd8 = get_mcb_data_section_pointer(DAT_00355bd0);
 
           // Special handling for data section 14
           if (DAT_00355bd0 == SPECIAL_DATA_SECTION)
@@ -202,8 +202,8 @@ void FUN_0022b300(long reset_flag) // MCB Data Processor
 
 /*
  * Helper Functions (referenced but not fully analyzed):
- * - FUN_0022a300(section_index): Returns number of entries in MCB data section
- * - FUN_0022a238(section_index): Returns pointer to MCB data section
+ * - count_mcb_section_entries(section_index): Returns number of entries in MCB data section (analyzed)
+ * - get_mcb_data_section_pointer(section_index): Returns pointer to MCB data section (analyzed)
  * - FUN_0026c088(...): Debug output formatter (outputs formatted debug messages)
  * - FUN_0022a1f8(): MCB cleanup function
  * - FUN_00206640(flag): Display/graphics system reset function

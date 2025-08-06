@@ -103,12 +103,6 @@ The PS2 game "Orphen: Scion of Sorcery" contains a sophisticated scripting syste
 
 ## File System Analysis
 
-### SCR.BIN (1.2MB, 227 entries)
-
-- **Type**: Text archive, NOT script bytecode
-- **Contents**: Game text strings and dialogue
-- **Format**: Custom archive with embedded text data
-
 ### MCB1.BIN
 
 - **Suspected Type**: Script container
