@@ -5,6 +5,7 @@ src/
 globals.json
 strings.json
 *_analysis.json
+function_pointers.json
 
 # Python cache files
 __pycache__/
