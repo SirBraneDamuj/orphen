@@ -113,8 +113,8 @@ typedef enum
 #define CTRL1_DOWN 0x4000
 #define CTRL1_RIGHT 0x2000
 #define CTRL1_UP 0x1000
-#define CTRL1_X 0x0008
-#define CTRL1_TRIANGLE 0x0004
+#define CTRL1_X 0x0008        // (TODO: this is actually L1)
+#define CTRL1_TRIANGLE 0x0004 // (TODO: this is actually R1)
 
 // Controller 2 (DAT_003555f6) button masks
 #define CTRL2_START 0x0100
