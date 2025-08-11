@@ -45,3 +45,16 @@ When analyzing functions with string references (like debug output), reference `
 Please do not use information in the `scripts` directory as a source of any truth for analysis. These scripts are tools that we have written to test hypotheses and are _NOT_ 100% accurate representations of the real logic in the codebase.
 
 Keep responses somewhat terse and avoid sensationalizing discoveries and progress.
+
+Additional procedural note (2025-08-09):
+
+Do NOT modify raw decompiled files under `src/` directly for semantic naming or cleanup. Instead, when analyzing a function (e.g. `FUN_00260738`), create a new analyzed version under `analyzed/`:
+
+1. Copy the function into a new appropriately named file (e.g. `update_entity_timed_parameter.c`).
+2. Preserve the original signature in a comment with the original `FUN_*` name.
+3. Rename local variables and any already-identified globals/functions to descriptive names.
+4. Add a header comment explaining inferred behavior, side effects (global writes), parameter semantics, and any PS2-specific considerations.
+5. Leave unanalyzed callee function names as their original `FUN_*` identifiers (extern) until they are also analyzed.
+6. Reference `globals.json` and `strings.json` for naming and document any addresses used.
+
+This keeps `src/` as a pristine reference and all human-authored analysis isolated in `analyzed/`.

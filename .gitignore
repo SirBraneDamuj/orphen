@@ -36,3 +36,6 @@ __pycache__/
 *.dat
 *.p2s
 *.psm2
+*.dec
+*.out
+*_report.json
