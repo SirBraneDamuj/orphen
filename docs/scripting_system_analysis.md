@@ -182,3 +182,97 @@ Based on jump table analysis, the scripting system supports:
 
 _Last Updated: August 5, 2025_
 _Analysis Status: Foundation Complete - Beginning Instruction Set Analysis_
+
+## Script File Format & Subprocedure (Subproc) ID Extraction
+
+### Pointer Table Region (SCR\* files)
+
+Preliminary layout (from empirical parsing of `scr*.out` exports):
+
+- File header: 11 x 32-bit words. Word[5] = pointer_table_start, word[6] = pointer_table_end, word[7] = footer_base.
+- Pointer table: sequence of 32-bit offsets into script region (ends at word[6]).
+- Post-pointer region: Mixed bytecode records containing script bodies and metadata.
+
+### Delimiter & Field Tokens
+
+- Byte `0x0B` acts as a ubiquitous field/record/parameter delimiter. Nearly all higher-level structural boundaries end with `0x0B`.
+- Byte `0x0E` frequently precedes parameter (literal) values; pattern `0x0E <value> 00 00 00 0B` commonly terminates numeric parameter blocks.
+
+### Repeating Structural Patterns (Heuristic Labels)
+
+Pattern A:
+
+```
+25 37 0e <...variable payload...> 0b <...payload...> 0b
+```
+
+Pattern B (two forms interleaved):
+
+```
+25 01 52 0e ...
+01 52 0e ...
+```
+
+Often followed by optional subheader:
+
+```
+0b 0b 34|44 00 00 00 37 0e <idx> 0b 59 0b
+```
+
+Then zero or more subrecords:
+
+```
+[25] 79 0e <u32> 0b (param groups of 0e <val> 00 00 00 0b)
+```
+
+These patterns delineate compound script structures; exact semantic mapping still pending.
+
+### Subproc ID Records ("0x04 ID16")
+
+Empirically discovered records encoding 16-bit subprocedure identifiers. Detection relies on preceding signature bytes:
+
+- Signature Class SIG_A: `9e 0c 01 1e 0b` immediately before an `0x04 <id_lo> <id_hi>` pair.
+- Signature Class SIG_B: Alternative context containing `0b 0b 02 92 0c` before the ID sequence.
+
+Extraction heuristic (implemented in `scripts/analyze_post_pointer_region.py`):
+
+1. Scan post-pointer region for byte `0x04` followed by two non-zero bytes (candidate ID16) and a plausible trailing delimiter.
+2. Validate presence of one of the known prologue signatures (SIG_A / SIG_B) within a small backward window.
+3. Reject candidates whose trailing context fails plausibility checks (next control byte not in {0x04,0x11,0x00}, or misaligned with preceding delimiter `0x0B`).
+4. De-duplicate by 16-bit value; track first occurrence offset and signature class.
+
+### Heuristic Reliability & Filtering
+
+- False positives reduced substantially by requiring signature match plus delimiter alignment.
+- Additional filter: adjacency to literal dword `0x00000001` in specific alignment contexts (observed near valid IDs) used to raise confidence but not mandatory.
+- Current pass produced a stable ID set (no spurious additions across successive tool revisions), indicating detection logic is near-complete for the sampled files.
+
+### Data Model Captured
+
+For each accepted ID:
+
+- 16-bit value (displayed hex)
+- First occurrence file offset
+- Signature class (SIG_A, SIG_B)
+- Local structural bytes (snippet for manual verification)
+
+Planned future enrichment: associate each ID with its enclosing Pattern A/B block to infer grouping or call graph semantics.
+
+### Open Questions
+
+- Semantic role of Pattern A vs Pattern B in relation to subproc invocation.
+- Whether IDs map 1:1 to exported functions in the interpreter or represent data-driven state machine labels.
+- Presence of any higher-order index table linking pointer table entries to subproc ID clusters.
+
+### Current Status Summary (Subproc IDs)
+
+- Discovery: COMPLETE (stable enumeration with dual signature classes)
+- False Positive Rate: Low (manual spot checks confirm structural alignment)
+- Next Steps: Correlate IDs with runtime call paths and interpreter jump table usage.
+
+_Section Added: August 11, 2025_
+
+## Revision History
+
+- Aug 11 2025: Added subprocedure ID detection methodology, patterns (A/B), delimiter semantics.
+- Aug 05 2025: Initial scripting system architecture document.

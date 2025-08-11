@@ -1,6 +1,8 @@
 {
   "files.associations": {
-    "orphen_globals.h": "c"
+    "orphen_globals.h": "c",
+    "format": "c",
+    "thread": "c"
   },
   "search.useIgnoreFiles": false,
   "files.autoSave": "afterDelay"

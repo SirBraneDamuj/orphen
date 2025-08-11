@@ -146,18 +146,21 @@ This document tracks the progress of reverse engineering Orphen: Scion of Sorcer
 1. **Position Display System**: Analyze POSITION_DISP functionality
 2. **Debug Menu Access**: Determine how to access debug menu in-game
 3. **Scene Processing Core**: Understand how scene work flags affect rendering
+4. **Subproc ID Correlation**: Map extracted 0x04 <ID16> records to interpreter call graph
 
 ### Medium Priority
 
 1. **Mini-Map Rendering Pipeline**: Analyze remaining mini-map functions
 2. **Text Rendering System**: Analyze font/text display functions
 3. **Audio Debug Features**: Investigate audio debugging capabilities
+4. **Pattern A/B Semantics**: Determine runtime meaning of structural patterns in script files
 
 ### Low Priority
 
 1. **Graphics Primitive Functions**: Analyze low-level rendering utilities
 2. **Memory Management**: Understand PS2 memory allocation patterns
 3. **Game State Management**: Analyze save/load system integration
+4. **Subproc Table Visualization**: Build tool to emit annotated subproc ID list with context snippets
 
 ## Technical Notes
 
