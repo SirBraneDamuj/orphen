@@ -1,6 +1,16 @@
-// Originally FUN_0025c258
-// Bytecode interpreter/virtual machine that executes script instructions
-// Uses a stack-based execution model with instruction pointer and opcode dispatch
+// bytecode_interpreter — analyzed version of FUN_0025c258
+// Purpose: Core script VM evaluator. Pulls opcodes from DAT_00355cd0, dispatches via jump tables,
+//          and produces a 32-bit scalar result for immediate reads by callers.
+// Summary:
+//  - Standard opcodes (0x32..0xFE) use PTR_LAB_0031e228[opcode-0x32]; extended (0xFF N) use PTR_LAB_0031e538[N].
+//  - Maintains a small evaluation stack for expression ops (0x00..0x31 handled by vm_fetch_immediate_or_pack and the switch).
+//  - On exit from the 0x0B (“return”) case, writes the top-of-stack into the provided out pointer.
+// Globals/side effects:
+//  - Advances DAT_00355cd0 (IP) and updates DAT_00355cd8 (current opcode) as it decodes.
+//  - Calls out into opcode handlers which may further touch engine state.
+// PS2-specific notes:
+//  - Two-level dispatch (normal vs extended) is characteristic of compact VM designs on PS2.
+//  - trap(7) paths reflect deliberate divide-by-zero guards seen elsewhere in the engine.
 
 #include <stdint.h>
 
@@ -17,9 +27,9 @@ extern void *PTR_LAB_0031e228; // Standard instruction jump table
 extern void *PTR_LAB_0031e538; // Extended instruction jump table
 
 // External function for handling basic opcodes
-extern long FUN_0025bf70(uint *param);
+extern unsigned int vm_fetch_immediate_or_pack(unsigned int *out); // analyzed (orig: FUN_0025bf70)
 
-void bytecode_interpreter(uint *result_param)
+void bytecode_interpreter(void *result_param)
 {
   byte instruction_byte;
   uint stack_value1;
@@ -74,7 +84,7 @@ LAB_0025c2b8:
     }
 
     // Call function to handle lower-level operations (opcodes 0x00-0x31)
-    call_result = FUN_0025bf70(working_buffer);
+    call_result = vm_fetch_immediate_or_pack(working_buffer);
     if (call_result == 0)
       break; // Exit if function returns 0
 
@@ -87,7 +97,7 @@ LAB_0025c2b8:
   switch (*DAT_00355cd0)
   {
   case 0xb: // Return/exit instruction
-    *result_param = *stack_ptr;
+    *(uint *)result_param = *stack_ptr;
     DAT_00355cd0 = DAT_00355cd0 + 1;
     return;
 

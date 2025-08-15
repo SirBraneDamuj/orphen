@@ -16,7 +16,7 @@ extern uint DAT_00355060;   // Pointer to work/flag array data
 extern byte DAT_00342b70[]; // Flag bitfield data array
 
 // External functions
-extern uint bytecode_interpreter(uint *result);       // FUN_0025c258
+extern void bytecode_interpreter(void *result_out);   // analyzed (orig: FUN_0025c258)
 extern void debug_output_formatter(uint string_addr); // FUN_0026bfc0
 
 uint script_read_flag_or_work_memory(void)

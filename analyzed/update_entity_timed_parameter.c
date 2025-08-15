@@ -43,9 +43,9 @@ extern f32 DAT_00352c08;   // timing divisor A
 extern f32 DAT_00352c0c;   // timing divisor B
 
 // Script VM helpers (un-analyzed yet):
-extern void FUN_0025c258(int *out_value);  // fetch next script value / stack interaction
-extern void FUN_0026bfc0(int addr);        // error / debug
-extern uint32_t FUN_00216690(float value); // conversion/scaling (returns packed? stored as u32)
+extern void bytecode_interpreter(void *out_value); // analyzed (orig: FUN_0025c258)
+extern void FUN_0026bfc0(int addr);                // error / debug
+extern uint32_t FUN_00216690(float value);         // conversion/scaling (returns packed? stored as u32)
 
 // Provisional analyzed version:
 uint64_t update_entity_timed_parameter(void)
@@ -55,7 +55,7 @@ uint64_t update_entity_timed_parameter(void)
   int scaledInputRaw = 0;  // iStack_5c
 
   // Fetch first script-supplied value (entity index)
-  FUN_0025c258(&entityIndexTemp);
+  bytecode_interpreter(&entityIndexTemp);
 
   // Read a small parameter count/control byte from bytecode stream (*DAT_00355cd0 previously) – done inline in original
   // In original decomp a byte bVar2 was read and bounds-checked (0..2); we keep logic implicit here.
@@ -63,7 +63,7 @@ uint64_t update_entity_timed_parameter(void)
   // The real code advanced DAT_00355cd0 externally; we do not model PC here, only document behavior.
 
   // Fetch second script value (raw scalar or time value)
-  FUN_0025c258(((int)&entityIndexTemp) | 4); // using stack offset pattern; reproducing sequence
+  bytecode_interpreter((void *)(((int)&entityIndexTemp) | 4)); // using stack offset pattern; reproducing sequence
 
   // Bounds & variant checks (mirroring original order):
   if (paramSlot > 2)
