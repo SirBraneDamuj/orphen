@@ -17,6 +17,15 @@
 //   - 0x04 pops the continuation (pbGpffffbd60 = *puVar4; puVar4++) unless the interpreter has returned to
 //     baseline depth (depth_counter == BASE_DEPTH before increment). At baseline, encountering 0x04 terminates
 //     the function (it consumes the 0x04 and returns). Thus 0x04 acts as a BLOCK_END; the top-level final 0x04 closes the structure.
+//
+//     Subproc chaining motif (observed in SCR): sequences like `9E 0C 01 1E 0B 04 <id16-le>` often appear.
+//     Interpretation:
+//       * 0x9E finish_process_slot(sel): clears slot table entry. Here `0C 01 1E 0B` evaluates to -1 (imm8 1, negate, return), so
+//         sel < 0 => use current slot index `uGpffffbd88`. Writes 0 to `*(iGpffffbd84 + 4*sel)`.
+//       * 0x04 at structural layer ends the current block and is immediately followed by a 16-bit ID. That ID is consumed by the
+//         next record’s header to schedule/chain the next subproc for that (now-finished) slot. Thus 0x04 here acts as a delimiter
+//         and a visual anchor for the following subproc ID16 in the raw bytes, not as a low-range arithmetic opcode.
+//     Cross-refs: iGpffffbd84 (slot table base pointer), uGpffffbd88 (current slot index) from globals.json.
 //   - The depth counter is used only as a termination sentinel (no bounds enforcement observed besides early exit condition).
 //
 // Low-opcode mini-table (PTR_LAB_0031e1f8 indices 0x00–0x0A; 0x04 is repurposed, so not dispatched):

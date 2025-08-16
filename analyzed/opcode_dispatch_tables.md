@@ -17,24 +17,24 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 ```
 0x32 LAB_0025d6f0
 0x33 FUN_0025d6f8  # name: advance_ip_and_sync_frame
-0x34 FUN_0025d728  # guess: FUN_0025d728
+0x34 FUN_0025d728  # name: probe_system_busy
 0x35 FUN_0025d748  # guess: FUN_0025d748
 0x36 FUN_0025d768  # guess: FUN_0025d768
-0x37 FUN_0025d818  # guess: FUN_0025d818
+0x37 variable_or_flag_alu  # orig FUN_0025d818 — ALU op on var array (0x37) or flag bucket (0x39)
 0x38 FUN_0025d768  # guess: FUN_0025d768
-0x39 FUN_0025d818  # guess: FUN_0025d818
+0x39 variable_or_flag_alu  # alias of 0x37; same handler chooses mode by sGpffffbd68
 0x3A FUN_0025dab8  # guess: FUN_0025dab8
 0x3B FUN_0025da78  # guess: FUN_0025da78
 0x3C FUN_0025daf8  # guess: FUN_0025daf8
-0x3D FUN_0025e560  # guess: FUN_0025e560
-0x3E FUN_0025e560  # guess: FUN_0025e560
-0x3F FUN_0025e560  # guess: FUN_0025e560
-0x40 FUN_0025e560  # guess: FUN_0025e560
+0x3D FUN_0025e560  # name: modify_flag_state (query/set/clear/toggle cluster via prev opcode)
+0x3E FUN_0025e560  # name: modify_flag_state
+0x3F FUN_0025e560  # name: modify_flag_state
+0x40 FUN_0025e560  # name: modify_flag_state
 0x41 FUN_0025db20  # guess: FUN_0025db20
 0x42 FUN_0025dd60  # guess: FUN_0025dd60
-0x43 FUN_0025de08  # guess: FUN_0025de08
+0x43 build_and_submit_3way_vertex_streams  # orig FUN_0025de08 — reads 3 streams (xyz/uv/xyz), normalizes, submits
 0x44 FUN_0025dd60  # guess: FUN_0025dd60
-0x45 FUN_0025dfc8  # guess: FUN_0025dfc8
+0x45 FUN_0025dfc8  # guess: FUN_0025dfc8  # TODO: analyze (seen in recent trace)
 0x46 FUN_0025dff0  # guess: FUN_0025dff0
 0x47 FUN_0025e0e8  # guess: FUN_0025e0e8
 0x48 FUN_0025e170  # guess: FUN_0025e170
@@ -84,12 +84,12 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x74 FUN_002601f8  # guess: FUN_002601f8
 0x75 FUN_002601f8  # guess: FUN_002601f8
 0x76 FUN_00260318  # name: select_object_and_read_register
-0x77 FUN_00260360  # guess: FUN_00260360
-0x78 FUN_00260360  # guess: FUN_00260360
-0x79 FUN_00260360  # guess: FUN_00260360
-0x7A FUN_00260360  # guess: FUN_00260360
-0x7B FUN_00260360  # guess: FUN_00260360
-0x7C FUN_00260360  # guess: FUN_00260360
+0x77 FUN_00260360  # name: modify_register_rmw (AND/OR/XOR/ADD/SUB family via read+op+write)
+0x78 FUN_00260360  # name: modify_register_rmw
+0x79 FUN_00260360  # name: modify_register_rmw
+0x7A FUN_00260360  # name: modify_register_rmw
+0x7B FUN_00260360  # name: modify_register_rmw
+0x7C FUN_00260360  # name: modify_register_rmw
 0x7D FUN_00260738  # guess: FUN_00260738
 0x7E FUN_00260738  # guess: FUN_00260738
 0x7F FUN_00260880  # guess: FUN_00260880
@@ -110,8 +110,8 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x8E FUN_002610a8  # guess: FUN_002610a8
 0x8F LAB_002610f8
 0x90 FUN_00261100  # guess: FUN_00261100
-0x91 FUN_002611b8  # guess: FUN_002611b8
-0x92 FUN_00261258  # guess: FUN_00261258
+0x91 param_ramp_current_toward_target  # orig FUN_002611b8 — step DAT_00571de0[idx].current toward target by step * (DAT_003555bc/32)
+0x92 audio_submit_current_param  # orig FUN_00261258 — submit DAT_00571de0[idx].current * DAT_00352c30 via FUN_0030bd20
 0x93 FUN_002612a0  # guess: FUN_002612a0
 0x94 FUN_002612e0  # guess: FUN_002612e0
 0x95 FUN_00261890  # guess: FUN_00261890
@@ -123,7 +123,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x9B FUN_00261c38  # name: advance_fade_track
 0x9C FUN_00261c60  # guess: FUN_00261c60
 0x9D FUN_00261cb8  # guess: FUN_00261cb8
-0x9E FUN_00261d18  # guess: FUN_00261d18
+0x9E finish_process_slot  # orig FUN_00261d18 — clears slot[sel]; sel<0 => current slot (uGpffffbd88)
 0x9F FUN_00261d88  # guess: FUN_00261d88
 0xA0 FUN_00261de0  # guess: FUN_00261de0
 0xA1 FUN_00261e30  # guess: FUN_00261e30

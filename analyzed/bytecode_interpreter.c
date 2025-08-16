@@ -5,6 +5,9 @@
 //  - Standard opcodes (0x32..0xFE) use PTR_LAB_0031e228[opcode-0x32]; extended (0xFF N) use PTR_LAB_0031e538[N].
 //  - Maintains a small evaluation stack for expression ops (0x00..0x31 handled by vm_fetch_immediate_or_pack and the switch).
 //  - On exit from the 0x0B (“return”) case, writes the top-of-stack into the provided out pointer.
+//  - Structural 0x04 is NOT a low-range arithmetic op here; it’s handled in the structural interpreter as a BLOCK_END. In raw
+//    bytes you’ll see common chaining: `… 9E 0C 01 1E 0B 04 <id16-le> …` meaning: finish current slot (9E with -1), then a 0x04
+//    delimiter followed by the next subproc ID16 for scheduling. See `script_block_structure_interpreter.c` and opcode 0x9E notes.
 // Globals/side effects:
 //  - Advances DAT_00355cd0 (IP) and updates DAT_00355cd8 (current opcode) as it decodes.
 //  - Calls out into opcode handlers which may further touch engine state.
