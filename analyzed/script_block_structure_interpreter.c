@@ -29,17 +29,17 @@
 //   - The depth counter is used only as a termination sentinel (no bounds enforcement observed besides early exit condition).
 //
 // Low-opcode mini-table (PTR_LAB_0031e1f8 indices 0x00–0x0A; 0x04 is repurposed, so not dispatched):
-//   0x00 -> LAB_0025bdc8
-//   0x01 -> FUN_0025bdd0
-//   0x02 -> FUN_0025be10
-//   0x03 -> LAB_0025bea0
+//   0x00 -> LAB_0025bdc8 — no-op/return (jr ra; nop)
+//   0x01 -> FUN_0025bdd0 — if vm_eval()==0: FUN_0025c220(); else: iGpffffbd60 += 4
+//   0x02 -> FUN_0025be10 — align to 4; scan (count) of [key:int][target:int] for vm_eval()==key; on match step +4; then FUN_0025c220
+//   0x03 -> LAB_0025bea0 — VM advance (calls FUN_0025c220: DAT_00355cd0 += *DAT_00355cd0)
 //   0x04 -> (structural end marker handled inline, NOT a table entry)
-//   0x05 -> LAB_0025bdc8
-//   0x06 -> LAB_0025bdc8
-//   0x07 -> LAB_0025bea8
-//   0x08 -> LAB_0025beb8
-//   0x09 -> LAB_0025bec0
-//   0x0A -> LAB_0025bed0
+//   0x05 -> LAB_0025bdc8 — alias of 0x00 no-op
+//   0x06 -> LAB_0025bdc8 — alias of 0x00 no-op
+//   0x07 -> LAB_0025bea8 — iGpffffbd60 += 4 (unconditional advance of VM scratch/base pointer)
+//   0x08 -> LAB_0025beb8 — VM advance via tail jump to FUN_0025c220 (alias of 0x03)
+//   0x09 -> LAB_0025bec0 — iGpffffbd60 += 4 (identical semantics to 0x07)
+//   0x0A -> LAB_0025bed0 — VM advance via tail jump to FUN_0025c220 (alias of 0x03)
 //   0x0B -> LAB_0025bed8 (note: opcodes < 0x0B are dispatched; 0x0B itself is not reached through <0x0B branch)
 //
 // Relationship to the main VM:

@@ -15,7 +15,7 @@ Opcode -> Target function (still using original FUN*/LAB* names until analyzed).
 Naming note: Until we confirm behavior, our "best-guess" name defaults to the current FUN\_\* symbol. When we've got a better semantic hypothesis, we annotate it inline after the symbol.
 
 ```
-0x32 LAB_0025d6f0
+0x32 return_zero  # orig LAB_0025d6f0 — jr ra; move v0, zero
 0x33 FUN_0025d6f8  # name: advance_ip_and_sync_frame
 0x34 FUN_0025d728  # name: probe_system_busy
 0x35 FUN_0025d748  # guess: FUN_0025d748
@@ -44,7 +44,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x4C FUN_0025e520  # guess: FUN_0025e520
 0x4D FUN_0025e628  # guess: FUN_0025e628
 0x4E FUN_0025e730  # guess: FUN_0025e730
-0x4F FUN_0025e7c0  # guess: FUN_0025e7c0
+0x4F process_pending_spawn_requests  # orig FUN_0025e7c0 — iterate pending list, load/resolve descriptors, init entities/effects
 0x50 FUN_0025eaf0  # guess: FUN_0025eaf0
 0x51 FUN_0025eb48  # guess: FUN_0025eb48
 0x52 FUN_0025edc8  # guess: FUN_0025edc8
@@ -92,8 +92,8 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x7C FUN_00260360  # name: modify_register_rmw
 0x7D FUN_00260738  # guess: FUN_00260738
 0x7E FUN_00260738  # guess: FUN_00260738
-0x7F FUN_00260880  # guess: FUN_00260880
-0x80 FUN_00260880  # guess: FUN_00260880
+0x7F submit_param_from_model_axis  # orig FUN_00260880 — read modelIndex (expr) + axis (imm), pick 3-component field, scale, submit via FUN_0030bd20
+0x80 submit_param_from_model_axis  # orig FUN_00260880 — same handler as 0x7F (alias)
 0x81 FUN_00260958  # guess: FUN_00260958
 0x82 FUN_00260958  # guess: FUN_00260958
 0x83 FUN_00260b60  # guess: FUN_00260b60
@@ -122,7 +122,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x9A FUN_00261b80  # guess: FUN_00261b80
 0x9B FUN_00261c38  # name: advance_fade_track
 0x9C FUN_00261c60  # guess: FUN_00261c60
-0x9D FUN_00261cb8  # guess: FUN_00261cb8
+0x9D set_slot_pointer_from_stream_offset  # orig FUN_00261cb8 — slot[idx] = iGpffffb0e8 + next_u32(); idx from expr; bounds 0x40
 0x9E finish_process_slot  # orig FUN_00261d18 — clears slot[sel]; sel<0 => current slot (uGpffffbd88)
 0x9F FUN_00261d88  # guess: FUN_00261d88
 0xA0 FUN_00261de0  # guess: FUN_00261de0
@@ -155,7 +155,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xBB FUN_00263db0  # guess: FUN_00263db0
 0xBC FUN_00263e30  # guess: FUN_00263e30
 0xBD FUN_00263e80  # guess: FUN_00263e80
-0xBE FUN_00263ee0  # guess: FUN_00263ee0
+0xBE call_function_table_entry  # orig FUN_00263ee0 — dispatch PTR_FUN_0031e730[index](arg)
 0xBF FUN_00263f28  # guess: FUN_00263f28
 0xC0 FUN_00263f28  # guess: FUN_00263f28
 0xC1 FUN_00263fe8  # guess: FUN_00263fe8
@@ -177,7 +177,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xD1 FUN_002647d0  # guess: FUN_002647d0
 0xD2 FUN_00264858  # guess: FUN_00264858
 0xD3 FUN_002648f8  # guess: FUN_002648f8
-0xD4 LAB_00264998
+0xD4 query_status_bit_0x40  # orig LAB_00264998 — returns (DAT_003555fa & 0x40)
 0xD5 FUN_00264d40  # guess: FUN_00264d40
 0xD6 FUN_00264d68  # guess: FUN_00264d68
 0xD7 FUN_00264d90  # guess: FUN_00264d90
@@ -193,7 +193,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xE1 FUN_00265000  # guess: FUN_00265000
 0xE2 FUN_002650e0  # guess: FUN_002650e0
 0xE3 FUN_00265120  # guess: FUN_00265120
-0xE4 FUN_00265148  # guess: FUN_00265148
+0xE4 stage_swizzled_word_stream_upload  # orig FUN_00265148 — copy words into swizzled bank buffer and schedule DMA (FUN_00210b60)
 0xE5 FUN_002651a0  # guess: FUN_002651a0
 0xE6 FUN_00265200  # guess: FUN_00265200
 0xE7 FUN_00265290  # guess: FUN_00265290
