@@ -231,7 +231,7 @@ Extended opcode = 0x100 + index byte following 0xFF.
 0x10A FUN_00262690  # guess: FUN_00262690
 0x10B FUN_00262780  # guess: FUN_00262780
 0x10C FUN_00262898  # guess: FUN_00262898
-0x10D FUN_002629c0  # guess: FUN_002629c0
+0x10D submit_scaled_param_block  # orig FUN_002629c0 — parses 9 args, scales first four by fGpffff8d0c, calls FUN_0021e088 (see analyzed/ops/0x10D_submit_scaled_param_block.c)
 0x10E FUN_00262a98  # guess: FUN_00262a98
 0x10F FUN_00262b90  # guess: FUN_00262b90
 0x110 FUN_00262cf0  # guess: FUN_00262cf0
