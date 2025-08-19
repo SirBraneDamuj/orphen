@@ -19,9 +19,9 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x33 FUN_0025d6f8  # name: advance_ip_and_sync_frame
 0x34 FUN_0025d728  # name: probe_system_busy
 0x35 FUN_0025d748  # guess: FUN_0025d748
-0x36 FUN_0025d768  # guess: FUN_0025d768
+0x36 script_read_flag_or_work_memory  # orig FUN_0025d768 — reads work array u32 (0x36) or flag bucket byte (0x38); see analyzed/script_read_flag_or_work_memory.c
 0x37 variable_or_flag_alu  # orig FUN_0025d818 — ALU op on var array (0x37) or flag bucket (0x39)
-0x38 FUN_0025d768  # guess: FUN_0025d768
+0x38 script_read_flag_or_work_memory  # alias of 0x36; same handler branches by DAT_00355cd8
 0x39 variable_or_flag_alu  # alias of 0x37; same handler chooses mode by sGpffffbd68
 0x3A FUN_0025dab8  # guess: FUN_0025dab8
 0x3B FUN_0025da78  # guess: FUN_0025da78
@@ -42,20 +42,20 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x4A FUN_0025e250  # guess: FUN_0025e250
 0x4B FUN_0025e420  # guess: FUN_0025e420
 0x4C FUN_0025e520  # guess: FUN_0025e520
-0x4D FUN_0025e628  # guess: FUN_0025e628
+0x4D process_resource_id_list  # orig FUN_0025e628 — read N 16-bit IDs from stream into temp arena, 0-terminate, call FUN_002661f8; see analyzed/ops/0x4D_process_resource_id_list.c
 0x4E FUN_0025e730  # guess: FUN_0025e730
 0x4F process_pending_spawn_requests  # orig FUN_0025e7c0 — iterate pending list, load/resolve descriptors, init entities/effects
 0x50 FUN_0025eaf0  # guess: FUN_0025eaf0
-0x51 FUN_0025eb48  # guess: FUN_0025eb48
+0x51 set_pw_all_dispatch  # orig FUN_0025eb48 — "tbox" set_pw_all group dispatcher; reads mode from pbGpffffbd60 and spawns/configures entries; see analyzed/ops/0x51_set_pw_all_dispatch.c
 0x52 FUN_0025edc8  # guess: FUN_0025edc8
 0x53 FUN_0025ee08  # guess: FUN_0025ee08
 0x54 FUN_0025eeb0  # guess: FUN_0025eeb0
 0x55 FUN_0025eeb0  # guess: FUN_0025eeb0
 0x56 FUN_0025efa8  # guess: FUN_0025efa8
 0x57 FUN_0025f010  # guess: FUN_0025f010
-0x58 FUN_0025f0d8  # guess: FUN_0025f0d8
-0x59 FUN_0025f120  # guess: FUN_0025f120
-0x5A FUN_0025f150  # guess: FUN_0025f150
+0x58 select_pw_slot_by_index  # orig FUN_0025f0d8 — sets DAT_00355044 = &DAT_0058beb0 + (expr*0xEC) if expr<0x100; see analyzed/ops/0x58_select_pw_slot_by_index.c
+0x59 get_pw_slot_index  # orig FUN_0025f120 — returns selected pool slot index (or 0x100 if none); see analyzed/ops/0x59_get_pw_slot_index.c
+0x5A select_pw_by_index  # orig FUN_0025f150 — selects the first active pool object with slot[+0x4C]==arg; sets DAT_00355044; returns 1/0; see analyzed/ops/0x5A_select_pw_by_index.c
 0x5B FUN_0025f1c8  # guess: FUN_0025f1c8
 0x5C FUN_0025f238  # guess: FUN_0025f238
 0x5D FUN_0025f290  # guess: FUN_0025f290
@@ -115,7 +115,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x93 FUN_002612a0  # guess: FUN_002612a0
 0x94 FUN_002612e0  # guess: FUN_002612e0
 0x95 FUN_00261890  # guess: FUN_00261890
-0x96 FUN_002618c0  # guess: FUN_002618c0
+0x96 set_global_rgb_color  # orig FUN_002618c0 — read three values via evaluator, pack low bytes into uGpffffb6fc (0xRRGGBB); see analyzed/ops/0x96_set_global_rgb_color.c
 0x97 FUN_00261910  # guess: FUN_00261910
 0x98 FUN_002619e0  # guess: FUN_002619e0
 0x99 FUN_00261af0  # guess: FUN_00261af0
