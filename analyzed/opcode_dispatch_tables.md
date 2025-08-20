@@ -77,10 +77,10 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x6D FUN_0025fd10  # guess: FUN_0025fd10
 0x6E FUN_0025fe98  # guess: FUN_0025fe98
 0x6F FUN_0025ff58  # guess: FUN_0025ff58
-0x70 FUN_00260038  # guess: FUN_00260038
-0x71 FUN_00260080  # guess: FUN_00260080
-0x72 FUN_002600c8  # guess: FUN_002600c8
-0x73 FUN_00260188  # guess: FUN_00260188
+0x70 submit_angle_to_target  # orig FUN_00260038 — selects object (index or direct), computes angle via atan2f wrapper FUN_0023a480, scales by fGpffff8c84, submits; see analyzed/ops/0x70_submit_angle_to_target.c
+0x71 submit_distance_to_target  # orig FUN_00260080 — select object (idx or keep current), compute distance via FUN_0023a418(DAT_00355044), scale by DAT_00352bf8, submit; see analyzed/ops/0x71_submit_distance_to_target.c
+0x72 FUN_002600c8  # name: lerp_wrap_and_submit — see analyzed/ops/0x72_lerp_wrap_and_submit.c
+0x73 submit_wrapped_delta  # orig FUN_00260188 — delta = wrap((b/scale)-(a/scale)) * scale; submit; see analyzed/ops/0x73_submit_wrapped_delta.c
 0x74 FUN_002601f8  # guess: FUN_002601f8
 0x75 FUN_002601f8  # guess: FUN_002601f8
 0x76 FUN_00260318  # name: select_object_and_read_register
@@ -99,7 +99,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x83 FUN_00260b60  # guess: FUN_00260b60
 0x84 FUN_00260bc8  # guess: FUN_00260bc8
 0x85 FUN_00260c20  # guess: FUN_00260c20
-0x86 FUN_00260ca0  # guess: FUN_00260ca0
+0x86 advance_fullscreen_fade  # orig FUN_00260ca0 — calls FUN_0025d238 to step and submit fullscreen fade; see analyzed/ops/0x86_advance_fullscreen_fade.c
 0x87 FUN_00260c20  # guess: FUN_00260c20
 0x88 FUN_00260cc0  # guess: FUN_00260cc0
 0x89 FUN_00260ce0  # guess: FUN_00260ce0
@@ -294,13 +294,3 @@ Extended opcode = 0x100 + index byte following 0xFF.
 0x149 FUN_00265790  # guess: FUN_00265790
 0x14A FUN_002657b8  # guess: FUN_002657b8
 ```
-
-## Notes / Next Steps
-
-- Many clusters of duplicate handlers (e.g., 0x3D–0x40, 0x77–0x7C, 0xE7–0xE8, extended 0x116–0x118) likely represent opcode aliases differing by embedded operand format or unused padding variants.
-- Standard opcode range observed ends at 0xF5; 0xF6–0xFE appear unimplemented (no table entries). 0xFF triggers extended range.
-  - Candidate high-level semantics to derive: identify which opcodes perform: constant push, memory/global load/store, conditional jump, function/subroutine call, entity field get/set (compare with `read_script_register` (orig `FUN_0025c548`) / `FUN_0025c8f8` usage), and record construction.
-- Recommend prioritizing analysis of: 0x65 (`FUN_0025f7d8` multi-call parser), 0x64 (`FUN_0025f700` maybe header read), 0x56/0x57/0x58 cluster around value preparation, and extended group starting at 0x129–0x132 (looks like a contiguous parameter block builder set).
-- Future naming convention: once behavior confirmed, create analyzed C wrappers (e.g., `opcode_spawn_effect.c`) retaining original FUN\_ reference in comments.
-
-(Generated mapping kept mechanical and un-opinionated for clarity.)

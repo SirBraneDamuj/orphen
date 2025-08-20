@@ -1,0 +1,4 @@
+// speeds up some screen fades
+// see analyzed\ops\0x86_advance_fullscreen_fade.c
+gametitle=Orphen: Scion of Sorcery
+patch=1,EE,00571DD2,byte,FF
