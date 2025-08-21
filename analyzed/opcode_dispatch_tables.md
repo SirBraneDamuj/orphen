@@ -31,9 +31,9 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x3F FUN_0025e560  # name: modify_flag_state
 0x40 FUN_0025e560  # name: modify_flag_state
 0x41 FUN_0025db20  # guess: FUN_0025db20
-0x42 FUN_0025dd60  # guess: FUN_0025dd60
+0x42 advance_timed_interpolation  # orig FUN_0025dd60 — shared with 0x44; see analyzed/ops/0x44_advance_timed_interpolation.c
 0x43 build_and_submit_3way_vertex_streams  # orig FUN_0025de08 — reads 3 streams (xyz/uv/xyz), normalizes, submits
-0x44 FUN_0025dd60  # guess: FUN_0025dd60
+0x44 advance_timed_interpolation  # orig FUN_0025dd60 — shared with 0x42; see analyzed/ops/0x44_advance_timed_interpolation.c
 0x45 FUN_0025dfc8  # guess: FUN_0025dfc8  # TODO: analyze (seen in recent trace)
 0x46 FUN_0025dff0  # guess: FUN_0025dff0
 0x47 FUN_0025e0e8  # guess: FUN_0025e0e8
@@ -154,7 +154,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xBA FUN_00263d60  # guess: FUN_00263d60
 0xBB FUN_00263db0  # guess: FUN_00263db0
 0xBC FUN_00263e30  # guess: FUN_00263e30
-0xBD FUN_00263e80  # guess: FUN_00263e80
+0xBD object_method_dispatch  # orig FUN_00263e80 — select obj (FUN_0025d6c0) then call FUN_00242a18(obj, method, arg0, arg1); see analyzed/ops/0xBD_object_method_dispatch.c
 0xBE call_function_table_entry  # orig FUN_00263ee0 — dispatch PTR_FUN_0031e730[index](arg)
 0xBF FUN_00263f28  # guess: FUN_00263f28
 0xC0 FUN_00263f28  # guess: FUN_00263f28
