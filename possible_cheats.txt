@@ -5,3 +5,7 @@ patch=1,EE,00571DD2,byte,FF
 // speeds up some lerps
 // see analyzed\ops\0x44_advance_timed_interpolation.c
 patch=1,EE,2025DDE4,extended,246300FF
+// ENABLES THE GOSH DANG SUBTITLES!!!!!!!
+// YEAH. THE SUBTITLES! THAT THEY TOOK OUT OF THE GAME!
+// ENABLES THEM.
+patch=1,EE,20238A44,extended,00000000
