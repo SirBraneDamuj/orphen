@@ -1,4 +1,7 @@
+gametitle=Orphen: Scion of Sorcery
 // speeds up some screen fades
 // see analyzed\ops\0x86_advance_fullscreen_fade.c
-gametitle=Orphen: Scion of Sorcery
 patch=1,EE,00571DD2,byte,FF
+// speeds up some lerps
+// see analyzed\ops\0x44_advance_timed_interpolation.c
+patch=1,EE,2025DDE4,extended,246300FF

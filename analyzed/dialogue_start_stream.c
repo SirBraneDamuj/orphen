@@ -1,52 +1,54 @@
-// Analysis of FUN_00237b38
-// Original decompiled signature: void FUN_00237b38(long param_1)
+// Analyzed re-expression of FUN_00237b38
+// Original signature: void FUN_00237b38(long stream_ptr)
 //
-// Inferred Role:
-//   Initialize (or terminate) the active dialogue/cutscene text & control stream.
-//   Sets the global pointer pcGpffffaec0 to the supplied stream base and, when starting a fresh stream,
-//   seeds a large set of rendering / timing / style globals and clears previously active glyph entries.
+// Verified Role (raw src comparison):
+//   Start, restart, or terminate a dialogue/text stream by setting global pointer pcGpffffaec0 and
+//   (on first ever activation) initializing related per-session state buffers and glyph slot metadata.
+//   Also toggles three resource/overlay IDs (0x509 always enabled during (re)start path; 0x8FF/0x8FE
+//   enabled when starting, disabled when terminating) and adjusts bits 0x6000 in uGpffffb0f4.
 //
-// High-Level Behavior:
-//   param_1 == 0:
-//     * Terminates current stream (if any) and flips resource flags (enables 0x8ff / 0x8fe assets?).
-//   param_1 != 0 and first byte at param_1 != 0x02:
-//     * Treat as NEW stream start.
-//       - Positions: uGpffffbcc8 (Y origin), uGpffffbccc (X origin)
-//       - Timing: uGpffffbce0 set to 2, iGpffffbce4 = 600 (wrap/line budget), uGpffffbce8 = 0 (elapsed),
-//         uGpffffaec8 = 0 (aux counter), uGpffffbd00 = -1 (timer sentinel).
-//       - Color/style: uGpffffbcd4 = 0x80808080 (ARGB neutral gray), glyph slot color fields cleared.
-//       - Clears ~300 glyph slots at iGpffffaed4 (stride 0x3C, markers at +0x04 / +0x2C set to constants).
-//       - Resource toggling: disables 0x8ff / 0x8fe (opposite of termination path) to show dialogue layer.
-//       - Resets list / scroll state: DAT_005716c0 = 0; sets uGpffffbcf4 = 8 (mode/state code).
-//   param_1 != 0 and first byte == 0x02:
-//     * Instead of initializing, it clears pcGpffffaec0 (acts like a guard / special script header causing abort).
+// Control cases:
+//   1) stream_ptr == 0:
+//        - Treated as termination: pcGpffffaec0 set to 0, resources 0x8FF & 0x8FE disabled via FUN_002663a0,
+//          bits 0x6000 set in uGpffffb0f4.
+//   2) stream_ptr != 0 and *stream_ptr != 0x02:
+//        - Start / (re)start path. Always enables 0x509; if this is the first ever activation
+//          (previous pointer was null) performs one-time initialization:
+//             uGpffffbcc8 = -0x130, uGpffffbccc = -0x78
+//             uGpffffbce0 = 2; uGpffffbce4 = 600; uGpffffaec8 = 0; uGpffffbcd4 = 0x80808080
+//             Calls FUN_00238f18(0)
+//             Clears 300 glyph slots at iGpffffaed4, stride 0x3C:
+//                *(slot+0x04)=0xFFFFEFF7, *(slot+0x2C)=1
+//             uGpffffbd00 = 0xFFFFFFFF
+//          Then enables 0x8FF & 0x8FE (FUN_002663d8) and clears bits 0x6000 in uGpffffb0f4.
+//   3) stream_ptr != 0 and *stream_ptr == 0x02:
+//        - Abort: resets pcGpffffaec0 back to 0 (does NOT run initialization or resource toggles beyond prior set).
 //
-// Observations:
-//   * First stream byte acting as 0x02 sentinel may denote an alternative format or a control header; the routine
-//     refuses to start if it encounters it on first activation, possibly meaning "not a dialogue script" or a
-//     continuation chunk requiring different entry point.
-//   * iGpffffaed4 base contains 300 entries * 0x3C bytes ≈ 0x2CA0 bytes. Loop writes sentinel pattern 0xFFFFEFF7
-//     at +4 and 1 at +0x2C—likely invalid bounding box and active flag/time scaler reset.
-//   * Resource function pairs FUN_002663d8 / FUN_002663a0 appear to enable/disable assets (maybe overlay textures
-//     or sprite sheets). IDs: 0x509 (dialogue pane?), 0x8ff / 0x8fe (subtitle layers?).
+// Always after the above (for cases 1 & 2, not abort case):
+//   DAT_005716c0 = 0; uGpffffbcf4 = 8; uGpffffbce8 = 0.
 //
-// Future Work:
-//   * Formalize globals into a struct to clarify relationships (position, timing, color, mode flags).
-//   * Determine meaning of first-byte == 0x02 to decide whether to split to a separate loader.
+// Sentinel meaning (byte 0x02): Only observed blocking start; exact semantic not yet derived—kept as guard.
+// Glyph slot pattern: 0xFFFFEFF7 likely a sentinel marker (e.g. invalid bounding box / clear state). Value 1 at +0x2C
+// may be an initial counter or “free” flag. No assumptions baked into code beyond copying pattern.
 //
-// Naming: Provide dialogue_start_stream wrapper while preserving original symbol.
-// NOTE: Raw function remains unmodified in src/.
+// Conservatively avoid speculative naming of resource IDs (0x509, 0x8FF, 0x8FE) until their usage surfaces elsewhere.
+//
+// Side effects summary:
+//   - pcGpffffaec0, position/format globals, glyph slot array init, resource enable/disable, bitfield mutation,
+//     state mode (uGpffffbcf4), counters (uGpffffbce8, DAT_005716c0), sentinel timestamp (uGpffffbd00).
+//
+// Wrapper: dialogue_start_stream() plus original name preserved for cross references.
 
 #include "orphen_globals.h"
 
 // External globals (types provisional)
 extern char *pcGpffffaec0;        // active stream pointer
-extern unsigned int uGpffffbcc8;  // Y origin (signed stored in unsigned?)
-extern unsigned int uGpffffbccc;  // X origin
-extern unsigned int uGpffffbce0;  // line(?) mode / spacing
-extern int iGpffffbce4;           // wrap threshold (600)
-extern unsigned int uGpffffaec8;  // auxiliary counter
-extern unsigned int uGpffffbcd4;  // default color/style
+extern unsigned int uGpffffbcc8;  // init: -0x130
+extern unsigned int uGpffffbccc;  // init: -0x78
+extern unsigned int uGpffffbce0;  // init: 2
+extern int iGpffffbce4;           // init: 600
+extern unsigned int uGpffffaec8;  // cleared to 0
+extern unsigned int uGpffffbcd4;  // init color 0x80808080
 extern int iGpffffaed4;           // glyph slot array base
 extern unsigned int uGpffffbd00;  // timing sentinel
 extern unsigned int uGpffffb0f4;  // global flags bitfield (UI / overlay)
@@ -54,10 +56,10 @@ extern unsigned int DAT_005716c0; // list size / scroll count
 extern unsigned int uGpffffbcf4;  // state mode
 extern unsigned int uGpffffbce8;  // elapsed counter
 
-// External funcs
-extern void FUN_002663d8(int); // enable resource
-extern void FUN_002663a0(int); // disable resource
-extern void FUN_00238f18(int); // likely clears glyph list (argument 0)
+// External funcs (rename analyzed flag bit operations; keep originals in comments)
+extern void clear_global_event_flag(int bit_index);                    // FUN_002663d8
+extern void set_global_event_flag(int bit_index);                      // FUN_002663a0
+extern void dialogue_clear_or_filter_glyph_slots(int *cycle_selector); // FUN_00238f18
 
 static void dialogue_start_stream_impl(long streamPtr)
 {
@@ -65,8 +67,8 @@ static void dialogue_start_stream_impl(long streamPtr)
   pcGpffffaec0 = (char *)streamPtr;
   if (streamPtr == 0 || *pcGpffffaec0 != 0x02)
   {
-    // Resource: ensure 0x509 disabled while (re)starting unless terminating case sets opposite
-    FUN_002663d8(0x509);
+    // Always enable 0x509 at (re)start / terminate path
+    clear_global_event_flag(0x509); // was FUN_002663d8
     if (wasNull)
     {
       uGpffffbcc8 = 0xFFFFFED0; // -0x130
@@ -74,9 +76,9 @@ static void dialogue_start_stream_impl(long streamPtr)
       uGpffffbce0 = 2;
       iGpffffbce4 = 600;
       uGpffffaec8 = 0;
-      FUN_00238f18(0); // clear glyph records
+      dialogue_clear_or_filter_glyph_slots(0); // clear glyph records (was FUN_00238f18)
       uGpffffbcd4 = 0x80808080;
-      // Clear 300 glyph slots
+      // Initialize 300 glyph slots (index 0..299)
       int count = 299;
       int p = iGpffffaed4;
       while (count-- >= 0)
@@ -89,16 +91,16 @@ static void dialogue_start_stream_impl(long streamPtr)
     }
     if (streamPtr == 0)
     {
-      // Terminate: disable dialogue assets, set flags
-      FUN_002663a0(0x8FF);
-      FUN_002663a0(0x8FE);
+      // Termination path: disable 0x8FF / 0x8FE and set bits 0x6000
+      set_global_event_flag(0x8FF); // was FUN_002663a0
+      set_global_event_flag(0x8FE);
       uGpffffb0f4 |= 0x6000;
     }
     else
     {
-      // Starting: enable assets
-      FUN_002663d8(0x8FF);
-      FUN_002663d8(0x8FE);
+      // Start path: enable 0x8FF / 0x8FE and clear bits 0x6000
+      clear_global_event_flag(0x8FF); // was FUN_002663d8
+      clear_global_event_flag(0x8FE);
       uGpffffb0f4 &= 0x9FFF; // clear bits 0x6000
     }
     DAT_005716c0 = 0;
@@ -107,7 +109,7 @@ static void dialogue_start_stream_impl(long streamPtr)
   }
   else
   {
-    // First byte 0x02: abort start (clears pointer)
+    // Abort: first byte sentinel 0x02
     pcGpffffaec0 = 0;
   }
 }
