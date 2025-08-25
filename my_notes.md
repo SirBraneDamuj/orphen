@@ -56,3 +56,17 @@ I don't know how much relevance this has, but I spent a fair amount of debugging
 Copilot was also not very smart about it :)
 
 ---
+
+Attempted to patch:
+`00237EC8 2AE20202`
+`slti v0,s7,0x0002` -> `slti v0,s7,0x0202`
+
+All it does is make the text scroll faster. It seems that the text still yields for something else to tell it to advance...
+
+---
+
+Pretty good solution for now:
+
+`1C` opcode is a "delay". Change all following bytes to `01` to minimize the delay
+
+`1A` opcode seems to be "wait for audio to finish". These are usually at the ends of sentences. These are a little trickier, but I think can just be replaced with `20` for right now.

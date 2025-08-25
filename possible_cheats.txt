@@ -4,8 +4,12 @@ gametitle=Orphen: Scion of Sorcery
 patch=1,EE,00571DD2,byte,FF
 // speeds up some lerps
 // see analyzed\ops\0x44_advance_timed_interpolation.c
+// this has too many side effects though, so probably can't use :(
 patch=1,EE,2025DDE4,extended,246300FF
 // ENABLES THE GOSH DANG SUBTITLES!!!!!!!
 // YEAH. THE SUBTITLES! THAT THEY TOOK OUT OF THE GAME!
 // ENABLES THEM.
 patch=1,EE,20238A44,extended,00000000
+// Enables the "button prompt" at the end of subtitles
+// kinda useless, but neat
+patch=1,EE,202391FC,extended,00000000
