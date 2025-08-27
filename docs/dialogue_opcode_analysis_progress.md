@@ -5,6 +5,7 @@ This document summarizes the current state of reverse engineering work on the di
 ## Scope & Goals
 
 Primary focus:
+
 1. Systematically analyze control opcodes (< 0x1F) driving dialogue rendering, audio sync, and state flag mutations.
 2. Replace anonymous `FUN_*` / `LAB_*` handlers with descriptive analyzed wrappers under `analyzed/text_ops/` without modifying raw decompiled `src/` output.
 3. Track cursor (`gp-0x5140`) behavior, parameter consumption, and side effects (flag sets, slot allocation, audio triggers).
@@ -28,6 +29,7 @@ Primary focus:
 ## Opcode Table Status
 
 Implemented / documented analyzed handlers (files under `analyzed/text_ops/`):
+
 - 0x00: `text_op_00_load_palette_entry_or_advance.c`
 - 0x01 / 03 / 04 / 05: `text_op_01_spawn_banner_or_overlay.c` (aliases)
 - 0x02: `text_op_02_terminate_stream.c`
@@ -40,6 +42,7 @@ Implemented / documented analyzed handlers (files under `analyzed/text_ops/`):
 - 0x1B / 0x1C: `text_op_1B_set_flag_from_two_byte_id_if_prefixed.c` (0x1C alias)
 
 Remaining TODO opcodes:
+
 - 0x06, 0x08, 0x09, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x1D, 0x1E
 
 ## Distinct Wait / Synchronization Patterns Identified
@@ -85,6 +88,7 @@ These indicate script-level fine control over pacing audio playback and overlay 
 ## Open Questions Tracking
 
 Carried from `text_ops_dispatch_table.md` plus new:
+
 - Which remaining TODO opcodes handle line/page breaks, color changes, speed modifiers, or text positioning?
 - Full semantic roles for `gp-0x4304` and `gp-0x4999` targets.
 - Are 0x06 / 0x08 involved in spatial or style metadata (need disassembly review)?
@@ -101,6 +105,7 @@ Carried from `text_ops_dispatch_table.md` plus new:
 ## File Inventory (Text Opcodes)
 
 Analyzed handler files currently present:
+
 ```
 analyzed/text_ops/
   text_op_00_load_palette_entry_or_advance.c
@@ -123,4 +128,5 @@ analyzed/text_ops/
 - Documented timer advancement separation (0x07) and parameter scaling (0x0C).
 
 ---
+
 This file will be updated as additional opcode handlers are reversed and named.
