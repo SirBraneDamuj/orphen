@@ -13,3 +13,14 @@ patch=1,EE,20238A44,extended,00000000
 // Enables the "button prompt" at the end of subtitles
 // kinda useless, but neat
 patch=1,EE,202391FC,extended,00000000
+// always say that the audio is finished playing (skips over dialogue opcode 1A)
+// giant enemy crab freezes :( no good
+// patch=1,EE,00356788,byte,0
+// instead, IGNORE the check for audio finished playing
+// by no-oping the instruction that checks.
+patch=1,EE,20239A80,extended,00000000
+
+
+//always set the dialogue wait timer to 1
+//addiu v0,zero,0x1
+patch=1,EE,20239440,extended,24020001
