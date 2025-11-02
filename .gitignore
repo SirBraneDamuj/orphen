@@ -1,9 +1,11 @@
 # Raw decompilation files - keep locally but don't track in git
 src/
+src-jp/
 
 # Generated analysis files - recreate with scripts as needed
 globals.json
 strings.json
+strings-jp.json
 *_analysis.json
 function_pointers.json
 

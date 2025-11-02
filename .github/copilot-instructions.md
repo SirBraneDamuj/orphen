@@ -15,6 +15,8 @@ When analyzing a new file, extern the un-analyzed functions as-is. **Do not chan
 
 All decompiled functions have been exported to the `src` directory using a Ghidra automation script. The `src` directory contains the raw decompiled code for reference during analysis.
 
+The functions from the Japanese version of the game have been extracted to `src-jp`. \*Unless otherwise instructed, you should prefer focusing on the `src` directory. Same thing with the `strings-jp.json` file, and any other file with a `jp` suffix. Those files are here for cross-referencing the regions of the game and are NOT the main focus of this research project.
+
 Additionally, we have exported global variables metadata to `globals.json` using the `export_globals.py` script. This file contains:
 
 - All global variables (DAT\_\* and named globals) with their addresses, types, and sizes
