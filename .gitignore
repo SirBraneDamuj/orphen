@@ -42,3 +42,5 @@ __pycache__/
 *.out
 *_report.json
 subprocs.json
+
+out/

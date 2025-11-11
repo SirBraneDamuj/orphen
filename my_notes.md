@@ -70,3 +70,5 @@ Pretty good solution for now:
 `1C` opcode is a "delay". Change all following bytes to `01` to minimize the delay
 
 `1A` opcode seems to be "wait for audio to finish". These are usually at the ends of sentences. These are a little trickier, but I think can just be replaced with `20` for right now.
+
+`0031DD60` japanese version - this appears to be where the character attributes for battle mode are stored.
