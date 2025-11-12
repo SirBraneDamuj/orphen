@@ -47,7 +47,7 @@ Where relevant, strings.json/globals.json addresses are referenced; raw decompil
     - +6: u16 index into float4 table at +0x28 (normal/tangent/weights)
     - +8: u16 TBD (likely UV or secondary attribute; not yet consumed in traced code)
 - +0x18: u32 offs_vertex_byte_table
-  - One byte per vertex (indexed by vertex id) used to build a per-vertex scalar (byte*4 + 0x20) in FUN_002129b8; semantics TBD (alpha? weight?).
+  - One byte per vertex (indexed by vertex id) used to build a per-vertex scalar (byte\*4 + 0x20) in FUN_002129b8; semantics TBD (alpha? weight?).
 - +0x1C: u32 offs_draw_desc_table
   - Entries x 0x18 bytes; renderer iterates these per submesh.
   - Offsets within entry used by renderer:
@@ -123,6 +123,7 @@ To mirror in-game behavior for an offline parser:
 6. Extended subheader at +0x40 is optional; if present, you can emulate FUN_00221e70 to build and attach the four initialized tables for parity with runtime.
 
 Open items (TBD through further code reading):
+
 - Meaning of vertex record field at +8 (potential UV / secondary index).
 - Detailed palette / CLUT logic for color table (+0x20) beyond per-vertex triple.
 - Full index/face reconstruction workflow (draw call batching, primitive type) — current plan uses sequential triangles for offline visualization.
