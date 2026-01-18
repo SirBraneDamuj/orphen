@@ -1,0 +1,46 @@
+77360e0a0000000b0b0e080000000b0c090b9e0c011e0b043f04000077360e0a0000000b0b0e080000000b0c130b9e0c011e0b044404000077360e0a0000000b0b0e080000000b0c140b9e0c011e0b044a040000
+
+================================================================================
+SUBPROC 0x46B2 BYTECODE ANALYSIS
+================================================================================
+
+Subproc boundary: Ends at the 04 delimiter (byte offset 26)
+Remaining bytes are the NEXT subproc (0x043F)
+
+-------------------------------------------
+77          - Opcode 0x77: modify_register (write immediate)
+  36        - Arg1: Opcode 0x36 (read work memory/flag)
+    0e 0a000000 - Read from work array index 0x0A (10)
+    0b        - Return result
+  0b        - Return from arg evaluation → selector
+  
+  0e 08000000 - Arg2: Immediate u32 = 0x08 (register ID 8)
+  0b        - Return
+  
+  0c 09     - Arg3: Immediate u8 = 0x09 (value to write)
+  0b        - Return
+
+9e 0c 01 1e 0b - Wait/cleanup sequence (finish_process_slot with -1)
+04          - Block end delimiter [END OF SUBPROC]
+
+3f04        - Next subproc ID 0x043F (start of different subproc)
+0000...     - Beginning of subproc 0x043F's bytecode
+
+================================================================================
+FUNCTIONALITY:
+================================================================================
+
+This subproc performs a single atomic operation:
+  • Retrieves object ID from work array slot 10
+  • Sets that object's register 8 to value 9
+  • Cleans up and terminates
+
+Simple object property setter. Register 8 likely controls:
+  - Animation frame/state
+  - Visual effect parameter
+  - Behavior mode flag
+  - Render property (palette/texture index)
+
+The fact that similar patterns appear in subsequent subprocs (0x043F, 0x0444, 
+0x044A likely set register 8 to values 19, 20, etc.) suggests these subprocs
+are scheduled sequentially by a parent controller to animate state transitions.

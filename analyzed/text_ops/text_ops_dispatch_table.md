@@ -29,7 +29,7 @@ Opcode entries (hex):
 - 10: LAB_00239548 — TODO
 - 11: FUN_002395c0 — TODO
 - 12: LAB_00239750 — TODO
-- 13: FUN_00239760 — TODO
+- 13: FUN_00239760 — render speaker in subtitle
 - 14: FUN_002397f0 — TODO
 - 15: FUN_00239848 — TODO
 - 16: LAB_00239990 — Trigger voice/audio load (parse 7-byte param block: channel, wait flag, 32-bit id -> FUN_00206ae0) (see text_op_16_trigger_voice_or_audio_playback)

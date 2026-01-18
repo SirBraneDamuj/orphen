@@ -1,26 +1,40 @@
 gametitle=Orphen: Scion of Sorcery
-// speeds up some screen fades
-// see analyzed\ops\0x86_advance_fullscreen_fade.c
-patch=1,EE,00571DD2,byte,FF
-// speeds up some lerps
-// see analyzed\ops\0x44_advance_timed_interpolation.c
-// this has too many side effects though, so probably can't use :(
-patch=1,EE,2025DDE4,extended,246300FF
-// ENABLES THE GOSH DANG SUBTITLES!!!!!!!
-// YEAH. THE SUBTITLES! THAT THEY TOOK OUT OF THE GAME!
-// ENABLES THEM.
+comment=Debug Menu
+patch=1,EE,003555DA,byte,1
+patch=1,EE,003555DC,byte,1
+
+
+// PLAN: Change this to be a patch on the instruction that checks the entity queue timer to always branch. Will that work?
+//patch=1,EE,00571dc8,byte,1
+
+// PLAN: Find the thing that checks if an animation is done and assert that it is always done.
+
+//make the frame wait timers 
+//srl v0,a0,0x01
+patch=1,EE,2025CECC,extended,00041042
+
+//subtitles
 patch=1,EE,20238A44,extended,00000000
-// Enables the "button prompt" at the end of subtitles
-// kinda useless, but neat
-patch=1,EE,202391FC,extended,00000000
-// always say that the audio is finished playing (skips over dialogue opcode 1A)
-// giant enemy crab freezes :( no good
+//patch=1,EE,202391FC,extended,00000000
+
+// always say that the audio is finished playing?
+// giant enemy crab freezes :(
 // patch=1,EE,00356788,byte,0
+
 // instead, IGNORE the check for audio finished playing
 // by no-oping the instruction that checks.
 patch=1,EE,20239A80,extended,00000000
 
-
 //always set the dialogue wait timer to 1
 //addiu v0,zero,0x1
 patch=1,EE,20239440,extended,24020001
+
+//always orphen grunt every line
+//voice id 0x57 is orphen grunt
+//addiu t0,zero,0x57
+//patch=1,EE,202399C4,extended,24080057
+
+
+//hypothetical: increase text advance speed. seems a little unstable?
+//slti v0,s7,0x0020
+//patch=1,EE,20237EC8,extended,2AE20005

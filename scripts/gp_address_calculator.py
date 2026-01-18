@@ -88,14 +88,64 @@ def calculate_real_address(gp_addr_str, gp_base=DEFAULT_GP_BASE):
     
     return real_address, offset, info
 
+def calculate_gp_offset(real_address_str, gp_base=DEFAULT_GP_BASE):
+    """
+    Calculate the GP-relative offset from a real memory address (reverse operation).
+    
+    Args:
+        real_address_str: Real memory address string (e.g., "0x0034b563" or "34b563")
+        gp_base: GP base address (default: 0x00359F70)
+    
+    Returns:
+        tuple: (offset, gp_format, formatted_info)
+    """
+    # Parse the real address
+    addr_str = real_address_str.strip()
+    if addr_str.startswith('0x') or addr_str.startswith('0X'):
+        real_address = int(addr_str, 16)
+    else:
+        real_address = int(addr_str, 16)
+    
+    # Calculate offset
+    offset = real_address - gp_base
+    
+    # Format as GP variable (with ffff prefix for negative offsets)
+    if offset < 0:
+        # Convert to 32-bit two's complement representation
+        hex_offset = (offset + 0x100000000) & 0xFFFFFFFF
+        gp_format = f"Gp{hex_offset:08x}"
+    else:
+        gp_format = f"Gp{offset:08x}"
+    
+    # Format the information
+    info = {
+        'real_address': f"0x{real_address:08X}",
+        'gp_base': f"0x{gp_base:08X}",
+        'offset': f"{offset:+#X}" if offset >= 0 else f"-0x{abs(offset):X}",
+        'gp_variable': gp_format,
+        'calculation': f"0x{real_address:08X} - 0x{gp_base:08X} = {offset:+#X}" if offset >= 0 else f"0x{real_address:08X} - 0x{gp_base:08X} = -0x{abs(offset):X}"
+    }
+    
+    return offset, gp_format, info
+
 def format_output(info):
     """Format the calculation results for display."""
-    return f"""GP Address Calculation:
+    if 'gp_variable' in info:
+        # Forward calculation (GP -> Real)
+        return f"""GP Address Calculation:
   Variable:     {info['gp_variable']}
   GP Base:      {info['gp_base']}
   Offset:       {info['offset']}
   Calculation:  {info['calculation']}
   Real Address: {info['real_address']}"""
+    else:
+        # Reverse calculation (Real -> GP)
+        return f"""Reverse GP Calculation:
+  Real Address: {info['real_address']}
+  GP Base:      {info['gp_base']}
+  Offset:       {info['offset']}
+  Calculation:  {info['calculation']}
+  GP Variable:  {info['gp_variable']}"""
 
 def interactive_mode():
     """Interactive mode for multiple calculations."""
@@ -107,18 +157,25 @@ def interactive_mode():
     
     while True:
         try:
-            user_input = input("Enter GP address (or command): ").strip()
+            user_input = input("Enter GP address or real address (or command): ").strip()
             
             if user_input.lower() in ['quit', 'exit', 'q']:
                 break
             elif user_input.lower() in ['help', 'h']:
                 print("""
 Examples:
-  cGpffffb663          - Calculate address for debug flag
-  uGpffffb0ec          - Calculate address for frame state
-  bGpffffb66d          - Calculate address for debug control
-  set-gp 0x00359F70    - Change GP base address
-  gp                   - Show current GP base
+  Forward (GP -> Real):
+    cGpffffb663          - Calculate address for debug flag
+    uGpffffb0ec          - Calculate address for frame state
+    bGpffffb66d          - Calculate address for debug control
+  
+  Reverse (Real -> GP):
+    0x0034b563           - Calculate GP offset from real address
+    34b563               - Same as above (0x prefix optional)
+  
+  Commands:
+    set-gp 0x00359F70    - Change GP base address
+    gp                   - Show current GP base
 """)
                 continue
             elif user_input.lower() == 'gp':
@@ -138,9 +195,17 @@ Examples:
             elif not user_input:
                 continue
             
-            # Calculate the address
-            real_addr, offset, info = calculate_real_address(user_input, current_gp_base)
-            print(format_output(info))
+            # Detect if this is a GP address or real address
+            is_gp_format = 'gp' in user_input.lower() or user_input[0].lower() in 'cubis'
+            
+            if is_gp_format:
+                # Forward calculation: GP -> Real
+                real_addr, offset, info = calculate_real_address(user_input, current_gp_base)
+                print(format_output(info))
+            else:
+                # Reverse calculation: Real -> GP
+                offset, gp_format, info = calculate_gp_offset(user_input, current_gp_base)
+                print(format_output(info))
             print()
             
         except KeyboardInterrupt:
@@ -152,13 +217,20 @@ Examples:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert GP-relative addresses to real memory addresses",
+        description="Convert between GP-relative addresses and real memory addresses",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s cGpffffb663
-  %(prog)s uGpffffb0ec --gp-base 0x00359F70
-  %(prog)s --interactive
+  Forward (GP -> Real):
+    %(prog)s cGpffffb663
+    %(prog)s uGpffffb0ec --gp-base 0x00359F70
+  
+  Reverse (Real -> GP):
+    %(prog)s --reverse 0x0034b563
+    %(prog)s -r 34b563
+  
+  Interactive mode (auto-detects direction):
+    %(prog)s --interactive
 
 Common debug flags from main_game_loop.c:
   bGpffffb66d  - Multi-bit debug control flags
@@ -169,11 +241,13 @@ Common debug flags from main_game_loop.c:
         """
     )
     
-    parser.add_argument('gp_address', nargs='?', 
-                       help='GP-relative address (e.g., cGpffffb663)')
+    parser.add_argument('address', nargs='?', 
+                       help='GP-relative address (e.g., cGpffffb663) or real address with --reverse')
     parser.add_argument('--gp-base', type=lambda x: int(x, 0), 
                        default=DEFAULT_GP_BASE,
                        help=f'GP base address (default: 0x{DEFAULT_GP_BASE:08X})')
+    parser.add_argument('--reverse', '-r', action='store_true',
+                       help='Reverse mode: convert real address to GP offset')
     parser.add_argument('--interactive', '-i', action='store_true',
                        help='Enter interactive mode')
     
@@ -183,13 +257,19 @@ Common debug flags from main_game_loop.c:
         interactive_mode()
         return
     
-    if not args.gp_address:
+    if not args.address:
         parser.print_help()
         return
     
     try:
-        real_addr, offset, info = calculate_real_address(args.gp_address, args.gp_base)
-        print(format_output(info))
+        if args.reverse:
+            # Reverse calculation: Real -> GP
+            offset, gp_format, info = calculate_gp_offset(args.address, args.gp_base)
+            print(format_output(info))
+        else:
+            # Forward calculation: GP -> Real
+            real_addr, offset, info = calculate_real_address(args.address, args.gp_base)
+            print(format_output(info))
         
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

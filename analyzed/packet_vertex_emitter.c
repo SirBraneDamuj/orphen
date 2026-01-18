@@ -68,24 +68,25 @@ extern void FlushCache(int);
 /*
  * Pseudocode sketch with descriptive names (omits packet write details):
  */
-void emit_packets_for_j_records(void) {
-    // Align packet cursor
-    // Iterate A/J records
-    //  - read A.flags
-    //  - detect up to 4 active rings (stores last active index and count)
-    //  - compute PARAM_MODE (0x40000) based on selector_table and external byte unless A.flags has 0x80
-    //  - for ring in 0..3:
-    //      if ring inactive: continue
-    //      setup pl context
-    //      ringVerts = (A.flags & 0x4000) ? 3 : 4
-    //      primBase  = (A.flags & 0x8000) ? 0x0D : 0x2D
-    //      attrCtl = *(u8*)(ringPtr+0x0B), attrA = *(u8*)(ringPtr+0x0A)
-    //      if (attrCtl & 0x70) { A.flags|=0x40; set attr count pl[6] = 1/2/3 per (0x40/0x10); set pl[4]=attrA (0x80->0) }
-    //      if (ringType < 0) mark pl=2 else pl=3 and OR 0x10 into prim flags
-    //      if (A.flags & 0x0004) use Section B position rows via c_to_b_map[D_index] else use Section C
-    //      write ringVerts position triples scaled by 126 and packed
-    //      write color/params: if (*pl==2) write weighted RGB else write ARGB words (alpha from pl[4])
-    //      if (*pl != 2) write u16 index stream copied from ring stream
-    //      choose tag 0x1400014B or 0x1400013B depending on PARAM_MODE and number of active rings
-    //      close packet, update counters
+void emit_packets_for_j_records(void)
+{
+  // Align packet cursor
+  // Iterate A/J records
+  //  - read A.flags
+  //  - detect up to 4 active rings (stores last active index and count)
+  //  - compute PARAM_MODE (0x40000) based on selector_table and external byte unless A.flags has 0x80
+  //  - for ring in 0..3:
+  //      if ring inactive: continue
+  //      setup pl context
+  //      ringVerts = (A.flags & 0x4000) ? 3 : 4
+  //      primBase  = (A.flags & 0x8000) ? 0x0D : 0x2D
+  //      attrCtl = *(u8*)(ringPtr+0x0B), attrA = *(u8*)(ringPtr+0x0A)
+  //      if (attrCtl & 0x70) { A.flags|=0x40; set attr count pl[6] = 1/2/3 per (0x40/0x10); set pl[4]=attrA (0x80->0) }
+  //      if (ringType < 0) mark pl=2 else pl=3 and OR 0x10 into prim flags
+  //      if (A.flags & 0x0004) use Section B position rows via c_to_b_map[D_index] else use Section C
+  //      write ringVerts position triples scaled by 126 and packed
+  //      write color/params: if (*pl==2) write weighted RGB else write ARGB words (alpha from pl[4])
+  //      if (*pl != 2) write u16 index stream copied from ring stream
+  //      choose tag 0x1400014B or 0x1400013B depending on PARAM_MODE and number of active rings
+  //      close packet, update counters
 }
