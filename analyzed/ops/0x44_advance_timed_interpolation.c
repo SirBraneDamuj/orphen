@@ -48,6 +48,15 @@ unsigned int opcode_0x44_advance_timed_interpolation(void)
   const short op = sGpffffbd68;
   FUN_0025c258(args); // read duration into args[0]
 
+  // PATCH POINT FOR INSTANT COMPLETION:
+  // To skip interpolation wait and jump to destination, insert here:
+  //   int step = args[0];  // Use final duration value
+  //   if (op == 0x42) FUN_00217f38(step);
+  //   else if (op == 0x44) FUN_00218158(step);
+  //   iGpffffbd78 = args[0] << 5;  // Set accumulator to final value
+  //   return 1;
+  // This gives progress=1.0 to the interpolator, completing the movement instantly.
+
   // Continue until accumulator reaches duration<<5 (Q5 target)
   if (iGpffffbd78 < (args[0] << 5))
   {

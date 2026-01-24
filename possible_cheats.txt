@@ -3,37 +3,64 @@ comment=Debug Menu
 patch=1,EE,003555DA,byte,1
 patch=1,EE,003555DC,byte,1
 
-
-// PLAN: Change this to be a patch on the instruction that checks the entity queue timer to always branch. Will that work?
-//patch=1,EE,00571dc8,byte,1
-
 // PLAN: Find the thing that checks if an animation is done and assert that it is always done.
 
 //make the frame wait timers 
 //srl v0,a0,0x01
-patch=1,EE,2025CECC,extended,00041042
+// this breaks one specific cutscene at least with Zeus
+// the door opens too slowly
+// if we can selectively apply it like we do for the voice line thing, it might help
+//patch=1,EE,2025CECC,extended,00041042
 
 //subtitles
 patch=1,EE,20238A44,extended,00000000
 //patch=1,EE,202391FC,extended,00000000
 
-// always say that the audio is finished playing?
-// giant enemy crab freezes :(
-// patch=1,EE,00356788,byte,0
-
 // instead, IGNORE the check for audio finished playing
 // by no-oping the instruction that checks.
-patch=1,EE,20239A80,extended,00000000
+// this breaks a cutscene :(
+//patch=1,EE,20239A80,extended,00000000
+
+// instead, selectively ignore the check for audio finished playing
+// when the L2 button is held down (???)
+// -0x511A(gp) = 01 when L2 is pressed. I think it contains more controller input states
+// but L2 = 1 is all I know for sure
+// set v0 = whether or not L2 is pressed
+// lw v0,-0x511A(gp)
+patch=1,EE,20239A78,extended,8F82AEE6
+// set v1 = zero
+// addiu v1,zero,0x1
+patch=1,EE,20239A7C,extended,24030001
+// branch if v0 != v1, aka if L2 is pressed. THIS is what the original patch did all the time
+// but now we can selectively disable with L2!
+// bne v0,v1,0x00239A94
+patch=1,EE,20239A80,extended,10430004
+
+
+//selectively skips cutscene wait timers (disable with L2)
+//lw v1,-0x511A(gp)
+patch=1,EE,2025CEC8,extended,8F83AEE6
+patch=1,EE,2025CECC,extended,00000000
+patch=1,EE,2025CED0,extended,00000000
+patch=1,EE,2025CED4,extended,00000000
+//bne v1,zero,0x0025CF74
+patch=1,EE,2025CED8,extended,14600026
+
+
 
 //always set the dialogue wait timer to 1
 //addiu v0,zero,0x1
 patch=1,EE,20239440,extended,24020001
 
+
+// dual controller mode?
+//  DAT_00354e50
+
 //always orphen grunt every line
 //voice id 0x57 is orphen grunt
+// this doesn't really work
 //addiu t0,zero,0x57
 //patch=1,EE,202399C4,extended,24080057
-
 
 //hypothetical: increase text advance speed. seems a little unstable?
 //slti v0,s7,0x0020
