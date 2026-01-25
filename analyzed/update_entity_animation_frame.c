@@ -208,7 +208,8 @@ void update_entity_animation_frame(int16_t *entity_ptr)
 
     // Load next frame data (offset by frame_index, 3 shorts per frame)
     int frame_offset = ((int)((uint16_t)entity_ptr[0x54] << 0x10) >> 0x10) -
-                       ((int)((uint16_t)entity_ptr[0x54] << 0x10) >> 0x1F) >> 1;
+                           ((int)((uint16_t)entity_ptr[0x54] << 0x10) >> 0x1F) >>
+                       1;
     frame_data = frame_data + frame_offset * 3;
 
     int16_t data_field_2 = frame_data[2];

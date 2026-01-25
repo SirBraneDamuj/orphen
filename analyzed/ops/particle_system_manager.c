@@ -84,11 +84,11 @@ extern float DAT_00352c60; // Divisor for opcode 0x108
 
 // Particle system managers (each handles allocation and rendering)
 // All take: (x, y, z, w, count, config1, config2, entity_ptr)
-extern void FUN_0021ac00(float x, float y, float z, float w, 
+extern void FUN_0021ac00(float x, float y, float z, float w,
                          int count, int config1, int config2, void *entity);
-extern void FUN_0021d448(float x, float y, float z, float w, 
+extern void FUN_0021d448(float x, float y, float z, float w,
                          int count, int config1, int config2, void *entity);
-extern void FUN_0021c748(float x, float y, float z, float w, 
+extern void FUN_0021c748(float x, float y, float z, float w,
                          int count, int config1, int config2, void *entity);
 
 // Original signature: undefined8 FUN_00262250(void)
@@ -96,17 +96,17 @@ uint64_t opcode_particle_system_manager(void)
 {
   int16_t current_opcode = DAT_00355cd8;
   void *entity_ptr = DAT_00355044; // Default to current selected object
-  
+
   // Read 8 script parameters
-  int param0; // Position/size X
-  int param1; // Position/size Y
-  int param2; // Position/size Z
-  int param3; // Position/size W (fourth dimension)
-  int param4; // Particle count/intensity
-  int config1; // Configuration value 1
-  int config2; // Configuration value 2
+  int param0;       // Position/size X
+  int param1;       // Position/size Y
+  int param2;       // Position/size Z
+  int param3;       // Position/size W (fourth dimension)
+  int param4;       // Particle count/intensity
+  int config1;      // Configuration value 1
+  int config2;      // Configuration value 2
   int entity_index; // Entity binding index
-  
+
   FUN_0025c258(&param0);
   FUN_0025c258(&param1);
   FUN_0025c258(&param2);
@@ -115,7 +115,7 @@ uint64_t opcode_particle_system_manager(void)
   FUN_0025c258(&config1);
   FUN_0025c258(&config2);
   FUN_0025c258(&entity_index);
-  
+
   // Resolve entity binding from index
   if (entity_index < 0)
   {
@@ -128,21 +128,20 @@ uint64_t opcode_particle_system_manager(void)
     entity_ptr = (void *)(&DAT_0058beb0 + entity_index * 0xEC);
   }
   // else: use default DAT_00355044 (current selected object)
-  
+
   // Dispatch to appropriate particle system based on opcode
   if (current_opcode == 0x106)
   {
     // Particle system type 2 - environmental effects
     FUN_0021d448(
-      (float)param0 / DAT_00352c5c,
-      (float)param1 / DAT_00352c5c,
-      (float)param2 / DAT_00352c5c,
-      (float)param3 / DAT_00352c5c,
-      param4,
-      config1,
-      config2,
-      entity_ptr
-    );
+        (float)param0 / DAT_00352c5c,
+        (float)param1 / DAT_00352c5c,
+        (float)param2 / DAT_00352c5c,
+        (float)param3 / DAT_00352c5c,
+        param4,
+        config1,
+        config2,
+        entity_ptr);
   }
   else if (current_opcode < 0x107)
   {
@@ -150,32 +149,30 @@ uint64_t opcode_particle_system_manager(void)
     {
       // Particle system type 1 - spell/magic effects
       FUN_0021ac00(
-        (float)param0 / DAT_00352c58,
-        (float)param1 / DAT_00352c58,
-        (float)param2 / DAT_00352c58,
-        (float)param3 / DAT_00352c58,
-        param4,
-        config1,
-        config2,
-        entity_ptr
-      );
+          (float)param0 / DAT_00352c58,
+          (float)param1 / DAT_00352c58,
+          (float)param2 / DAT_00352c58,
+          (float)param3 / DAT_00352c58,
+          param4,
+          config1,
+          config2,
+          entity_ptr);
     }
   }
   else if (current_opcode == 0x108)
   {
     // Particle system type 3 - combat/impact effects
     FUN_0021c748(
-      (float)param0 / DAT_00352c60,
-      (float)param1 / DAT_00352c60,
-      (float)param2 / DAT_00352c60,
-      (float)param3 / DAT_00352c60,
-      param4,
-      config1,
-      config2,
-      entity_ptr
-    );
+        (float)param0 / DAT_00352c60,
+        (float)param1 / DAT_00352c60,
+        (float)param2 / DAT_00352c60,
+        (float)param3 / DAT_00352c60,
+        param4,
+        config1,
+        config2,
+        entity_ptr);
   }
-  
+
   return 0;
 }
 

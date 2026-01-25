@@ -47,20 +47,20 @@ void set_entity_animation_state(int entity_ptr, uint16_t animation_state, uint16
 {
   // Set primary animation state ID
   *(uint16_t *)(entity_ptr + 0x60) = animation_state;
-  
+
   // Set animation timer (fixed 999 countdown)
   *(uint16_t *)(entity_ptr + 0xA4) = 999;
-  
+
   // Set animation parameter/substate
   *(uint16_t *)(entity_ptr + 0xA0) = animation_param;
-  
+
   // Mark next state as undefined (no queued transition)
   *(uint16_t *)(entity_ptr + 0xA2) = 0xFFFF;
-  
+
   // Clear animation control flags (keep only bits 0x0038, clear 0x00C7)
   // Bitwise: flags = (flags & 0xFF38) - clears bits 0-2, 6-7 in lower byte
   *(uint16_t *)(entity_ptr + 6) = *(uint16_t *)(entity_ptr + 6) & 0xFF38;
-  
+
   // Reset animation frame counter
   *(uint16_t *)(entity_ptr + 0xA8) = 0;
 }

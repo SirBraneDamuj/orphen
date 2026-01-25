@@ -43,19 +43,19 @@ extern char cGpffffb6e1;
 void reset_entity_animation_to_default(uint64_t entity)
 {
   int entity_ptr = (int)entity;
-  
+
   // Set animation to default state 0, parameter 1 (idle/neutral)
   set_entity_animation_state(entity, 0, 1);
-  
+
   // Clear secondary animation state
   *(uint16_t *)(entity_ptr + 0x1B6) = 0;
-  
+
   // Ensure animation loop counter is at least 1
   if (*(int16_t *)(entity_ptr + 0x1B8) == 0)
   {
     *(uint16_t *)(entity_ptr + 0x1B8) = 1;
   }
-  
+
   // Reset global character counter if invalid (negative)
   if (cGpffffb6e1 < 0)
   {
