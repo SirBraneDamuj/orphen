@@ -1,42 +1,46 @@
-// Camera Entity Setup Function (analyzed)
+// Battle Logo Entity Setup Function (analyzed)
 // Original: FUN_0025d5b8
 // Address: 0x0025d5b8
-
-// HUMAN NOTE: most of this file is AI generated but I just want to clarify, this appears
-// to actually be the setup function for the SORCEROUS STABBER ORPHEN logo that shows up
-// before battles in the JP version.
 //
 // Summary:
-// - Initializes the camera entity at fixed address 0x58C7E8 in memory.
-// - Creates a camera entity (type 0x49) if not already initialized.
-// - Sets camera scale to 12.0 and enables specific camera flags.
-// - Camera entity is NOT part of the main entity pool (DAT_0058beb0).
+// - Initializes the "SORCEROUS STABBER ORPHEN" battle logo entity at fixed address 0x58C7E8.
+// - This logo appears before battles in the Japanese version.
+// - US version disables the logo by skipping opcodes 0xDF/0xE0, but the code remains.
+// - Creates logo entity (type 0x49) if not already initialized.
+// - Sets logo scale to 12.0 and enables display flag.
+// - Logo entity is NOT part of the main entity pool (DAT_0058beb0).
 //
-// Camera Entity Memory:
-// - Base Address: 0x58C7E8 (fixed, dedicated camera slot)
-// - Entity Type: 0x49 (camera entity type)
+// Logo Entity Memory:
+// - Base Address: 0x58C7E8 (fixed, dedicated logo slot)
+// - Entity Type: 0x49 (battle logo entity type)
 // - Initial Scale: 12.0 (0x41400000 in IEEE-754)
 //
 // Initialization Process:
-// 1. Set DAT_00355044 (current object pointer) to camera entity address
-// 2. Check if camera entity ID is initialized (< 1 means uninitialized)
+// 1. Set DAT_00355044 (current object pointer) to logo entity address
+// 2. Check if logo entity ID is initialized (< 1 means uninitialized)
 // 3. If uninitialized:
 //    a. Call FUN_00229c40(0x58c7e8, 0x49) - initializes entity structure with type 0x49
-//    b. Set flag bit 0x40 in entity flags at offset +0x08
-//    c. Call FUN_00229ef0(12.0f, entity) - sets up camera scale and size parameters
-// 4. Return pointer to camera entity
+//    b. Set flag bit 0x40 in entity flags at offset +0x08 (enables display)
+//    c. Call FUN_00229ef0(12.0f, entity) - sets up logo scale and size parameters
+// 4. Return pointer to logo entity
 //
-// Entity Structure (camera at 0x58C7E8):
-// - +0x00: Entity ID/type (initialized to 0x49 = camera)
-// - +0x08: Flags (bit 0x40 set = camera-specific flag)
+// Entity Structure (logo at 0x58C7E8):
+// - +0x00: Entity ID/type (initialized to 0x49 = battle logo)
+// - +0x08: Flags (bit 0x40 set = display enable flag)
 // - +0x14C: Scale parameter (set to 12.0)
 // - +0x150: Additional scale (set to 12.0)
 // - Other offsets populated by FUN_00229c40 and FUN_00229ef0
 //
 // Global Side Effects:
-// - Sets DAT_00355044 to point to camera entity (0x58C7E8)
-// - Marks camera as initialized (entity ID becomes 0x49)
-// - Enables camera rendering/update flag (bit 0x40)
+// - Sets DAT_00355044 to point to logo entity (0x58C7E8)
+// - Marks logo as initialized (entity ID becomes 0x49)
+// - Enables logo rendering/display flag (bit 0x40)
+//
+// Related Functions:
+// - Opcode 0xDF: Calls this function to initialize/show logo
+// - Opcode 0xE0 (FUN_00264fc0): Destroys logo via FUN_00265ec0, sets ID to -2
+// - FUN_00224798: Conditional logo removal when type=0x49 and flag bit 0x01 set
+// - FUN_00265ec0: Generic entity destroyer (clears ID to 0, calls cleanup functions)
 //
 // FUN_00229c40 (entity initializer):
 // - Initializes entity structure with specified type
@@ -51,11 +55,13 @@
 // - Updates both current and target scale values
 //
 // Notes:
-// - Camera entity is a singleton - only one exists at fixed address
-// - Type 0x49 appears to be specifically for camera entities
-// - Scale of 12.0 is the default camera distance/zoom
-// - Bit 0x40 in flags likely enables camera updates in entity processing loop
-// - Unlike regular entities, camera is not allocated from entity pool
+// - Logo entity is a singleton - only one exists at fixed address
+// - Type 0x49 is specifically for the battle logo entity
+// - Type 0x48 also seen at this address in FUN_00271220 (alternate logo/splash?)
+// - Scale of 12.0 controls logo size on screen
+// - Bit 0x40 in flags enables logo display in rendering loop
+// - US version scripts skip opcodes 0xDF/0xE0 to disable logo
+// - Unlike regular entities, logo is not allocated from entity pool
 
 #include <stdint.h>
 
@@ -78,21 +84,21 @@ void *setup_camera_entity(void)
 {
   void *camera_entity;
 
-  // Set current object pointer to camera entity
-  DAT_00355044 = (void *)0x58C7E8; // Camera entity fixed address
+  // Set current object pointer to battle logo entity
+  DAT_00355044 = (void *)0x58C7E8; // Battle logo entity fixed address
   camera_entity = DAT_00355044;
 
-  // Check if camera needs initialization (ID < 1 = uninitialized)
+  // Check if logo needs initialization (ID < 1 = uninitialized)
   if (DAT_0058c7e8 < 1)
   {
-    // Initialize camera entity structure with type 0x49
+    // Initialize logo entity structure with type 0x49 (battle logo)
     FUN_00229c40(0x58C7E8, 0x49);
 
-    // Set camera-specific flag (bit 0x40 at offset +0x08)
+    // Set logo display flag (bit 0x40 at offset +0x08)
     uint16_t *camera_flags = (uint16_t *)((char *)DAT_00355044 + 0x08);
     *camera_flags = *camera_flags | 0x40;
 
-    // Set camera scale to 12.0 (default camera distance/zoom)
+    // Set logo scale to 12.0 (logo size on screen)
     FUN_00229ef0(12.0f, (uint64_t)DAT_00355044);
   }
 
