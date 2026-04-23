@@ -1,0 +1,39 @@
+// Orphen fast-forward patch set (strict letterbox == 0x01)
+// Base profile: Profile C (x8 cadence), corrected and stable.
+//
+// Notes:
+// - Addresses use 2xxxxxxx format for PCSX2 pnach.
+// - Strict check uses DAT_00355054 == 0x01 to avoid false triggers when 0xFFFFFFFF appears.
+// - "Hard renderer off" is optional and disabled by default (uncomment to test).
+
+// ------------------------------------------------------------
+// Base: strict Profile C (x8 cadence)
+// ------------------------------------------------------------
+patch=1,EE,20200A20,extended,9382B0E4
+patch=1,EE,20200A24,extended,2442FFFF
+patch=1,EE,20200A28,extended,14400010
+patch=1,EE,20200A2C,extended,00000000
+patch=1,EE,20200A30,extended,00000000
+
+patch=1,EE,20223F58,extended,9382B0E4
+patch=1,EE,20223F5C,extended,2442FFFF
+patch=1,EE,20223F64,extended,14400009
+patch=1,EE,20223F68,extended,00000000
+patch=1,EE,20223F7C,extended,30420007
+patch=1,EE,20223F80,extended,30420007
+
+patch=1,EE,20207014,extended,9382B0E4
+patch=1,EE,2020702C,extended,2442FFFF
+patch=1,EE,20207034,extended,00000000
+patch=1,EE,20207038,extended,00000000
+patch=1,EE,2020703C,extended,10400063
+
+// ------------------------------------------------------------
+// Optional: hard disable main renderer while fast-forward path is active
+// ------------------------------------------------------------
+// Effect:
+// - During the cutscene fast-forward gated path, skip render calls unconditionally.
+// - This can remove flicker, but may hide scene visuals/subtitle layers depending on draw order.
+//
+// Enable by uncommenting this line:
+// patch=1,EE,20223F84,extended,1000000C

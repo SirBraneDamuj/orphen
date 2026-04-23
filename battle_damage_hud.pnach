@@ -1,0 +1,439 @@
+// Battle Damage HUD patch - displays attack/target info on hit
+//
+// When an attack triggers the HP bar update (FUN_002d5630), captures:
+//   Attack element flags, damage type, net damage dealt
+//   Target defense stat, current HP, max HP
+//   Target elemental effectiveness table (6 elements)
+// Displays as 4 lines of hex in the upper-right for ~5 seconds.
+//
+// Display format:
+//   Line 1: "E:XXXX T:XXXX >XXXX"  (attack element, dmg type, damage)
+//   Line 2: "Df:XXXX HP:XXXX/XXXX" (defense, HP current/max)
+//   Line 3: "P:XX L:XX W:XX"       (physical, lightning, wind effectiveness)
+//   Line 4: "F:XX D:XX I:XX"       (fire, dark, ice effectiveness)
+//
+// Hooks:
+//   0x00200844: jal FUN_00268270 -> jal display_hook (per-frame)
+//   0x002163f8: jal FUN_002d5630 -> jal capture_hook (on damage)
+//   0x002163d8: beq -> nop (remove entity type flag gate for bosses)
+//   0x002163e8: bne -> nop (remove entity status flag gate for bosses)
+//
+// Code cave: 0x01E00000+ (unused EE RAM, ~701KB above .bss,
+//   ~2MB below $sp @ 0x01FFFCC0)
+//
+// Data captured from inside FUN_00216140 (damage calculation):
+//   s0 = target entity, s1 = attack data, s3 = attacker
+//   a1 = max HP, a2 = current HP, a3 = pending damage
+//   s1[0] = attack element flags, s1+3 = damage type byte
+//   s0+0x12E = target defense stat
+//   Effectiveness table at caller sp+0x868 (acStack_88, 16 bytes)
+//
+// Compatible with boss_pentagon.pnach (separate hooks and memory).
+//   boss_pentagon hooks 0x00240838 and uses 0x312920.
+//   This patch hooks 0x00200844 and 0x002163f8, uses 0x01E00000+.
+
+// ------------------------------------------------------------
+// Hook 1: per-frame display (replace jal FUN_00268270 in main loop)
+// Original: 0C09A09C (jal 0x00268270)
+// ------------------------------------------------------------
+patch=1,EE,20200844,extended,0C780000
+
+// ------------------------------------------------------------
+// Hook 2: damage capture (replace jal FUN_002d5630 in FUN_00216140)
+// Original: 0C0B558C (jal 0x002d5630)
+// Delay slot at 0x002163fc (sltu a0,zero,a0) still executes.
+// ------------------------------------------------------------
+patch=1,EE,202163F8,extended,0C780080
+
+// ------------------------------------------------------------
+// Boss fix: NOP entity flag checks that gate the FUN_002d5630 call
+// Without these, bosses skip the call (and our capture hook).
+// The damage > 0 check at 0x002163c8 (blez) is preserved.
+// ------------------------------------------------------------
+// NOP entity type flag check: beq v0,zero,0x216404 if (flags & 0x4B)==0
+// Original: 1040000A (beq v0, zero, +0x0A)
+patch=1,EE,202163D8,extended,00000000
+// NOP entity status flag check: bne v0,zero,0x216404 if (status & 0x20)
+// Original: 14400006 (bne v0, zero, +0x06)
+patch=1,EE,202163E8,extended,00000000
+
+// ------------------------------------------------------------
+// Display hook at 0x01E00000
+// ------------------------------------------------------------
+// addiu sp, sp, -0x20
+patch=1,EE,21E00000,extended,27BDFFE0
+// sw ra, 0x00(sp)
+patch=1,EE,21E00004,extended,AFBF0000
+// sw s0, 0x04(sp)
+patch=1,EE,21E00008,extended,AFB00004
+// lui s0, 0x01E0
+patch=1,EE,21E0000C,extended,3C1001E0
+// lw v0, 0x0500(s0)  ; timer
+patch=1,EE,21E00010,extended,8E020500
+// beq v0, zero, call_original
+patch=1,EE,21E00014,extended,10400013
+// nop
+patch=1,EE,21E00018,extended,00000000
+// addiu v0, v0, -1
+patch=1,EE,21E0001C,extended,2442FFFF
+// sw v0, 0x0500(s0)  ; store timer
+patch=1,EE,21E00020,extended,AE020500
+// addiu a0, s0, 0x0600  ; &line1
+patch=1,EE,21E00024,extended,26040600
+// li a1, 0x44  ; x=68
+patch=1,EE,21E00028,extended,24050044
+// jal render_text_string
+patch=1,EE,21E0002C,extended,0C09A126
+// li a2, 0xC8  ; y=200 [delay]
+patch=1,EE,21E00030,extended,240600C8
+// addiu a0, s0, 0x0640  ; &line2
+patch=1,EE,21E00034,extended,26040640
+// li a1, 0x44  ; x=68
+patch=1,EE,21E00038,extended,24050044
+// jal render_text_string
+patch=1,EE,21E0003C,extended,0C09A126
+// li a2, 0xB6  ; y=182 [delay]
+patch=1,EE,21E00040,extended,240600B6
+// addiu a0, s0, 0x0680  ; &line3
+patch=1,EE,21E00044,extended,26040680
+// li a1, 0x44  ; x=68
+patch=1,EE,21E00048,extended,24050044
+// jal render_text_string
+patch=1,EE,21E0004C,extended,0C09A126
+// li a2, 0xA4  ; y=164 [delay]
+patch=1,EE,21E00050,extended,240600A4
+// addiu a0, s0, 0x06C0  ; &line4
+patch=1,EE,21E00054,extended,260406C0
+// li a1, 0x44  ; x=68
+patch=1,EE,21E00058,extended,24050044
+// jal render_text_string
+patch=1,EE,21E0005C,extended,0C09A126
+// li a2, 0x92  ; y=146 [delay]
+patch=1,EE,21E00060,extended,24060092
+// call_original: jal FUN_00268270
+patch=1,EE,21E00064,extended,0C09A09C
+// nop  [delay]
+patch=1,EE,21E00068,extended,00000000
+// lw s0, 0x04(sp)
+patch=1,EE,21E0006C,extended,8FB00004
+// lw ra, 0x00(sp)
+patch=1,EE,21E00070,extended,8FBF0000
+// jr ra
+patch=1,EE,21E00074,extended,03E00008
+// addiu sp, sp, 0x20  [delay]
+patch=1,EE,21E00078,extended,27BD0020
+
+// ------------------------------------------------------------
+// hex4 subroutine at 0x01E00100
+// t0=value(16-bit), t1=output ptr, t5=hex table base
+// ------------------------------------------------------------
+// sll t0, t0, 16  ; value to upper 16
+patch=1,EE,21E00100,extended,00084400
+// li t4, 4  ; nibble counter
+patch=1,EE,21E00104,extended,240C0004
+// loop: srl t2, t0, 28  ; top nibble
+patch=1,EE,21E00108,extended,00085702
+// addu t2, t2, t5  ; index hex table
+patch=1,EE,21E0010C,extended,014D5021
+// lbu t2, 0(t2)  ; hex char
+patch=1,EE,21E00110,extended,914A0000
+// sb t2, 0(t1)  ; store
+patch=1,EE,21E00114,extended,A12A0000
+// addiu t1, t1, 1
+patch=1,EE,21E00118,extended,25290001
+// sll t0, t0, 4  ; next nibble
+patch=1,EE,21E0011C,extended,00084100
+// addiu t4, t4, -1
+patch=1,EE,21E00120,extended,258CFFFF
+// bne t4, zero, loop
+patch=1,EE,21E00124,extended,1580FFF8
+// nop  [delay]
+patch=1,EE,21E00128,extended,00000000
+// jr ra
+patch=1,EE,21E0012C,extended,03E00008
+// nop  [delay]
+patch=1,EE,21E00130,extended,00000000
+
+// ------------------------------------------------------------
+// hex2 subroutine at 0x01E00140
+// t0=value(8-bit), t1=output ptr, t5=hex table base
+// Shares hex4's loop at 0x01E00108
+// ------------------------------------------------------------
+// sll t0, t0, 24  ; value to upper 8 bits
+patch=1,EE,21E00140,extended,00084600
+// li t4, 2  ; 2 nibbles
+patch=1,EE,21E00144,extended,240C0002
+// j hex4_loop  ; shared loop
+patch=1,EE,21E00148,extended,08780042
+// nop  [delay]
+patch=1,EE,21E0014C,extended,00000000
+
+// ------------------------------------------------------------
+// Hex lookup table "0123456789ABCDEF" at 0x01E00180
+// ------------------------------------------------------------
+// "0123"
+patch=1,EE,21E00180,extended,33323130
+// "4567"
+patch=1,EE,21E00184,extended,37363534
+// "89AB"
+patch=1,EE,21E00188,extended,42413938
+// "CDEF"
+patch=1,EE,21E0018C,extended,46454443
+
+// ------------------------------------------------------------
+// Damage capture hook at 0x01E00200
+// ------------------------------------------------------------
+// addiu sp, sp, -0x30
+patch=1,EE,21E00200,extended,27BDFFD0
+// sw ra, 0x00(sp)
+patch=1,EE,21E00204,extended,AFBF0000
+// sw a0, 0x04(sp)  ; is_enemy
+patch=1,EE,21E00208,extended,AFA40004
+// sw a1, 0x08(sp)  ; max_hp
+patch=1,EE,21E0020C,extended,AFA50008
+// sw a2, 0x0C(sp)  ; cur_hp
+patch=1,EE,21E00210,extended,AFA6000C
+// sw a3, 0x10(sp)  ; damage
+patch=1,EE,21E00214,extended,AFA70010
+// lui t6, 0x01E0  ; base
+patch=1,EE,21E00218,extended,3C0E01E0
+// li t0, 300  ; timer ~5s @60fps
+patch=1,EE,21E0021C,extended,2408012C
+// sw t0, 0x0500(t6)  ; set timer
+patch=1,EE,21E00220,extended,ADC80500
+// addiu t5, t6, 0x0180  ; hex table
+patch=1,EE,21E00224,extended,25CD0180
+// addiu t1, t6, 0x0600  ; line1 buf
+patch=1,EE,21E00228,extended,25C90600
+// li t0, 0x3A45  ; 'E:'
+patch=1,EE,21E0022C,extended,24083A45
+// sh t0, 0(t1)
+patch=1,EE,21E00230,extended,A5280000
+// addiu t1, t1, 2
+patch=1,EE,21E00234,extended,25290002
+// lhu t0, 0x00(s1)  ; atk element
+patch=1,EE,21E00238,extended,96280000
+// jal hex4
+patch=1,EE,21E0023C,extended,0C780040
+// nop
+patch=1,EE,21E00240,extended,00000000
+// li t0, 0x5420  ; ' T'
+patch=1,EE,21E00244,extended,24085420
+// sh t0, 0(t1)
+patch=1,EE,21E00248,extended,A5280000
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E0024C,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E00250,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E00254,extended,25290003
+// lbu t0, 0x03(s1)  ; damage type
+patch=1,EE,21E00258,extended,92280003
+// jal hex4
+patch=1,EE,21E0025C,extended,0C780040
+// nop
+patch=1,EE,21E00260,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E00264,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E00268,extended,A1280000
+// li t0, 0x3E  ; '>'
+patch=1,EE,21E0026C,extended,2408003E
+// sb t0, 1(t1)
+patch=1,EE,21E00270,extended,A1280001
+// addiu t1, t1, 2
+patch=1,EE,21E00274,extended,25290002
+// lw t0, 0x10(sp)  ; damage (a3)
+patch=1,EE,21E00278,extended,8FA80010
+// jal hex4
+patch=1,EE,21E0027C,extended,0C780040
+// nop
+patch=1,EE,21E00280,extended,00000000
+// sb zero, 0(t1)  ; null term
+patch=1,EE,21E00284,extended,A1200000
+// addiu t1, t6, 0x0640  ; line2 buf
+patch=1,EE,21E00288,extended,25C90640
+// li t0, 0x6644  ; 'Df'
+patch=1,EE,21E0028C,extended,24086644
+// sh t0, 0(t1)
+patch=1,EE,21E00290,extended,A5280000
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E00294,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E00298,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E0029C,extended,25290003
+// lhu t0, 0x012E(s0)  ; defense
+patch=1,EE,21E002A0,extended,9608012E
+// jal hex4
+patch=1,EE,21E002A4,extended,0C780040
+// nop
+patch=1,EE,21E002A8,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E002AC,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E002B0,extended,A1280000
+// li t0, 0x48  ; 'H'
+patch=1,EE,21E002B4,extended,24080048
+// sb t0, 1(t1)
+patch=1,EE,21E002B8,extended,A1280001
+// li t0, 0x50  ; 'P'
+patch=1,EE,21E002BC,extended,24080050
+// sb t0, 2(t1)
+patch=1,EE,21E002C0,extended,A1280002
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E002C4,extended,2408003A
+// sb t0, 3(t1)
+patch=1,EE,21E002C8,extended,A1280003
+// addiu t1, t1, 4
+patch=1,EE,21E002CC,extended,25290004
+// lw t0, 0x0C(sp)  ; cur HP (a2)
+patch=1,EE,21E002D0,extended,8FA8000C
+// jal hex4
+patch=1,EE,21E002D4,extended,0C780040
+// nop
+patch=1,EE,21E002D8,extended,00000000
+// li t0, 0x2F  ; '/'
+patch=1,EE,21E002DC,extended,2408002F
+// sb t0, 0(t1)
+patch=1,EE,21E002E0,extended,A1280000
+// addiu t1, t1, 1
+patch=1,EE,21E002E4,extended,25290001
+// lw t0, 0x08(sp)  ; max HP (a1)
+patch=1,EE,21E002E8,extended,8FA80008
+// jal hex4
+patch=1,EE,21E002EC,extended,0C780040
+// nop
+patch=1,EE,21E002F0,extended,00000000
+// sb zero, 0(t1)  ; null term
+patch=1,EE,21E002F4,extended,A1200000
+// addiu t1, t6, 0x0680  ; line3 buf
+patch=1,EE,21E002F8,extended,25C90680
+// li t0, 0x3A50  ; 'P:'
+patch=1,EE,21E002FC,extended,24083A50
+// sh t0, 0(t1)
+patch=1,EE,21E00300,extended,A5280000
+// addiu t1, t1, 2
+patch=1,EE,21E00304,extended,25290002
+// lbu t0, 0x898(sp)  ; eff[0] Physical
+patch=1,EE,21E00308,extended,93A80898
+// jal hex2
+patch=1,EE,21E0030C,extended,0C780050
+// nop
+patch=1,EE,21E00310,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E00314,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E00318,extended,A1280000
+// li t0, 0x4C  ; 'L'
+patch=1,EE,21E0031C,extended,2408004C
+// sb t0, 1(t1)
+patch=1,EE,21E00320,extended,A1280001
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E00324,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E00328,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E0032C,extended,25290003
+// lbu t0, 0x899(sp)  ; eff[1] Lightning
+patch=1,EE,21E00330,extended,93A80899
+// jal hex2
+patch=1,EE,21E00334,extended,0C780050
+// nop
+patch=1,EE,21E00338,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E0033C,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E00340,extended,A1280000
+// li t0, 0x57  ; 'W'
+patch=1,EE,21E00344,extended,24080057
+// sb t0, 1(t1)
+patch=1,EE,21E00348,extended,A1280001
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E0034C,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E00350,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E00354,extended,25290003
+// lbu t0, 0x89A(sp)  ; eff[2] Wind
+patch=1,EE,21E00358,extended,93A8089A
+// jal hex2
+patch=1,EE,21E0035C,extended,0C780050
+// nop
+patch=1,EE,21E00360,extended,00000000
+// sb zero, 0(t1)  ; null term line3
+patch=1,EE,21E00364,extended,A1200000
+// addiu t1, t6, 0x06C0  ; line4 buf
+patch=1,EE,21E00368,extended,25C906C0
+// li t0, 0x3A46  ; 'F:'
+patch=1,EE,21E0036C,extended,24083A46
+// sh t0, 0(t1)
+patch=1,EE,21E00370,extended,A5280000
+// addiu t1, t1, 2
+patch=1,EE,21E00374,extended,25290002
+// lbu t0, 0x89C(sp)  ; eff[4] Fire
+patch=1,EE,21E00378,extended,93A8089C
+// jal hex2
+patch=1,EE,21E0037C,extended,0C780050
+// nop
+patch=1,EE,21E00380,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E00384,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E00388,extended,A1280000
+// li t0, 0x44  ; 'D'
+patch=1,EE,21E0038C,extended,24080044
+// sb t0, 1(t1)
+patch=1,EE,21E00390,extended,A1280001
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E00394,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E00398,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E0039C,extended,25290003
+// lbu t0, 0x89D(sp)  ; eff[5] Dark
+patch=1,EE,21E003A0,extended,93A8089D
+// jal hex2
+patch=1,EE,21E003A4,extended,0C780050
+// nop
+patch=1,EE,21E003A8,extended,00000000
+// li t0, 0x20  ; ' '
+patch=1,EE,21E003AC,extended,24080020
+// sb t0, 0(t1)
+patch=1,EE,21E003B0,extended,A1280000
+// li t0, 0x49  ; 'I'
+patch=1,EE,21E003B4,extended,24080049
+// sb t0, 1(t1)
+patch=1,EE,21E003B8,extended,A1280001
+// li t0, 0x3A  ; ':'
+patch=1,EE,21E003BC,extended,2408003A
+// sb t0, 2(t1)
+patch=1,EE,21E003C0,extended,A1280002
+// addiu t1, t1, 3
+patch=1,EE,21E003C4,extended,25290003
+// lbu t0, 0x8A2(sp)  ; eff[10] Ice
+patch=1,EE,21E003C8,extended,93A808A2
+// jal hex2
+patch=1,EE,21E003CC,extended,0C780050
+// nop
+patch=1,EE,21E003D0,extended,00000000
+// sb zero, 0(t1)  ; null term line4
+patch=1,EE,21E003D4,extended,A1200000
+// lw a0, 0x04(sp)  ; restore args
+patch=1,EE,21E003D8,extended,8FA40004
+// lw a1, 0x08(sp)
+patch=1,EE,21E003DC,extended,8FA50008
+// lw a2, 0x0C(sp)
+patch=1,EE,21E003E0,extended,8FA6000C
+// lw a3, 0x10(sp)
+patch=1,EE,21E003E4,extended,8FA70010
+// jal FUN_002d5630  ; original
+patch=1,EE,21E003E8,extended,0C0B558C
+// nop
+patch=1,EE,21E003EC,extended,00000000
+// lw ra, 0x00(sp)
+patch=1,EE,21E003F0,extended,8FBF0000
+// jr ra
+patch=1,EE,21E003F4,extended,03E00008
+// addiu sp, sp, 0x30  [delay]
+patch=1,EE,21E003F8,extended,27BD0030

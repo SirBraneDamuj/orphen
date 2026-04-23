@@ -219,14 +219,14 @@ Extended opcode = 0x100 + index byte following 0xFF.
 
 ```
 0x100 LAB_002620a8
-0x101 FUN_00262118  # guess: FUN_00262118
-0x102 FUN_00262250  # guess: FUN_00262250
-0x103 FUN_00262488  # guess: FUN_00262488
-0x104 FUN_002624d8  # guess: FUN_002624d8
-0x105 FUN_00262118  # guess: FUN_00262118
-0x106 FUN_00262250  # guess: FUN_00262250
-0x107 FUN_00262118  # guess: FUN_00262118
-0x108 FUN_00262250  # guess: FUN_00262250
+0x101 set_2d_params_normalized  # orig FUN_00262118 — read 3 params, normalize 2 by scale, call FUN_0021abc8; shared with 0x105/0x107, branches by opcode ID; see analyzed/ops/0x101_0x105_0x107_set_2d_params_normalized.c
+0x102 set_quad_params_normalized_with_entity  # orig FUN_00262250 — read 8 params (4 coords + 3 values + entity index), normalize 4 coords, select entity from pool, call FUN_0021ac00; shared with 0x106/0x108; see analyzed/ops/0x102_0x106_0x108_set_quad_params_normalized_with_entity.c
+0x103 set_single_normalized_param  # orig FUN_00262488 — read 2 params, normalize second by DAT_00352c64, call FUN_0021b480; see analyzed/ops/0x103_set_single_normalized_param.c
+0x104 set_triple_normalized_params_with_entity  # orig FUN_002624d8 — read 7 params (3 coords + 3 values + entity index), normalize coords by DAT_00352c68, select entity, call FUN_0021b4b8; see analyzed/ops/0x104_set_triple_normalized_params_with_entity.c
+0x105 set_2d_params_normalized  # orig FUN_00262118 — shared with 0x101, normalizes by DAT_00352c50, calls FUN_0021d410; see analyzed/ops/0x101_0x105_0x107_set_2d_params_normalized.c
+0x106 set_quad_params_normalized_with_entity  # orig FUN_00262250 — shared with 0x102, normalizes by DAT_00352c5c, calls FUN_0021d448; see analyzed/ops/0x102_0x106_0x108_set_quad_params_normalized_with_entity.c
+0x107 set_2d_params_normalized  # orig FUN_00262118 — shared with 0x101, normalizes by DAT_00352c54, calls FUN_0021c710; see analyzed/ops/0x101_0x105_0x107_set_2d_params_normalized.c
+0x108 set_quad_params_normalized_with_entity  # orig FUN_00262250 — shared with 0x102, normalizes by DAT_00352c60, calls FUN_0021c748; see analyzed/ops/0x102_0x106_0x108_set_quad_params_normalized_with_entity.c
 0x109 FUN_002625b8  # guess: FUN_002625b8
 0x10A FUN_00262690  # guess: FUN_00262690
 0x10B FUN_00262780  # guess: FUN_00262780

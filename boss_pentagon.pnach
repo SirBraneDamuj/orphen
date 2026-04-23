@@ -1,0 +1,126 @@
+// Boss pentagon display patch v8 - hold L2 to show (current target + boss fallback)
+//
+// Problem: during boss battles, the pentagon targeting system is entirely
+// bypassed. Previous toggle approach failed because PCSX2 re-applies pnach
+// patches every frame, resetting the toggle state byte to 0.
+//
+// Solution: hold L2 to display the pentagon. No persistent state needed.
+// Hook the tail call `j FUN_002f1680` at 0x00240838 in FUN_0023fd30
+// (main battle update loop). Runs every frame during active battle, AFTER
+// FUN_002462c8 has already executed normally. FUN_002462c8 at 0x00240808
+// is completely unmodified, preserving pause/input behavior.
+//
+// When L2 is NOT held, the code cave is a pass-through: restores regs
+// and jumps to FUN_002f1680 — identical to original behavior.
+//
+// When L2 IS held:
+//   1. Gets the CURRENT target entity from DAT_00354e90
+//   2. If entity type is 0x192 (boss), temporarily fixup to 0x86/0x87
+//   3. Calls FUN_002334e8 to populate weakness data
+//   4. Calls FUN_00233818 to render the pentagon HUD
+//   5. Jumps to FUN_002f1680 (original tail call destination)
+//
+// PS2 controller button layout (game's format, active-high after inversion):
+//   DAT_003555f4 = currently held buttons (full state, updated every frame)
+//   L2 = 0x0001 (bit 0, from PS2 pad byte 3 bit 0)
+//
+// Code cave: 0x00312920 (dead functions FUN_00312920-FUN_00312998, zero xrefs,
+//   204 bytes available at tail of code section)
+//   43 instructions (172 bytes used)
+//
+// v5->v6 fix: previous code cave at 0x0022E910 was FUN_0022e910, which is
+// NOT dead — it's the battle pause/menu handler called from 0x002244d0.
+// Overwriting it broke the pause menu. Relocated to truly dead code.
+//
+// v6->v7: load current target from DAT_00354e90 instead of always slot-0.
+// DAT_00354e90 is the entity pointer set by FUN_002462c8 when the player
+// cycles targets with D-pad. Now the pentagon shows the selected enemy.
+//
+// v7->v8: DAT_00354e90 is only written when DAT_00354ec0 == 0 (normal battles).
+// Boss battles use a separate targeting path (FUN_002481f0 + DAT_00354ec0)
+// that never populates DAT_00354e90. Added fallback: if DAT_00354e90 is null,
+// load slot-0 from the enemy table (DAT_00354eb4 + 8) instead.
+
+// ------------------------------------------------------------
+// Hook: replace tail call `j FUN_002f1680` at end of FUN_0023fd30
+// Delay slot (addiu sp,sp,0xa0) still executes, restoring sp.
+// FUN_002462c8 at 0x00240808 is NOT modified.
+// ------------------------------------------------------------
+patch=1,EE,20240838,extended,080C4A48
+
+// ------------------------------------------------------------
+// Code cave at 0x00312920
+// ------------------------------------------------------------
+
+// ---- Prologue ----
+patch=1,EE,20312920,extended,27BDFFE0
+patch=1,EE,20312924,extended,AFBF0000
+patch=1,EE,20312928,extended,AFB00004
+
+// ---- Check L2 held (DAT_003555f4 & 0x0001) ----
+patch=1,EE,2031292C,extended,3C080035
+patch=1,EE,20312930,extended,950955F4
+patch=1,EE,20312934,extended,312A0001
+
+// if L2 not held -> done (0x003129BC)
+patch=1,EE,20312938,extended,11400020
+patch=1,EE,2031293C,extended,00000000
+
+// ---- Load current target entity (DAT_00354e90, reuse t0=0x0035xxxx) ----
+// If DAT_00354e90 is set (normal battles), use it directly.
+// If null (boss battles where DAT_00354ec0 != 0), fall back to slot-0.
+patch=1,EE,20312940,extended,8D044E90
+patch=1,EE,20312944,extended,14800005
+patch=1,EE,20312948,extended,00000000
+
+// fallback: load slot-0 from enemy table
+patch=1,EE,2031294C,extended,8D094EB4
+patch=1,EE,20312950,extended,1120001A
+patch=1,EE,20312954,extended,00000000
+patch=1,EE,20312958,extended,8D240008
+
+// if entity ptr null -> done
+patch=1,EE,2031295C,extended,10800017
+patch=1,EE,20312960,extended,00000000
+
+// ---- Type check ----
+// load entity type (halfword at entity+0), save entity ptr in s0
+patch=1,EE,20312964,extended,948B0000
+patch=1,EE,20312968,extended,00808025
+patch=1,EE,2031296C,extended,240C0192
+
+// if type != 0x192, skip fixup -> not_192 (0x003129AC)
+patch=1,EE,20312970,extended,156C000E
+patch=1,EE,20312974,extended,00000000
+
+// ---- Type 0x192 fixup (boss entity) ----
+// check entity[0x94]: if == 1 use 0x87, else 0x86
+patch=1,EE,20312978,extended,808D0094
+patch=1,EE,2031297C,extended,240B0086
+patch=1,EE,20312980,extended,240E0001
+patch=1,EE,20312984,extended,15AE0002
+patch=1,EE,20312988,extended,00000000
+patch=1,EE,2031298C,extended,240B0087
+
+// set_type: write fixup type, populate, restore
+patch=1,EE,20312990,extended,A48B0000
+patch=1,EE,20312994,extended,0C08CD3A
+patch=1,EE,20312998,extended,00000000
+patch=1,EE,2031299C,extended,240B0192
+patch=1,EE,203129A0,extended,A60B0000
+patch=1,EE,203129A4,extended,10000003
+patch=1,EE,203129A8,extended,00000000
+
+// ---- not_192: direct populate ----
+patch=1,EE,203129AC,extended,0C08CD3A
+patch=1,EE,203129B0,extended,00000000
+
+// ---- render pentagon ----
+patch=1,EE,203129B4,extended,0C08CE06
+patch=1,EE,203129B8,extended,00000000
+
+// ---- done: epilogue ----
+patch=1,EE,203129BC,extended,8FB00004
+patch=1,EE,203129C0,extended,8FBF0000
+patch=1,EE,203129C4,extended,080BC5A0
+patch=1,EE,203129C8,extended,27BD0020

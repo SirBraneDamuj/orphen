@@ -1,0 +1,75 @@
+// Debug Hello World patch - draws "Hello World" text on screen every frame
+//
+// Uses render_text_string (FUN_00268498) which renders ASCII text directly
+// to the scratchpad GPU command buffer. No enable flags or initialization
+// needed - it writes GS draw primitives for each character using the
+// game's built-in font texture atlas.
+//
+// Function signature: void render_text_string(char *text, int x, int y)
+//   a0 = pointer to null-terminated ASCII string
+//   a1 = X coordinate (origin at screen center, positive = right)
+//   a2 = Y coordinate (origin at screen center, positive = up/top)
+//   Character width: 12px, ASCII range 0x20-0x7F
+//   Screen range: X ~[-320,+320], Y ~[-224,+224] (640x448 non-interlaced)
+//
+// Hook: replace `jal FUN_00268270` at 0x00200844 in the main frame loop
+// (FUN_002000c0). This runs every frame in ALL game states (menus, battles,
+// exploration, etc.). The code cave calls render_text_string first, then
+// calls the original FUN_00268270 (debug buffer flush) before returning.
+//
+// Delay slot at 0x200848 is `move s1,zero` - unrelated to our hook,
+// executes harmlessly. Code after return at 0x20084C immediately overwrites
+// v0, so return value from FUN_00268270 is unused.
+//
+// Code cave: 0x01E00000 - unused EE RAM between .bss end (0x01D50AFF)
+//   and stack ($sp ~ 0x01FFFCC0). ~701KB above .bss, ~2MB below stack.
+//   PCSX2 pnach re-applies every frame, so the code cave is always fresh.
+//
+// Memory map context:
+//   .text:  0x00200000 - 0x00312A0B
+//   .bss:   0x00355F00 - 0x01D50AFF
+//   cave:   0x01E00000 (unused RAM)
+//   $sp:  ~ 0x01FFFCC0
+//
+// Text position: x=0xA0 (160), y=0xC8 (200) = upper-right area of screen
+
+// ------------------------------------------------------------
+// Hook: replace `jal FUN_00268270` in main frame loop
+// Original: 0C09A09C (jal 0x00268270)
+// ------------------------------------------------------------
+patch=1,EE,20200844,extended,0C780000
+
+// ------------------------------------------------------------
+// Code cave at 0x01E00000 (unused EE RAM)
+// ------------------------------------------------------------
+
+// ---- Prologue: save return address ----
+patch=1,EE,21E00000,extended,27BDFFF0
+patch=1,EE,21E00004,extended,AFBF0000
+
+// ---- Call render_text_string("Hello World", 160, 200) ----
+// a0 = 0x01E00030 (string pointer, stored after code)
+patch=1,EE,21E00008,extended,3C0401E0
+patch=1,EE,21E0000C,extended,24840030
+// a1 = 0xA0 (x = 160, right of center)
+patch=1,EE,21E00010,extended,240500A0
+// jal render_text_string (FUN_00268498)
+patch=1,EE,21E00014,extended,0C09A126
+// a2 = 0xC8 (y = 200, near top) [delay slot]
+patch=1,EE,21E00018,extended,240600C8
+
+// ---- Call original FUN_00268270 (debug buffer flush) ----
+patch=1,EE,21E0001C,extended,0C09A09C
+patch=1,EE,21E00020,extended,00000000
+
+// ---- Epilogue: restore ra and return ----
+patch=1,EE,21E00024,extended,8FBF0000
+patch=1,EE,21E00028,extended,03E00008
+patch=1,EE,21E0002C,extended,27BD0010
+
+// ------------------------------------------------------------
+// String data: "Hello World\0" at 0x01E00030
+// ------------------------------------------------------------
+patch=1,EE,21E00030,extended,6C6C6548
+patch=1,EE,21E00034,extended,6F57206F
+patch=1,EE,21E00038,extended,00646C72
