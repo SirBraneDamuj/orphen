@@ -6,24 +6,25 @@ Status: **PSM2 extraction working**. Implementation lives in
 ## Verified facts
 
 ### Helpers
+
 - `FUN_0022b4e0` is `*dst = *(u32*)src; return src + 4` — read u32, advance.
 - `FUN_0022b520` is `*dst = (u32)*(u16*)src; return src + 2` — read u16, advance.
 
 ### Section layout (header at offset 0; magic 'PSM2' = `0x324D5350`)
 
-| Header | Section | Purpose                                                                        |
-|--------|---------|--------------------------------------------------------------------------------|
-| +0x04  | A       | Per-mesh records (0x20 stride). Used for J construction; not needed offline.   |
-| +0x08  | C       | **Per-vertex positions**. Stride 16: `f32 x,y,z`, `u16 b_index`, `u8 style`, pad. Count = `s16` at +0. |
+| Header | Section | Purpose                                                                                                                                                                                       |
+| ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| +0x04  | A       | Per-mesh records (0x20 stride). Used for J construction; not needed offline.                                                                                                                  |
+| +0x08  | C       | **Per-vertex positions**. Stride 16: `f32 x,y,z`, `u16 b_index`, `u8 style`, pad. Count = `s16` at +0.                                                                                        |
 | +0x0C  | D       | **Primitives**. 32 bytes / record (16 × u16). Only `u16[0..3]` are C-indices. Count = `s16` at +0; **records start at +4 (not +2)** — the 2 bytes after the count are reserved/unused header. |
-| +0x10  | K       | 3-byte rows feeding per-D material slots. Not needed for OBJ.                  |
-| +0x14  | E       | Compact 0x10-byte rows (same role as K). Not needed for OBJ.                   |
-| +0x18  | F       | 0x1000-short LUT + trailing list. Not relevant to mesh geometry.               |
-| +0x1C  | J       | Per-mesh differential vertex buffers. Redundant with D's global C-indices.     |
-| +0x2C  | G       | Grouped triangle index lists (collision?). Not the primary draw stream.        |
-| +0x30  | B       | **Per-vertex normals**. Stride 12 on disk (3 × f32); widened to 16 in memory by zeroing a 4th dword. Count = u32 truncated to s16 at +0. |
-| +0x34  | H       | 0x10-byte rows of 4 ints. Not relevant to mesh export.                         |
-| +0x38  | I       | 0x20-byte rows of 2×2 ints. Not relevant to mesh export.                       |
+| +0x10  | K       | 3-byte rows feeding per-D material slots. Not needed for OBJ.                                                                                                                                 |
+| +0x14  | E       | Compact 0x10-byte rows (same role as K). Not needed for OBJ.                                                                                                                                  |
+| +0x18  | F       | 0x1000-short LUT + trailing list. Not relevant to mesh geometry.                                                                                                                              |
+| +0x1C  | J       | Per-mesh differential vertex buffers. Redundant with D's global C-indices.                                                                                                                    |
+| +0x2C  | G       | Grouped triangle index lists (collision?). Not the primary draw stream.                                                                                                                       |
+| +0x30  | B       | **Per-vertex normals**. Stride 12 on disk (3 × f32); widened to 16 in memory by zeroing a 4th dword. Count = u32 truncated to s16 at +0.                                                      |
+| +0x34  | H       | 0x10-byte rows of 4 ints. Not relevant to mesh export.                                                                                                                                        |
+| +0x38  | I       | 0x20-byte rows of 2×2 ints. Not relevant to mesh export.                                                                                                                                      |
 
 ### Why "Section B = normals"
 
@@ -38,7 +39,7 @@ garbage. v2 omits those modes.
 ### D-record on-disk stride is 32 bytes (16 × u16)
 
 | u16 idx | Use                                                                  |
-|---------|----------------------------------------------------------------------|
+| ------- | -------------------------------------------------------------------- |
 | 0..3    | Four C-indices (vertices of the primitive)                           |
 | 4..12   | Auxiliary fields fed into 0x80/0x78 in-memory records                |
 | 13      | Index `k` into Section A 0x10-stride table (material/state slot)     |

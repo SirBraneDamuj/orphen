@@ -16,11 +16,11 @@ Tooling for extracting 3D models (and related data) from the Orphen: Scion of So
 
 ## Formats covered
 
-| Format | Magic    | Loader (Ghidra)    | Doc                                     |
-|--------|----------|--------------------|-----------------------------------------|
-| PSM2   | `PSM2`   | `FUN_0022b5a8`     | `docs/psm2_format_and_loader_notes.md`  |
-| PSC3   | `PSC3`   | `FUN_00222498`     | `docs/psc3_format_and_loader_notes.md`  |
-| PSB4   | `PSB4`   | `FUN_0022ce60`     | `docs/psb4_format_and_loader_notes.md`  |
+| Format | Magic  | Loader (Ghidra) | Doc                                    |
+| ------ | ------ | --------------- | -------------------------------------- |
+| PSM2   | `PSM2` | `FUN_0022b5a8`  | `docs/psm2_format_and_loader_notes.md` |
+| PSC3   | `PSC3` | `FUN_00222498`  | `docs/psc3_format_and_loader_notes.md` |
+| PSB4   | `PSB4` | `FUN_0022ce60`  | `docs/psb4_format_and_loader_notes.md` |
 
 `MAP.BIN` (sector table) carries PSM2 chunks for map geometry; many entries are
 LZ-compressed with the headerless decoder in `lz_decoder.py`.
