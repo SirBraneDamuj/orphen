@@ -33,8 +33,10 @@ from typing import Dict, List, Optional, Tuple
 from .psc3_full import (
     MAGIC_PSC3,
     PSC3FullMesh,
+    UV_SCALE,
     parse_psc3_full,
     sample_pose_v2,
+    _norm_for,
     _u32,
 )
 from .psc3_gltf import (
@@ -45,6 +47,7 @@ from .psc3_gltf import (
     _f32_vec3,
     _preferred_png,
     _authoritative_png,
+    _primary_subdraw_idx,
     _u16_idx,
     _build_face_groups,
 )
@@ -71,9 +74,12 @@ def _swap_trans(t):
 def _euler_to_quat(ex: float, ey: float, ez: float) -> Tuple[float, float, float, float]:
     """Convert PS2 euler triple to a unit quaternion in glTF Y-up space.
 
-    The runtime matrix builder (FUN_0020cf28, param_10==0 branch) does:
-        M = T * R_y(-ey) * R_x(-ex) * R_z(-ez) * S
-    so the equivalent quaternion is q = q_y(-ey) * q_x(-ex) * q_z(-ez).
+    The runtime matrix builder (FUN_0020cf28, param_10==0 branch) applies
+    rotations to the working matrix as post-multiplies in this sequence:
+        M' = M * R_z(-ez) * R_x(-ex) * R_y(-ey)
+    so the composite rotation applied to column vectors is
+        R = R_z(-ez) * R_x(-ex) * R_y(-ey)
+    and the equivalent quaternion is q_z(-ez) * q_x(-ex) * q_y(-ey).
     Z-up -> Y-up basis swap (x,y,z) -> (x,z,-y) is applied to the axis
     components after composition.
     """
@@ -94,10 +100,10 @@ def _euler_to_quat(ex: float, ey: float, ez: float) -> Tuple[float, float, float
             aw * bw - ax * bx - ay * by - az * bz,
         )
 
-    qy = axis(-ey, 1)
-    qx = axis(-ex, 0)
-    qz = axis(-ez, 2)
-    q = qmul(qmul(qy, qx), qz)
+    qz = axis(ez, 2)
+    qx = axis(ex, 0)
+    qy = axis(ey, 1)
+    q = qmul(qmul(qz, qx), qy)
     qx_, qy_, qz_, qw_ = q
     # Basis swap on the axis component to match the position swap.
     return (qx_, qz_, -qy_, qw_)
@@ -155,11 +161,70 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
         return times, targets
 
     # ---- geometry ----
+    # Use the static face builder to get material info & ordering, but
+    # we discard its per-submesh grouping: PSC3 uses per-vertex skinning
+    # (a primitive's verts can come from multiple bones' vstream
+    # windows), so the correct per-vertex bone is determined by which
+    # submesh's window contains that vertex, not by which submesh owns
+    # the primitive. We rebuild a flat list of (orig_vi, uv, mat_key)
+    # corners below so JOINTS_0 can be set per vertex.
     groups, mat_data, mat_order = _build_face_groups(mesh, apply_pose=False)
-    sm_groups: Dict[int, Dict[Tuple[int, int, int, int], list]] = {}
-    for (sm_idx, mat_key), tris in groups.items():
-        sm_groups.setdefault(sm_idx, {})[mat_key] = tris
-    active_sm = sorted(sm_groups.keys())
+    active_sm = sorted({sm for (sm, _k) in groups.keys()})
+
+    # Per-vertex bone owner: vert_idx -> sm_idx. Every vertex falls in
+    # exactly one submesh's [vstream_start, vstream_end) window.
+    n_verts = len(mesh.positions)
+    vert_owner: List[int] = [-1] * n_verts
+    for sm in mesh.submeshes:
+        for v in range(sm.vstream_start, sm.vstream_end):
+            if 0 <= v < n_verts:
+                vert_owner[v] = sm.index
+
+    def _resolve_uv_for_prim(prim) -> List[Tuple[float, float]]:
+        sd_idx = _primary_subdraw_idx(prim)
+        if sd_idx is None or not (0 <= sd_idx < len(mesh.subdraws)):
+            return [(0.0, 0.0)] * 4
+        sd = mesh.subdraws[sd_idx]
+        out: List[Tuple[float, float]] = []
+        for slot in sd.uvs:
+            u = (slot & 0xFF) * UV_SCALE
+            v = ((slot >> 8) & 0xFF) * UV_SCALE
+            out.append((u, v))
+        return out
+
+    # Material key for a primitive (matches _build_face_groups logic).
+    def _mat_key_for_prim(prim) -> Optional[Tuple[int, int, int, int]]:
+        sd_idx = _primary_subdraw_idx(prim)
+        if sd_idx is None or not (0 <= sd_idx < len(mesh.subdraws)):
+            return None
+        sd = mesh.subdraws[sd_idx]
+        flags = sd.tex_flags
+        r, g, b = mesh.color_for(sd_idx, 0)
+        return (r, g, b, flags)
+
+    # Group triangles by material only. Each tri corner is (orig_vi, uv).
+    skinned_tris: Dict[Tuple[int, int, int, int], List[List[Tuple[int, Tuple[float, float]]]]] = {}
+    for prim in mesh.primitives:
+        if prim.flags & 0x20:
+            continue
+        mk = _mat_key_for_prim(prim)
+        if mk is None or mk not in mat_data:
+            continue
+        uvs = _resolve_uv_for_prim(prim)
+        bucket = skinned_tris.setdefault(mk, [])
+        if prim.is_triangle:
+            bucket.append([
+                (prim.v[0], uvs[0]),
+                (prim.v[1], uvs[1]),
+                (prim.v[2], uvs[2]),
+            ])
+        else:
+            c0 = (prim.v[0], uvs[0])
+            c1 = (prim.v[1], uvs[1])
+            c2 = (prim.v[2], uvs[2])
+            c3 = (prim.v[3], uvs[3])
+            bucket.append([c3, c0, c1])
+            bucket.append([c1, c2, c3])
 
     # ---- texture / material ------------------------------------------
     pngs = _bundle_pngs(bundle_dir) if bundle_dir else []
@@ -233,73 +298,173 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
         accessors.append(a)
         return len(accessors) - 1
 
-    meshes_json: List[dict] = []
-    sm_to_mesh_index: Dict[int, int] = {}
+    # ---- joint table & per-bone rest matrices ------------------------
+    # Every submesh becomes a joint. Order = mesh.submeshes order; this
+    # is the order used when emitting JOINTS_0 indices and the order
+    # of inverseBindMatrices below.
+    joint_sm_indices: List[int] = [sm.index for sm in mesh.submeshes]
+    sm_idx_to_joint: Dict[int, int] = {sm.index: j for j, sm in enumerate(mesh.submeshes)}
 
-    for sm_idx in active_sm:
-        groups_for_sm = sm_groups[sm_idx]
-        primitives_json: List[dict] = []
-        for mat_key in sorted(groups_for_sm.keys(), key=lambda k: mat_order.index(k)):
-            tris = groups_for_sm[mat_key]
-            positions: List[Tuple[float, float, float]] = []
-            normals: List[Tuple[float, float, float]] = []
-            uvs: List[Tuple[float, float]] = []
-            indices: List[int] = []
-            for tri in tris:
-                for (p, n, uv) in tri:
-                    indices.append(len(positions))
-                    positions.append(p)
-                    normals.append(n)
-                    uvs.append(uv)
-            if not positions:
-                continue
-            pos_off = binbuf.append(_f32_vec3(positions))
-            nrm_off = binbuf.append(_f32_vec3(normals))
-            uv_off = binbuf.append(_f32_vec2(uvs))
-            idx_off = binbuf.append(_u16_idx(indices), align=2)
-            bv_pos = _add_bv(pos_off, len(positions) * 12, target=34962)
-            bv_nrm = _add_bv(nrm_off, len(normals) * 12, target=34962)
-            bv_uv = _add_bv(uv_off, len(uvs) * 8, target=34962)
-            bv_idx = _add_bv(idx_off, len(indices) * 2, target=34963)
-            mn, mx = _bbox(positions)
-            a_pos = _add_acc(bv_pos, len(positions), "VEC3", 5126, mn, mx)
-            a_nrm = _add_acc(bv_nrm, len(normals), "VEC3", 5126)
-            a_uv = _add_acc(bv_uv, len(uvs), "VEC2", 5126)
-            a_idx = _add_acc(bv_idx, len(indices), "SCALAR", 5123)
-            primitives_json.append({
-                "attributes": {"POSITION": a_pos, "NORMAL": a_nrm, "TEXCOORD_0": a_uv},
-                "indices": a_idx,
-                "material": mat_key_to_index[mat_key],
-                "mode": 4,
-            })
-        if not primitives_json:
+    # ---- single skinned mesh ------------------------------------------
+    # One glTF primitive per material. Each vertex carries its owning
+    # bone via JOINTS_0 (single influence, weight 1.0). Vertices remain
+    # in bone-local space; inverseBindMatrices are identity (see notes
+    # at the skin block below).
+    def _u8x4(items: List[Tuple[int, int, int, int]]) -> bytes:
+        out = bytearray()
+        for a, b, c, d in items:
+            out.append(a & 0xff); out.append(b & 0xff)
+            out.append(c & 0xff); out.append(d & 0xff)
+        return bytes(out)
+
+    primitives_json: List[dict] = []
+    for mat_key in mat_order:
+        if mat_key not in skinned_tris:
             continue
-        sm_to_mesh_index[sm_idx] = len(meshes_json)
-        meshes_json.append({
-            "name": f"{name}_sm{sm_idx:02d}",
-            "primitives": primitives_json,
+        tris = skinned_tris[mat_key]
+        # De-duplicate corners by (orig_vi, uv) — same vertex with the
+        # same UV across triangles can share an emitted vertex.
+        corner_to_idx: Dict[Tuple[int, Tuple[float, float]], int] = {}
+        positions: List[Tuple[float, float, float]] = []
+        normals: List[Tuple[float, float, float]] = []
+        uvs: List[Tuple[float, float]] = []
+        joints: List[Tuple[int, int, int, int]] = []
+        weights: List[Tuple[float, float, float, float]] = []
+        indices: List[int] = []
+        for tri in tris:
+            for (orig_vi, uv) in tri:
+                key = (orig_vi, uv)
+                idx = corner_to_idx.get(key)
+                if idx is None:
+                    p = mesh.positions[orig_vi] if 0 <= orig_vi < n_verts else (0.0, 0.0, 0.0)
+                    n = _norm_for(mesh, orig_vi)
+                    # Z-up -> Y-up (matches bone TRS swap).
+                    pos = (p[0], p[2], -p[1])
+                    nrm = (n[0], n[2], -n[1])
+                    owner_sm = vert_owner[orig_vi] if 0 <= orig_vi < n_verts else -1
+                    if owner_sm < 0:
+                        # Fall back to the world-root submesh (sm37 / first
+                        # entry whose parent_idx == -1 or self) — should not
+                        # happen for valid PSC3 data.
+                        owner_sm = mesh.submeshes[0].index
+                    joint_idx = sm_idx_to_joint[owner_sm]
+                    idx = len(positions)
+                    corner_to_idx[key] = idx
+                    positions.append(pos)
+                    normals.append(nrm)
+                    uvs.append(uv)
+                    joints.append((joint_idx, 0, 0, 0))
+                    weights.append((1.0, 0.0, 0.0, 0.0))
+                indices.append(idx)
+        if not positions:
+            continue
+        pos_off = binbuf.append(_f32_vec3(positions))
+        nrm_off = binbuf.append(_f32_vec3(normals))
+        uv_off = binbuf.append(_f32_vec2(uvs))
+        # JOINTS_0 as UNSIGNED_BYTE VEC4 (5121).
+        j_off = binbuf.append(_u8x4(joints))
+        w_off = binbuf.append(_f32_vec4(weights))
+        idx_off = binbuf.append(_u16_idx(indices), align=2)
+        bv_pos = _add_bv(pos_off, len(positions) * 12, target=34962)
+        bv_nrm = _add_bv(nrm_off, len(normals) * 12, target=34962)
+        bv_uv = _add_bv(uv_off, len(uvs) * 8, target=34962)
+        bv_j = _add_bv(j_off, len(joints) * 4, target=34962)
+        bv_w = _add_bv(w_off, len(weights) * 16, target=34962)
+        bv_idx = _add_bv(idx_off, len(indices) * 2, target=34963)
+        mn, mx = _bbox(positions)
+        a_pos = _add_acc(bv_pos, len(positions), "VEC3", 5126, mn, mx)
+        a_nrm = _add_acc(bv_nrm, len(normals), "VEC3", 5126)
+        a_uv = _add_acc(bv_uv, len(uvs), "VEC2", 5126)
+        a_j = _add_acc(bv_j, len(joints), "VEC4", 5121)
+        a_w = _add_acc(bv_w, len(weights), "VEC4", 5126)
+        a_idx = _add_acc(bv_idx, len(indices), "SCALAR", 5123)
+        primitives_json.append({
+            "attributes": {
+                "POSITION": a_pos,
+                "NORMAL": a_nrm,
+                "TEXCOORD_0": a_uv,
+                "JOINTS_0": a_j,
+                "WEIGHTS_0": a_w,
+            },
+            "indices": a_idx,
+            "material": mat_key_to_index[mat_key],
+            "mode": 4,
         })
 
+    meshes_json: List[dict] = []
+    if primitives_json:
+        meshes_json.append({
+            "name": f"{name}_skinned",
+            "primitives": primitives_json,
+        })
+    skinned_mesh_index = 0 if meshes_json else None
+
+    # ---- node hierarchy + skin ---------------------------------------
+    # Layout:
+    #   node 0  : virtual scene root (holds the bone tree + skinned mesh)
+    #   nodes 1..N: one per submesh, parented per Submesh.parent_idx.
+    #   last    : the skinned mesh node (no TRS, references skin).
+    # Bone nodes carry TRS (rest pose) but no `mesh` attribute — geometry
+    # lives on the skinned mesh node and is positioned via the skin.
     nodes: List[dict] = [{"name": name, "children": []}]
     sm_to_node_index: Dict[int, int] = {}
-    # Bind pose: per-submesh translation + rotation sampled at the
-    # bind target (we use target=0 of bind_anim_id; identity for
-    # unbound submeshes).
-    for sm_idx in active_sm:
-        if sm_idx not in sm_to_mesh_index:
-            continue
-        tr_raw, eu_raw, _scale = sample_pose_v2(buf, mesh, sm_idx, 0)
+    for sm in mesh.submeshes:
+        tr_raw, eu_raw, _scale = sample_pose_v2(buf, mesh, sm.index, 0)
         tx, ty, tz = _swap_trans(tr_raw)
         qx, qy, qz, qw = _euler_to_quat(*eu_raw)
-        node = {
-            "name": f"{name}_sm{sm_idx:02d}",
-            "mesh": sm_to_mesh_index[sm_idx],
+        node: dict = {
+            "name": f"{name}_sm{sm.index:02d}",
             "translation": [tx, ty, tz],
             "rotation": [qx, qy, qz, qw],
         }
-        sm_to_node_index[sm_idx] = len(nodes)
-        nodes[0]["children"].append(len(nodes))
+        sm_to_node_index[sm.index] = len(nodes)
         nodes.append(node)
+    # Wire parents.
+    for sm in mesh.submeshes:
+        my_node = sm_to_node_index[sm.index]
+        if sm.parent_idx >= 0 and sm.parent_idx in sm_to_node_index:
+            parent_node = sm_to_node_index[sm.parent_idx]
+        else:
+            parent_node = 0
+        nodes[parent_node].setdefault("children", []).append(my_node)
+
+    # Joint node indices in the same order as joint_sm_indices.
+    joint_node_indices: List[int] = [sm_to_node_index[s] for s in joint_sm_indices]
+
+    skins_json: List[dict] = []
+    if skinned_mesh_index is not None:
+        # Inverse bind matrices: identity for every joint. Vertex
+        # positions in the PSC3 are stored in each owning bone's local
+        # space, so at rest:
+        #   final = node_world_at_rest * IBM * v_local
+        #         = bone_world_at_rest * I * v_local
+        #         = bone_world_at_rest * v_local
+        # which is the correct rest-pose placement.
+        ibm_data = bytearray()
+        identity = (1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0)
+        for _ in joint_node_indices:
+            ibm_data.extend(struct.pack("<16f", *identity))
+        ibm_off = binbuf.append(bytes(ibm_data))
+        bv_ibm = _add_bv(ibm_off, len(ibm_data))
+        a_ibm = _add_acc(bv_ibm, len(joint_node_indices), "MAT4", 5126)
+        skins_json.append({
+            "name": f"{name}_skin",
+            "joints": joint_node_indices,
+            "inverseBindMatrices": a_ibm,
+            "skeleton": joint_node_indices[0] if joint_node_indices else 0,
+        })
+        # Skinned mesh node: no TRS, references the skin + mesh. Live
+        # under the virtual root so it renders alongside the skeleton.
+        skinned_node_idx = len(nodes)
+        nodes.append({
+            "name": f"{name}_mesh",
+            "mesh": skinned_mesh_index,
+            "skin": 0,
+        })
+        nodes[0].setdefault("children", []).append(skinned_node_idx)
 
     # ---- animations ---------------------------------------------------
     animations_json: List[dict] = []
@@ -314,7 +479,8 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
         bv_time = _add_bv(time_off, len(times) * 4)
         a_time = _add_acc(bv_time, len(times), "SCALAR", 5126,
                           mn=[min(times)], mx=[max(times)])
-        for sm_idx in active_sm:
+        for sm in mesh.submeshes:
+            sm_idx = sm.index
             if sm_idx not in sm_to_node_index:
                 continue
             trans_kf: List[Tuple[float, float, float]] = []
@@ -361,6 +527,8 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
         "materials": materials,
         "animations": animations_json,
     }
+    if skins_json:
+        gltf["skins"] = skins_json
     if textures:
         gltf["textures"] = textures
     if images:

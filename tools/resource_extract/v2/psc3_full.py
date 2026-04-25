@@ -92,6 +92,10 @@ class Submesh:
     material_group: int
     aux_id: int
     section_a_off: int  # absolute file offset
+    # Bone hierarchy: low byte of `material_group` is the parent submesh
+    # index. A self-loop (parent == self) marks the world root. -1 means
+    # no parent (root or unparented).
+    parent_idx: int = -1
     # Rest-pose transform resolved via slab[0] -> Section B. None when absent.
     rest_quat: Optional[Tuple[float, float, float, float]] = None  # (x, y, z, w)
     rest_trans: Optional[Tuple[float, float, float]] = None
@@ -198,11 +202,18 @@ def parse_psc3_full(buf: bytes, pose_frame: int = 0) -> PSC3FullMesh:
         # (psc3_base + sec_a_off), NOT relative to offs_section_a. Verified
         # by re-reading FUN_0020da68 against small meshes like grp_017c.
         sec_a_off = _u32(buf, base + 0x10)
+        # Parent index lives in the low byte of `material_group`. The high
+        # byte appears to encode flags (skinning/weighting hints). Self-loop
+        # marks the world root (typically the last submesh, with
+        # byte_len == 0 -- a joint-only node).
+        parent = mgrp & 0xff
+        if parent == i or parent >= max(1, h['submesh_count']):
+            parent = -1
         mesh.submeshes.append(Submesh(
             index=i, vstream_start=vstart, vstream_end=vend,
             prim_start=pstart, prim_end=pend, byte_len=byte_len,
             material_group=mgrp, aux_id=aux,
-            section_a_off=sec_a_off,
+            section_a_off=sec_a_off, parent_idx=parent,
         ))
 
     # ---------- rest-pose resolution (pose-table slab[0] -> keyframe pool) ----------

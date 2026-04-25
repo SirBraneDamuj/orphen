@@ -31,17 +31,17 @@ Once that's confirmed, remove it and proceed.
 ## Candidate sampler / render functions
 
 We were wrong that `FUN_0020da68` is the canonical animation sampler.
-It's *one* sampler (only invoked when `entity+0x9c != 0` and the
+It's _one_ sampler (only invoked when `entity+0x9c != 0` and the
 render path goes through `FUN_0020eec0`). Other entry points:
 
-| BP address | Function | Why it might be the right one |
-| ---------- | -------- | ----------------------------- |
-| `0x0020c810` | `FUN_0020c810` — per-entity render setup | Reads `entity+0x15c` (PSC3 base), `entity+0x9c` (anim table), `entity+0xa0` (anim id). Calls FUN_0020eec0 + FUN_0020e840 + FUN_0020dfb0. **Set this one first** — it's the funnel for the standard render path. |
-| `0x0020e840` | `FUN_0020e840` — alt path called right after `FUN_0020eec0` | Possibly a per-vertex transform path that does its own pose lookup. |
-| `0x0020dfb0` | `FUN_0020dfb0` — final tail call from setup | Same. |
-| `0x0020dc88` | `FUN_0020dc88` — also called by `FUN_0029c7a8` for entity+0x140 reads | Used to fetch a position/quat with a different argument pattern. |
-| `0x00212058` | `FUN_00212058` — per-primitive render loop | The actual draw call. If this hits but no upstream sampler does, the pose math is happening inline in this function (likely VU0 macro mode). |
-| `0x00204db8` | `FUN_00204db8` — main game loop | Sanity check (Step 0). |
+| BP address   | Function                                                              | Why it might be the right one                                                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0x0020c810` | `FUN_0020c810` — per-entity render setup                              | Reads `entity+0x15c` (PSC3 base), `entity+0x9c` (anim table), `entity+0xa0` (anim id). Calls FUN_0020eec0 + FUN_0020e840 + FUN_0020dfb0. **Set this one first** — it's the funnel for the standard render path. |
+| `0x0020e840` | `FUN_0020e840` — alt path called right after `FUN_0020eec0`           | Possibly a per-vertex transform path that does its own pose lookup.                                                                                                                                             |
+| `0x0020dfb0` | `FUN_0020dfb0` — final tail call from setup                           | Same.                                                                                                                                                                                                           |
+| `0x0020dc88` | `FUN_0020dc88` — also called by `FUN_0029c7a8` for entity+0x140 reads | Used to fetch a position/quat with a different argument pattern.                                                                                                                                                |
+| `0x00212058` | `FUN_00212058` — per-primitive render loop                            | The actual draw call. If this hits but no upstream sampler does, the pose math is happening inline in this function (likely VU0 macro mode).                                                                    |
+| `0x00204db8` | `FUN_00204db8` — main game loop                                       | Sanity check (Step 0).                                                                                                                                                                                          |
 
 ## Suggested order
 
@@ -73,12 +73,15 @@ match in step 2), dump:
 
 PCSX2 debugger: right-click in memory view → "Copy bytes as hex" or
 use the Python console:
+
 ```
 ee.ReadMemory(<addr>, <size>)
 ```
+
 Save each as a separate `.bin` file named after the offset, e.g.:
-- `entity_state.bin`           (0x100 bytes @ entity+0x80)
-- `anim_table_deref.bin`        (0x200 bytes @ *(u32*)(entity+0x9c))
+
+- `entity_state.bin` (0x100 bytes @ entity+0x80)
+- `anim_table_deref.bin` (0x200 bytes @ _(u32_)(entity+0x9c))
 
 ## Bonus question to answer
 
