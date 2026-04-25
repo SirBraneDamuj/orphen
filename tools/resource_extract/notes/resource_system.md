@@ -87,6 +87,7 @@ MCB1.BIN : ~295 MB of raw bundle blobs, concatenated.
   `category` matches the `FUN_00223268` dispatch table:
   `0 = GRP, 1 = SCR, 2 = MAP, 3 = TEX, 4 = ITM, 6 = SND`. Payloads are
   headerless-LZ compressed, identical format to the flat BIN entries.
+
 - **Scene-private namespace**: a record's `resource_id` is NOT an index
   into the flat BIN of that category. MCB tex `0x0001` and TEX.BIN entry
   `0x0001` have identical sizes but different bytes — bundles carry their

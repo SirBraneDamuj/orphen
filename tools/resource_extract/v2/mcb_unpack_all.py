@@ -38,6 +38,7 @@ from . import bmpa as bmpa_mod
 from . import mcb_bundle
 from . import psb4 as psb4_mod
 from . import psc3 as psc3_mod
+from . import psc3_full as psc3_full_mod
 from . import psm2 as psm2_mod
 
 
@@ -92,8 +93,15 @@ def _extract_mesh_obj(payload: bytes, kind: str, out_path: Path, name: str) -> b
         mesh = psm2_mod.parse_psm2(payload)
         return _write_obj(str(out_path), name, mesh.positions, mesh.normals, mesh.primitives)
     if kind == "psc3":
-        mesh = psc3_mod.parse_psc3(payload)
-        return _write_obj(str(out_path), name, mesh.positions, mesh.normals, mesh.primitives)
+        # Use the full extractor: per-submesh groups, UVs, subdraw colors,
+        # matching MTL written alongside the OBJ.
+        try:
+            mesh = psc3_full_mod.parse_psc3_full(payload)
+        except Exception:
+            return False
+        stats = psc3_full_mod.write_obj_mtl(mesh, str(out_path), name=name,
+                                             bundle_dir=str(out_path.parent))
+        return bool(stats.get("faces_written", 0))
     if kind == "psb4":
         mesh = psb4_mod.parse_psb4(payload)
         return _write_obj(str(out_path), name, mesh.positions, [], mesh.primitives)
