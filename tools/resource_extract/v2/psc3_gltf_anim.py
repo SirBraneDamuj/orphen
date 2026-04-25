@@ -630,6 +630,9 @@ def main() -> int:
     ap.add_argument('--png', default=None,
                     help="Override the auto-picked BMPA PNG basename "
                          "(e.g. --png tex_0178.png). Must exist next to --src.")
+    ap.add_argument('--flat-aids', action='store_true',
+                    help="Use legacy sibling layout <dst>_aid<N>/ "
+                         "instead of nested <dst>/aid<N>/.")
     args = ap.parse_args()
     data = open(args.src, 'rb').read()
     if len(data) < 4 or _u32(data, 0) != MAGIC_PSC3:
@@ -658,10 +661,16 @@ def main() -> int:
                   f"keyframes={a['keyframes']}  duration={a['duration_s']:.2f}s")
         return 0
 
-    # Default: one .gltf per anim id, in sibling _aid<N> subdirs.
+    # Default: one .gltf per anim id, nested under --dst as
+    # <dst>/aid<N>/<name>.gltf so a single mesh's animations group
+    # together in one folder. Pass --flat-aids to fall back to the
+    # legacy sibling layout (<dst>_aid<N>/).
     parent = args.dst.rstrip('/\\')
     for aid in anim_ids:
-        out_dir = f"{parent}_aid{aid}"
+        if args.flat_aids:
+            out_dir = f"{parent}_aid{aid}"
+        else:
+            out_dir = os.path.join(parent, f"aid{aid}")
         out_gltf = os.path.join(out_dir, f"{name}.gltf")
         stats = emit_animated(data, mesh, out_gltf, name, anim_ids=[aid],
                               bundle_dir=bundle_dir, png_override=args.png)
