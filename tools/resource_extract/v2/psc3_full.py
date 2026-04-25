@@ -450,8 +450,18 @@ def sample_pose_v2(buf: bytes, mesh: PSC3FullMesh, sm_id: int, pose_idx: int):
     if sm.section_a_off == 0 or sm.byte_len <= 0:
         return ident
     n_poses = sm.byte_len // 4
-    if pose_idx < 0 or pose_idx >= n_poses:
+    # When an animation references a pose index higher than this
+    # submesh has data for, the runtime leaves the bone at its bind/
+    # rest pose (target 0) rather than snapping to identity. Returning
+    # identity would collapse low-pose-count bones like fingers
+    # (8-9 poses) to their parent's origin during animations whose
+    # targets reach into the high tens or low hundreds.
+    if pose_idx < 0:
         return ident
+    if pose_idx >= n_poses:
+        if n_poses <= 0:
+            return ident
+        pose_idx = 0
     slab_entry = sm.section_a_off + pose_idx * 4
     if slab_entry + 4 > len(buf):
         return ident

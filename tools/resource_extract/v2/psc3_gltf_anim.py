@@ -74,14 +74,31 @@ def _swap_trans(t):
 def _euler_to_quat(ex: float, ey: float, ez: float) -> Tuple[float, float, float, float]:
     """Convert PS2 euler triple to a unit quaternion in glTF Y-up space.
 
-    The runtime matrix builder (FUN_0020cf28, param_10==0 branch) applies
-    rotations to the working matrix as post-multiplies in this sequence:
-        M' = M * R_z(-ez) * R_x(-ex) * R_y(-ey)
-    so the composite rotation applied to column vectors is
-        R = R_z(-ez) * R_x(-ex) * R_y(-ey)
-    and the equivalent quaternion is q_z(-ez) * q_x(-ex) * q_y(-ey).
-    Z-up -> Y-up basis swap (x,y,z) -> (x,z,-y) is applied to the axis
-    components after composition.
+    Empirically verified convention (validated against in-game capture
+    of grp_0001 aid2): YXZ with positive signs and the standard Z-up ->
+    Y-up axis-component swap.
+
+        q = q_y(ey) * q_x(ex) * q_z(ez)
+
+    Derivation: per-bone runtime build path
+    ``FUN_0020cf28`` (param_10==0, called from ``FUN_0020d618``)
+    constructs the matrix as
+        M = I -> diag(s) -> *R_z(-ez) -> *R_x(-ex) -> *R_y(-ey) -> *T
+    where each per-axis cell function (FUN_0020ba30/ba88/bae0) writes
+    four entries of the working buffer and a VU0 microprogram at
+    ``_vcallms 0x60`` composes it with the running matrix. The PS2
+    runtime uses row-vector convention (v' = v * M), so the per-bone
+    rotation applied to a row vector is equivalent to a column-vector
+    rotation by R_y(ey) * R_x(ex) * R_z(ez) -- hence the YXZ order with
+    POSITIVE signs in the column-vector quaternion form glTF uses.
+
+    The Z-up -> Y-up axis component swap (x, y, z) -> (x, z, -y) is
+    applied after composition to match the translation swap.
+
+    The entity-root caller (``FUN_0020cdc0``) passes ``param_10 = 1``
+    which selects the XYZ branch; that is the world transform of the
+    entity, not a per-bone transform, and is irrelevant to PSC3 bone
+    poses.
     """
     def axis(theta: float, ax: int) -> Tuple[float, float, float, float]:
         s = math.sin(theta * 0.5)
@@ -100,12 +117,12 @@ def _euler_to_quat(ex: float, ey: float, ez: float) -> Tuple[float, float, float
             aw * bw - ax * bx - ay * by - az * bz,
         )
 
-    qz = axis(ez, 2)
-    qx = axis(ex, 0)
     qy = axis(ey, 1)
-    q = qmul(qmul(qz, qx), qy)
+    qx = axis(ex, 0)
+    qz = axis(ez, 2)
+    q = qmul(qmul(qy, qx), qz)
     qx_, qy_, qz_, qw_ = q
-    # Basis swap on the axis component to match the position swap.
+    # Z-up -> Y-up axis component swap (x, y, z) -> (x, z, -y).
     return (qx_, qz_, -qy_, qw_)
 
 
@@ -149,12 +166,15 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
         entries = parse_timeline(buf, rec.timeline_off, end_off)
         if not entries:
             return [], []
-        # Each entry says "interpolate to target N over duration D".
-        # Animations start from the bind/rest pose (target=0) at t=0.
+        # Each entry says "interpolate to target N over duration D frames".
+        # In-game, entry[0]'s duration is the blend-in window from
+        # whatever pose the previous animation left, so for an isolated
+        # export we treat target[0] as the start pose at t=0 and only
+        # advance time for entries 1..N-1.
         times: List[float] = [0.0]
-        targets: List[int] = [0]
+        targets: List[int] = [entries[0].target]
         t = 0.0
-        for e in entries:
+        for e in entries[1:]:
             t += e.duration / 60.0
             times.append(t)
             targets.append(e.target)
@@ -488,7 +508,18 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
             for tgt in targets:
                 tr, eu, _scale = sample_pose_v2(buf, mesh, sm_idx, tgt)
                 trans_kf.append(_swap_trans(tr))
-                rot_kf.append(_euler_to_quat(*eu))
+                q = _euler_to_quat(*eu)
+                # Hemisphere-correct successive quats so that LINEAR
+                # interpolation in glTF doesn't take the long way around
+                # the 4-sphere. q and -q represent the same rotation; we
+                # negate q whenever its dot with the previous keyframe is
+                # negative.
+                if rot_kf:
+                    pq = rot_kf[-1]
+                    dot = q[0]*pq[0] + q[1]*pq[1] + q[2]*pq[2] + q[3]*pq[3]
+                    if dot < 0.0:
+                        q = (-q[0], -q[1], -q[2], -q[3])
+                rot_kf.append(q)
             t_off = binbuf.append(_f32_vec3(trans_kf))
             r_off = binbuf.append(_f32_vec4(rot_kf))
             bv_t = _add_bv(t_off, len(trans_kf) * 12)

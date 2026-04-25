@@ -56,7 +56,8 @@ class TimelineEntry:
 
 
 def parse_anim_table(buf: bytes, anim_table_off: int) -> list[AnimRecord]:
-    """Read 8-byte records until we hit padding (0x02020202) or run off."""
+    """Read 8-byte records until we hit padding (0x02020202), a null
+    sentinel (a==0 and b==0), or run off the section."""
     out: list[AnimRecord] = []
     i = 0
     while True:
@@ -64,12 +65,16 @@ def parse_anim_table(buf: bytes, anim_table_off: int) -> list[AnimRecord]:
         # 0x02020202 is observed PSC3 inter-section padding
         if a == 0x02020202:
             break
+        # Null sentinel: some PSC3s pad the anim table with a zero record
+        # (timeline_off=0 lod=0). Stop before consuming it as a real anim.
+        if a == 0 and b == 0:
+            break
         # Sanity: timeline_off should be smaller than anim_table_off
         if a >= anim_table_off and i > 0:
             break
         out.append(AnimRecord(i, a, b))
         i += 1
-        if i > 64:
+        if i > 128:
             break
     return out
 
