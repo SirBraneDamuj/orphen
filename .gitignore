@@ -49,3 +49,4 @@ out/
 .claude/settings.local.json
 
 SLUS_200.11
+*.zst

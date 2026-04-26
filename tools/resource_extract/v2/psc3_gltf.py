@@ -272,40 +272,18 @@ def _load_grp_tex_map(bundle_dir: Optional[str]) -> dict:
 
 def _authoritative_png(name: str, pngs: List[str],
                        bundle_dir: Optional[str]) -> Optional[str]:
-    """Return the PNG mandated by grp_tex_map.json (the SLUS-derived
-    entity-type → mesh/tex mapping), or None if no authoritative match.
+    """Return the PNG mandated by either the SLUS-derived
+    ``grp_tex_map.json`` or by bundle-adjacency layout in the unpack
+    ``_manifest.txt``. Returns None when neither source agrees.
 
-    When this returns a value, callers should treat it as a hard override
-    of the per-material 'untextured' flag bits, since the flag decode is
-    not 100% reliable.
+    When this returns a value, callers should treat it as a hard
+    override of the per-material 'untextured' flag bits, since the
+    flag decode is not 100% reliable.
     """
-    if not name.startswith('grp_'):
+    if not name.startswith(('grp_', 'map_')):
         return None
-    rid = name[len('grp_'):]
-    mp = _load_grp_tex_map(bundle_dir)
-    tex_map = mp.get('grp_to_tex') if isinstance(mp, dict) else None
-    if not isinstance(tex_map, dict):
-        return None
-    tid = tex_map.get(rid.lower()) or tex_map.get(rid)
-    if not isinstance(tid, str):
-        return None
-    candidate = f"tex_{tid}.png"
-    return candidate if candidate in pngs else None
-
-
-def _preferred_png(name: str, pngs: List[str],
-                   bundle_dir: Optional[str] = None) -> Optional[str]:
-    """Pick the best PNG for a grp_<rid>.psc3 name.
-
-    Resolution order:
-      1. grp_tex_map.json — authoritative mapping baked into SLUS_200.11
-         (the entity-type → mesh/tex descriptor tables).
-      2. Same-id filename match (tex_<rid>.png).
-      3. First available PNG (legacy fallback).
-    """
     if name.startswith('grp_'):
         rid = name[len('grp_'):]
-        # 1. authoritative map
         mp = _load_grp_tex_map(bundle_dir)
         tex_map = mp.get('grp_to_tex') if isinstance(mp, dict) else None
         if isinstance(tex_map, dict):
@@ -314,11 +292,163 @@ def _preferred_png(name: str, pngs: List[str],
                 candidate = f"tex_{tid}.png"
                 if candidate in pngs:
                     return candidate
-        # 2. same-id filename match
+    return _adjacency_png(name, pngs, bundle_dir)
+
+
+# Cache for parsed _manifest.txt files. Maps bundle_dir -> ordered list of
+# {"cat": "grp"|"map"|"tex"|..., "rid": "0001", "name": "grp_0001.psc3"}.
+_BUNDLE_MANIFEST_CACHE: dict = {}
+
+
+def _load_bundle_manifest(bundle_dir: Optional[str]):
+    """Parse `<bundle_dir>/_manifest.txt` (written by mcb_unpack_all) and
+    return an ordered list of records, or None if not available.
+
+    Each record is a dict ``{cat, rid, base}`` -- ``base`` matches the
+    file basename without extension (e.g. ``grp_013c``).
+    """
+    if not bundle_dir:
+        return None
+    bd = os.path.abspath(bundle_dir)
+    if bd in _BUNDLE_MANIFEST_CACHE:
+        return _BUNDLE_MANIFEST_CACHE[bd]
+    path = os.path.join(bd, '_manifest.txt')
+    out = None
+    if os.path.isfile(path):
+        try:
+            recs = []
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line.startswith('@'):
+                        continue
+                    parts = line.split()
+                    # @offset id cat rid raw_size kind written
+                    if len(parts) < 7:
+                        continue
+                    cat, rid_hex = parts[2], parts[3]
+                    if not rid_hex.startswith('0x'):
+                        continue
+                    rid = int(rid_hex, 16)
+                    base = f"{cat}_{rid:04x}"
+                    recs.append({'cat': cat, 'rid': rid, 'base': base})
+            out = recs
+        except OSError:
+            out = None
+    _BUNDLE_MANIFEST_CACHE[bd] = out
+    return out
+
+
+def _adjacency_png(name: str, pngs: List[str],
+                   bundle_dir: Optional[str]) -> Optional[str]:
+    """Bundle-adjacency texture lookup.
+
+    Within an MCB bundle, each PSC3 mesh (or contiguous block of PSC3
+    meshes) is immediately followed in record order by the texture
+    BMPA that belongs to it. We use this layout as the primary
+    resolver for textures, since it matches how the runtime streams
+    each scene's per-character/per-prop texture pages alongside the
+    meshes.
+
+    For a query record ``name`` (e.g. ``grp_013d``), we walk forward
+    through the manifest from that record until we hit the next
+    ``tex`` record and return its PNG name -- so a block of
+    ``grp_013d``/``grp_013e``/``grp_013f`` followed by ``tex_0189``
+    all map to ``tex_0189.png``.
+    """
+    recs = _load_bundle_manifest(bundle_dir)
+    if not recs:
+        return None
+    target_base = name.lower()
+    idx = None
+    for i, r in enumerate(recs):
+        if r['base'] == target_base:
+            idx = i
+            break
+    if idx is None:
+        return None
+    # Walk forward to next tex record.
+    for r in recs[idx + 1:]:
+        if r['cat'] == 'tex':
+            cand = f"tex_{r['rid']:04x}.png"
+            if cand in pngs:
+                return cand
+            return None  # tex was found in manifest but missing on disk
+    return None
+
+
+def _adjacency_pngs(name: str, pngs: List[str],
+                    bundle_dir: Optional[str]) -> List[str]:
+    """Return ALL contiguous ``tex`` records that follow ``name`` in the
+    bundle manifest, in manifest order.
+
+    PSM2 maps consume multiple texture pages (one per material slot in
+    section [E] byte 6); the runtime streams them as a contiguous block
+    of BMPAs immediately after the PSM2 record, in the same order the
+    section-E byte-6 indices reference (0..N-1). Callers index into this
+    list by the per-corner texture-page byte to bind the right PNG.
+    """
+    recs = _load_bundle_manifest(bundle_dir)
+    if not recs:
+        return []
+    target_base = name.lower()
+    idx = None
+    for i, r in enumerate(recs):
+        if r['base'] == target_base:
+            idx = i
+            break
+    if idx is None:
+        return []
+    out: List[str] = []
+    for r in recs[idx + 1:]:
+        if r['cat'] != 'tex':
+            break
+        cand = f"tex_{r['rid']:04x}.png"
+        if cand in pngs:
+            out.append(cand)
+        else:
+            out.append("")  # placeholder to preserve indexing
+    return out
+
+
+def _preferred_png(name: str, pngs: List[str],
+                   bundle_dir: Optional[str] = None) -> Optional[str]:
+    """Pick the best PNG for a grp_<rid>.psc3 name.
+
+    Resolution order:
+      1. grp_tex_map.json -- authoritative mapping baked into
+         SLUS_200.11 (the entity-type -> mesh/tex descriptor tables).
+         Limited to the ~635 entities the engine references by id from
+         the static descriptor tables.
+      2. Bundle-adjacency lookup via the unpack manifest. Each PSC3
+         (or consecutive block of PSC3s) is followed in the bundle by
+         its texture BMPA; this resolves anything the SLUS map misses,
+         including map_* records and rid ranges (like 0x013c..0x013f
+         in s01_e013) that aren't in the descriptor tables.
+      3. Same-id filename match (tex_<rid>.png).
+      4. First available PNG (legacy fallback, only when no manifest).
+    """
+    if name.startswith(('grp_', 'map_')):
+        rid = name.split('_', 1)[1]
+        # 1. authoritative SLUS map (grp only)
+        if name.startswith('grp_'):
+            mp = _load_grp_tex_map(bundle_dir)
+            tex_map = mp.get('grp_to_tex') if isinstance(mp, dict) else None
+            if isinstance(tex_map, dict):
+                tid = tex_map.get(rid.lower()) or tex_map.get(rid)
+                if isinstance(tid, str):
+                    candidate = f"tex_{tid}.png"
+                    if candidate in pngs:
+                        return candidate
+        # 2. bundle adjacency
+        adj = _adjacency_png(name, pngs, bundle_dir)
+        if adj:
+            return adj
+        # 3. same-id filename match
         match = f"tex_{rid}.png"
         if match in pngs:
             return match
-    # 3. anything goes
+    # 4. anything goes
     return pngs[0] if pngs else None
 
 

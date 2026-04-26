@@ -82,6 +82,24 @@
 //   - If present, reads a count via FUN_0022b520 into DAT_00355690.
 //   - For each row, reads 6 pairs of bytes (total 12 bytes); writes them packed into a 0x10-byte row
 //     in DAT_003556b4, zeroing the remaining pairs for columns 6..7.
+//   - Per-corner attribute layout (decoded empirically; see tools/resource_extract/v2/psm2_gltf.py):
+//       bytes [0..1]  : u16 U  (PS2 fixed-point, 1.0 == 4096)
+//       bytes [2..3]  : u16 V
+//       bytes [4..5]  : per-corner ST.q / fog packed value (varies widely)
+//       byte  [6]     : *texture-page index* into the bundle's adjacency
+//                       PNG list. Distinct values match exactly the count
+//                       of BMPA records that immediately follow the PSM2
+//                       in `_manifest.txt` (verified for 4/5 maps in
+//                       s00_e000..s01_e014). Used to split a single PSM2
+//                       mesh into N draw groups, one per page.
+//       byte  [7]     : low-cardinality flag (alpha mode? appears as 0/3/5).
+//       bytes [8..9]  : two flag bytes (~5 + 4 distinct values).
+//       bytes [10..11]: per-corner intensity / extra ST component.
+//
+//     The runtime pulls these out by absolute offset in FUN_0022c3d8 /
+//     FUN_00208450 when assembling GS command buffers; the offsets above
+//     reflect what shows up consistent across map_0001 (s01_e011),
+//     map_0002 (s01_e012), map_0003 (s01_e013), map_0004 (s01_e014).
 //
 // [F] +0x18 large 0x1000 shorts table and trailing short list → DAT_003556f0/556ec
 //   - If absent: fills 0x1000 shorts at &DAT_00345a18 with 0xFFFF and sets DAT_003556ec=0.

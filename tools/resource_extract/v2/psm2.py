@@ -62,6 +62,17 @@ class PSM2Mesh:
     c_to_b: List[int] = field(default_factory=list)
     """Per-position index into Section B (one entry per Section C record)."""
 
+    prim_uv_indices: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    """Per-primitive 4 corner UV-table indices (Section D u16[6..9]).
+    Sentinel 0xFFFF means "no per-corner UV record" -- the renderer
+    falls back to a solid color for that corner. Parallel to ``primitives``."""
+
+    uv_records: List[bytes] = field(default_factory=list)
+    """Section E -- the per-corner attribute table. Each entry is the raw
+    12 bytes copied verbatim into a corner's slot at +0x30+i*0xC by the
+    runtime loader. We keep them raw so consumers can pick out whichever
+    fields they need (UVs at bytes [0..3] as little-endian u16, etc.)."""
+
     header_offsets: dict = field(default_factory=dict)
 
 
@@ -89,6 +100,7 @@ def parse_psm2(buf: bytes) -> PSM2Mesh:
         'A': _u32(buf, 0x04),
         'C': _u32(buf, 0x08),
         'D': _u32(buf, 0x0C),
+        'E': _u32(buf, 0x14),
         'B': _u32(buf, 0x30),
     }
     mesh = PSM2Mesh(header_offsets=offs)
@@ -142,13 +154,50 @@ def parse_psm2(buf: bytes) -> PSM2Mesh:
         for _ in range(max(0, cnt)):
             if p + 8 > len(buf):
                 break
-            mesh.primitives.append((
-                _u16(buf, p + 0),
-                _u16(buf, p + 2),
-                _u16(buf, p + 4),
-                _u16(buf, p + 6),
-            ))
+            s0 = _u16(buf, p + 0)
+            s1 = _u16(buf, p + 2)
+            s2 = _u16(buf, p + 4)
+            s3 = _u16(buf, p + 6)
+            mesh.primitives.append((s0, s1, s2, s3))
+            # Per-prim attribute index. The loader writes u16[6..9] to four
+            # corner slots, but in real maps only u16[6] holds a non-sentinel
+            # value; u16[7..9] are 0xFFFF (invalid stubs) for every prim.
+            # The renderer fetches all 4 corner UVs from the SINGLE E record
+            # at u16[6] (see byte layout in `uv_records`).
+            #
+            # Encoding of u16[6]:
+            #   0x0000..0x7FFE  -> index into Section E (textured prim).
+            #   0x8000..0xFFFE  -> palette colour (low 15 bits = palette idx).
+            #   0xFFFF          -> invalid / fully-stubbed prim.
+            #
+            # We keep four parallel slots in `prim_uv_indices` to match the
+            # 4-corner geometry, but they all point at the same E record.
+            prim_e = _u16(buf, p + 12)
+            mesh.prim_uv_indices.append((prim_e, prim_e, prim_e, prim_e))
             p += 32
+
+    # Section E — per-corner attribute records (UVs + tag bytes). On disk:
+    #   +0x00 : u16 count (FUN_0022b520 returns this as the first short).
+    #   +0x02 : count × 12 bytes, sequentially.
+    # Per-record layout (verified from FUN_0022b5a8 reader pulling 6 byte
+    # pairs and from ground-truth UVs on map_0002 door panel):
+    #   byte[0..7]  : 4 corner UV pairs (U,V) for D0, D1, D2, D3 in order.
+    #   byte[8]     : texture page index (0..7).
+    #   byte[9]     : alpha mode.
+    #   byte[10..11]: flags.
+    # The runtime widens each row to 16 bytes by zero-padding (see the
+    # loader's "for cols 6..7 zero" branch). We only need the original 12.
+    if offs['E']:
+        base = offs['E']
+        cnt = _u16(buf, base)
+        if cnt >= 0x8000:
+            cnt = 0
+        p = base + 2
+        for _ in range(cnt):
+            if p + 12 > len(buf):
+                break
+            mesh.uv_records.append(bytes(buf[p:p + 12]))
+            p += 12
 
     return mesh
 
