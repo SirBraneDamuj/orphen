@@ -1,62 +1,142 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Orphen Model/Animation Viewer</title>
-<style>
-  html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
-  #ui {
-    position: absolute; top: 8px; left: 8px; z-index: 10;
-    background: rgba(0,0,0,0.6); padding: 8px 10px; border-radius: 6px;
-    display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; max-width: calc(100% - 16px);
-  }
-  #ui select { background: #222; color: #eee; border: 1px solid #444; padding: 4px; min-width: 120px; }
-  #ui button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 8px; cursor: pointer; }
-  #ui button:hover { background: #444; }
-  #ui button.nav { padding: 4px 6px; min-width: 24px; font-weight: bold; }
-  #ui label { opacity: 0.7; }
-  #status { opacity: 0.8; }
-  #help {
-    position: absolute; bottom: 8px; left: 8px; z-index: 10;
-    background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 6px;
-    font-size: 12px; line-height: 1.5; max-width: 360px;
-  }
-  #hint {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #bbb; pointer-events: none; font-size: 18px; text-shadow: 0 1px 2px #000;
-  }
-  #hint.hidden { display: none; }
-  canvas { display: block; }
-  a.toplink { color: #6cf; text-decoration: none; }
-  a.toplink:hover { text-decoration: underline; }
-</style>
-</head>
-<body>
-<div id="ui">
-  <a class="toplink" href="/">Maps</a> ·
-  <label>Model:</label>
-  <button class="nav" id="modelPrev" title="Prev model ([)">◀</button>
-  <select id="model"></select>
-  <button class="nav" id="modelNext" title="Next model (])">▶</button>
-  <label>Anim:</label>
-  <button class="nav" id="animPrev" title="Prev anim (,)">◀</button>
-  <select id="anim"></select>
-  <button class="nav" id="animNext" title="Next anim (.)">▶</button>
-  <button id="play">⏸ Pause</button>
-  <button id="reset">Reset cam</button>
-  <button id="mode">Mode: Orbit</button>
-  <span id="status"></span>
-</div>
-<div id="help">
-  <b>Orbit:</b> drag to rotate · right-drag pan · wheel zoom<br/>
-  <b>FPS:</b> click to capture · WASD · Q/E · Shift crawl · Esc release<br/>
-  <b>Space</b> play/pause · <b>M</b> toggle mode · <b>R</b> reset cam<br/>
-  <b>[</b> / <b>]</b> prev/next model · <b>,</b> / <b>.</b> prev/next anim
-</div>
-<div id="scenes" style="position:absolute;top:8px;right:8px;z-index:10;background:rgba(0,0,0,0.55);padding:6px 10px;border-radius:6px;font-size:11px;line-height:1.4;max-width:260px;max-height:50vh;overflow:auto"></div>
-<div id="hint">Loading…</div>
 
-<script type="importmap">
+<head>
+  <meta charset="utf-8" />
+  <title>Orphen Model/Animation Viewer</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    #ui {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 8px 10px;
+      border-radius: 6px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 13px;
+      flex-wrap: wrap;
+      max-width: calc(100% - 16px);
+    }
+
+    #ui select {
+      background: #222;
+      color: #eee;
+      border: 1px solid #444;
+      padding: 4px;
+      min-width: 120px;
+    }
+
+    #ui button {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    #ui button:hover {
+      background: #444;
+    }
+
+    #ui button.nav {
+      padding: 4px 6px;
+      min-width: 24px;
+      font-weight: bold;
+    }
+
+    #ui label {
+      opacity: 0.7;
+    }
+
+    #status {
+      opacity: 0.8;
+    }
+
+    #help {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.5;
+      max-width: 360px;
+    }
+
+    #hint {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #bbb;
+      pointer-events: none;
+      font-size: 18px;
+      text-shadow: 0 1px 2px #000;
+    }
+
+    #hint.hidden {
+      display: none;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    a.toplink {
+      color: #6cf;
+      text-decoration: none;
+    }
+
+    a.toplink:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="ui">
+    <a class="toplink" href="/">Maps</a> ·
+    <label>Model:</label>
+    <button class="nav" id="modelPrev" title="Prev model ([)">◀</button>
+    <select id="model"></select>
+    <button class="nav" id="modelNext" title="Next model (])">▶</button>
+    <label>Anim:</label>
+    <button class="nav" id="animPrev" title="Prev anim (,)">◀</button>
+    <select id="anim"></select>
+    <button class="nav" id="animNext" title="Next anim (.)">▶</button>
+    <button id="play">⏸ Pause</button>
+    <button id="reset">Reset cam</button>
+    <button id="mode">Mode: Orbit</button>
+    <span id="status"></span>
+  </div>
+  <div id="help">
+    <b>Orbit:</b> drag to rotate · right-drag pan · wheel zoom<br />
+    <b>FPS:</b> click to capture · WASD · Q/E · Shift crawl · Esc release<br />
+    <b>Space</b> play/pause · <b>M</b> toggle mode · <b>R</b> reset cam<br />
+    <b>[</b> / <b>]</b> prev/next model · <b>,</b> / <b>.</b> prev/next anim
+  </div>
+  <div id="scenes"
+    style="position:absolute;top:8px;right:8px;z-index:10;background:rgba(0,0,0,0.55);padding:6px 10px;border-radius:6px;font-size:11px;line-height:1.4;max-width:260px;max-height:50vh;overflow:auto">
+  </div>
+  <div id="hint">Loading…</div>
+
+  <script type="importmap">
 {
   "imports": {
     "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
@@ -65,269 +145,270 @@
 }
 </script>
 
-<script type="module">
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const sceneSel = null; // legacy placeholder, no longer used
-const modelSel = document.getElementById('model');
-const animSel = document.getElementById('anim');
-const playBtn = document.getElementById('play');
-const modeBtn = document.getElementById('mode');
-const statusEl = document.getElementById('status');
-const hintEl = document.getElementById('hint');
-const scenesEl = document.getElementById('scenes');
+    const sceneSel = null; // legacy placeholder, no longer used
+    const modelSel = document.getElementById('model');
+    const animSel = document.getElementById('anim');
+    const playBtn = document.getElementById('play');
+    const modeBtn = document.getElementById('mode');
+    const statusEl = document.getElementById('status');
+    const hintEl = document.getElementById('hint');
+    const scenesEl = document.getElementById('scenes');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-document.body.appendChild(renderer.domElement);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a22);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a22);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50000);
-camera.position.set(0, 2, 5);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50000);
+    camera.position.set(0, 2, 5);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-sun.position.set(1, 2, 1);
-scene.add(sun);
-scene.add(new THREE.HemisphereLight(0x88aaff, 0x222211, 0.4));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+    sun.position.set(1, 2, 1);
+    scene.add(sun);
+    scene.add(new THREE.HemisphereLight(0x88aaff, 0x222211, 0.4));
 
-const grid = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
-grid.position.y = -0.01;
-scene.add(grid);
+    const grid = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+    grid.position.y = -0.01;
+    scene.add(grid);
 
-const fpsControls = new PointerLockControls(camera, renderer.domElement);
-scene.add(fpsControls.getObject());
-fpsControls.addEventListener('lock', () => hintEl.classList.add('hidden'));
-fpsControls.addEventListener('unlock', () => { if (mode === 'fps') hintEl.classList.remove('hidden'); });
+    const fpsControls = new PointerLockControls(camera, renderer.domElement);
+    scene.add(fpsControls.getObject());
+    fpsControls.addEventListener('lock', () => hintEl.classList.add('hidden'));
+    fpsControls.addEventListener('unlock', () => { if (mode === 'fps') hintEl.classList.remove('hidden'); });
 
-const orbitControls = new OrbitControls(camera, renderer.domElement);
-orbitControls.enableDamping = true;
-orbitControls.dampingFactor = 0.1;
+    const orbitControls = new OrbitControls(camera, renderer.domElement);
+    orbitControls.enableDamping = true;
+    orbitControls.dampingFactor = 0.1;
 
-let mode = 'orbit';
-function setMode(next) {
-  mode = next;
-  if (mode === 'fps') {
-    orbitControls.enabled = false;
-    modeBtn.textContent = 'Mode: FPS';
-    hintEl.textContent = 'Click to fly · WASD + mouse';
-    hintEl.classList.remove('hidden');
-  } else {
-    if (fpsControls.isLocked) fpsControls.unlock();
-    orbitControls.enabled = true;
-    modeBtn.textContent = 'Mode: Orbit';
-    hintEl.classList.add('hidden');
-  }
-}
-modeBtn.onclick = () => setMode(mode === 'fps' ? 'orbit' : 'fps');
-setMode('orbit');
-
-renderer.domElement.addEventListener('click', () => { if (mode === 'fps') fpsControls.lock(); });
-
-const keys = new Set();
-window.addEventListener('keydown', (e) => {
-  keys.add(e.code);
-  if (e.code === 'KeyR') resetCamera();
-  if (e.code === 'KeyM') setMode(mode === 'fps' ? 'orbit' : 'fps');
-  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  if (e.code === 'BracketLeft') stepModel(-1);
-  if (e.code === 'BracketRight') stepModel(1);
-  if (e.code === 'Comma') stepAnim(-1);
-  if (e.code === 'Period') stepAnim(1);
-});
-window.addEventListener('keyup', (e) => keys.delete(e.code));
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-const loader = new GLTFLoader();
-let currentRoot = null;
-let mixer = null;
-let action = null;
-let playing = true;
-let modelBounds = new THREE.Box3();
-const clock = new THREE.Clock();
-
-function clearCurrent() {
-  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(currentRoot); mixer = null; }
-  action = null;
-  if (!currentRoot) return;
-  scene.remove(currentRoot);
-  currentRoot.traverse((o) => {
-    if (o.isMesh) {
-      o.geometry?.dispose();
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      mats.forEach((m) => {
-        if (!m) return;
-        for (const k of ['map','normalMap','roughnessMap','metalnessMap','emissiveMap']) { if (m[k]) m[k].dispose?.(); }
-        m.dispose?.();
-      });
-    }
-  });
-  currentRoot = null;
-}
-
-function resetCamera() {
-  if (modelBounds.isEmpty()) {
-    camera.position.set(0, 2, 5); orbitControls.target.set(0, 0, 0); return;
-  }
-  const size = new THREE.Vector3(); modelBounds.getSize(size);
-  const center = new THREE.Vector3(); modelBounds.getCenter(center);
-  const radius = Math.max(size.x, size.y, size.z) * 0.6 + 1;
-  camera.position.set(center.x, center.y + radius * 0.4, center.z + radius * 1.6);
-  fpsControls.getObject().position.copy(camera.position);
-  camera.lookAt(center);
-  orbitControls.target.copy(center);
-  orbitControls.update();
-}
-
-function togglePlay() {
-  playing = !playing;
-  playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
-  if (action) action.paused = !playing;
-}
-playBtn.onclick = togglePlay;
-document.getElementById('reset').onclick = resetCamera;
-
-let modelIndex = {}; // model_name -> { name, sha6, scenes, aid_count, ... }
-let modelNames = [];
-async function init() {
-  modelIndex = await fetch('/models-index.json').then((r) => r.json());
-  modelNames = Object.keys(modelIndex).sort();
-  for (const m of modelNames) {
-    const meta = modelIndex[m];
-    const opt = document.createElement('option');
-    opt.value = m;
-    const aidc = meta.aid_count ?? 0;
-    const scc = meta.scene_count ?? 0;
-    opt.textContent = `${m}  (${aidc} aids · ${scc} scenes)`;
-    modelSel.appendChild(opt);
-  }
-  modelSel.onchange = () => populateAnims();
-  animSel.onchange = () => loadCurrent();
-  if (modelNames.length) { modelSel.selectedIndex = 0; populateAnims(); }
-  else { statusEl.textContent = 'no models found'; hintEl.textContent = 'No data'; }
-}
-
-function stepModel(delta) {
-  if (!modelNames.length) return;
-  let i = modelSel.selectedIndex + delta;
-  if (i < 0) i = modelNames.length - 1;
-  if (i >= modelNames.length) i = 0;
-  modelSel.selectedIndex = i;
-  populateAnims();
-}
-
-function stepAnim(delta) {
-  const n = animSel.options.length;
-  if (!n) return;
-  let i = animSel.selectedIndex + delta;
-  if (i < 0) i = n - 1;
-  if (i >= n) i = 0;
-  animSel.selectedIndex = i;
-  loadCurrent();
-}
-
-document.getElementById('modelPrev').onclick = () => stepModel(-1);
-document.getElementById('modelNext').onclick = () => stepModel(1);
-document.getElementById('animPrev').onclick = () => stepAnim(-1);
-document.getElementById('animNext').onclick = () => stepAnim(1);
-
-function populateAnims() {
-  animSel.innerHTML = '';
-  const name = modelSel.value;
-  const meta = modelIndex[name] || {};
-  const count = meta.aid_count || 0;
-  for (let i = 0; i < count; i++) {
-    const opt = document.createElement('option');
-    opt.value = `/models/${name}/aid${i}/${name}.gltf`;
-    opt.textContent = `aid${i}`;
-    animSel.appendChild(opt);
-  }
-  // Render scene manifest panel.
-  const scenes = meta.scenes || [];
-  scenesEl.innerHTML = `<div style="opacity:0.7;margin-bottom:4px"><b>${name}</b> · sha ${meta.sha6 || '?'}</div>`
-    + `<div style="opacity:0.7;margin-bottom:4px">used in ${scenes.length} scene(s):</div>`
-    + scenes.map((s) => `<div style="opacity:0.85">${s}</div>`).join('');
-  if (animSel.options.length) { animSel.selectedIndex = 0; loadCurrent(); }
-  else { statusEl.textContent = `${name} · no animations`; clearCurrent(); }
-}
-
-async function loadCurrent() {
-  const url = animSel.value;
-  const label = `${modelSel.value} / ${animSel.options[animSel.selectedIndex].textContent}`;
-  statusEl.textContent = `loading ${label}…`;
-  clearCurrent();
-  try {
-    const gltf = await loader.loadAsync(url);
-    currentRoot = gltf.scene;
-    currentRoot.traverse((o) => {
-      if (o.isMesh) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach((m) => { if (m) m.side = THREE.DoubleSide; });
+    let mode = 'orbit';
+    function setMode(next) {
+      mode = next;
+      if (mode === 'fps') {
+        orbitControls.enabled = false;
+        modeBtn.textContent = 'Mode: FPS';
+        hintEl.textContent = 'Click to fly · WASD + mouse';
+        hintEl.classList.remove('hidden');
+      } else {
+        if (fpsControls.isLocked) fpsControls.unlock();
+        orbitControls.enabled = true;
+        modeBtn.textContent = 'Mode: Orbit';
+        hintEl.classList.add('hidden');
       }
-    });
-    scene.add(currentRoot);
-    modelBounds.setFromObject(currentRoot);
-    resetCamera();
-
-    if (gltf.animations && gltf.animations.length) {
-      mixer = new THREE.AnimationMixer(currentRoot);
-      action = mixer.clipAction(gltf.animations[0]);
-      action.play();
-      action.paused = !playing;
-      statusEl.textContent = `${label} · ${gltf.animations.length} clip(s)`;
-    } else {
-      statusEl.textContent = `${label} · no clips`;
     }
-  } catch (err) {
-    console.error(err);
-    statusEl.textContent = `error: ${err.message}`;
-  }
-}
+    modeBtn.onclick = () => setMode(mode === 'fps' ? 'orbit' : 'fps');
+    setMode('orbit');
 
-const velocity = new THREE.Vector3();
-const direction = new THREE.Vector3();
-function tick() {
-  requestAnimationFrame(tick);
-  const dt = Math.min(0.1, clock.getDelta());
+    renderer.domElement.addEventListener('click', () => { if (mode === 'fps') fpsControls.lock(); });
 
-  if (mixer) mixer.update(dt);
+    const keys = new Set();
+    window.addEventListener('keydown', (e) => {
+      keys.add(e.code);
+      if (e.code === 'KeyR') resetCamera();
+      if (e.code === 'KeyM') setMode(mode === 'fps' ? 'orbit' : 'fps');
+      if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+      if (e.code === 'BracketLeft') stepModel(-1);
+      if (e.code === 'BracketRight') stepModel(1);
+      if (e.code === 'Comma') stepAnim(-1);
+      if (e.code === 'Period') stepAnim(1);
+    });
+    window.addEventListener('keyup', (e) => keys.delete(e.code));
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
-  if (mode === 'orbit') {
-    orbitControls.update();
-  } else if (fpsControls.isLocked) {
-    const speedBase = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1.0 : 2.0;
-    const accel = speedBase * 8;
-    const damp = 10;
-    velocity.x -= velocity.x * damp * dt;
-    velocity.y -= velocity.y * damp * dt;
-    velocity.z -= velocity.z * damp * dt;
-    direction.z = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
-    direction.x = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
-    direction.y = (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
-    direction.normalize();
-    if (direction.z) velocity.z -= direction.z * accel * dt;
-    if (direction.x) velocity.x -= direction.x * accel * dt;
-    if (direction.y) velocity.y += direction.y * accel * dt;
-    fpsControls.moveRight(-velocity.x * dt);
-    fpsControls.moveForward(-velocity.z * dt);
-    fpsControls.getObject().position.y += velocity.y * dt;
-  }
+    const loader = new GLTFLoader();
+    let currentRoot = null;
+    let mixer = null;
+    let action = null;
+    let playing = true;
+    let modelBounds = new THREE.Box3();
+    const clock = new THREE.Clock();
 
-  renderer.render(scene, camera);
-}
-tick();
-init();
-</script>
+    function clearCurrent() {
+      if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(currentRoot); mixer = null; }
+      action = null;
+      if (!currentRoot) return;
+      scene.remove(currentRoot);
+      currentRoot.traverse((o) => {
+        if (o.isMesh) {
+          o.geometry?.dispose();
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach((m) => {
+            if (!m) return;
+            for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) { if (m[k]) m[k].dispose?.(); }
+            m.dispose?.();
+          });
+        }
+      });
+      currentRoot = null;
+    }
+
+    function resetCamera() {
+      if (modelBounds.isEmpty()) {
+        camera.position.set(0, 2, 5); orbitControls.target.set(0, 0, 0); return;
+      }
+      const size = new THREE.Vector3(); modelBounds.getSize(size);
+      const center = new THREE.Vector3(); modelBounds.getCenter(center);
+      const radius = Math.max(size.x, size.y, size.z) * 0.6 + 1;
+      camera.position.set(center.x, center.y + radius * 0.4, center.z + radius * 1.6);
+      fpsControls.getObject().position.copy(camera.position);
+      camera.lookAt(center);
+      orbitControls.target.copy(center);
+      orbitControls.update();
+    }
+
+    function togglePlay() {
+      playing = !playing;
+      playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+      if (action) action.paused = !playing;
+    }
+    playBtn.onclick = togglePlay;
+    document.getElementById('reset').onclick = resetCamera;
+
+    let modelIndex = {}; // model_name -> { name, sha6, scenes, aid_count, ... }
+    let modelNames = [];
+    async function init() {
+      modelIndex = await fetch('/models-index.json').then((r) => r.json());
+      modelNames = Object.keys(modelIndex).sort();
+      for (const m of modelNames) {
+        const meta = modelIndex[m];
+        const opt = document.createElement('option');
+        opt.value = m;
+        const aidc = meta.aid_count ?? 0;
+        const scc = meta.scene_count ?? 0;
+        opt.textContent = `${m}  (${aidc} aids · ${scc} scenes)`;
+        modelSel.appendChild(opt);
+      }
+      modelSel.onchange = () => populateAnims();
+      animSel.onchange = () => loadCurrent();
+      if (modelNames.length) { modelSel.selectedIndex = 0; populateAnims(); }
+      else { statusEl.textContent = 'no models found'; hintEl.textContent = 'No data'; }
+    }
+
+    function stepModel(delta) {
+      if (!modelNames.length) return;
+      let i = modelSel.selectedIndex + delta;
+      if (i < 0) i = modelNames.length - 1;
+      if (i >= modelNames.length) i = 0;
+      modelSel.selectedIndex = i;
+      populateAnims();
+    }
+
+    function stepAnim(delta) {
+      const n = animSel.options.length;
+      if (!n) return;
+      let i = animSel.selectedIndex + delta;
+      if (i < 0) i = n - 1;
+      if (i >= n) i = 0;
+      animSel.selectedIndex = i;
+      loadCurrent();
+    }
+
+    document.getElementById('modelPrev').onclick = () => stepModel(-1);
+    document.getElementById('modelNext').onclick = () => stepModel(1);
+    document.getElementById('animPrev').onclick = () => stepAnim(-1);
+    document.getElementById('animNext').onclick = () => stepAnim(1);
+
+    function populateAnims() {
+      animSel.innerHTML = '';
+      const name = modelSel.value;
+      const meta = modelIndex[name] || {};
+      const count = meta.aid_count || 0;
+      for (let i = 0; i < count; i++) {
+        const opt = document.createElement('option');
+        opt.value = `/models/${name}/aid${i}/${name}.gltf`;
+        opt.textContent = `aid${i}`;
+        animSel.appendChild(opt);
+      }
+      // Render scene manifest panel.
+      const scenes = meta.scenes || [];
+      scenesEl.innerHTML = `<div style="opacity:0.7;margin-bottom:4px"><b>${name}</b> · sha ${meta.sha6 || '?'}</div>`
+        + `<div style="opacity:0.7;margin-bottom:4px">used in ${scenes.length} scene(s):</div>`
+        + scenes.map((s) => `<div style="opacity:0.85">${s}</div>`).join('');
+      if (animSel.options.length) { animSel.selectedIndex = 0; loadCurrent(); }
+      else { statusEl.textContent = `${name} · no animations`; clearCurrent(); }
+    }
+
+    async function loadCurrent() {
+      const url = animSel.value;
+      const label = `${modelSel.value} / ${animSel.options[animSel.selectedIndex].textContent}`;
+      statusEl.textContent = `loading ${label}…`;
+      clearCurrent();
+      try {
+        const gltf = await loader.loadAsync(url);
+        currentRoot = gltf.scene;
+        currentRoot.traverse((o) => {
+          if (o.isMesh) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach((m) => { if (m) m.side = THREE.DoubleSide; });
+          }
+        });
+        scene.add(currentRoot);
+        modelBounds.setFromObject(currentRoot);
+        resetCamera();
+
+        if (gltf.animations && gltf.animations.length) {
+          mixer = new THREE.AnimationMixer(currentRoot);
+          action = mixer.clipAction(gltf.animations[0]);
+          action.play();
+          action.paused = !playing;
+          statusEl.textContent = `${label} · ${gltf.animations.length} clip(s)`;
+        } else {
+          statusEl.textContent = `${label} · no clips`;
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = `error: ${err.message}`;
+      }
+    }
+
+    const velocity = new THREE.Vector3();
+    const direction = new THREE.Vector3();
+    function tick() {
+      requestAnimationFrame(tick);
+      const dt = Math.min(0.1, clock.getDelta());
+
+      if (mixer) mixer.update(dt);
+
+      if (mode === 'orbit') {
+        orbitControls.update();
+      } else if (fpsControls.isLocked) {
+        const speedBase = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1.0 : 2.0;
+        const accel = speedBase * 8;
+        const damp = 10;
+        velocity.x -= velocity.x * damp * dt;
+        velocity.y -= velocity.y * damp * dt;
+        velocity.z -= velocity.z * damp * dt;
+        direction.z = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+        direction.x = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+        direction.y = (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
+        direction.normalize();
+        if (direction.z) velocity.z -= direction.z * accel * dt;
+        if (direction.x) velocity.x -= direction.x * accel * dt;
+        if (direction.y) velocity.y += direction.y * accel * dt;
+        fpsControls.moveRight(-velocity.x * dt);
+        fpsControls.moveForward(-velocity.z * dt);
+        fpsControls.getObject().position.y += velocity.y * dt;
+      }
+
+      renderer.render(scene, camera);
+    }
+    tick();
+    init();
+  </script>
 </body>
+
 </html>
