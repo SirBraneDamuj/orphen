@@ -2,17 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Orphen Map Viewer</title>
+<title>Orphen Model/Animation Viewer</title>
 <style>
   html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
   #ui {
     position: absolute; top: 8px; left: 8px; z-index: 10;
     background: rgba(0,0,0,0.6); padding: 8px 10px; border-radius: 6px;
-    display: flex; gap: 8px; align-items: center; font-size: 13px;
+    display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; max-width: calc(100% - 16px);
   }
-  #ui select { background: #222; color: #eee; border: 1px solid #444; padding: 4px; min-width: 180px; }
+  #ui select { background: #222; color: #eee; border: 1px solid #444; padding: 4px; min-width: 120px; }
   #ui button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 8px; cursor: pointer; }
   #ui button:hover { background: #444; }
+  #ui label { opacity: 0.7; }
   #status { opacity: 0.8; }
   #help {
     position: absolute; bottom: 8px; left: 8px; z-index: 10;
@@ -25,23 +26,25 @@
   }
   #hint.hidden { display: none; }
   canvas { display: block; }
+  a.toplink { color: #6cf; text-decoration: none; }
+  a.toplink:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <div id="ui">
-  <label>Scene:</label>
-  <select id="scene"></select>
-  <button id="prev">◀</button>
-  <button id="next">▶</button>
+  <a class="toplink" href="/">Maps</a> ·
+  <label>Scene:</label><select id="scene"></select>
+  <label>Model:</label><select id="model"></select>
+  <label>Anim:</label><select id="anim"></select>
+  <button id="play">⏸ Pause</button>
   <button id="reset">Reset cam</button>
-  <button id="mode">Mode: FPS</button>
-  <a href="/animations" style="color:#6cf; text-decoration:none; margin-left:8px;">Animations →</a>
+  <button id="mode">Mode: Orbit</button>
   <span id="status"></span>
 </div>
 <div id="help">
-  <b>FPS:</b> click to capture · <b>WASD</b> · <b>Q/E</b> down/up · <b>Shift</b> crawl · <b>Esc</b> release<br/>
-  <b>Orbit:</b> drag to rotate · right-drag to pan · wheel to zoom<br/>
-  <b>R</b> reset · <b>[</b> / <b>]</b> prev/next · <b>M</b> toggle mode
+  <b>Orbit:</b> drag to rotate · right-drag pan · wheel zoom<br/>
+  <b>FPS:</b> click to capture · WASD · Q/E · Shift crawl · Esc release<br/>
+  <b>Space</b> play/pause · <b>M</b> toggle mode · <b>R</b> reset cam
 </div>
 <div id="hint">Loading…</div>
 
@@ -60,8 +63,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const statusEl = document.getElementById('status');
 const sceneSel = document.getElementById('scene');
+const modelSel = document.getElementById('model');
+const animSel = document.getElementById('anim');
+const playBtn = document.getElementById('play');
+const modeBtn = document.getElementById('mode');
+const statusEl = document.getElementById('status');
 const hintEl = document.getElementById('hint');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -73,8 +80,8 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a22);
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 50000);
-camera.position.set(0, 50, 100);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50000);
+camera.position.set(0, 2, 5);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const sun = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -82,7 +89,7 @@ sun.position.set(1, 2, 1);
 scene.add(sun);
 scene.add(new THREE.HemisphereLight(0x88aaff, 0x222211, 0.4));
 
-const grid = new THREE.GridHelper(2000, 100, 0x444444, 0x222222);
+const grid = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
 grid.position.y = -0.01;
 scene.add(grid);
 
@@ -94,11 +101,8 @@ fpsControls.addEventListener('unlock', () => { if (mode === 'fps') hintEl.classL
 const orbitControls = new OrbitControls(camera, renderer.domElement);
 orbitControls.enableDamping = true;
 orbitControls.dampingFactor = 0.1;
-orbitControls.target.set(0, 0, 0);
-orbitControls.enabled = false;
 
-let mode = 'fps';
-const modeBtn = document.getElementById('mode');
+let mode = 'orbit';
 function setMode(next) {
   mode = next;
   if (mode === 'fps') {
@@ -108,13 +112,13 @@ function setMode(next) {
     hintEl.classList.remove('hidden');
   } else {
     if (fpsControls.isLocked) fpsControls.unlock();
-    orbitControls.target.copy(modelBounds.isEmpty() ? new THREE.Vector3() : modelBounds.getCenter(new THREE.Vector3()));
     orbitControls.enabled = true;
     modeBtn.textContent = 'Mode: Orbit';
     hintEl.classList.add('hidden');
   }
 }
 modeBtn.onclick = () => setMode(mode === 'fps' ? 'orbit' : 'fps');
+setMode('orbit');
 
 renderer.domElement.addEventListener('click', () => { if (mode === 'fps') fpsControls.lock(); });
 
@@ -122,12 +126,10 @@ const keys = new Set();
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyR') resetCamera();
-  if (e.code === 'BracketLeft') stepScene(-1);
-  if (e.code === 'BracketRight') stepScene(1);
   if (e.code === 'KeyM') setMode(mode === 'fps' ? 'orbit' : 'fps');
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
-
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -136,9 +138,15 @@ window.addEventListener('resize', () => {
 
 const loader = new GLTFLoader();
 let currentRoot = null;
+let mixer = null;
+let action = null;
+let playing = true;
 let modelBounds = new THREE.Box3();
+const clock = new THREE.Clock();
 
 function clearCurrent() {
+  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(currentRoot); mixer = null; }
+  action = null;
   if (!currentRoot) return;
   scene.remove(currentRoot);
   currentRoot.traverse((o) => {
@@ -147,9 +155,7 @@ function clearCurrent() {
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       mats.forEach((m) => {
         if (!m) return;
-        for (const k of ['map','normalMap','roughnessMap','metalnessMap','emissiveMap']) {
-          if (m[k]) m[k].dispose?.();
-        }
+        for (const k of ['map','normalMap','roughnessMap','metalnessMap','emissiveMap']) { if (m[k]) m[k].dispose?.(); }
         m.dispose?.();
       });
     }
@@ -159,29 +165,64 @@ function clearCurrent() {
 
 function resetCamera() {
   if (modelBounds.isEmpty()) {
-    camera.position.set(0, 50, 100);
-    camera.lookAt(0, 0, 0);
-    return;
+    camera.position.set(0, 2, 5); orbitControls.target.set(0, 0, 0); return;
   }
   const size = new THREE.Vector3(); modelBounds.getSize(size);
   const center = new THREE.Vector3(); modelBounds.getCenter(center);
   const radius = Math.max(size.x, size.y, size.z) * 0.6 + 1;
-  camera.position.set(center.x, center.y + radius * 0.4, center.z + radius * 1.4);
+  camera.position.set(center.x, center.y + radius * 0.4, center.z + radius * 1.6);
   fpsControls.getObject().position.copy(camera.position);
   camera.lookAt(center);
   orbitControls.target.copy(center);
   orbitControls.update();
 }
 
-async function loadScene(entry) {
-  statusEl.textContent = `loading ${entry.scene}…`;
-  hintEl.classList.remove('hidden');
-  hintEl.textContent = `Loading ${entry.scene}…`;
+function togglePlay() {
+  playing = !playing;
+  playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (action) action.paused = !playing;
+}
+playBtn.onclick = togglePlay;
+document.getElementById('reset').onclick = resetCamera;
+
+let tree = {}; // scene -> model -> [aid entries]
+async function init() {
+  tree = await fetch('/anim-index.json').then((r) => r.json());
+  for (const sc of Object.keys(tree)) {
+    const opt = document.createElement('option'); opt.value = sc; opt.textContent = sc; sceneSel.appendChild(opt);
+  }
+  sceneSel.onchange = () => populateModels();
+  modelSel.onchange = () => populateAnims();
+  animSel.onchange = () => loadCurrent();
+  if (sceneSel.options.length) { sceneSel.selectedIndex = 0; populateModels(); }
+  else { statusEl.textContent = 'no animations found'; hintEl.textContent = 'No data'; }
+}
+
+function populateModels() {
+  modelSel.innerHTML = '';
+  const models = tree[sceneSel.value] || {};
+  for (const m of Object.keys(models)) {
+    const opt = document.createElement('option'); opt.value = m; opt.textContent = m; modelSel.appendChild(opt);
+  }
+  if (modelSel.options.length) { modelSel.selectedIndex = 0; populateAnims(); }
+}
+function populateAnims() {
+  animSel.innerHTML = '';
+  const anims = (tree[sceneSel.value] || {})[modelSel.value] || [];
+  for (const a of anims) {
+    const opt = document.createElement('option'); opt.value = a.url; opt.textContent = a.aid; animSel.appendChild(opt);
+  }
+  if (animSel.options.length) { animSel.selectedIndex = 0; loadCurrent(); }
+}
+
+async function loadCurrent() {
+  const url = animSel.value;
+  const label = `${sceneSel.value} / ${modelSel.value} / ${animSel.options[animSel.selectedIndex].textContent}`;
+  statusEl.textContent = `loading ${label}…`;
   clearCurrent();
   try {
-    const gltf = await loader.loadAsync(entry.url);
+    const gltf = await loader.loadAsync(url);
     currentRoot = gltf.scene;
-    // Enable double-sided + nicer color so untextured prims aren't black.
     currentRoot.traverse((o) => {
       if (o.isMesh) {
         const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -191,72 +232,46 @@ async function loadScene(entry) {
     scene.add(currentRoot);
     modelBounds.setFromObject(currentRoot);
     resetCamera();
-    statusEl.textContent = `${entry.scene} · ${entry.file}`;
-    hintEl.textContent = 'Click to fly · WASD + mouse';
+
+    if (gltf.animations && gltf.animations.length) {
+      mixer = new THREE.AnimationMixer(currentRoot);
+      action = mixer.clipAction(gltf.animations[0]);
+      action.play();
+      action.paused = !playing;
+      statusEl.textContent = `${label} · ${gltf.animations.length} clip(s)`;
+    } else {
+      statusEl.textContent = `${label} · no clips`;
+    }
   } catch (err) {
     console.error(err);
     statusEl.textContent = `error: ${err.message}`;
-    hintEl.textContent = `Failed to load ${entry.scene}`;
   }
 }
 
-let scenes = [];
-function stepScene(delta) {
-  if (!scenes.length) return;
-  let i = sceneSel.selectedIndex + delta;
-  if (i < 0) i = scenes.length - 1;
-  if (i >= scenes.length) i = 0;
-  sceneSel.selectedIndex = i;
-  loadScene(scenes[i]);
-}
-
-document.getElementById('prev').onclick = () => stepScene(-1);
-document.getElementById('next').onclick = () => stepScene(1);
-document.getElementById('reset').onclick = resetCamera;
-sceneSel.onchange = () => loadScene(scenes[sceneSel.selectedIndex]);
-
-(async function init() {
-  const list = await fetch('/scenes.json').then((r) => r.json());
-  scenes = list;
-  for (const s of scenes) {
-    const opt = document.createElement('option');
-    opt.value = s.url;
-    opt.textContent = s.scene;
-    sceneSel.appendChild(opt);
-  }
-  if (scenes.length) loadScene(scenes[0]);
-  else { statusEl.textContent = 'no scenes found'; hintEl.textContent = 'No scenes'; }
-})();
-
-// Movement loop.
 const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
-let prev = performance.now();
 function tick() {
   requestAnimationFrame(tick);
-  const now = performance.now();
-  const dt = Math.min(0.1, (now - prev) / 1000);
-  prev = now;
+  const dt = Math.min(0.1, clock.getDelta());
+
+  if (mixer) mixer.update(dt);
 
   if (mode === 'orbit') {
     orbitControls.update();
   } else if (fpsControls.isLocked) {
-    const speedBase = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 18.75 : 37.5;
+    const speedBase = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1.0 : 2.0;
     const accel = speedBase * 8;
     const damp = 10;
     velocity.x -= velocity.x * damp * dt;
     velocity.y -= velocity.y * damp * dt;
     velocity.z -= velocity.z * damp * dt;
-
     direction.z = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     direction.x = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
     direction.y = (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
     direction.normalize();
-
     if (direction.z) velocity.z -= direction.z * accel * dt;
     if (direction.x) velocity.x -= direction.x * accel * dt;
     if (direction.y) velocity.y += direction.y * accel * dt;
-
     fpsControls.moveRight(-velocity.x * dt);
     fpsControls.moveForward(-velocity.z * dt);
     fpsControls.getObject().position.y += velocity.y * dt;
@@ -265,6 +280,7 @@ function tick() {
   renderer.render(scene, camera);
 }
 tick();
+init();
 </script>
 </body>
 </html>
