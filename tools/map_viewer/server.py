@@ -1,17 +1,17 @@
-"""Tiny local HTTP server for browsing exported map glTFs and animations.
+"""Tiny local HTTP server for browsing exported map glTFs and models.
 
 Usage:
-    python -m tools.map_viewer.server [--root out/map_gltf_all] [--anim-root out/anim] [--port 8765]
+    python -m tools.map_viewer.server [--root out/map_gltf_all] [--models-root out/models] [--port 8765]
 
 Open the printed URL. `/` is the map viewer; `/animations` is the
-model+animation viewer (scene → model → anim id).
+deduplicated model viewer (Model -> Anim id, with the manifest of
+scenes referencing each model shown alongside).
 """
 from __future__ import annotations
 
 import argparse
 import http.server
 import json
-import re
 import socketserver
 import webbrowser
 from pathlib import Path
@@ -37,45 +37,31 @@ def build_scene_index(root: Path) -> list[dict]:
     return scenes
 
 
-_AID_RE = re.compile(r"^aid(\d+)$")
-
-
-def build_anim_index(root: Path) -> dict:
-    """Return {scene: {model: [{aid, url}]}} sorted naturally."""
-    tree: dict = {}
+def build_models_index(root: Path) -> dict:
+    """Read out/models/_index.json (produced by psc3_export_all)."""
     if not root.is_dir():
-        return tree
-    for scene_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        models: dict = {}
-        for model_dir in sorted(p for p in scene_dir.iterdir() if p.is_dir()):
-            anims: list[dict] = []
-            aid_dirs = []
-            for aid_dir in model_dir.iterdir():
-                if not aid_dir.is_dir():
-                    continue
-                m = _AID_RE.match(aid_dir.name)
-                if not m:
-                    continue
-                aid_dirs.append((int(m.group(1)), aid_dir))
-            aid_dirs.sort(key=lambda t: t[0])
-            for aid_num, aid_dir in aid_dirs:
-                gltfs = sorted(aid_dir.glob("*.gltf"))
-                if not gltfs:
-                    continue
-                gltf = gltfs[0]
-                rel = gltf.relative_to(root).as_posix()
-                anims.append(
-                    {
-                        "aid": aid_dir.name,
-                        "file": gltf.name,
-                        "url": f"/anim/{rel}",
-                    }
-                )
-            if anims:
-                models[model_dir.name] = anims
-        if models:
-            tree[scene_dir.name] = models
-    return tree
+        return {}
+    idx_path = root / "_index.json"
+    if idx_path.is_file():
+        try:
+            return json.loads(idx_path.read_text())
+        except Exception:
+            pass
+    # Fall back: scan directory tree.
+    out: dict = {}
+    for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        manifest = model_dir / "_scenes.json"
+        meta = {}
+        if manifest.is_file():
+            try:
+                meta = json.loads(manifest.read_text())
+            except Exception:
+                meta = {}
+        aid_dirs = sorted(p for p in model_dir.iterdir() if p.is_dir() and p.name.startswith("aid"))
+        meta["aid_count"] = len(aid_dirs)
+        meta.setdefault("name", model_dir.name)
+        out[model_dir.name] = meta
+    return out
 
 
 def _safe_under(base: Path, rel: str) -> Path | None:
@@ -95,16 +81,16 @@ def _ctype_for(path: Path) -> str:
         return "application/octet-stream"
     if path.suffix == ".png":
         return "image/png"
-    if path.suffix == ".jpg" or path.suffix == ".jpeg":
+    if path.suffix in (".jpg", ".jpeg"):
         return "image/jpeg"
     return "application/octet-stream"
 
 
-def make_handler(map_root: Path, anim_root: Path, scenes: list[dict], anim_tree: dict):
+def make_handler(map_root: Path, models_root: Path, scenes: list[dict], models_index: dict):
     index_html = (HERE / "index.html").read_bytes()
     anim_html = (HERE / "index_anim.html").read_bytes()
     scenes_json = json.dumps(scenes).encode("utf-8")
-    anim_json = json.dumps(anim_tree).encode("utf-8")
+    models_json = json.dumps(models_index).encode("utf-8")
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def _send_bytes(self, data: bytes, ctype: str) -> None:
@@ -127,20 +113,20 @@ def make_handler(map_root: Path, anim_root: Path, scenes: list[dict], anim_tree:
             if path in ("/", "/index.html"):
                 self._send_bytes(index_html, "text/html; charset=utf-8")
                 return
-            if path in ("/animations", "/animations/", "/index_anim.html"):
+            if path in ("/animations", "/animations/", "/models", "/models/", "/index_anim.html"):
                 self._send_bytes(anim_html, "text/html; charset=utf-8")
                 return
             if path == "/scenes.json":
                 self._send_bytes(scenes_json, "application/json")
                 return
-            if path == "/anim-index.json":
-                self._send_bytes(anim_json, "application/json")
+            if path == "/models-index.json":
+                self._send_bytes(models_json, "application/json")
                 return
             if path.startswith("/maps/"):
                 self._serve_file(map_root, path[len("/maps/"):])
                 return
-            if path.startswith("/anim/"):
-                self._serve_file(anim_root, path[len("/anim/"):])
+            if path.startswith("/models/"):
+                self._serve_file(models_root, path[len("/models/"):])
                 return
             self.send_error(404)
 
@@ -153,28 +139,26 @@ def make_handler(map_root: Path, anim_root: Path, scenes: list[dict], anim_tree:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="out/map_gltf_all", help="Directory of map scene subfolders")
-    ap.add_argument("--anim-root", default="out/anim", help="Directory of animation scene subfolders")
+    ap.add_argument("--models-root", default="out/models", help="Directory of deduplicated model folders")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true")
     args = ap.parse_args()
 
     map_root = Path(args.root).resolve()
-    anim_root = Path(args.anim_root).resolve()
+    models_root = Path(args.models_root).resolve()
     if not map_root.is_dir():
         print(f"[error] map root not found: {map_root}")
         return 1
 
     scenes = build_scene_index(map_root)
-    anim_tree = build_anim_index(anim_root)
-    n_models = sum(len(m) for m in anim_tree.values())
-    n_anims = sum(len(a) for m in anim_tree.values() for a in m.values())
+    models_index = build_models_index(models_root)
     print(f"[viewer] maps: {len(scenes)} scenes from {map_root}")
-    print(f"[viewer] anims: {len(anim_tree)} scenes / {n_models} models / {n_anims} clips from {anim_root}")
-    handler = make_handler(map_root, anim_root, scenes, anim_tree)
+    print(f"[viewer] models: {len(models_index)} unique models from {models_root}")
+    handler = make_handler(map_root, models_root, scenes, models_index)
     with socketserver.TCPServer(("127.0.0.1", args.port), handler) as httpd:
         url = f"http://127.0.0.1:{args.port}/"
         print(f"[viewer] open {url}  (Ctrl+C to stop)")
-        print(f"[viewer]      {url}animations")
+        print(f"[viewer]      {url}models")
         if not args.no_open:
             try:
                 webbrowser.open(url)

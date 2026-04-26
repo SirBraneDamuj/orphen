@@ -13,6 +13,7 @@
   #ui select { background: #222; color: #eee; border: 1px solid #444; padding: 4px; min-width: 120px; }
   #ui button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 8px; cursor: pointer; }
   #ui button:hover { background: #444; }
+  #ui button.nav { padding: 4px 6px; min-width: 24px; font-weight: bold; }
   #ui label { opacity: 0.7; }
   #status { opacity: 0.8; }
   #help {
@@ -33,9 +34,14 @@
 <body>
 <div id="ui">
   <a class="toplink" href="/">Maps</a> ·
-  <label>Scene:</label><select id="scene"></select>
-  <label>Model:</label><select id="model"></select>
-  <label>Anim:</label><select id="anim"></select>
+  <label>Model:</label>
+  <button class="nav" id="modelPrev" title="Prev model ([)">◀</button>
+  <select id="model"></select>
+  <button class="nav" id="modelNext" title="Next model (])">▶</button>
+  <label>Anim:</label>
+  <button class="nav" id="animPrev" title="Prev anim (,)">◀</button>
+  <select id="anim"></select>
+  <button class="nav" id="animNext" title="Next anim (.)">▶</button>
   <button id="play">⏸ Pause</button>
   <button id="reset">Reset cam</button>
   <button id="mode">Mode: Orbit</button>
@@ -44,8 +50,10 @@
 <div id="help">
   <b>Orbit:</b> drag to rotate · right-drag pan · wheel zoom<br/>
   <b>FPS:</b> click to capture · WASD · Q/E · Shift crawl · Esc release<br/>
-  <b>Space</b> play/pause · <b>M</b> toggle mode · <b>R</b> reset cam
+  <b>Space</b> play/pause · <b>M</b> toggle mode · <b>R</b> reset cam<br/>
+  <b>[</b> / <b>]</b> prev/next model · <b>,</b> / <b>.</b> prev/next anim
 </div>
+<div id="scenes" style="position:absolute;top:8px;right:8px;z-index:10;background:rgba(0,0,0,0.55);padding:6px 10px;border-radius:6px;font-size:11px;line-height:1.4;max-width:260px;max-height:50vh;overflow:auto"></div>
 <div id="hint">Loading…</div>
 
 <script type="importmap">
@@ -63,13 +71,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const sceneSel = document.getElementById('scene');
+const sceneSel = null; // legacy placeholder, no longer used
 const modelSel = document.getElementById('model');
 const animSel = document.getElementById('anim');
 const playBtn = document.getElementById('play');
 const modeBtn = document.getElementById('mode');
 const statusEl = document.getElementById('status');
 const hintEl = document.getElementById('hint');
+const scenesEl = document.getElementById('scenes');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -128,6 +137,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetCamera();
   if (e.code === 'KeyM') setMode(mode === 'fps' ? 'orbit' : 'fps');
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.code === 'BracketLeft') stepModel(-1);
+  if (e.code === 'BracketRight') stepModel(1);
+  if (e.code === 'Comma') stepAnim(-1);
+  if (e.code === 'Period') stepAnim(1);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('resize', () => {
@@ -185,39 +198,73 @@ function togglePlay() {
 playBtn.onclick = togglePlay;
 document.getElementById('reset').onclick = resetCamera;
 
-let tree = {}; // scene -> model -> [aid entries]
+let modelIndex = {}; // model_name -> { name, sha6, scenes, aid_count, ... }
+let modelNames = [];
 async function init() {
-  tree = await fetch('/anim-index.json').then((r) => r.json());
-  for (const sc of Object.keys(tree)) {
-    const opt = document.createElement('option'); opt.value = sc; opt.textContent = sc; sceneSel.appendChild(opt);
+  modelIndex = await fetch('/models-index.json').then((r) => r.json());
+  modelNames = Object.keys(modelIndex).sort();
+  for (const m of modelNames) {
+    const meta = modelIndex[m];
+    const opt = document.createElement('option');
+    opt.value = m;
+    const aidc = meta.aid_count ?? 0;
+    const scc = meta.scene_count ?? 0;
+    opt.textContent = `${m}  (${aidc} aids · ${scc} scenes)`;
+    modelSel.appendChild(opt);
   }
-  sceneSel.onchange = () => populateModels();
   modelSel.onchange = () => populateAnims();
   animSel.onchange = () => loadCurrent();
-  if (sceneSel.options.length) { sceneSel.selectedIndex = 0; populateModels(); }
-  else { statusEl.textContent = 'no animations found'; hintEl.textContent = 'No data'; }
+  if (modelNames.length) { modelSel.selectedIndex = 0; populateAnims(); }
+  else { statusEl.textContent = 'no models found'; hintEl.textContent = 'No data'; }
 }
 
-function populateModels() {
-  modelSel.innerHTML = '';
-  const models = tree[sceneSel.value] || {};
-  for (const m of Object.keys(models)) {
-    const opt = document.createElement('option'); opt.value = m; opt.textContent = m; modelSel.appendChild(opt);
-  }
-  if (modelSel.options.length) { modelSel.selectedIndex = 0; populateAnims(); }
+function stepModel(delta) {
+  if (!modelNames.length) return;
+  let i = modelSel.selectedIndex + delta;
+  if (i < 0) i = modelNames.length - 1;
+  if (i >= modelNames.length) i = 0;
+  modelSel.selectedIndex = i;
+  populateAnims();
 }
+
+function stepAnim(delta) {
+  const n = animSel.options.length;
+  if (!n) return;
+  let i = animSel.selectedIndex + delta;
+  if (i < 0) i = n - 1;
+  if (i >= n) i = 0;
+  animSel.selectedIndex = i;
+  loadCurrent();
+}
+
+document.getElementById('modelPrev').onclick = () => stepModel(-1);
+document.getElementById('modelNext').onclick = () => stepModel(1);
+document.getElementById('animPrev').onclick = () => stepAnim(-1);
+document.getElementById('animNext').onclick = () => stepAnim(1);
+
 function populateAnims() {
   animSel.innerHTML = '';
-  const anims = (tree[sceneSel.value] || {})[modelSel.value] || [];
-  for (const a of anims) {
-    const opt = document.createElement('option'); opt.value = a.url; opt.textContent = a.aid; animSel.appendChild(opt);
+  const name = modelSel.value;
+  const meta = modelIndex[name] || {};
+  const count = meta.aid_count || 0;
+  for (let i = 0; i < count; i++) {
+    const opt = document.createElement('option');
+    opt.value = `/models/${name}/aid${i}/${name}.gltf`;
+    opt.textContent = `aid${i}`;
+    animSel.appendChild(opt);
   }
+  // Render scene manifest panel.
+  const scenes = meta.scenes || [];
+  scenesEl.innerHTML = `<div style="opacity:0.7;margin-bottom:4px"><b>${name}</b> · sha ${meta.sha6 || '?'}</div>`
+    + `<div style="opacity:0.7;margin-bottom:4px">used in ${scenes.length} scene(s):</div>`
+    + scenes.map((s) => `<div style="opacity:0.85">${s}</div>`).join('');
   if (animSel.options.length) { animSel.selectedIndex = 0; loadCurrent(); }
+  else { statusEl.textContent = `${name} · no animations`; clearCurrent(); }
 }
 
 async function loadCurrent() {
   const url = animSel.value;
-  const label = `${sceneSel.value} / ${modelSel.value} / ${animSel.options[animSel.selectedIndex].textContent}`;
+  const label = `${modelSel.value} / ${animSel.options[animSel.selectedIndex].textContent}`;
   statusEl.textContent = `loading ${label}…`;
   clearCurrent();
   try {
