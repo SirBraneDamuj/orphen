@@ -18,23 +18,23 @@
  */
 
 typedef unsigned char u8;
-typedef unsigned int  u32;
+typedef unsigned int u32;
 typedef unsigned long long u64;
 
-extern u8 *puGpffffbed0;      /* Interleaved block buffer */
-extern u8 *puGpffffbed8;      /* PCM ring buffer */
-extern int *piGpffffbed4;     /* Header sector, later MPEG ring buffer */
-extern u32 uGpffffbedc;       /* Bytes read into current block */
-extern u32 uGpffffbee0;       /* MPEG ring write offset */
-extern int iGpffffbee4;       /* Buffered MPEG byte count */
-extern u32 uGpffffbee8;       /* PCM ring write offset */
-extern int iGpffffbef0;       /* Buffered PCM byte count */
-extern int iGpffffbf04;       /* Remaining unread file bytes */
-extern int iGpffffbf08;       /* blk_byte */
-extern int iGpffffbf0c;       /* pcm_ofs */
-extern int iGpffffbf10;       /* pcm_1sz */
-extern int iGpffffbf14;       /* mpg_ofs */
-extern int iGpffffbf18;       /* mpg_1sz */
+extern u8 *puGpffffbed0;  /* Interleaved block buffer */
+extern u8 *puGpffffbed8;  /* PCM ring buffer */
+extern int *piGpffffbed4; /* Header sector, later MPEG ring buffer */
+extern u32 uGpffffbedc;   /* Bytes read into current block */
+extern u32 uGpffffbee0;   /* MPEG ring write offset */
+extern int iGpffffbee4;   /* Buffered MPEG byte count */
+extern u32 uGpffffbee8;   /* PCM ring write offset */
+extern int iGpffffbef0;   /* Buffered PCM byte count */
+extern int iGpffffbf04;   /* Remaining unread file bytes */
+extern int iGpffffbf08;   /* blk_byte */
+extern int iGpffffbf0c;   /* pcm_ofs */
+extern int iGpffffbf10;   /* pcm_1sz */
+extern int iGpffffbf14;   /* mpg_ofs */
+extern int iGpffffbf18;   /* mpg_1sz */
 extern int iGpffffb638;
 
 extern long FUN_002fc450(unsigned int sectors, void *dest, int split_reads, void *status_out);
@@ -42,12 +42,14 @@ extern void FUN_002f1ed0(void);
 extern void FUN_00267da0(void *dest, void *src, unsigned int bytes);
 extern void FlushCache(int mode);
 
-static void copy_16_aligned(void *dest, const void *src, int byte_count) {
+static void copy_16_aligned(void *dest, const void *src, int byte_count)
+{
     const u64 *readp = (const u64 *)src;
     u32 *writep = (u32 *)dest;
     int qwords = (byte_count + 15) >> 4;
 
-    while (qwords-- > 0) {
+    while (qwords-- > 0)
+    {
         u64 lo_hi = *readp++;
         u32 third = *(const u32 *)readp;
         u32 fourth = *(const u32 *)((const u8 *)readp + 4);
@@ -61,12 +63,14 @@ static void copy_16_aligned(void *dest, const void *src, int byte_count) {
     }
 }
 
-unsigned int mv3_read_next_interleaved_block(void) {
+unsigned int mv3_read_next_interleaved_block(void)
+{
     long sectors_read;
     unsigned int mpeg_chunk_size;
     u8 cd_status[16];
 
-    if (iGpffffbf10 * 7 < iGpffffbef0 || (int)(iGpffffbf18 * 3) < iGpffffbee4) {
+    if (iGpffffbf10 * 7 < iGpffffbef0 || (int)(iGpffffbf18 * 3) < iGpffffbee4)
+    {
         return 0xffffffff;
     }
 
@@ -74,8 +78,10 @@ unsigned int mv3_read_next_interleaved_block(void) {
                                 puGpffffbed0 + uGpffffbedc,
                                 0,
                                 cd_status);
-    if (sectors_read == 0) {
-        if (iGpffffb638 == 0) {
+    if (sectors_read == 0)
+    {
+        if (iGpffffb638 == 0)
+        {
             FUN_002f1ed0();
         }
         return 0;
@@ -85,7 +91,8 @@ unsigned int mv3_read_next_interleaved_block(void) {
     uGpffffbedc += (int)sectors_read * 0x800;
     iGpffffb638 = 0x78;
 
-    if (uGpffffbedc < (u32)iGpffffbf08) {
+    if (uGpffffbedc < (u32)iGpffffbf08)
+    {
         return 0;
     }
 
@@ -97,7 +104,8 @@ unsigned int mv3_read_next_interleaved_block(void) {
                     iGpffffbf10);
     uGpffffbee8 += iGpffffbf10;
     iGpffffbef0 += iGpffffbf10;
-    if ((u32)(iGpffffbf10 << 3) <= uGpffffbee8) {
+    if ((u32)(iGpffffbf10 << 3) <= uGpffffbee8)
+    {
         uGpffffbee8 = 0;
     }
 
@@ -107,10 +115,11 @@ unsigned int mv3_read_next_interleaved_block(void) {
     uGpffffbee0 += iGpffffbf18;
     iGpffffbee4 += iGpffffbf18;
 
-    if ((u32)(iGpffffbf18 * 5) <= uGpffffbee0) {
+    if ((u32)(iGpffffbf18 * 5) <= uGpffffbee0)
+    {
         mpeg_chunk_size = (unsigned int)iGpffffbf18;
         copy_16_aligned(piGpffffbed4,
-                (u8 *)piGpffffbed4 + mpeg_chunk_size,
+                        (u8 *)piGpffffbed4 + mpeg_chunk_size,
                         (int)mpeg_chunk_size);
         uGpffffbee0 = mpeg_chunk_size;
     }

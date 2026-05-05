@@ -156,6 +156,29 @@ class PSC3FullMesh:
         return (128, 128, 128)
 
 
+def pose_table_count(mesh: PSC3FullMesh, sm: Submesh) -> int:
+    """Return the number of u32 pose-table entries for a submesh.
+
+    The field previously called ``byte_len`` is not the Section A table byte
+    length. The runtime slabs are bounded by consecutive ``section_a_off``
+    values, with ``offs_section_b`` as the final bound. This matters for sparse
+    animation ids: high targets (for example 65 in grp_000d) are valid even
+    when ``byte_len // 4`` would incorrectly mark them out-of-range.
+    """
+    start = sm.section_a_off
+    sec_b = mesh.header.get('offs_section_b', 0)
+    if start <= 0 or (sec_b and start >= sec_b):
+        return 0
+    candidates = sorted({s.section_a_off for s in mesh.submeshes
+                         if s.section_a_off > start})
+    end = candidates[0] if candidates else (sec_b or mesh.header.get('file_size', 0))
+    if sec_b:
+        end = min(end, sec_b)
+    if end <= start:
+        return 0
+    return (end - start) // 4
+
+
 def parse_psc3_full(buf: bytes, pose_frame: int = 0) -> PSC3FullMesh:
     """Parse a PSC3 chunk.
 
@@ -172,6 +195,7 @@ def parse_psc3_full(buf: bytes, pose_frame: int = 0) -> PSC3FullMesh:
     h = {
         'magic':             _u32(buf, 0x00),
         'submesh_count':     _s16(buf, 0x04),
+        'u0c_count':         _u16(buf, 0x06),
         'offs_submeshes':    _u32(buf, 0x08),
         'offs_u0c':          _u32(buf, 0x0C),  # 0x28-byte record table (unparsed)
         'offs_section_a':    _u32(buf, 0x10),  # ~97KB aux (unparsed)
@@ -226,9 +250,9 @@ def parse_psc3_full(buf: bytes, pose_frame: int = 0) -> PSC3FullMesh:
     secB = h['offs_section_b']
     if secB:
         for sm in mesh.submeshes:
-            if sm.section_a_off == 0 or sm.byte_len <= 0:
+            n_poses = pose_table_count(mesh, sm)
+            if n_poses <= 0:
                 continue
-            n_poses = sm.byte_len // 4
             frame = pose_frame if 0 <= pose_frame < n_poses else 0
             slab_entry = sm.section_a_off + frame * 4
             if slab_entry + 4 > len(buf):
@@ -360,9 +384,9 @@ def sample_pose(buf: bytes, mesh: PSC3FullMesh, bone_id: int, pose_idx: int
     if bone_id < 0 or bone_id >= len(mesh.submeshes):
         return ident
     sm = mesh.submeshes[bone_id]
-    if sm.section_a_off == 0 or sm.byte_len <= 0:
+    n_poses = pose_table_count(mesh, sm)
+    if n_poses <= 0:
         return ident
-    n_poses = sm.byte_len // 4
     if pose_idx < 0 or pose_idx >= n_poses:
         return ident
     slab_entry = sm.section_a_off + pose_idx * 4
@@ -447,9 +471,9 @@ def sample_pose_v2(buf: bytes, mesh: PSC3FullMesh, sm_id: int, pose_idx: int):
     if sm_id < 0 or sm_id >= len(mesh.submeshes):
         return ident
     sm = mesh.submeshes[sm_id]
-    if sm.section_a_off == 0 or sm.byte_len <= 0:
+    n_poses = pose_table_count(mesh, sm)
+    if n_poses <= 0:
         return ident
-    n_poses = sm.byte_len // 4
     # When an animation references a pose index higher than this
     # submesh has data for, the runtime leaves the bone at its bind/
     # rest pose (target 0) rather than snapping to identity. Returning
@@ -501,8 +525,7 @@ def max_pose_count(mesh: PSC3FullMesh) -> int:
     """Return the largest pose-table length across all submeshes."""
     best = 0
     for sm in mesh.submeshes:
-        if sm.byte_len > 0:
-            best = max(best, sm.byte_len // 4)
+        best = max(best, pose_table_count(mesh, sm))
     return best
 
 

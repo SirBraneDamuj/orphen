@@ -39,6 +39,47 @@ The executable contains one standalone audio-like MV3 path plus nineteen movie p
 
 Real-file validation: `M01.MV3` through `M19.MV3` all start with `MV30`. `A01.MV3` does not; it starts with zero-filled data and should be handled as a separate audio/PCM stream, not as the movie container described below.
 
+## A01.MV3 PCM stream
+
+`A01.MV3` is not an FMV/movie container. It is a headerless standalone PCM stream that reuses the same IOP/SPU streaming path used for MV3 movie audio.
+
+Code evidence:
+
+- Script opcode `0xBE` dispatches through the table at `PTR_FUN_0031e730`; entry 5 is `FUN_00267650`.
+- `FUN_00267650` is a small command gate for `\MV3\A01.MV3;1`: command values `>= 10` open/cache the file info, command `1` starts playback, command `2` stops playback, and other values pump the state machine.
+- `FUN_002f2ca0(file_info, 0x50)` initializes the PCM stream. It sets the ring buffer base to `0x01949a80`, chunk size to `0x10000`, buffered-ring capacity to eight chunks, and logs `pcm:%dbyte\n` with the opened file byte count.
+- `FUN_002f2df8` fills that ring directly from CD sectors with `FUN_002fc450`; there is no sector-0 header read or byte skip, so stream data starts at file offset `0x00000000`.
+- `FUN_002f2ef0` runs the playback states: wait for CD readiness, open the stream, prefill at least one chunk, wait for SPU stream readiness, start audio with `FUN_00207408(iGpffffbf10 << 1, 0x2f2110, volume)`, then keep filling until the remaining file byte count drops below one `0x10000` chunk.
+
+Real-file validation of `A01.MV3`:
+
+| Property | Value |
+| --- | --- |
+| File size | `0x00f60000` / 16,121,856 bytes |
+| CD sectors | 7,872 sectors of `0x800` bytes |
+| PCM chunks | 246 chunks of `0x10000` bytes |
+| Duration | 83.968 seconds at stereo 48 kHz |
+
+The byte pattern matches signed 16-bit little-endian PCM rather than PS2/SPU ADPCM: even byte positions have near-full entropy, odd byte positions have lower entropy with many sign-extension bytes, and there is no plausible 16-byte ADPCM frame-header cadence.
+
+Like the `Mxx` movie audio, A01 is stored in alternating 0x200-byte channel stripes, not ordinary LRLR samples. A continuity check across candidate stripe sizes strongly selects 0x200: with 0x200-byte stripes the channel-boundary delta RMS is `603.9`, essentially the same as ordinary adjacent-sample delta RMS `590.6` (ratio `1.02`), while other tested stripe sizes had boundary ratios from `4.78` to `9.10`. Treating the file as direct LRLR gives even/odd channel correlation `0.9893`, which is just adjacent samples being mistaken for left/right channels.
+
+Conversion command:
+
+```bash
+python tools/mv3_reorder_audio.py \
+	"C:/path/to/MV3/A01.MV3" \
+	out/a01/A01_stripe0200_chunk10000_s16le_stereo_48000.pcm \
+	--chunk-size 0x10000 \
+	--stripe-size 0x200
+
+ffmpeg -f s16le -ar 48000 -ac 2 \
+	-i out/a01/A01_stripe0200_chunk10000_s16le_stereo_48000.pcm \
+	out/a01/A01_stripe0200_ar48000.wav
+```
+
+The generated local candidate is `out/a01/A01_stripe0200_ar48000.wav`.
+
 ## Trigger path
 
 - Script opcode `0x13A` (`FUN_00265378`, already analyzed as `analyzed/ops/0x13A_set_global_byte_3555d2.c`) evaluates one byte and stores it to `DAT_003555d2`.
@@ -58,14 +99,14 @@ blk_byte=%d,pcm_ofs=%d,pcm_1sz=%d,mpg_ofs=%d,mpg_1sz=%d
 
 Header layout:
 
-| Offset | Type | Meaning |
-| --- | --- | --- |
-| `0x00` | char[4] | `MV30` magic |
-| `0x04` | u32 | `blk_byte`, size of each interleaved block |
-| `0x08` | u32 | `pcm_ofs`, offset of the PCM chunk inside each block |
-| `0x0c` | u32 | `pcm_1sz`, bytes of PCM copied from each block |
-| `0x10` | u32 | `mpg_ofs`, offset of the MPEG chunk inside each block |
-| `0x14` | u32 | `mpg_1sz`, bytes of MPEG copied from each block |
+| Offset | Type    | Meaning                                               |
+| ------ | ------- | ----------------------------------------------------- |
+| `0x00` | char[4] | `MV30` magic                                          |
+| `0x04` | u32     | `blk_byte`, size of each interleaved block            |
+| `0x08` | u32     | `pcm_ofs`, offset of the PCM chunk inside each block  |
+| `0x0c` | u32     | `pcm_1sz`, bytes of PCM copied from each block        |
+| `0x10` | u32     | `mpg_ofs`, offset of the MPEG chunk inside each block |
+| `0x14` | u32     | `mpg_1sz`, bytes of MPEG copied from each block       |
 
 The player reads sector 0 for the header and then starts block reads from the next sector. That means the interleaved block area should begin at file offset `0x800` for a raw ISO file extract. Any bytes after the 24-byte header inside sector 0 are ignored by the game.
 
@@ -78,13 +119,13 @@ Both failure paths log `[%s] mpg_block size over.`, so the string name is broade
 
 All nineteen extracted `Mxx.MV3` files share the same layout:
 
-| Field | Value |
-| --- | --- |
+| Field      | Value                        |
+| ---------- | ---------------------------- |
 | `blk_byte` | `0x000aa800` / 698,368 bytes |
-| `pcm_ofs` | `0x00000000` |
-| `pcm_1sz` | `0x00030000` / 196,608 bytes |
-| `mpg_ofs` | `0x00030000` |
-| `mpg_1sz` | `0x0007a120` / 500,000 bytes |
+| `pcm_ofs`  | `0x00000000`                 |
+| `pcm_1sz`  | `0x00030000` / 196,608 bytes |
+| `mpg_ofs`  | `0x00030000`                 |
+| `mpg_1sz`  | `0x0007a120` / 500,000 bytes |
 
 Each block therefore contains 196,608 bytes of PCM data, 500,000 bytes of MPEG data, and 1,760 bytes of unused/padding space at the end of the block.
 
@@ -213,4 +254,4 @@ ffmpeg -fflags +genpts -i out/mv3_test/M13.mpg \
 ## Open questions
 
 - Decode the `0x00326fd0` per-movie table used as the third argument to `FUN_00207408`.
-- Analyze `A01.MV3` separately; it does not use the `MV30` header.
+- Confirm the A01 stream contents by listening to the converted WAV and identifying where it plays in script context.

@@ -55,27 +55,42 @@ class TimelineEntry:
     end: bool
 
 
-def parse_anim_table(buf: bytes, anim_table_off: int) -> list[AnimRecord]:
-    """Read 8-byte records until we hit padding (0x02020202), a null
-    sentinel (a==0 and b==0), or run off the section."""
+def parse_anim_table(buf: bytes, anim_table_off: int,
+                     record_count: int | None = None) -> list[AnimRecord]:
+    """Read 8-byte animation records.
+
+    The high halfword of PSC3 header dword +0x04 gives the number of slots in
+    this table. Some character models use sparse tables with leading zero slots
+    (for example grp_000b starts at aid 4), so when ``record_count`` is known
+    zero records are skipped, not treated as a terminal sentinel.
+    """
     out: list[AnimRecord] = []
     i = 0
-    while True:
+    limit = record_count if record_count is not None else 128
+    while i < limit and anim_table_off + i * 8 + 8 <= len(buf):
         a, b = struct.unpack_from("<II", buf, anim_table_off + i * 8)
         # 0x02020202 is observed PSC3 inter-section padding
         if a == 0x02020202:
+            if record_count is not None:
+                i += 1
+                continue
             break
         # Null sentinel: some PSC3s pad the anim table with a zero record
         # (timeline_off=0 lod=0). Stop before consuming it as a real anim.
         if a == 0 and b == 0:
+            if record_count is not None:
+                i += 1
+                continue
             break
-        # Sanity: timeline_off should be smaller than anim_table_off
-        if a >= anim_table_off and i > 0:
+        # Sanity: timeline_off should point into the timeline blob before the
+        # table, not into another section. In bounded mode, skip bad slots.
+        if not (0 < a < anim_table_off):
+            if record_count is not None:
+                i += 1
+                continue
             break
         out.append(AnimRecord(i, a, b))
         i += 1
-        if i > 128:
-            break
     return out
 
 
@@ -96,6 +111,8 @@ def decode(buf: bytes, base: int = 0) -> None:
     """`base` is the offset within `buf` where PSC3 magic lives."""
     if buf[base : base + 4] != b"PSC3":
         raise ValueError(f"PSC3 magic missing at base 0x{base:x}")
+    (header_word,) = struct.unpack_from("<I", buf, base + 0x04)
+    record_count = (header_word >> 16) & 0xFFFF
     (anim_table_off,) = struct.unpack_from("<I", buf, base + 0x0C)
     (kf_pool_off,) = struct.unpack_from("<I", buf, base + 0x2C)
     print(f"PSC3 base=0x{base:x}")
@@ -103,7 +120,7 @@ def decode(buf: bytes, base: int = 0) -> None:
     print(f"  keyframe_pool @ psc3+0x{kf_pool_off:x}")
     print()
 
-    recs = parse_anim_table(buf, base + anim_table_off)
+    recs = parse_anim_table(buf, base + anim_table_off, record_count)
     # Compute end of each timeline = start of the next record (or estimate)
     for i, r in enumerate(recs):
         if i + 1 < len(recs):

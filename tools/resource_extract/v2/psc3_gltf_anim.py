@@ -146,19 +146,23 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
     anim_table_off = h['offs_u0c']
     if not anim_table_off:
         raise ValueError("PSC3 has no anim table (offs_u0c == 0)")
-    recs = parse_anim_table(buf, anim_table_off)
+    recs = parse_anim_table(buf, anim_table_off, h.get('u0c_count'))
     if not recs:
         raise ValueError("PSC3 anim table is empty")
+    rec_by_id = {r.index: r for r in recs}
+    rec_pos_by_id = {r.index: i for i, r in enumerate(recs)}
+    available_ids = [r.index for r in recs]
     if anim_ids is None:
-        anim_ids = list(range(len(recs)))
+        anim_ids = available_ids
     for aid in anim_ids:
-        if aid < 0 or aid >= len(recs):
-            raise ValueError(f"anim_id {aid} out of range; got {len(recs)} records")
+        if aid not in rec_by_id:
+            raise ValueError(f"anim_id {aid} not present; available ids: {available_ids}")
 
     def _timeline_for(aid: int) -> Tuple[List[float], List[int]]:
-        rec = recs[aid]
-        if aid + 1 < len(recs):
-            end_off = recs[aid + 1].timeline_off
+        rec = rec_by_id[aid]
+        pos = rec_pos_by_id[aid]
+        if pos + 1 < len(recs):
+            end_off = recs[pos + 1].timeline_off
         elif 0 < rec.lod_param < 0x200:
             end_off = rec.timeline_off + rec.lod_param
         else:
@@ -215,10 +219,14 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
     # Material key for a primitive (matches _build_face_groups logic).
     def _mat_key_for_prim(prim) -> Optional[Tuple[int, int, int, int]]:
         sd_idx = _primary_subdraw_idx(prim)
-        if sd_idx is None or not (0 <= sd_idx < len(mesh.subdraws)):
+        if sd_idx is None:
             return None
-        sd = mesh.subdraws[sd_idx]
-        flags = sd.tex_flags
+        # Some PSC3 records (for example grp_0102) have no parsed subdraw/UV
+        # table but still reference material indices. The static exporter emits
+        # those with fallback UVs/color; mirror that here instead of dropping
+        # the primitive and producing an animation-only glTF.
+        sd = mesh.subdraws[sd_idx] if 0 <= sd_idx < len(mesh.subdraws) else None
+        flags = sd.tex_flags if sd else 0
         r, g, b = mesh.color_for(sd_idx, 0)
         return (r, g, b, flags)
 
@@ -594,11 +602,11 @@ def emit_animated(buf: bytes, mesh: PSC3FullMesh, gltf_path: str, name: str,
     }
 
 
-def _parse_anim_ids(spec: str, total: int) -> List[int]:
-    """Parse 'all', '0,2,3', or '0-3' into an ordered list of ids."""
+def _parse_anim_ids(spec: str, available_ids: List[int]) -> List[int]:
+    """Parse 'all', '0,2,3', or '0-3' into an ordered list of aid ids."""
     spec = spec.strip().lower()
     if not spec or spec == 'all':
-        return list(range(total))
+        return list(available_ids)
     out: List[int] = []
     for part in spec.split(','):
         part = part.strip()
@@ -609,6 +617,9 @@ def _parse_anim_ids(spec: str, total: int) -> List[int]:
             out.extend(range(int(a), int(b) + 1))
         else:
             out.append(int(part))
+    missing = [aid for aid in out if aid not in set(available_ids)]
+    if missing:
+        raise ValueError(f"anim id(s) not present: {missing}; available: {available_ids}")
     return out
 
 
@@ -643,8 +654,8 @@ def main() -> int:
     if not h['offs_u0c']:
         print("PSC3 has no animation table", file=sys.stderr)
         return 1
-    total = len(parse_anim_table(data, h['offs_u0c']))
-    anim_ids = _parse_anim_ids(args.anim_id, total)
+    records = parse_anim_table(data, h['offs_u0c'], h.get('u0c_count'))
+    anim_ids = _parse_anim_ids(args.anim_id, [r.index for r in records])
     name = os.path.splitext(os.path.basename(args.src))[0]
     bundle_dir = os.path.dirname(os.path.abspath(args.src))
 

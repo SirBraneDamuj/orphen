@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 import time
 from collections import defaultdict
@@ -32,6 +33,7 @@ from typing import Dict, List, Tuple
 
 from .psc3_anim_decode import parse_anim_table
 from .psc3_full import MAGIC_PSC3, parse_psc3_full, _u32
+from .psc3_gltf import export_file as export_static_gltf
 from .psc3_gltf_anim import emit_animated
 
 
@@ -69,6 +71,13 @@ def _gather(src: Path) -> Dict[Tuple[str, str], Dict]:
 
 def _model_dirname(name: str, sha: str, has_variants: bool) -> str:
     return f"{name}__{sha}" if has_variants else name
+
+
+def _remove_stale_aid_dirs(out_dir: Path, aid_ids: List[int]) -> None:
+    expected = {f"aid{aid}" for aid in aid_ids}
+    for child in out_dir.glob("aid*"):
+        if child.is_dir() and child.name not in expected:
+            shutil.rmtree(child)
 
 
 def main() -> int:
@@ -135,13 +144,35 @@ def main() -> int:
             data = canonical.read_bytes()
             mesh = parse_psc3_full(data)
             h = mesh.header
-            if not h["offs_u0c"]:
-                index[out_name] = {**manifest, "aid_count": 0, "note": "no anim table"}
-                continue
-            anim_total = len(parse_anim_table(data, h["offs_u0c"]))
             bundle_dir = str(canonical.parent)
 
-            for aid in range(anim_total):
+            if h["offs_u0c"]:
+                anim_records = parse_anim_table(data, h["offs_u0c"], h.get("u0c_count"))
+            else:
+                anim_records = []
+            aid_ids = [r.index for r in anim_records]
+
+            if not aid_ids:
+                _remove_stale_aid_dirs(out_dir, [0])
+                aid_dir = out_dir / "aid0"
+                stats = export_static_gltf(str(canonical), str(aid_dir))
+                index[out_name] = {
+                    **manifest,
+                    "aid_count": 1 if stats else 0,
+                    "aid_ids": [0] if stats else [],
+                    "static": True,
+                    "source_anim_count": 0,
+                }
+                processed += 1
+                if processed % 25 == 0:
+                    print(f"[emit] {processed} models written...")
+                if args.limit and processed >= args.limit:
+                    print(f"[stop] hit --limit {args.limit}")
+                    break
+                continue
+
+            _remove_stale_aid_dirs(out_dir, aid_ids)
+            for aid in aid_ids:
                 aid_dir = out_dir / f"aid{aid}"
                 gltf_path = aid_dir / f"{name}.gltf"
                 emit_animated(
@@ -152,7 +183,8 @@ def main() -> int:
                 )
             index[out_name] = {
                 **manifest,
-                "aid_count": anim_total,
+                "aid_count": len(aid_ids),
+                "aid_ids": aid_ids,
             }
             processed += 1
             if processed % 25 == 0:

@@ -289,7 +289,8 @@
         opt.value = m;
         const aidc = meta.aid_count ?? 0;
         const scc = meta.scene_count ?? 0;
-        opt.textContent = `${m}  (${aidc} aids · ${scc} scenes)`;
+        const aidLabel = meta.static ? 'static' : `${aidc} aids`;
+        opt.textContent = `${m}  (${aidLabel} · ${scc} scenes)`;
         modelSel.appendChild(opt);
       }
       modelSel.onchange = () => populateAnims();
@@ -327,10 +328,11 @@
       const name = modelSel.value;
       const meta = modelIndex[name] || {};
       const count = meta.aid_count || 0;
-      for (let i = 0; i < count; i++) {
+      const aidIds = meta.aid_ids || Array.from({ length: count }, (_, i) => i);
+      for (const aid of aidIds) {
         const opt = document.createElement('option');
-        opt.value = `/models/${name}/aid${i}/${name}.gltf`;
-        opt.textContent = `aid${i}`;
+        opt.value = `/models/${name}/aid${aid}/${name}.gltf`;
+        opt.textContent = meta.static ? 'static' : `aid${aid}`;
         animSel.appendChild(opt);
       }
       // Render scene manifest panel.

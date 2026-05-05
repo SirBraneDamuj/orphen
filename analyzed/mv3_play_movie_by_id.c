@@ -10,9 +10,9 @@
  * one-based, so movie_id 1 maps to M01.MV3.
  */
 
-typedef unsigned char  u8;
+typedef unsigned char u8;
 typedef unsigned short u16;
-typedef unsigned int   u32;
+typedef unsigned int u32;
 
 extern u32 uGpffffb7b8;
 extern u32 uGpffffb7bc;
@@ -35,8 +35,8 @@ extern void *uGpffffacbc;
 extern void *uGpffffacc0;
 
 extern const char *PTR_s__MV3_M01_MV3_1_00326f80[];
-extern u16 DAT_00326fd0[];    /* Per-movie audio/pitch-like parameter */
-extern u16 DAT_00326ff8[];    /* Per-movie metadata passed to FUN_002663a0 */
+extern u16 DAT_00326fd0[]; /* Per-movie audio/pitch-like parameter */
+extern u16 DAT_00326ff8[]; /* Per-movie metadata passed to FUN_002663a0 */
 
 extern void FUN_002f9308(int, int);
 extern void FUN_00305110(void);
@@ -48,7 +48,8 @@ extern void FUN_002f1f38(const char *disc_path);
 extern long FUN_00266368(int flag_id, ...);
 extern void FUN_00200c48(void *handle);
 
-void mv3_play_movie_by_id(int movie_id) {
+void mv3_play_movie_by_id(int movie_id)
+{
     unsigned int saved_arena;
     int table_index_bytes;
     long flag_value;
@@ -68,22 +69,27 @@ void mv3_play_movie_by_id(int movie_id) {
     iGpffffbec0 = (uGpffffbebc + 0x480) - (uGpffffbebc & 0x7f);
     uGpffffb7bc = iGpffffbec0 + 0x17c300;
 
-    if (0x18499ff < uGpffffb7bc) {
+    if (0x18499ff < uGpffffb7bc)
+    {
         FUN_0026bfc0(0x34fde0, iGpffffbec0 - 0x16cd700);
     }
 
     uGpffffbec5 = 0;
-    if (cGpffffb66a == 0) {
-        if (movie_id == 0x12 && cGpffffb61c == 0) {
+    if (cGpffffb66a == 0)
+    {
+        if (movie_id == 0x12 && cGpffffb61c == 0)
+        {
             uGpffffbec5 = 1;
             cGpffffb61c = 1;
         }
-        if (movie_id == 10 || movie_id == 0xf) {
+        if (movie_id == 10 || movie_id == 0xf)
+        {
             uGpffffbec5 = 1;
         }
     }
 
-    do {
+    do
+    {
         table_index_bytes = (movie_id - 1) * 2;
         FUN_002663a0(*(u16 *)((u8 *)DAT_00326ff8 + table_index_bytes));
         uGpffffbecc = *(u16 *)((u8 *)DAT_00326fd0 + table_index_bytes);
@@ -91,13 +97,18 @@ void mv3_play_movie_by_id(int movie_id) {
 
         FUN_002f1f38(PTR_s__MV3_M01_MV3_1_00326f80[movie_id - 1]);
 
-        if (iGpffffb284 == 0xc) {
+        if (iGpffffb284 == 0xc)
+        {
             break;
         }
-        if (movie_id == 2) {
+        if (movie_id == 2)
+        {
             movie_id = 0xd;
-        } else {
-            if (movie_id != 0x11 || FUN_00266368(0x55a, saved_arena) != 0) {
+        }
+        else
+        {
+            if (movie_id != 0x11 || FUN_00266368(0x55a, saved_arena) != 0)
+            {
                 break;
             }
             flag_value = FUN_00266368(0x55b);

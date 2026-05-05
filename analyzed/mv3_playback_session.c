@@ -32,7 +32,8 @@ extern void RemoveIntcHandler(int cause, unsigned long long handler_id);
 extern void FUN_002fc9b0(void *mpeg_context);
 extern void FUN_002fc420(void);
 
-void mv3_playback_session(const char *disc_path) {
+void mv3_playback_session(const char *disc_path)
+{
     int opened_size;
     unsigned long long handler_id;
     unsigned char mpeg_context[80];
@@ -49,7 +50,8 @@ void mv3_playback_session(const char *disc_path) {
     FUN_00222fc8();
 
     opened_size = mv3_open_stream_and_read_header(disc_path);
-    if (opened_size == 0) {
+    if (opened_size == 0)
+    {
         FUN_00206840();
         return;
     }
