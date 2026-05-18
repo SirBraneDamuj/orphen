@@ -23,6 +23,7 @@ passes FUN_0022c6e8 / FUN_00211230):
 - Section D (header +0x0C): primitives. Each on-disk record is exactly
   16 u16 (32 bytes). Only the first four matter for geometry:
     u16[0..3] : four C-indices forming a triangle (when [2]==[3]) or a quad.
+        u16[10..11]: runtime 0x78-record +0x04 terrain/collision flags.
 
 - Quad triangulation matches FUN_0022c6e8's normal computation calls:
     triangle  : (s0, s1, s2)
@@ -74,6 +75,11 @@ class PSM2Mesh:
     fields they need (UVs at bytes [0..3] as little-endian u16, etc.)."""
 
     header_offsets: dict = field(default_factory=dict)
+
+    primitive_terrain_flags: List[int] = field(default_factory=list)
+    """Per-primitive runtime terrain/collision flags. Loader FUN_0022b5a8
+    stores Section D u16[10] | (u16[11] << 16) at 0x78-record +0x04; the
+    terrain sampler copies this word into entity surface-state fields."""
 
 
 def _u16(buf: bytes, off: int) -> int:
@@ -152,13 +158,12 @@ def parse_psm2(buf: bytes) -> PSM2Mesh:
         cnt = _s16(buf, base)
         p = base + 4
         for _ in range(max(0, cnt)):
-            if p + 8 > len(buf):
+            if p + 32 > len(buf):
                 break
-            s0 = _u16(buf, p + 0)
-            s1 = _u16(buf, p + 2)
-            s2 = _u16(buf, p + 4)
-            s3 = _u16(buf, p + 6)
+            words = [_u16(buf, p + index * 2) for index in range(16)]
+            s0, s1, s2, s3 = words[0], words[1], words[2], words[3]
             mesh.primitives.append((s0, s1, s2, s3))
+            mesh.primitive_terrain_flags.append(words[10] | (words[11] << 16))
             # Per-prim attribute index. The loader writes u16[6..9] to four
             # corner slots, but in real maps only u16[6] holds a non-sentinel
             # value; u16[7..9] are 0xFFFF (invalid stubs) for every prim.
@@ -172,7 +177,7 @@ def parse_psm2(buf: bytes) -> PSM2Mesh:
             #
             # We keep four parallel slots in `prim_uv_indices` to match the
             # 4-corner geometry, but they all point at the same E record.
-            prim_e = _u16(buf, p + 12)
+            prim_e = words[6]
             mesh.prim_uv_indices.append((prim_e, prim_e, prim_e, prim_e))
             p += 32
 
