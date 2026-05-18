@@ -1,0 +1,141 @@
+// Trigger Surface Highlight patch - experimental PSM2 terrain-flag visualizer
+//
+// Recolors loaded map primitives whose runtime terrain/collision flag word
+// contains any currently-known SCR surface-test bit:
+//   0x10, 0x20, 0x40, 0x80, or 0x00010000.
+// This covers the SCR2 low-bit cutscene/dialogue gates and the SCR4
+// 0x00010000 dialogue gate. It intentionally ignores unrelated/shared high
+// collision bits so the whole map does not become one solid debug wash.
+//
+// Mechanism:
+//   DAT_00355688 = PSM2 primitive count
+//   DAT_003556AC = render/A-record array, stride 0x80
+//   DAT_003556B0 = terrain/collision record array, stride 0x78
+//   terrain record +0x04 = Section D flags word
+//
+// When the PSM2 loader is about to bake static map packets, this hook walks
+// the loaded primitive records. If
+//   (terrain_flags & 0x000100F0) != 0
+// it repaints render material slot 0 at A-record +0x30 using a bright
+// OR-composed palette from the trigger bits, marks that slot as
+// solid-color/active by writing 0xFF at +0x38, and clears A.flags bit 0x20
+// at +0x70 so collision-only/inactive records can be reconsidered by
+// FUN_00211230.
+//
+// Palette:
+//   0x10      -> red channel
+//   0x20      -> green channel
+//   0x40      -> blue channel
+//   0x80      -> yellow overlay
+//   0x10000   -> magenta overlay
+// Combinations OR together, so multi-bit trigger surfaces produce blended
+// colors.
+//
+// Because this runs at PSM2 load/finalization time, enable the patch before
+// entering/reloading the scene you want to inspect.
+//
+// Hook: replace `jal FUN_00211230` at 0x0022C3A0 in FUN_0022b5a8
+// (PSM2 loader finalization). The delay slot at 0x0022C3A4 is NOP.
+// This still conflicts with other patches that use the 0x01E00000 cave,
+// such as debug_hello.pnach and battle_damage_hud.pnach.
+
+// ------------------------------------------------------------
+// Hook: replace `jal FUN_00211230` in the PSM2 loader
+// Original: 0C08448C (jal 0x00211230)
+// ------------------------------------------------------------
+patch=1,EE,2022C3A0,extended,0C780000
+
+// ------------------------------------------------------------
+// Code cave at 0x01E00000
+// ------------------------------------------------------------
+
+// ---- Prologue ----
+patch=1,EE,21E00000,extended,27BDFFD0
+patch=1,EE,21E00004,extended,AFBF0000
+patch=1,EE,21E00008,extended,AFB00004
+patch=1,EE,21E0000C,extended,AFB10008
+patch=1,EE,21E00010,extended,AFB2000C
+patch=1,EE,21E00014,extended,AFB30010
+patch=1,EE,21E00018,extended,AFB40014
+
+// ---- Load PSM2 runtime table pointers/count ----
+patch=1,EE,21E0001C,extended,3C100035
+patch=1,EE,21E00020,extended,8E115688
+patch=1,EE,21E00024,extended,1A200037
+patch=1,EE,21E00028,extended,00000000
+patch=1,EE,21E0002C,extended,8E1256B0
+patch=1,EE,21E00030,extended,8E1356AC
+patch=1,EE,21E00034,extended,12400033
+patch=1,EE,21E00038,extended,00000000
+patch=1,EE,21E0003C,extended,12600031
+patch=1,EE,21E00040,extended,00000000
+patch=1,EE,21E00044,extended,0220A021
+
+// ---- Loop over primitives ----
+patch=1,EE,21E00048,extended,8E480004
+patch=1,EE,21E0004C,extended,310A00F0
+patch=1,EE,21E00050,extended,15400005
+patch=1,EE,21E00054,extended,00000000
+patch=1,EE,21E00058,extended,3C090001
+patch=1,EE,21E0005C,extended,01095024
+patch=1,EE,21E00060,extended,11400023
+patch=1,EE,21E00064,extended,00000000
+
+// Compose color from trigger bits.
+patch=1,EE,21E00068,extended,00005825
+patch=1,EE,21E0006C,extended,310A0010
+patch=1,EE,21E00070,extended,11400003
+patch=1,EE,21E00074,extended,00000000
+patch=1,EE,21E00078,extended,3C0C00FF
+patch=1,EE,21E0007C,extended,016C5825
+patch=1,EE,21E00080,extended,310A0020
+patch=1,EE,21E00084,extended,11400002
+patch=1,EE,21E00088,extended,00000000
+patch=1,EE,21E0008C,extended,356BFF00
+patch=1,EE,21E00090,extended,310A0040
+patch=1,EE,21E00094,extended,11400002
+patch=1,EE,21E00098,extended,00000000
+patch=1,EE,21E0009C,extended,356B00FF
+patch=1,EE,21E000A0,extended,310A0080
+patch=1,EE,21E000A4,extended,11400004
+patch=1,EE,21E000A8,extended,00000000
+patch=1,EE,21E000AC,extended,3C0C00FF
+patch=1,EE,21E000B0,extended,358CFF00
+patch=1,EE,21E000B4,extended,016C5825
+patch=1,EE,21E000B8,extended,3C090001
+patch=1,EE,21E000BC,extended,01095024
+patch=1,EE,21E000C0,extended,11400004
+patch=1,EE,21E000C4,extended,00000000
+patch=1,EE,21E000C8,extended,3C0C00FF
+patch=1,EE,21E000CC,extended,358C00FF
+patch=1,EE,21E000D0,extended,016C5825
+
+// Repaint material/ring slot 0 and force it active.
+patch=1,EE,21E000D4,extended,AE6B0030
+patch=1,EE,21E000D8,extended,240CFFFF
+patch=1,EE,21E000DC,extended,A26C0038
+patch=1,EE,21E000E0,extended,8E6D0070
+patch=1,EE,21E000E4,extended,240EFFDF
+patch=1,EE,21E000E8,extended,01AE6824
+patch=1,EE,21E000EC,extended,AE6D0070
+
+// skip:
+patch=1,EE,21E000F0,extended,26520078
+patch=1,EE,21E000F4,extended,26730080
+patch=1,EE,21E000F8,extended,2694FFFF
+patch=1,EE,21E000FC,extended,1E80FFD2
+patch=1,EE,21E00100,extended,00000000
+
+// ---- Call original FUN_00211230 to bake map packets ----
+patch=1,EE,21E00104,extended,0C08448C
+patch=1,EE,21E00108,extended,00000000
+
+// ---- Epilogue ----
+patch=1,EE,21E0010C,extended,8FB40014
+patch=1,EE,21E00110,extended,8FB30010
+patch=1,EE,21E00114,extended,8FB2000C
+patch=1,EE,21E00118,extended,8FB10008
+patch=1,EE,21E0011C,extended,8FB00004
+patch=1,EE,21E00120,extended,8FBF0000
+patch=1,EE,21E00124,extended,03E00008
+patch=1,EE,21E00128,extended,27BD0030
