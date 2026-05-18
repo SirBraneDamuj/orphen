@@ -18,6 +18,40 @@ The main debug menu (`debug_menu_handler.c` - FUN_00268d30) provides three prima
 - **Circle button**: Toggle selected option ON/OFF
 - **Start button**: Exit debug menu
 
+## Runtime Debug Input Gates
+
+The cheat bytes in `possible_cheats.txt` set:
+
+- `DAT_003555da` / `cGpffffb66a`: debug-active gate
+- `DAT_003555dc` / `cGpffffb66c`: debug-output/detail gate
+- `DAT_003555d8` / `uGpffffb668`: scene/debug mode flags word
+
+Controller aliases used by these gates:
+
+- `uGpffffb684` = `DAT_003555f4`: raw held pad bits
+- `uGpffffb686` = `DAT_003555f6`: raw newly pressed pad bits
+- `uGpffffb688` = `DAT_003555f8`: mapped held action bits
+- `uGpffffb68a` = `DAT_003555fa`: mapped newly pressed action bits
+
+Raw pad bits are byte-swapped relative to common PS2 pad constants. Known bits:
+
+- `0x0001`: L2
+- `0x0100`: Select
+- `0x0800`: Start
+- `0x0010`, `0x0020`, `0x0040`, `0x0080`: Triangle, Circle, Cross, Square
+- `0x1000`, `0x2000`, `0x4000`, `0x8000`: Up, Right, Down, Left
+
+Verified input gates behind `DAT_003555da`:
+
+| Input | Code path | Effect |
+| --- | --- | --- |
+| Hold L2 (`0x0001`) and press/hold Select (`0x0100`) | `FUN_002239c8` | Enters the stepping loop and prints `Stepping\n`. While L2 remains held, a new Select press advances/releases the wait. |
+| Press Select (`0x0100`) while mapped action bit `0x0001` is not held | `FUN_002239c8` -> `FUN_00224f78` -> `FUN_00268ce0` | Opens the debug menu dispatcher at `PTR_FUN_0031edd8`; pressing Select again exits the active dispatcher. |
+| Hold mapped action `0x20` and newly press mapped action `0x80` | `FUN_00251ed8` -> `FUN_002534d8` | Restarts the player airborne state as substate `0x0c`, giving the debug midair jump behavior. With default mapping this is Circle held plus Jump/Square pressed. |
+| Press Start (`0x0800`) while pause/menu state `iGpffffadbc == 2` is active | `FUN_00224ff0` | If `DAT_003555d8 & 0x80` / `uGpffffb668 & 0x80` is also set, toggles `DAT_003555dc` / `bGpffffb66c`, changing debug output/detail behavior. This one needs both the debug-active byte and the separate flags word. |
+
+An exact scan for `DAT_003555da` / `cGpffffb66a` plus controller globals in `src/*.c` found only these live input cases plus initialization, cleanup, and non-input/movie gates. Broader checks using `DAT_003555d8` also appear in loading or scripted sequence helpers, but those are separate debug/status flags rather than the cheat byte used for the midair jump and stepping gates.
+
 ## Debug Output System
 
 ### Core Function: `debug_output_formatter` (FUN_002681c0)

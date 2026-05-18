@@ -38,8 +38,8 @@ extern int FUN_00305130(undefined4 param);                                      
 extern int FUN_00305218(undefined4 param);                                                       // Math/trigonometric function
 
 // Global variables (original names preserved until analyzed)
-extern uint uGpffffbd54;   // State flag related to param_2 & 0x20
-extern char cGpffffb66a;   // Master enable/disable flag
+extern uint uGpffffbd54;   // DAT_00355cc4: debug-gated current action bit 0x20 latch
+extern char cGpffffb66a;   // DAT_003555da: debug active flag
 extern char cGpffffb0ac;   // State control flag
 extern char cGpffffb6e4;   // Special mode flag
 extern float fGpffffb678;  // Timer/counter value
@@ -55,7 +55,7 @@ extern float fGpffffb674;  // Target/reference value
 extern float fGpffff88b8;  // Threshold constant
 extern uint uGpffffb0a4;   // Associated state data
 extern uint uGpffffb6d4;   // Reference data
-extern uint uGpffffb09c;   // Parameter storage
+extern uint uGpffffb09c;   // DAT_0035500c: newly pressed mapped action flags
 extern ushort uGpffffbd5e; // Timer countdown
 extern ushort uGpffffb64c; // Frame/tick counter
 extern char bGpffffbd58;   // Array index/slot
@@ -104,11 +104,13 @@ void update_player_field_mode(undefined8 player_entity, uint input_flags, undefi
     return;
   }
 
-  // Process input flags - extract bit 5 (0x20)
+  // Preserve action bit 0x20 only when the debug-active flag is enabled.
+  // FUN_002534d8 combines this with newly pressed action bit 0x80 to restart
+  // the airborne jump substate, which is the Circle+Jump debug midair jump.
   uGpffffbd54 = input_flags & 0x20;
   if (cGpffffb66a == '\0')
   {
-    uGpffffbd54 = 0; // Master disable overrides input
+    uGpffffbd54 = 0;
   }
 
   // Handle state transition flags
