@@ -29,6 +29,11 @@
 // - iGpffffb0e8 is the base for turning offsets into absolute pointers; iGpffffbd84 is the runtime
 //   subproc slot table (0x40 entries). The [uGpffffbd70,uGpffffbd74) window selects which targets are
 //   executed immediately vs pushed to the slot queue.
+// - Static SCR2 evidence matches this layout: the lower cutscene region contains 8-byte rows
+//   [u16 delay_frames][u16 flags][u32 target_offset]. The footer table at scr2.out:0xd8e4 indexes
+//   several of these streams, and opcode 0xA1 arms additional streams by writing into DAT_00571e40.
+//   Common target 0xab52 is the body of subproc 0x119c (marker bytes 0b 04 9c 11 00 00), whose body
+//   starts with the self-removing no-op sequence 9e 0c 01 1e 0b.
 
 #include "orphen_globals.h"
 

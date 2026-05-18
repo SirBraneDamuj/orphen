@@ -62,7 +62,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x5E calculate_polar_component  # orig FUN_0025f380 — eval magnitude + angle, calc magnitude*cos(angle)*scale, submit result; see analyzed/ops/0x5E_0x5F_calculate_polar_component.c
 0x5F calculate_polar_component  # orig FUN_0025f380 — eval magnitude + angle, calc magnitude*sin(angle)*scale, submit result; same handler as 0x5E, branches on opcode; see analyzed/ops/0x5E_0x5F_calculate_polar_component.c
 0x60 calculate_3d_magnitude  # orig FUN_0025f428 — eval 3 exprs (x,y,z), normalize, calc sqrt(x²+y²+z²), scale, submit result; see analyzed/ops/0x60_calculate_3d_magnitude.c
-0x61 test_controller_button_state  # orig FUN_0025f4b8 — eval expr (unused), read button flags byte (bits 0-6=mask, bit 7=port), test controller state, return bool; see analyzed/ops/0x61_test_controller_button_state.c
+0x61 test_controller_button_state  # orig FUN_0025f4b8 — eval mask expr, read selector byte (bits 0-6=active-gate selector, bit 7=state-word selector), test DAT_0058bf1c/bf20, return bool; see analyzed/ops/0x61_test_controller_button_state.c
 0x62 find_entity_by_id_in_secondary_pool  # orig FUN_0025f548 — eval target_id, search secondary pool (DAT_0058d120, 245 entities), match entity[+0x95], return slot index (80-324) or 0; see analyzed/ops/0x62_find_entity_by_id_in_secondary_pool.c
 0x63 set_entity_tracking_and_position  # orig FUN_0025f5d8 — eval 2 selectors + mode + 3 pos coords, link tracker→target entities, set tracking mode (+0xA0/192/194), set position; see analyzed/ops/0x63_set_entity_tracking_and_position.c
 0x64 FUN_0025f700   # name: update_object_transform_from_bone (tentative)
