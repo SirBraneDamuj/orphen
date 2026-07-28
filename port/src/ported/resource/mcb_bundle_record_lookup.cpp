@@ -1,9 +1,9 @@
-#include "ported/resource/fun_00222c08.h"
+#include "ported/resource/mcb_bundle_record_lookup.h"
 
 namespace orphen::ported::resource
 {
 
-  std::optional<McbBundleRecord> FUN_00222c08(std::span<const std::uint8_t> bundle, std::uint32_t packedId)
+  std::optional<McbBundleRecord> findMcbBundleRecord(std::span<const std::uint8_t> bundle, std::uint32_t packedId)
   {
     std::size_t recordOffset = 0;
     while (true)

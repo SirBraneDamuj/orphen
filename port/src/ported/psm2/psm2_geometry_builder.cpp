@@ -1,4 +1,4 @@
-#include "ported/psm2/fun_0022c6e8.h"
+#include "ported/psm2/psm2_geometry_builder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -66,7 +66,7 @@ namespace orphen::ported::psm2
     return std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
   }
 
-  void FUN_0022c6e8(Psm2RuntimeState &state)
+  void buildPsm2DerivedGeometry(Psm2RuntimeState &state)
   {
     state.derivedTriangles.clear();
     state.bounds = {};

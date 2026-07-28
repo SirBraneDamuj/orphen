@@ -1,14 +1,14 @@
-#include "ported/resource/fun_00222898.h"
+#include "ported/resource/mcb_scene_bundle_loader.h"
 
 #include <stdexcept>
 
 namespace orphen::ported::resource
 {
 
-  std::vector<std::uint8_t> FUN_00222898(const McbTable &table,
-                                         std::span<const std::uint8_t> mcb1Bytes,
-                                         std::uint16_t section,
-                                         std::uint16_t entry)
+  std::vector<std::uint8_t> loadMcb1SceneBundle(const McbTable &table,
+                                                std::span<const std::uint8_t> mcb1Bytes,
+                                                std::uint16_t section,
+                                                std::uint16_t entry)
   {
     const McbTableEntry &tableEntry = table.entryAt(section, entry);
     if (!tableEntry.populated())

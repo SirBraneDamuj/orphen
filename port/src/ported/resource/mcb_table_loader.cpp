@@ -1,11 +1,11 @@
-#include "ported/resource/fun_00222638.h"
+#include "ported/resource/mcb_table_loader.h"
 
 #include <stdexcept>
 
 namespace orphen::ported::resource
 {
 
-  McbTable FUN_00222638(std::span<const std::uint8_t> mcb0Bytes)
+  McbTable loadMcb0Table(std::span<const std::uint8_t> mcb0Bytes)
   {
     constexpr std::size_t kExpectedMcb0Size = McbTable::kSectionCount * McbTable::kEntryCount * 8;
     if (mcb0Bytes.size() != kExpectedMcb0Size)

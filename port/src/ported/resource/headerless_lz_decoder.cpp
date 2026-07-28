@@ -1,4 +1,4 @@
-#include "ported/resource/fun_002f3118.h"
+#include "ported/resource/headerless_lz_decoder.h"
 
 #include <stdexcept>
 
@@ -11,7 +11,7 @@ namespace orphen::ported::resource
     {
       if (inputOffset >= source.size())
       {
-        throw std::runtime_error("unexpected end of FUN_002f3118 input stream");
+        throw std::runtime_error("unexpected end of headerless LZ input stream");
       }
       return source[inputOffset++];
     }
@@ -25,7 +25,7 @@ namespace orphen::ported::resource
     {
       if (displacement == 0 || displacement > output.size())
       {
-        throw std::runtime_error("invalid FUN_002f3118 back-reference displacement");
+        throw std::runtime_error("invalid headerless LZ back-reference displacement");
       }
 
       std::size_t sourceOffset = output.size() - displacement;
@@ -37,7 +37,7 @@ namespace orphen::ported::resource
 
   } // namespace
 
-  std::vector<std::uint8_t> FUN_002f3118(std::span<const std::uint8_t> source)
+  std::vector<std::uint8_t> decodeHeaderlessLzStream(std::span<const std::uint8_t> source)
   {
     std::vector<std::uint8_t> output;
     std::size_t inputOffset = 0;

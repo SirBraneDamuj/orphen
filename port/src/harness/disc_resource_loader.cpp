@@ -1,8 +1,8 @@
 #include "harness/disc_resource_loader.h"
 
-#include "ported/resource/fun_00222638.h"
-#include "ported/resource/fun_00222898.h"
-#include "ported/resource/fun_002f3118.h"
+#include "ported/resource/headerless_lz_decoder.h"
+#include "ported/resource/mcb_scene_bundle_loader.h"
+#include "ported/resource/mcb_table_loader.h"
 #include "ported/resource/mcb_runtime.h"
 
 #include <array>
@@ -84,7 +84,7 @@ namespace orphen::harness
   std::vector<McbSceneSelection> listPopulatedMcbScenes(const std::filesystem::path &discRoot)
   {
     const std::vector<std::uint8_t> mcb0Bytes = readBinaryFile(discRoot / "MCB0.BIN");
-    const auto table = orphen::ported::resource::FUN_00222638(mcb0Bytes);
+    const auto table = orphen::ported::resource::loadMcb0Table(mcb0Bytes);
     std::vector<McbSceneSelection> scenes;
 
     for (std::uint16_t section = 0; section < orphen::ported::resource::McbTable::kSectionCount; ++section)
@@ -106,8 +106,8 @@ namespace orphen::harness
     const std::vector<std::uint8_t> mcb0Bytes = readBinaryFile(discRoot / "MCB0.BIN");
     const std::vector<std::uint8_t> mcb1Bytes = readBinaryFile(discRoot / "MCB1.BIN");
 
-    const auto table = orphen::ported::resource::FUN_00222638(mcb0Bytes);
-    const std::vector<std::uint8_t> bundle = orphen::ported::resource::FUN_00222898(
+    const auto table = orphen::ported::resource::loadMcb0Table(mcb0Bytes);
+    const std::vector<std::uint8_t> bundle = orphen::ported::resource::loadMcb1SceneBundle(
         table, mcb1Bytes, selection.section, selection.entry);
 
     std::size_t recordOffset = 0;
@@ -122,7 +122,7 @@ namespace orphen::harness
 
       if (record->category == kMapCategory)
       {
-        std::vector<std::uint8_t> decoded = orphen::ported::resource::FUN_002f3118(record->payload);
+        std::vector<std::uint8_t> decoded = orphen::ported::resource::decodeHeaderlessLzStream(record->payload);
         if (hasPsm2Magic(decoded))
         {
           return {std::move(decoded),

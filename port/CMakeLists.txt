@@ -41,20 +41,20 @@ target_sources(orphen_port
     src/harness/disc_resource_loader.h
         src/platform/sdl_gl_window.cpp
         src/platform/sdl_gl_window.h
-    src/ported/resource/fun_00222638.cpp
-    src/ported/resource/fun_00222638.h
-    src/ported/resource/fun_00222898.cpp
-    src/ported/resource/fun_00222898.h
-    src/ported/resource/fun_00222c08.cpp
-    src/ported/resource/fun_00222c08.h
-    src/ported/resource/fun_002f3118.cpp
-    src/ported/resource/fun_002f3118.h
+    src/ported/resource/mcb_table_loader.cpp
+    src/ported/resource/mcb_table_loader.h
+    src/ported/resource/mcb_scene_bundle_loader.cpp
+    src/ported/resource/mcb_scene_bundle_loader.h
+    src/ported/resource/mcb_bundle_record_lookup.cpp
+    src/ported/resource/mcb_bundle_record_lookup.h
+    src/ported/resource/headerless_lz_decoder.cpp
+    src/ported/resource/headerless_lz_decoder.h
     src/ported/resource/mcb_runtime.cpp
     src/ported/resource/mcb_runtime.h
-    src/ported/psm2/fun_0022b5a8.cpp
-    src/ported/psm2/fun_0022b5a8.h
-    src/ported/psm2/fun_0022c6e8.cpp
-    src/ported/psm2/fun_0022c6e8.h
+    src/ported/psm2/decoded_psm2_loader.cpp
+    src/ported/psm2/decoded_psm2_loader.h
+    src/ported/psm2/psm2_geometry_builder.cpp
+    src/ported/psm2/psm2_geometry_builder.h
     src/ported/psm2/psm2_runtime.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h

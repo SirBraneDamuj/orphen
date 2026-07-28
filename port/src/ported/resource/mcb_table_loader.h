@@ -8,7 +8,7 @@
 namespace orphen::ported::resource
 {
 
-  // Counterpart for src/FUN_00222638.c's MCB0 table materialization.
-  McbTable FUN_00222638(std::span<const std::uint8_t> mcb0Bytes);
+  // Native counterpart of src/FUN_00222638.c (0x00222638): materializes the MCB0 scene table.
+  McbTable loadMcb0Table(std::span<const std::uint8_t> mcb0Bytes);
 
 } // namespace orphen::ported::resource

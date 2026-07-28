@@ -1,6 +1,6 @@
-#include "ported/psm2/fun_0022b5a8.h"
+#include "ported/psm2/decoded_psm2_loader.h"
 
-#include "ported/psm2/fun_0022c6e8.h"
+#include "ported/psm2/psm2_geometry_builder.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -172,7 +172,7 @@ namespace orphen::ported::psm2
 
   } // namespace
 
-  Psm2RuntimeState FUN_0022b5a8(std::span<const std::uint8_t> decodedPsm2)
+  Psm2RuntimeState loadDecodedPsm2(std::span<const std::uint8_t> decodedPsm2)
   {
     requireRange(decodedPsm2, 0, 0x3c, "PSM2 header");
     if (readU32(decodedPsm2, 0) != kPsm2Magic)
@@ -187,7 +187,7 @@ namespace orphen::ported::psm2
     loadSectionD(decodedPsm2, readU32(decodedPsm2, 0x0c), state);
     loadSectionE(decodedPsm2, readU32(decodedPsm2, 0x14), state);
 
-    FUN_0022c6e8(state);
+    buildPsm2DerivedGeometry(state);
 
     state.stats.positionRecordCount = state.DAT_0035569c_sectionCRecords.size();
     state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();

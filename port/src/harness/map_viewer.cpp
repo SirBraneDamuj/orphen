@@ -1,6 +1,6 @@
 #include "harness/map_viewer.h"
 
-#include "ported/psm2/fun_0022b5a8.h"
+#include "ported/psm2/decoded_psm2_loader.h"
 
 #include <SDL_opengl.h>
 
@@ -146,7 +146,7 @@ namespace orphen::harness
   void MapViewer::loadDecodedPsm2(const std::filesystem::path &path)
   {
     const std::vector<std::uint8_t> bytes = readBinaryFile(path);
-    map_ = orphen::ported::psm2::FUN_0022b5a8(bytes);
+    map_ = orphen::ported::psm2::loadDecodedPsm2(bytes);
     loadedSourceDescription_ = path.string();
     discRoot_.clear();
     discScenes_.clear();
@@ -159,9 +159,8 @@ namespace orphen::harness
     discRoot_ = discRoot;
     discScenes_ = listPopulatedMcbScenes(discRoot_);
 
-    const auto selectedScene = std::find_if(discScenes_.begin(), discScenes_.end(), [selection](McbSceneSelection scene) {
-      return sameScene(scene, selection);
-    });
+    const auto selectedScene = std::find_if(discScenes_.begin(), discScenes_.end(), [selection](McbSceneSelection scene)
+                                            { return sameScene(scene, selection); });
     if (selectedScene == discScenes_.end())
     {
       throw std::runtime_error("selected MCB scene slot is empty: " + sceneName(selection));
@@ -212,7 +211,7 @@ namespace orphen::harness
 
     const McbSceneSelection selection = discScenes_[sceneIndex];
     LoadedDiscMap loadedMap = loadFirstPsm2FromDiscScene(discRoot_, selection);
-    map_ = orphen::ported::psm2::FUN_0022b5a8(loadedMap.decodedPsm2);
+    map_ = orphen::ported::psm2::loadDecodedPsm2(loadedMap.decodedPsm2);
     loadedSourceDescription_ = sceneName(selection) + " map_" + loadedMap.resourceIdHex;
     currentDiscSceneIndex_ = sceneIndex;
     resetCamera();
