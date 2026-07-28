@@ -27,6 +27,7 @@ namespace orphen::harness
 
   McbSceneSelection parseSceneName(std::string_view sceneName);
   std::string sceneName(McbSceneSelection selection);
+  std::vector<McbSceneSelection> listPopulatedMcbScenes(const std::filesystem::path &discRoot);
   LoadedDiscMap loadFirstPsm2FromDiscScene(const std::filesystem::path &discRoot, McbSceneSelection selection);
 
 } // namespace orphen::harness

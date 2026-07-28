@@ -76,9 +76,29 @@ namespace orphen::harness
   std::string sceneName(McbSceneSelection selection)
   {
     std::ostringstream stream;
-        stream << 's' << std::dec << std::setw(2) << std::setfill('0') << selection.section
+    stream << 's' << std::dec << std::setw(2) << std::setfill('0') << selection.section
            << "_e" << std::setw(3) << std::setfill('0') << selection.entry;
     return stream.str();
+  }
+
+  std::vector<McbSceneSelection> listPopulatedMcbScenes(const std::filesystem::path &discRoot)
+  {
+    const std::vector<std::uint8_t> mcb0Bytes = readBinaryFile(discRoot / "MCB0.BIN");
+    const auto table = orphen::ported::resource::FUN_00222638(mcb0Bytes);
+    std::vector<McbSceneSelection> scenes;
+
+    for (std::uint16_t section = 0; section < orphen::ported::resource::McbTable::kSectionCount; ++section)
+    {
+      for (std::uint16_t entry = 0; entry < orphen::ported::resource::McbTable::kEntryCount; ++entry)
+      {
+        if (table.entryAt(section, entry).populated())
+        {
+          scenes.push_back({section, entry});
+        }
+      }
+    }
+
+    return scenes;
   }
 
   LoadedDiscMap loadFirstPsm2FromDiscScene(const std::filesystem::path &discRoot, McbSceneSelection selection)

@@ -16,9 +16,8 @@ namespace orphen::ported::psm2
     bool primitiveIndicesAreValid(const Psm2RuntimeState &state, const std::array<std::uint16_t, 4> &indices)
     {
       const std::size_t positionCount = state.DAT_0035569c_sectionCRecords.size();
-      return std::all_of(indices.begin(), indices.end(), [positionCount](std::uint16_t index) {
-        return static_cast<std::size_t>(index) < positionCount;
-      });
+      return std::all_of(indices.begin(), indices.end(), [positionCount](std::uint16_t index)
+                         { return static_cast<std::size_t>(index) < positionCount; });
     }
 
     void appendTriangle(Psm2RuntimeState &state, std::size_t primitiveIndex, std::uint16_t firstIndex, std::uint16_t secondIndex, std::uint16_t thirdIndex)

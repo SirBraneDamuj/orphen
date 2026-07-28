@@ -15,8 +15,12 @@ namespace orphen::port
     bool quitRequested = false;
     bool resetRequested = false;
     bool toggleWireframeRequested = false;
+    bool previousMapRequested = false;
+    bool nextMapRequested = false;
     float moveX = 0.0f;
     float moveY = 0.0f;
+    float rotateX = 0.0f;
+    float rotateY = 0.0f;
     float zoom = 0.0f;
   };
 

@@ -121,6 +121,14 @@ namespace orphen::port
         {
           input.toggleWireframeRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
+        {
+          input.previousMapRequested = true;
+        }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_RIGHT)
+        {
+          input.nextMapRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
@@ -132,10 +140,10 @@ namespace orphen::port
     }
 
     const Uint8 *keys = SDL_GetKeyboardState(nullptr);
-    input.moveX = keyAxis(keys[SDL_SCANCODE_A] != 0 || keys[SDL_SCANCODE_LEFT] != 0,
-                          keys[SDL_SCANCODE_D] != 0 || keys[SDL_SCANCODE_RIGHT] != 0);
-    input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0 || keys[SDL_SCANCODE_DOWN] != 0,
-                          keys[SDL_SCANCODE_W] != 0 || keys[SDL_SCANCODE_UP] != 0);
+    input.moveX = keyAxis(keys[SDL_SCANCODE_A] != 0, keys[SDL_SCANCODE_D] != 0);
+    input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0, keys[SDL_SCANCODE_W] != 0);
+    input.rotateX = keyAxis(keys[SDL_SCANCODE_J] != 0, keys[SDL_SCANCODE_L] != 0);
+    input.rotateY = keyAxis(keys[SDL_SCANCODE_K] != 0, keys[SDL_SCANCODE_I] != 0);
     input.zoom = keyAxis(keys[SDL_SCANCODE_Q] != 0, keys[SDL_SCANCODE_E] != 0);
   }
 

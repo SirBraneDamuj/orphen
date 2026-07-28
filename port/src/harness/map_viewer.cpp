@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <vector>
@@ -125,6 +126,21 @@ namespace orphen::harness
       return std::max({spanX, spanY, spanZ}) * 0.75f + 5.0f;
     }
 
+    bool sameScene(McbSceneSelection left, McbSceneSelection right)
+    {
+      return left.section == right.section && left.entry == right.entry;
+    }
+
+    void printLoadedStats(const std::string &source, const orphen::ported::psm2::Psm2Stats &stats)
+    {
+      std::cout << "[psm2] loaded " << source
+                << " positions=" << stats.positionRecordCount
+                << " sectionB=" << stats.sectionBRecordCount
+                << " primitives=" << stats.primitiveRecordCount
+                << " triangles=" << stats.triangleCount
+                << " skipped=" << stats.skippedPrimitiveCount << '\n';
+    }
+
   } // namespace
 
   void MapViewer::loadDecodedPsm2(const std::filesystem::path &path)
@@ -132,14 +148,73 @@ namespace orphen::harness
     const std::vector<std::uint8_t> bytes = readBinaryFile(path);
     map_ = orphen::ported::psm2::FUN_0022b5a8(bytes);
     loadedSourceDescription_ = path.string();
+    discRoot_.clear();
+    discScenes_.clear();
+    currentDiscSceneIndex_ = 0;
     resetCamera();
   }
 
   void MapViewer::loadDiscSceneMap(const std::filesystem::path &discRoot, McbSceneSelection selection)
   {
-    LoadedDiscMap loadedMap = loadFirstPsm2FromDiscScene(discRoot, selection);
+    discRoot_ = discRoot;
+    discScenes_ = listPopulatedMcbScenes(discRoot_);
+
+    const auto selectedScene = std::find_if(discScenes_.begin(), discScenes_.end(), [selection](McbSceneSelection scene) {
+      return sameScene(scene, selection);
+    });
+    if (selectedScene == discScenes_.end())
+    {
+      throw std::runtime_error("selected MCB scene slot is empty: " + sceneName(selection));
+    }
+
+    loadDiscSceneAtIndex(static_cast<std::size_t>(selectedScene - discScenes_.begin()));
+  }
+
+  bool MapViewer::cycleDiscScene(int direction)
+  {
+    if (discRoot_.empty() || discScenes_.empty() || direction == 0)
+    {
+      return false;
+    }
+
+    const std::size_t sceneCount = discScenes_.size();
+    std::size_t nextSceneIndex = currentDiscSceneIndex_;
+
+    for (std::size_t attempt = 0; attempt < sceneCount; ++attempt)
+    {
+      nextSceneIndex = direction > 0
+                           ? (nextSceneIndex + 1) % sceneCount
+                           : (nextSceneIndex + sceneCount - 1) % sceneCount;
+      try
+      {
+        loadDiscSceneAtIndex(nextSceneIndex);
+        if (map_.has_value())
+        {
+          printLoadedStats(loadedSourceDescription_, map_->stats);
+        }
+        return true;
+      }
+      catch (const std::exception &error)
+      {
+        std::cerr << "[psm2] skipping " << sceneName(discScenes_[nextSceneIndex]) << ": " << error.what() << '\n';
+      }
+    }
+
+    return false;
+  }
+
+  void MapViewer::loadDiscSceneAtIndex(std::size_t sceneIndex)
+  {
+    if (sceneIndex >= discScenes_.size())
+    {
+      throw std::out_of_range("disc scene index outside loaded scene list");
+    }
+
+    const McbSceneSelection selection = discScenes_[sceneIndex];
+    LoadedDiscMap loadedMap = loadFirstPsm2FromDiscScene(discRoot_, selection);
     map_ = orphen::ported::psm2::FUN_0022b5a8(loadedMap.decodedPsm2);
     loadedSourceDescription_ = sceneName(selection) + " map_" + loadedMap.resourceIdHex;
+    currentDiscSceneIndex_ = sceneIndex;
     resetCamera();
   }
 
@@ -162,6 +237,7 @@ namespace orphen::harness
 
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
   {
+    constexpr float kPanSpeed = 0.75f;
     constexpr float kYawSpeed = 70.0f;
     constexpr float kPitchSpeed = 55.0f;
     constexpr float kZoomSpeed = 2.25f;
@@ -171,8 +247,25 @@ namespace orphen::harness
       wireframe_ = !wireframe_;
     }
 
-    cameraYawDegrees_ += input.moveX * kYawSpeed * deltaSeconds;
-    cameraPitchDegrees_ = std::clamp(cameraPitchDegrees_ + input.moveY * kPitchSpeed * deltaSeconds, -85.0f, -10.0f);
+    if (input.previousMapRequested)
+    {
+      cycleDiscScene(-1);
+    }
+    if (input.nextMapRequested)
+    {
+      cycleDiscScene(1);
+    }
+
+    cameraYawDegrees_ += input.rotateX * kYawSpeed * deltaSeconds;
+    cameraPitchDegrees_ = std::clamp(cameraPitchDegrees_ + input.rotateY * kPitchSpeed * deltaSeconds, -85.0f, -10.0f);
+
+    const float yawRadians = cameraYawDegrees_ * static_cast<float>(kPi / 180.0);
+    const float panDistance = std::max(cameraDistance_, 10.0f) * kPanSpeed * deltaSeconds;
+    const orphen::ported::psm2::Vec3 right{std::cos(yawRadians), 0.0f, -std::sin(yawRadians)};
+    const orphen::ported::psm2::Vec3 forward{std::sin(yawRadians), 0.0f, std::cos(yawRadians)};
+
+    cameraTarget_.x += (right.x * input.moveX + forward.x * input.moveY) * panDistance;
+    cameraTarget_.z += (right.z * input.moveX + forward.z * input.moveY) * panDistance;
     cameraDistance_ *= std::exp(-input.zoom * kZoomSpeed * deltaSeconds);
     cameraDistance_ = std::max(cameraDistance_, 1.0f);
   }

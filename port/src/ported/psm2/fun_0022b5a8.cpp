@@ -190,7 +190,7 @@ namespace orphen::ported::psm2
     FUN_0022c6e8(state);
 
     state.stats.positionRecordCount = state.DAT_0035569c_sectionCRecords.size();
-  state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();
+    state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();
     state.stats.primitiveRecordCount = state.DAT_003556ac_dRecords80.size();
     state.stats.triangleCount = state.derivedTriangles.size();
 

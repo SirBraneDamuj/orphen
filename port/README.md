@@ -73,8 +73,9 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --load-only
 
 Controls:
 
-- `A/D` or left/right arrows rotate around the map.
-- `W/S` or up/down arrows tilt the camera.
+- `W/A/S/D` moves the camera target across the map.
+- `I/J/K/L` rotates the camera around the map.
+- Left/right arrows cycle maps when running from `--disc-root`.
 - `Q/E` zoom out/in.
 - `R` resets the camera.
 - `F` toggles wireframe.
