@@ -49,6 +49,8 @@ target_sources(orphen_port
     src/ported/resource/mcb_bundle_record_lookup.h
     src/ported/resource/headerless_lz_decoder.cpp
     src/ported/resource/headerless_lz_decoder.h
+    src/ported/resource/bmpa_texture_decoder.cpp
+    src/ported/resource/bmpa_texture_decoder.h
     src/ported/resource/mcb_runtime.cpp
     src/ported/resource/mcb_runtime.h
     src/ported/psm2/decoded_psm2_loader.cpp

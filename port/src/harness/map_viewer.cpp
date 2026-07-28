@@ -9,7 +9,9 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace orphen::harness
@@ -90,6 +92,111 @@ namespace orphen::harness
       glEnd();
     }
 
+    orphen::ported::psm2::Vec3 glyphPoint(const orphen::ported::psm2::Vec3 &origin,
+                                          const orphen::ported::psm2::Vec3 &horizontalAxis,
+                                          const orphen::ported::psm2::Vec3 &verticalAxis,
+                                          float horizontalScale,
+                                          float verticalScale)
+    {
+      return {origin.x + horizontalAxis.x * horizontalScale + verticalAxis.x * verticalScale,
+              origin.y + horizontalAxis.y * horizontalScale + verticalAxis.y * verticalScale,
+              origin.z + horizontalAxis.z * horizontalScale + verticalAxis.z * verticalScale};
+    }
+
+    void emitStrokeSegment(const orphen::ported::psm2::Vec3 &origin,
+                           const orphen::ported::psm2::Vec3 &horizontalAxis,
+                           const orphen::ported::psm2::Vec3 &verticalAxis,
+                           float startHorizontal,
+                           float startVertical,
+                           float endHorizontal,
+                           float endVertical)
+    {
+      const auto start = glyphPoint(origin, horizontalAxis, verticalAxis, startHorizontal, startVertical);
+      const auto end = glyphPoint(origin, horizontalAxis, verticalAxis, endHorizontal, endVertical);
+      glVertex3f(start.x, start.y, start.z);
+      glVertex3f(end.x, end.y, end.z);
+    }
+
+    void drawStrokeGlyph(char glyph,
+                         const orphen::ported::psm2::Vec3 &origin,
+                         const orphen::ported::psm2::Vec3 &horizontalAxis,
+                         const orphen::ported::psm2::Vec3 &verticalAxis)
+    {
+      glBegin(GL_LINES);
+      switch (glyph)
+      {
+      case 'X':
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, -1.0f, -1.0f, 1.0f, 1.0f);
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, -1.0f, 1.0f, 1.0f, -1.0f);
+        break;
+      case 'Y':
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, -1.0f, 1.0f, 0.0f, 0.0f);
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, 1.0f, 1.0f, 0.0f, 0.0f);
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, 0.0f, 0.0f, 0.0f, -1.0f);
+        break;
+      case 'Z':
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, -1.0f, 1.0f, 1.0f, 1.0f);
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, 1.0f, 1.0f, -1.0f, -1.0f);
+        emitStrokeSegment(origin, horizontalAxis, verticalAxis, -1.0f, -1.0f, 1.0f, -1.0f);
+        break;
+      default:
+        break;
+      }
+      glEnd();
+    }
+
+    void drawOriginAxisIndicator(float cameraDistance)
+    {
+      const float axisLength = std::clamp(cameraDistance * 0.18f, 4.0f, 40.0f);
+      const float arrowSize = axisLength * 0.12f;
+      const float labelOffset = axisLength + axisLength * 0.22f;
+      const float labelSize = axisLength * 0.08f;
+
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glLineWidth(3.0f);
+
+      glBegin(GL_LINES);
+
+      // Game +X -> viewer +X.
+      glColor3f(0.95f, 0.18f, 0.12f);
+      glVertex3f(0.0f, 0.0f, 0.0f);
+      glVertex3f(axisLength, 0.0f, 0.0f);
+      glVertex3f(axisLength, 0.0f, 0.0f);
+      glVertex3f(axisLength - arrowSize, arrowSize, 0.0f);
+      glVertex3f(axisLength, 0.0f, 0.0f);
+      glVertex3f(axisLength - arrowSize, -arrowSize, 0.0f);
+
+      // Game +Y -> viewer -Z.
+      glColor3f(0.12f, 0.42f, 1.0f);
+      glVertex3f(0.0f, 0.0f, 0.0f);
+      glVertex3f(0.0f, 0.0f, -axisLength);
+      glVertex3f(0.0f, 0.0f, -axisLength);
+      glVertex3f(arrowSize, 0.0f, -axisLength + arrowSize);
+      glVertex3f(0.0f, 0.0f, -axisLength);
+      glVertex3f(-arrowSize, 0.0f, -axisLength + arrowSize);
+
+      // Game +Z -> viewer +Y (up).
+      glColor3f(0.22f, 0.88f, 0.24f);
+      glVertex3f(0.0f, 0.0f, 0.0f);
+      glVertex3f(0.0f, axisLength, 0.0f);
+      glVertex3f(0.0f, axisLength, 0.0f);
+      glVertex3f(arrowSize, axisLength - arrowSize, 0.0f);
+      glVertex3f(0.0f, axisLength, 0.0f);
+      glVertex3f(-arrowSize, axisLength - arrowSize, 0.0f);
+
+      glEnd();
+
+      glColor3f(0.95f, 0.18f, 0.12f);
+      drawStrokeGlyph('X', {labelOffset, 0.0f, 0.0f}, {0.0f, 0.0f, labelSize}, {0.0f, labelSize, 0.0f});
+      glColor3f(0.12f, 0.42f, 1.0f);
+      drawStrokeGlyph('Y', {0.0f, 0.0f, -labelOffset}, {labelSize, 0.0f, 0.0f}, {0.0f, labelSize, 0.0f});
+      glColor3f(0.22f, 0.88f, 0.24f);
+      drawStrokeGlyph('Z', {0.0f, labelOffset, 0.0f}, {labelSize, 0.0f, 0.0f}, {0.0f, 0.0f, -labelSize});
+
+      glLineWidth(1.0f);
+    }
+
     void emitVertex(const orphen::ported::psm2::Psm2RuntimeState &map, std::uint16_t vertexIndex)
     {
       const auto &source = map.DAT_0035569c_sectionCRecords.at(vertexIndex).position;
@@ -97,18 +204,85 @@ namespace orphen::harness
       glVertex3f(viewerPosition.x, viewerPosition.y, viewerPosition.z);
     }
 
-    void drawMap(const orphen::ported::psm2::Psm2RuntimeState &map)
+    std::optional<std::size_t> texturePageForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map, std::size_t primitiveIndex)
     {
-      glBegin(GL_TRIANGLES);
+      if (primitiveIndex >= map.DAT_003556ac_dRecords80.size())
+      {
+        return std::nullopt;
+      }
+
+      const std::uint16_t sectionEIndex = map.DAT_003556ac_dRecords80[primitiveIndex].sectionEIndex;
+      if (sectionEIndex >= 0x8000 || static_cast<std::size_t>(sectionEIndex) >= map.DAT_003556b4_sectionERecords.size())
+      {
+        return std::nullopt;
+      }
+
+      return map.DAT_003556b4_sectionERecords[sectionEIndex].bytes[8];
+    }
+
+    std::pair<float, float> textureCoordinateForCorner(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                       const orphen::ported::psm2::TriangleRecord &triangle,
+                                                       std::size_t triangleCornerIndex)
+    {
+      if (triangle.primitiveIndex >= map.DAT_003556ac_dRecords80.size())
+      {
+        return {0.0f, 0.0f};
+      }
+
+      const std::uint16_t sectionEIndex = map.DAT_003556ac_dRecords80[triangle.primitiveIndex].sectionEIndex;
+      if (sectionEIndex >= 0x8000 || static_cast<std::size_t>(sectionEIndex) >= map.DAT_003556b4_sectionERecords.size())
+      {
+        return {0.0f, 0.0f};
+      }
+
+      const std::uint8_t sourceCorner = triangle.cornerIndices[triangleCornerIndex] & 3;
+      const auto &record = map.DAT_003556b4_sectionERecords[sectionEIndex];
+      return {static_cast<float>(record.bytes[sourceCorner * 2]) / 256.0f,
+              static_cast<float>(record.bytes[sourceCorner * 2 + 1]) / 256.0f};
+    }
+
+    void emitTexturedVertex(const orphen::ported::psm2::Psm2RuntimeState &map,
+                            const orphen::ported::psm2::TriangleRecord &triangle,
+                            std::size_t triangleCornerIndex)
+    {
+      const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex);
+      glTexCoord2f(u, v);
+      emitVertex(map, triangle.vertexIndices[triangleCornerIndex]);
+    }
+
+    void drawMap(const orphen::ported::psm2::Psm2RuntimeState &map, const std::vector<unsigned int> &textureIds)
+    {
       for (const auto &triangle : map.derivedTriangles)
       {
+        const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, triangle.primitiveIndex);
+        const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
+
+        if (hasTexture)
+        {
+          glEnable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, textureIds[*texturePage]);
+          glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+        else
+        {
+          glDisable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, 0);
+        }
+
+        glBegin(GL_TRIANGLES);
         const float shade = 0.35f + 0.35f * static_cast<float>(triangle.primitiveIndex % 17) / 16.0f;
-        glColor3f(0.22f + shade * 0.35f, 0.42f + shade * 0.25f, 0.50f + shade * 0.30f);
-        emitVertex(map, triangle.vertexIndices[0]);
-        emitVertex(map, triangle.vertexIndices[1]);
-        emitVertex(map, triangle.vertexIndices[2]);
+        if (!hasTexture)
+        {
+          glColor3f(0.22f + shade * 0.35f, 0.42f + shade * 0.25f, 0.50f + shade * 0.30f);
+        }
+        emitTexturedVertex(map, triangle, 0);
+        emitTexturedVertex(map, triangle, 1);
+        emitTexturedVertex(map, triangle, 2);
+        glEnd();
       }
-      glEnd();
+
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     orphen::ported::psm2::Vec3 boundsCenter(const orphen::ported::psm2::Bounds3 &bounds)
@@ -131,17 +305,23 @@ namespace orphen::harness
       return left.section == right.section && left.entry == right.entry;
     }
 
-    void printLoadedStats(const std::string &source, const orphen::ported::psm2::Psm2Stats &stats)
+    void printLoadedStats(const std::string &source, const orphen::ported::psm2::Psm2Stats &stats, std::size_t texturePageCount)
     {
       std::cout << "[psm2] loaded " << source
                 << " positions=" << stats.positionRecordCount
                 << " sectionB=" << stats.sectionBRecordCount
                 << " primitives=" << stats.primitiveRecordCount
                 << " triangles=" << stats.triangleCount
-                << " skipped=" << stats.skippedPrimitiveCount << '\n';
+                << " skipped=" << stats.skippedPrimitiveCount
+                << " textures=" << texturePageCount << '\n';
     }
 
   } // namespace
+
+  MapViewer::~MapViewer()
+  {
+    releaseUploadedTextures();
+  }
 
   void MapViewer::loadDecodedPsm2(const std::filesystem::path &path)
   {
@@ -151,6 +331,7 @@ namespace orphen::harness
     discRoot_.clear();
     discScenes_.clear();
     currentDiscSceneIndex_ = 0;
+    setTexturePages({});
     resetCamera();
   }
 
@@ -189,7 +370,7 @@ namespace orphen::harness
         loadDiscSceneAtIndex(nextSceneIndex);
         if (map_.has_value())
         {
-          printLoadedStats(loadedSourceDescription_, map_->stats);
+          printLoadedStats(loadedSourceDescription_, map_->stats, texturePages_.size());
         }
         return true;
       }
@@ -211,10 +392,71 @@ namespace orphen::harness
 
     const McbSceneSelection selection = discScenes_[sceneIndex];
     LoadedDiscMap loadedMap = loadFirstPsm2FromDiscScene(discRoot_, selection);
-    map_ = orphen::ported::psm2::loadDecodedPsm2(loadedMap.decodedPsm2);
+    orphen::ported::psm2::Psm2RuntimeState loadedPsm2 = orphen::ported::psm2::loadDecodedPsm2(loadedMap.decodedPsm2);
+    setTexturePages(std::move(loadedMap.texturePages));
+    map_ = std::move(loadedPsm2);
     loadedSourceDescription_ = sceneName(selection) + " map_" + loadedMap.resourceIdHex;
     currentDiscSceneIndex_ = sceneIndex;
     resetCamera();
+  }
+
+  void MapViewer::setTexturePages(std::vector<LoadedDiscTexturePage> texturePages)
+  {
+    releaseUploadedTextures();
+    texturePages_ = std::move(texturePages);
+    textureUploadDirty_ = true;
+  }
+
+  void MapViewer::releaseUploadedTextures() const
+  {
+    if (!uploadedTextureIds_.empty())
+    {
+      glDeleteTextures(static_cast<GLsizei>(uploadedTextureIds_.size()), uploadedTextureIds_.data());
+      uploadedTextureIds_.clear();
+    }
+    textureUploadDirty_ = true;
+  }
+
+  void MapViewer::ensureTexturesUploaded() const
+  {
+    if (!textureUploadDirty_)
+    {
+      return;
+    }
+
+    uploadedTextureIds_.assign(texturePages_.size(), 0);
+    if (texturePages_.empty())
+    {
+      textureUploadDirty_ = false;
+      return;
+    }
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    for (std::size_t pageIndex = 0; pageIndex < texturePages_.size(); ++pageIndex)
+    {
+      GLuint textureId = 0;
+      glGenTextures(1, &textureId);
+      glBindTexture(GL_TEXTURE_2D, textureId);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+      const auto &texture = texturePages_[pageIndex].texture;
+      glTexImage2D(GL_TEXTURE_2D,
+                   0,
+                   GL_RGBA,
+                   texture.width,
+                   texture.height,
+                   0,
+                   GL_RGBA,
+                   GL_UNSIGNED_BYTE,
+                   texture.rgbaPixels.data());
+      uploadedTextureIds_[pageIndex] = textureId;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    textureUploadDirty_ = false;
   }
 
   void MapViewer::resetCamera()
@@ -271,18 +513,26 @@ namespace orphen::harness
 
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
+    ensureTexturesUploaded();
+
     setPerspective(framebufferWidth, framebufferHeight, cameraDistance_);
     applyCamera(cameraTarget_, cameraDistance_, cameraYawDegrees_, cameraPitchDegrees_);
 
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_CULL_FACE);
     glPolygonMode(GL_FRONT_AND_BACK, wireframe_ ? GL_LINE : GL_FILL);
 
     drawGrid(cameraDistance_);
     if (map_.has_value())
     {
-      drawMap(*map_);
+      drawMap(*map_, uploadedTextureIds_);
     }
+
+    glDisable(GL_DEPTH_TEST);
+    drawOriginAxisIndicator(cameraDistance_);
+    glEnable(GL_DEPTH_TEST);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }

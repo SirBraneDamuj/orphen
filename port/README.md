@@ -14,7 +14,7 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path.
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded PSM2 maps also decode adjacent BMPA texture records and bind them through the Section E texture page byte.
 
 ## Build
 
@@ -79,6 +79,8 @@ Controls:
 - `Q/E` zoom out/in.
 - `R` resets the camera.
 - `F` toggles wireframe.
+
+The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 
 ## Suggested Next Slices
 

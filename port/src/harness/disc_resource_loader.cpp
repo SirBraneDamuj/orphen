@@ -1,15 +1,18 @@
 #include "harness/disc_resource_loader.h"
 
+#include "ported/resource/bmpa_texture_decoder.h"
 #include "ported/resource/headerless_lz_decoder.h"
 #include "ported/resource/mcb_table_loader.h"
 #include "ported/resource/mcb_runtime.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -19,7 +22,9 @@ namespace orphen::harness
   {
 
     constexpr std::uint16_t kMapCategory = 2;
+    constexpr std::uint16_t kTextureCategory = 3;
     constexpr std::array<std::uint8_t, 4> kPsm2Magic{'P', 'S', 'M', '2'};
+    constexpr std::array<std::uint8_t, 4> kBmpaMagic{'B', 'M', 'P', 'A'};
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -79,11 +84,46 @@ namespace orphen::harness
              std::equal(kPsm2Magic.begin(), kPsm2Magic.end(), bytes.begin());
     }
 
+    bool hasBmpaMagic(const std::vector<std::uint8_t> &bytes)
+    {
+      return bytes.size() >= kBmpaMagic.size() &&
+             std::equal(kBmpaMagic.begin(), kBmpaMagic.end(), bytes.begin());
+    }
+
     std::string resourceIdHex(std::uint16_t resourceId)
     {
       std::ostringstream stream;
       stream << std::hex << std::setw(4) << std::setfill('0') << resourceId;
       return stream.str();
+    }
+
+    std::vector<LoadedDiscTexturePage> loadAdjacentBmpaTexturePages(std::span<const std::uint8_t> bundle,
+                                                                    std::size_t recordOffset)
+    {
+      std::vector<LoadedDiscTexturePage> texturePages;
+      while (true)
+      {
+        const std::optional<orphen::ported::resource::McbBundleRecord> record =
+            orphen::ported::resource::readMcbBundleRecordAt(bundle, recordOffset);
+        if (!record.has_value() || record->category != kTextureCategory)
+        {
+          return texturePages;
+        }
+
+        std::vector<std::uint8_t> decoded = orphen::ported::resource::decodeHeaderlessLzStream(record->payload);
+        if (!hasBmpaMagic(decoded))
+        {
+          return texturePages;
+        }
+
+        texturePages.push_back({orphen::ported::resource::decodeBmpaTexture(decoded),
+                                record->resourceId,
+                                resourceIdHex(record->resourceId),
+                                record->offset,
+                                record->payload.size(),
+                                decoded.size()});
+        recordOffset = record->offset + 8 + record->payload.size();
+      }
     }
 
   } // namespace
@@ -154,7 +194,10 @@ namespace orphen::harness
         std::vector<std::uint8_t> decoded = orphen::ported::resource::decodeHeaderlessLzStream(record->payload);
         if (hasPsm2Magic(decoded))
         {
+          std::vector<LoadedDiscTexturePage> texturePages = loadAdjacentBmpaTexturePages(
+            bundle, record->offset + 8 + record->payload.size());
           return {std::move(decoded),
+                  std::move(texturePages),
                   record->resourceId,
                   resourceIdHex(record->resourceId),
                   record->offset,

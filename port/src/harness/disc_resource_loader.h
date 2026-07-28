@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ported/resource/bmpa_texture_decoder.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -15,9 +17,20 @@ namespace orphen::harness
     std::uint16_t entry = 0;
   };
 
+  struct LoadedDiscTexturePage
+  {
+    orphen::ported::resource::BmpaTexture texture;
+    std::uint16_t resourceId = 0;
+    std::string resourceIdHex;
+    std::size_t bundleRecordOffset = 0;
+    std::size_t packedSize = 0;
+    std::size_t decodedSize = 0;
+  };
+
   struct LoadedDiscMap
   {
     std::vector<std::uint8_t> decodedPsm2;
+    std::vector<LoadedDiscTexturePage> texturePages;
     std::uint16_t resourceId = 0;
     std::string resourceIdHex;
     std::size_t bundleRecordOffset = 0;

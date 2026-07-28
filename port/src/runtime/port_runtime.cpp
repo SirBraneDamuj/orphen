@@ -33,7 +33,8 @@ namespace orphen::port
                 << " sectionB=" << stats.sectionBRecordCount
                 << " primitives=" << stats.primitiveRecordCount
                 << " triangles=" << stats.triangleCount
-                << " skipped=" << stats.skippedPrimitiveCount << '\n';
+                << " skipped=" << stats.skippedPrimitiveCount
+                << " textures=" << mapViewer_.loadedTexturePageCount() << '\n';
     }
   }
 

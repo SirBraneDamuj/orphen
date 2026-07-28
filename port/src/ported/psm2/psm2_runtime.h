@@ -64,6 +64,7 @@ namespace orphen::ported::psm2
   {
     std::size_t primitiveIndex = 0;
     std::array<std::uint16_t, 3> vertexIndices{};
+    std::array<std::uint8_t, 3> cornerIndices{};
   };
 
   struct Psm2Stats

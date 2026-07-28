@@ -20,9 +20,16 @@ namespace orphen::ported::psm2
                          { return static_cast<std::size_t>(index) < positionCount; });
     }
 
-    void appendTriangle(Psm2RuntimeState &state, std::size_t primitiveIndex, std::uint16_t firstIndex, std::uint16_t secondIndex, std::uint16_t thirdIndex)
+    void appendTriangle(Psm2RuntimeState &state,
+                        std::size_t primitiveIndex,
+                        std::uint16_t firstIndex,
+                        std::uint16_t secondIndex,
+                        std::uint16_t thirdIndex,
+                        std::uint8_t firstCorner,
+                        std::uint8_t secondCorner,
+                        std::uint8_t thirdCorner)
     {
-      state.derivedTriangles.push_back({primitiveIndex, {firstIndex, secondIndex, thirdIndex}});
+      state.derivedTriangles.push_back({primitiveIndex, {firstIndex, secondIndex, thirdIndex}, {firstCorner, secondCorner, thirdCorner}});
     }
 
   } // namespace
@@ -109,12 +116,12 @@ namespace orphen::ported::psm2
 
       if (isTriangle)
       {
-        appendTriangle(state, primitiveIndex, indices[0], indices[1], indices[2]);
+        appendTriangle(state, primitiveIndex, indices[0], indices[1], indices[2], 0, 1, 2);
       }
       else
       {
-        appendTriangle(state, primitiveIndex, indices[3], indices[0], indices[1]);
-        appendTriangle(state, primitiveIndex, indices[1], indices[2], indices[3]);
+        appendTriangle(state, primitiveIndex, indices[3], indices[0], indices[1], 3, 0, 1);
+        appendTriangle(state, primitiveIndex, indices[1], indices[2], indices[3], 1, 2, 3);
       }
     }
   }
