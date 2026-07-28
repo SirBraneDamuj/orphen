@@ -14,8 +14,10 @@ namespace orphen::port
   {
     bool quitRequested = false;
     bool resetRequested = false;
+    bool toggleWireframeRequested = false;
     float moveX = 0.0f;
     float moveY = 0.0f;
+    float zoom = 0.0f;
   };
 
   class SdlGlWindow

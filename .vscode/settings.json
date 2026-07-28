@@ -5,5 +5,6 @@
     "thread": "c"
   },
   "search.useIgnoreFiles": false,
-  "files.autoSave": "afterDelay"
+  "files.autoSave": "afterDelay",
+  "C_Cpp.default.compilerPath": "cl.exe"
 }

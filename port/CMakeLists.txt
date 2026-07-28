@@ -35,8 +35,15 @@ add_executable(orphen_port)
 target_sources(orphen_port
     PRIVATE
         src/main.cpp
+    src/harness/map_viewer.cpp
+    src/harness/map_viewer.h
         src/platform/sdl_gl_window.cpp
         src/platform/sdl_gl_window.h
+    src/ported/psm2/fun_0022b5a8.cpp
+    src/ported/psm2/fun_0022b5a8.h
+    src/ported/psm2/fun_0022c6e8.cpp
+    src/ported/psm2/fun_0022c6e8.h
+    src/ported/psm2/psm2_runtime.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h
         src/runtime/ps2_memory.h

@@ -117,6 +117,10 @@ namespace orphen::port
         {
           input.resetRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_f)
+        {
+          input.toggleWireframeRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
@@ -132,6 +136,7 @@ namespace orphen::port
                           keys[SDL_SCANCODE_D] != 0 || keys[SDL_SCANCODE_RIGHT] != 0);
     input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0 || keys[SDL_SCANCODE_DOWN] != 0,
                           keys[SDL_SCANCODE_W] != 0 || keys[SDL_SCANCODE_UP] != 0);
+    input.zoom = keyAxis(keys[SDL_SCANCODE_Q] != 0, keys[SDL_SCANCODE_E] != 0);
   }
 
   void SdlGlWindow::beginFrame(float red, float green, float blue)

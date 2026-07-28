@@ -6,13 +6,15 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 ## Layout
 
+- `src/ported/` - faithful native counterparts to specific original functions. Files here should keep the original `FUN_*` identity visible and avoid harness concerns.
+- `src/harness/` - PC-only viewer/debug code that consumes ported runtime data.
 - `src/platform/` - SDL window, input, OpenGL context, frame presentation.
 - `src/runtime/` - portable game/runtime state that should eventually host analyzed systems from `../analyzed/`.
 - `src/runtime/ps2_memory.h` - a small fake EE RAM helper for systems that still depend on PS2-style absolute addresses.
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, advances a tiny runtime state, and renders a diagnostic grid. It is deliberately boring: the point is to establish the native loop before moving script VM, resource loading, rendering, or audio code into it.
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one already-decoded PSM2 map file through the ported `FUN_0022b5a8` / `FUN_0022c6e8` path. If no file is supplied it renders only the diagnostic grid.
 
 ## Build
 
@@ -47,6 +49,28 @@ From Command Prompt or PowerShell, use the normal Windows path form:
 port\check-msvc.bat
 port\build-msvc.bat Debug
 ```
+
+## Running The PSM2 Slice
+
+From the repository root after building:
+
+```sh
+port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2
+```
+
+To validate the loader without opening a window:
+
+```sh
+port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2 --load-only
+```
+
+Controls:
+
+- `A/D` or left/right arrows rotate around the map.
+- `W/S` or up/down arrows tilt the camera.
+- `Q/E` zoom out/in.
+- `R` resets the camera.
+- `F` toggles wireframe.
 
 ## Suggested Next Slices
 
