@@ -1,7 +1,6 @@
 #include "harness/disc_resource_loader.h"
 
 #include "ported/resource/headerless_lz_decoder.h"
-#include "ported/resource/mcb_scene_bundle_loader.h"
 #include "ported/resource/mcb_table_loader.h"
 #include "ported/resource/mcb_runtime.h"
 
@@ -31,6 +30,32 @@ namespace orphen::harness
       }
 
       return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+
+    std::vector<std::uint8_t> readBinaryFileRange(const std::filesystem::path &path,
+                                                  std::uint32_t byteOffset,
+                                                  std::uint32_t byteSize)
+    {
+      std::ifstream file(path, std::ios::binary);
+      if (!file)
+      {
+        throw std::runtime_error("failed to open disc resource file: " + path.string());
+      }
+
+      file.seekg(static_cast<std::streamoff>(byteOffset), std::ios::beg);
+      if (!file)
+      {
+        throw std::runtime_error("failed to seek disc resource file: " + path.string());
+      }
+
+      std::vector<std::uint8_t> bytes(byteSize);
+      file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+      if (file.gcount() != static_cast<std::streamsize>(bytes.size()))
+      {
+        throw std::runtime_error("disc resource range extends past file end: " + path.string());
+      }
+
+      return bytes;
     }
 
     std::uint16_t parseFixedDecimal(std::string_view text, std::size_t offset, std::size_t digitCount, const char *label)
@@ -104,11 +129,15 @@ namespace orphen::harness
   LoadedDiscMap loadFirstPsm2FromDiscScene(const std::filesystem::path &discRoot, McbSceneSelection selection)
   {
     const std::vector<std::uint8_t> mcb0Bytes = readBinaryFile(discRoot / "MCB0.BIN");
-    const std::vector<std::uint8_t> mcb1Bytes = readBinaryFile(discRoot / "MCB1.BIN");
-
     const auto table = orphen::ported::resource::loadMcb0Table(mcb0Bytes);
-    const std::vector<std::uint8_t> bundle = orphen::ported::resource::loadMcb1SceneBundle(
-        table, mcb1Bytes, selection.section, selection.entry);
+    const auto &tableEntry = table.entryAt(selection.section, selection.entry);
+    if (!tableEntry.populated())
+    {
+      throw std::runtime_error("selected MCB scene slot is empty: " + sceneName(selection));
+    }
+
+    const std::vector<std::uint8_t> bundle = readBinaryFileRange(
+      discRoot / "MCB1.BIN", tableEntry.byteOffset, tableEntry.byteSize);
 
     std::size_t recordOffset = 0;
     while (true)
