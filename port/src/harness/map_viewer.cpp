@@ -131,6 +131,15 @@ namespace orphen::harness
   {
     const std::vector<std::uint8_t> bytes = readBinaryFile(path);
     map_ = orphen::ported::psm2::FUN_0022b5a8(bytes);
+    loadedSourceDescription_ = path.string();
+    resetCamera();
+  }
+
+  void MapViewer::loadDiscSceneMap(const std::filesystem::path &discRoot, McbSceneSelection selection)
+  {
+    LoadedDiscMap loadedMap = loadFirstPsm2FromDiscScene(discRoot, selection);
+    map_ = orphen::ported::psm2::FUN_0022b5a8(loadedMap.decodedPsm2);
+    loadedSourceDescription_ = sceneName(selection) + " map_" + loadedMap.resourceIdHex;
     resetCamera();
   }
 

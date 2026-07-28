@@ -13,12 +13,13 @@ namespace
 
   void printUsage(const char *programName)
   {
-    std::cout << "Usage: " << programName << " [--psm2 <decoded-map.psm2>] [--load-only]\n";
+    std::cout << "Usage: " << programName
+              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only]\n";
   }
 
-  void printPsm2Stats(const std::filesystem::path &path, const orphen::ported::psm2::Psm2Stats &stats)
+  void printPsm2Stats(std::string_view source, const orphen::ported::psm2::Psm2Stats &stats)
   {
-    std::cout << "[psm2] loaded " << path.string()
+    std::cout << "[psm2] loaded " << source
               << " positions=" << stats.positionRecordCount
               << " sectionB=" << stats.sectionBRecordCount
               << " primitives=" << stats.primitiveRecordCount
@@ -48,6 +49,25 @@ namespace
         config.decodedPsm2Path = std::filesystem::path(argv[++argumentIndex]);
         continue;
       }
+      if (argument == "--disc-root")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--disc-root requires a path");
+        }
+        config.discRoot = std::filesystem::path(argv[++argumentIndex]);
+        continue;
+      }
+      if (argument == "--scene")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--scene requires sNN_eMMM");
+        }
+        config.discScene = orphen::harness::parseSceneName(argv[++argumentIndex]);
+        config.hasDiscScene = true;
+        continue;
+      }
       if (argument == "--load-only")
       {
         config.loadOnly = true;
@@ -58,6 +78,35 @@ namespace
     }
 
     return config;
+  }
+
+  void validateSourceConfig(const orphen::port::PortRuntimeConfig &config)
+  {
+    const bool hasDecodedPsm2 = !config.decodedPsm2Path.empty();
+    const bool hasDiscRoot = !config.discRoot.empty();
+    if (hasDecodedPsm2 == hasDiscRoot)
+    {
+      throw std::runtime_error("provide exactly one source: --psm2 or --disc-root with --scene");
+    }
+    if (hasDiscRoot && !config.hasDiscScene)
+    {
+      throw std::runtime_error("--disc-root requires --scene sNN_eMMM");
+    }
+    if (!hasDiscRoot && config.hasDiscScene)
+    {
+      throw std::runtime_error("--scene requires --disc-root <dir>");
+    }
+  }
+
+  void loadConfiguredMap(orphen::harness::MapViewer &loader, const orphen::port::PortRuntimeConfig &config)
+  {
+    if (!config.decodedPsm2Path.empty())
+    {
+      loader.loadDecodedPsm2(config.decodedPsm2Path);
+      return;
+    }
+
+    loader.loadDiscSceneMap(config.discRoot, config.discScene);
   }
 
 } // namespace
@@ -71,17 +120,13 @@ int main(int argc, char **argv)
     {
       return 0;
     }
+    validateSourceConfig(config);
 
     if (config.loadOnly)
     {
-      if (config.decodedPsm2Path.empty())
-      {
-        throw std::runtime_error("--load-only requires --psm2 <decoded-map.psm2>");
-      }
-
       orphen::harness::MapViewer loader;
-      loader.loadDecodedPsm2(config.decodedPsm2Path);
-      printPsm2Stats(config.decodedPsm2Path, loader.loadedMap()->stats);
+      loadConfiguredMap(loader, config);
+      printPsm2Stats(loader.loadedSourceDescription(), loader.loadedMap()->stats);
       return 0;
     }
 

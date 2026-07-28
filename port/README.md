@@ -14,7 +14,7 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one already-decoded PSM2 map file through the ported `FUN_0022b5a8` / `FUN_0022c6e8` path. If no file is supplied it renders only the diagnostic grid.
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `FUN_0022b5a8` / `FUN_0022c6e8` path.
 
 ## Build
 
@@ -58,10 +58,17 @@ From the repository root after building:
 port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2
 ```
 
+Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1.BIN`:
+
+```sh
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
+```
+
 To validate the loader without opening a window:
 
 ```sh
 port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2 --load-only
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --load-only
 ```
 
 Controls:

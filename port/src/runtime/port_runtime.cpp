@@ -19,8 +19,16 @@ namespace orphen::port
     if (!config.decodedPsm2Path.empty())
     {
       mapViewer_.loadDecodedPsm2(config.decodedPsm2Path);
+    }
+    else if (!config.discRoot.empty())
+    {
+      mapViewer_.loadDiscSceneMap(config.discRoot, config.discScene);
+    }
+
+    if (mapViewer_.loadedMap() != nullptr)
+    {
       const auto &stats = mapViewer_.loadedMap()->stats;
-      std::cout << "[psm2] loaded " << config.decodedPsm2Path.string()
+      std::cout << "[psm2] loaded " << mapViewer_.loadedSourceDescription()
                 << " positions=" << stats.positionRecordCount
                 << " sectionB=" << stats.sectionBRecordCount
                 << " primitives=" << stats.primitiveRecordCount

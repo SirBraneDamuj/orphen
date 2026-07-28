@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/disc_resource_loader.h"
 #include "platform/sdl_gl_window.h"
 #include "harness/map_viewer.h"
 #include "runtime/ps2_memory.h"
@@ -13,6 +14,9 @@ namespace orphen::port
   struct PortRuntimeConfig
   {
     std::filesystem::path decodedPsm2Path;
+    std::filesystem::path discRoot;
+    orphen::harness::McbSceneSelection discScene;
+    bool hasDiscScene = false;
     bool exitAfterUsage = false;
     bool loadOnly = false;
   };

@@ -37,8 +37,20 @@ target_sources(orphen_port
         src/main.cpp
     src/harness/map_viewer.cpp
     src/harness/map_viewer.h
+    src/harness/disc_resource_loader.cpp
+    src/harness/disc_resource_loader.h
         src/platform/sdl_gl_window.cpp
         src/platform/sdl_gl_window.h
+    src/ported/resource/fun_00222638.cpp
+    src/ported/resource/fun_00222638.h
+    src/ported/resource/fun_00222898.cpp
+    src/ported/resource/fun_00222898.h
+    src/ported/resource/fun_00222c08.cpp
+    src/ported/resource/fun_00222c08.h
+    src/ported/resource/fun_002f3118.cpp
+    src/ported/resource/fun_002f3118.h
+    src/ported/resource/mcb_runtime.cpp
+    src/ported/resource/mcb_runtime.h
     src/ported/psm2/fun_0022b5a8.cpp
     src/ported/psm2/fun_0022b5a8.h
     src/ported/psm2/fun_0022c6e8.cpp
