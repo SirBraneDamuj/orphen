@@ -10,9 +10,11 @@
 //     - value == 1: Disable battle mode, reset AI state
 //
 // Behavior by Parameter Value
-//   - < -2 (e.g., -3, -4, etc.):
+//   - < 1 (including -2, -1, and 0):
 //       • Clear bit 0 of DAT_0058beb8 (character flags)
 //       • Call FUN_00225bf0(0x58beb0, 10, 1) - set animation state 10, parameter 1
+//
+//   - < -2 (e.g., -3, -4, etc.):
 //       • Set bit 0 of DAT_0058beb8 (enable battle/attack mode)
 //       • Check character type via FUN_002298d0(DAT_0058beb0)
 //       • If player character (result == 0) and in valid context (DAT_0058c610 > 0):
@@ -34,7 +36,8 @@
 //               • Clear bit 0 of DAT_0058c618 (disable attack)
 //       • If iGpffffb0e4 != 0: set it to -1 (disable/reverse alignment mode)
 //
-//   - == 0 or > 1: Clear bit 0 of DAT_0058beb8 only
+//   - == 0: Set state 10/substate 1, with no extra battle/alignment flags
+//   - > 1: Clear bit 0 of DAT_0058beb8 only
 //
 // Key Globals
 //   pcGpffffbd60         - Secondary parameter stream pointer (advanced by 1)
@@ -98,11 +101,12 @@ unsigned long opcode_0x6D_control_character_ai_mode(void)
 
   if (mode_param < 1)
   {
+    FUN_00225bf0((int)&DAT_0058beb0, 10, 1); // set animation state 10
+
     // === Enable/Configure AI/Battle Modes ===
     if (mode_param < -2)
     {
       // Enable battle/attack mode (-3, -4, etc.)
-      FUN_00225bf0((int)&DAT_0058beb0, 10, 1); // set animation state 10
       DAT_0058beb8 |= 1;                       // enable battle mode flag
 
       long char_type = FUN_002298d0(DAT_0058beb0);

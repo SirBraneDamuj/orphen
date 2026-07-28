@@ -1,0 +1,289 @@
+// Trigger Surface Learned Highlight patch - experimental runtime mask learner
+//
+// Learns terrain/surface masks from active SCR bytecode and opcode 0x61 runtime
+// checks, then recolors PSM2 terrain primitives whose Section D flags overlap
+// the learned mask union. This is a separate experiment from
+// trigger_surface_highlight.pnach.
+//
+// Hooks:
+//   0x00200844: main frame FUN_00268270 call -> frame_hook
+//   0x0022C3A0: PSM2 loader FUN_00211230 call -> map_load_hook
+//   0x0025B5F8: FUN_0025b390 return -> script_return_hook
+//   0x0025F4D4: FUN_0025f4b8 expression eval call -> checker_expr_hook
+//
+// Cave state, intentionally not patched as constants because PNACH code lines may
+// be re-applied while the game runs:
+//   0x01E00F00 learned_union
+//   0x01E00F04 dirty
+//   0x01E00F08 last_mask
+//   0x01E00F0C hit_count
+//
+// scan_active_script preserves its incoming $ra in $v1 before calling
+// record_mask. This avoids returning into the scanner loop after the nested JAL.
+//
+// Filtering: learned masks below 0x10 are ignored while recording. Once a mask
+// is learned from SCR, every PSM2 primitive whose terrain flags overlap that
+// learned union is highlighted. Low learned bits 0x10/0x20/0x40/0x80 keep the
+// RGB/Y color coding; any higher learned bit adds magenta.
+//
+// This patch uses the 0x01E00000 cave and conflicts with other patches using
+// that cave or the 0x00200844 main-frame hook.
+
+// Hook 1: main-frame dirty processor
+// Original at 0x00200844: 0C09A09C (jal FUN_00268270)
+patch=1,EE,20200844,extended,0C780034
+
+// Hook 2: clear learned state, rescan active SCR, and colorize before the
+// PSM2 loader bakes static map packets.
+// Original at 0x0022C3A0: 0C08448C (jal FUN_00211230)
+patch=1,EE,2022C3A0,extended,0C780000
+
+// Hook 3: scan active SCR after FUN_0025b390 returns
+// Original at 0x0025B5F8: 03E00008 (jr ra); delay slot 27BD0130 is preserved
+patch=1,EE,2025B5F8,extended,08780010
+
+// Hook 4: record evaluated opcode-0x61 masks after FUN_0025c258
+// Original at 0x0025F4D4: 0C097096 (jal FUN_0025c258); delay slot is preserved
+patch=1,EE,2025F4D4,extended,0C780024
+
+// Code cave at 0x01E00000
+patch=1,EE,21E00000,extended,27BDFFE0
+patch=1,EE,21E00004,extended,AFBF0000
+patch=1,EE,21E00008,extended,3C0801E0
+patch=1,EE,21E0000C,extended,AD000F00
+patch=1,EE,21E00010,extended,AD000F04
+patch=1,EE,21E00014,extended,AD000F08
+patch=1,EE,21E00018,extended,AD000F0C
+patch=1,EE,21E0001C,extended,0C78004C
+patch=1,EE,21E00020,extended,00000000
+patch=1,EE,21E00024,extended,0C7800B0
+patch=1,EE,21E00028,extended,00000000
+patch=1,EE,21E0002C,extended,0C08448C
+patch=1,EE,21E00030,extended,00000000
+patch=1,EE,21E00034,extended,8FBF0000
+patch=1,EE,21E00038,extended,03E00008
+patch=1,EE,21E0003C,extended,27BD0020
+patch=1,EE,21E00040,extended,27BDFFE0
+patch=1,EE,21E00044,extended,AFBF0000
+patch=1,EE,21E00048,extended,0C78004C
+patch=1,EE,21E0004C,extended,00000000
+patch=1,EE,21E00050,extended,8FBF0000
+patch=1,EE,21E00054,extended,03E00008
+patch=1,EE,21E00058,extended,27BD0020
+patch=1,EE,21E0005C,extended,00000000
+patch=1,EE,21E00060,extended,00000000
+patch=1,EE,21E00064,extended,00000000
+patch=1,EE,21E00068,extended,00000000
+patch=1,EE,21E0006C,extended,00000000
+patch=1,EE,21E00070,extended,00000000
+patch=1,EE,21E00074,extended,00000000
+patch=1,EE,21E00078,extended,00000000
+patch=1,EE,21E0007C,extended,00000000
+patch=1,EE,21E00080,extended,00000000
+patch=1,EE,21E00084,extended,00000000
+patch=1,EE,21E00088,extended,00000000
+patch=1,EE,21E0008C,extended,00000000
+patch=1,EE,21E00090,extended,27BDFFE0
+patch=1,EE,21E00094,extended,AFBF0000
+patch=1,EE,21E00098,extended,AFA40004
+patch=1,EE,21E0009C,extended,0C097096
+patch=1,EE,21E000A0,extended,00000000
+patch=1,EE,21E000A4,extended,8FA80004
+patch=1,EE,21E000A8,extended,8D040000
+patch=1,EE,21E000AC,extended,0C780088
+patch=1,EE,21E000B0,extended,00000000
+patch=1,EE,21E000B4,extended,8FBF0000
+patch=1,EE,21E000B8,extended,03E00008
+patch=1,EE,21E000BC,extended,27BD0020
+patch=1,EE,21E000C0,extended,00000000
+patch=1,EE,21E000C4,extended,00000000
+patch=1,EE,21E000C8,extended,00000000
+patch=1,EE,21E000CC,extended,00000000
+patch=1,EE,21E000D0,extended,27BDFFE0
+patch=1,EE,21E000D4,extended,AFBF0000
+patch=1,EE,21E000D8,extended,0C09A09C
+patch=1,EE,21E000DC,extended,00000000
+patch=1,EE,21E000E0,extended,0C780099
+patch=1,EE,21E000E4,extended,00000000
+patch=1,EE,21E000E8,extended,8FBF0000
+patch=1,EE,21E000EC,extended,03E00008
+patch=1,EE,21E000F0,extended,27BD0020
+patch=1,EE,21E000F4,extended,00000000
+patch=1,EE,21E000F8,extended,00000000
+patch=1,EE,21E000FC,extended,00000000
+patch=1,EE,21E00100,extended,00000000
+patch=1,EE,21E00104,extended,00000000
+patch=1,EE,21E00108,extended,00000000
+patch=1,EE,21E0010C,extended,00000000
+patch=1,EE,21E00110,extended,00000000
+patch=1,EE,21E00114,extended,00000000
+patch=1,EE,21E00118,extended,00000000
+patch=1,EE,21E0011C,extended,00000000
+patch=1,EE,21E00120,extended,00000000
+patch=1,EE,21E00124,extended,00000000
+patch=1,EE,21E00128,extended,00000000
+patch=1,EE,21E0012C,extended,00000000
+patch=1,EE,21E00130,extended,3C080035
+patch=1,EE,21E00134,extended,8D095058
+patch=1,EE,21E00138,extended,8D0A5CF4
+patch=1,EE,21E0013C,extended,11200031
+patch=1,EE,21E00140,extended,03E01825
+patch=1,EE,21E00144,extended,1140002F
+patch=1,EE,21E00148,extended,00000000
+patch=1,EE,21E0014C,extended,012A582B
+patch=1,EE,21E00150,extended,1160002C
+patch=1,EE,21E00154,extended,00000000
+patch=1,EE,21E00158,extended,01495823
+patch=1,EE,21E0015C,extended,2D6C0009
+patch=1,EE,21E00160,extended,15800028
+patch=1,EE,21E00164,extended,00000000
+patch=1,EE,21E00168,extended,3C0D0002
+patch=1,EE,21E0016C,extended,01AB702B
+patch=1,EE,21E00170,extended,11C00002
+patch=1,EE,21E00174,extended,00000000
+patch=1,EE,21E00178,extended,01A05825
+patch=1,EE,21E0017C,extended,012B5021
+patch=1,EE,21E00180,extended,254AFFF8
+patch=1,EE,21E00184,extended,912C0000
+patch=1,EE,21E00188,extended,240D0061
+patch=1,EE,21E0018C,extended,158D0019
+patch=1,EE,21E00190,extended,00000000
+patch=1,EE,21E00194,extended,912C0001
+patch=1,EE,21E00198,extended,240D000E
+patch=1,EE,21E0019C,extended,158D0015
+patch=1,EE,21E001A0,extended,00000000
+patch=1,EE,21E001A4,extended,912C0006
+patch=1,EE,21E001A8,extended,240D000B
+patch=1,EE,21E001AC,extended,158D0011
+patch=1,EE,21E001B0,extended,00000000
+patch=1,EE,21E001B4,extended,912C0007
+patch=1,EE,21E001B8,extended,318D007E
+patch=1,EE,21E001BC,extended,15A0000D
+patch=1,EE,21E001C0,extended,00000000
+patch=1,EE,21E001C4,extended,91240002
+patch=1,EE,21E001C8,extended,912C0003
+patch=1,EE,21E001CC,extended,000C6200
+patch=1,EE,21E001D0,extended,008C2025
+patch=1,EE,21E001D4,extended,912C0004
+patch=1,EE,21E001D8,extended,000C6400
+patch=1,EE,21E001DC,extended,008C2025
+patch=1,EE,21E001E0,extended,912C0005
+patch=1,EE,21E001E4,extended,000C6600
+patch=1,EE,21E001E8,extended,008C2025
+patch=1,EE,21E001EC,extended,0C780088
+patch=1,EE,21E001F0,extended,00000000
+patch=1,EE,21E001F4,extended,25290001
+patch=1,EE,21E001F8,extended,0149602B
+patch=1,EE,21E001FC,extended,1180FFE1
+patch=1,EE,21E00200,extended,00000000
+patch=1,EE,21E00204,extended,0060F825
+patch=1,EE,21E00208,extended,03E00008
+patch=1,EE,21E0020C,extended,00000000
+patch=1,EE,21E00210,extended,00000000
+patch=1,EE,21E00214,extended,00000000
+patch=1,EE,21E00218,extended,00000000
+patch=1,EE,21E0021C,extended,00000000
+patch=1,EE,21E00220,extended,2C8E0010
+patch=1,EE,21E00224,extended,15C0000D
+patch=1,EE,21E00228,extended,00000000
+patch=1,EE,21E0022C,extended,3C0F01E0
+patch=1,EE,21E00230,extended,8DF80F00
+patch=1,EE,21E00234,extended,0304C825
+patch=1,EE,21E00238,extended,13380008
+patch=1,EE,21E0023C,extended,00000000
+patch=1,EE,21E00240,extended,ADF90F00
+patch=1,EE,21E00244,extended,240E0001
+patch=1,EE,21E00248,extended,ADEE0F04
+patch=1,EE,21E0024C,extended,ADE40F08
+patch=1,EE,21E00250,extended,8DEE0F0C
+patch=1,EE,21E00254,extended,25CE0001
+patch=1,EE,21E00258,extended,ADEE0F0C
+patch=1,EE,21E0025C,extended,03E00008
+patch=1,EE,21E00260,extended,00000000
+patch=1,EE,21E00264,extended,27BDFFE0
+patch=1,EE,21E00268,extended,AFBF0000
+patch=1,EE,21E0026C,extended,3C0801E0
+patch=1,EE,21E00270,extended,8D090F04
+patch=1,EE,21E00274,extended,11200009
+patch=1,EE,21E00278,extended,00000000
+patch=1,EE,21E0027C,extended,8D0A0F00
+patch=1,EE,21E00280,extended,AD000F04
+patch=1,EE,21E00284,extended,11400005
+patch=1,EE,21E00288,extended,00000000
+patch=1,EE,21E0028C,extended,0C7800B0
+patch=1,EE,21E00290,extended,00000000
+patch=1,EE,21E00294,extended,0C08448C
+patch=1,EE,21E00298,extended,00000000
+patch=1,EE,21E0029C,extended,8FBF0000
+patch=1,EE,21E002A0,extended,03E00008
+patch=1,EE,21E002A4,extended,27BD0020
+patch=1,EE,21E002A8,extended,00000000
+patch=1,EE,21E002AC,extended,00000000
+patch=1,EE,21E002B0,extended,00000000
+patch=1,EE,21E002B4,extended,00000000
+patch=1,EE,21E002B8,extended,00000000
+patch=1,EE,21E002BC,extended,00000000
+patch=1,EE,21E002C0,extended,3C0801E0
+patch=1,EE,21E002C4,extended,8D0E0F00
+patch=1,EE,21E002C8,extended,11C0003B
+patch=1,EE,21E002CC,extended,00000000
+patch=1,EE,21E002D0,extended,3C080035
+patch=1,EE,21E002D4,extended,8D095688
+patch=1,EE,21E002D8,extended,19200037
+patch=1,EE,21E002DC,extended,00000000
+patch=1,EE,21E002E0,extended,8D0A56B0
+patch=1,EE,21E002E4,extended,8D0B56AC
+patch=1,EE,21E002E8,extended,11400033
+patch=1,EE,21E002EC,extended,00000000
+patch=1,EE,21E002F0,extended,11600031
+patch=1,EE,21E002F4,extended,00000000
+patch=1,EE,21E002F8,extended,8D4C0004
+patch=1,EE,21E002FC,extended,018E6824
+patch=1,EE,21E00300,extended,11A00028
+patch=1,EE,21E00304,extended,00000000
+patch=1,EE,21E00308,extended,00000000
+patch=1,EE,21E0030C,extended,00000000
+patch=1,EE,21E00310,extended,00000000
+patch=1,EE,21E00314,extended,00000000
+patch=1,EE,21E00318,extended,00000000
+patch=1,EE,21E0031C,extended,0000C025
+patch=1,EE,21E00320,extended,31AF0010
+patch=1,EE,21E00324,extended,11E00003
+patch=1,EE,21E00328,extended,00000000
+patch=1,EE,21E0032C,extended,3C1900FF
+patch=1,EE,21E00330,extended,0319C025
+patch=1,EE,21E00334,extended,31AF0020
+patch=1,EE,21E00338,extended,11E00002
+patch=1,EE,21E0033C,extended,00000000
+patch=1,EE,21E00340,extended,3718FF00
+patch=1,EE,21E00344,extended,31AF0040
+patch=1,EE,21E00348,extended,11E00002
+patch=1,EE,21E0034C,extended,00000000
+patch=1,EE,21E00350,extended,371800FF
+patch=1,EE,21E00354,extended,31AF0080
+patch=1,EE,21E00358,extended,11E00004
+patch=1,EE,21E0035C,extended,00000000
+patch=1,EE,21E00360,extended,3C1900FF
+patch=1,EE,21E00364,extended,3739FF00
+patch=1,EE,21E00368,extended,0319C025
+patch=1,EE,21E0036C,extended,240FFF0F
+patch=1,EE,21E00370,extended,01AF7824
+patch=1,EE,21E00374,extended,11E00004
+patch=1,EE,21E00378,extended,00000000
+patch=1,EE,21E0037C,extended,3C1900FF
+patch=1,EE,21E00380,extended,373900FF
+patch=1,EE,21E00384,extended,0319C025
+patch=1,EE,21E00388,extended,AD780030
+patch=1,EE,21E0038C,extended,240FFFFF
+patch=1,EE,21E00390,extended,A16F0038
+patch=1,EE,21E00394,extended,8D780070
+patch=1,EE,21E00398,extended,240FFFDF
+patch=1,EE,21E0039C,extended,030FC024
+patch=1,EE,21E003A0,extended,AD780070
+patch=1,EE,21E003A4,extended,254A0078
+patch=1,EE,21E003A8,extended,256B0080
+patch=1,EE,21E003AC,extended,2529FFFF
+patch=1,EE,21E003B0,extended,1D20FFD1
+patch=1,EE,21E003B4,extended,00000000
+patch=1,EE,21E003B8,extended,03E00008
+patch=1,EE,21E003BC,extended,00000000
