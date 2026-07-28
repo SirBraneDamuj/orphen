@@ -1,0 +1,87 @@
+cmake_minimum_required(VERSION 3.24)
+
+project(orphen_native_port LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(ORPHEN_PORT_FETCH_SDL2 "Download SDL2 with CMake FetchContent when SDL2 is not installed" ON)
+
+find_package(OpenGL REQUIRED)
+
+find_package(SDL2 CONFIG QUIET)
+if(NOT TARGET SDL2::SDL2)
+    find_package(SDL2 QUIET)
+endif()
+
+if(NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2 AND NOT SDL2_FOUND AND ORPHEN_PORT_FETCH_SDL2)
+    include(FetchContent)
+
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+        SDL2
+        URL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(SDL2)
+endif()
+
+add_executable(orphen_port)
+
+target_sources(orphen_port
+    PRIVATE
+        src/main.cpp
+        src/platform/sdl_gl_window.cpp
+        src/platform/sdl_gl_window.h
+        src/runtime/port_runtime.cpp
+        src/runtime/port_runtime.h
+        src/runtime/ps2_memory.h
+)
+
+target_include_directories(orphen_port
+    PRIVATE
+        src
+)
+
+set(ORPHEN_SDL2_TARGETS)
+
+if(TARGET SDL2::SDL2main)
+    list(APPEND ORPHEN_SDL2_TARGETS SDL2::SDL2main)
+elseif(TARGET SDL2main)
+    list(APPEND ORPHEN_SDL2_TARGETS SDL2main)
+endif()
+
+if(TARGET SDL2::SDL2)
+    list(APPEND ORPHEN_SDL2_TARGETS SDL2::SDL2)
+elseif(TARGET SDL2)
+    list(APPEND ORPHEN_SDL2_TARGETS SDL2)
+elseif(SDL2_FOUND)
+    target_include_directories(orphen_port PRIVATE ${SDL2_INCLUDE_DIRS})
+    list(APPEND ORPHEN_SDL2_TARGETS ${SDL2_LIBRARIES})
+else()
+    message(FATAL_ERROR "SDL2 was not found. Install SDL2 or configure with -DORPHEN_PORT_FETCH_SDL2=ON.")
+endif()
+
+target_link_libraries(orphen_port
+    PRIVATE
+        ${ORPHEN_SDL2_TARGETS}
+        OpenGL::GL
+)
+
+if(MSVC)
+    target_compile_options(orphen_port PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(orphen_port PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(WIN32 AND TARGET SDL2::SDL2)
+    add_custom_command(TARGET orphen_port POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL2::SDL2>
+            $<TARGET_FILE_DIR:orphen_port>
+    )
+endif()
