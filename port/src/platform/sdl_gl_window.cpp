@@ -129,6 +129,10 @@ namespace orphen::port
         {
           input.nextMapRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_SPACE)
+        {
+          input.jumpRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;

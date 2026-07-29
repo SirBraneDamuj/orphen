@@ -1,5 +1,7 @@
 #include "harness/disc_resource_loader.h"
 
+#include "harness/scene_resource_provider.h"
+
 #include "ported/resource/bmpa_texture_decoder.h"
 #include "ported/resource/headerless_lz_decoder.h"
 #include "ported/resource/mcb_table_loader.h"
@@ -37,32 +39,6 @@ namespace orphen::harness
       return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     }
 
-    std::vector<std::uint8_t> readBinaryFileRange(const std::filesystem::path &path,
-                                                  std::uint32_t byteOffset,
-                                                  std::uint32_t byteSize)
-    {
-      std::ifstream file(path, std::ios::binary);
-      if (!file)
-      {
-        throw std::runtime_error("failed to open disc resource file: " + path.string());
-      }
-
-      file.seekg(static_cast<std::streamoff>(byteOffset), std::ios::beg);
-      if (!file)
-      {
-        throw std::runtime_error("failed to seek disc resource file: " + path.string());
-      }
-
-      std::vector<std::uint8_t> bytes(byteSize);
-      file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-      if (file.gcount() != static_cast<std::streamsize>(bytes.size()))
-      {
-        throw std::runtime_error("disc resource range extends past file end: " + path.string());
-      }
-
-      return bytes;
-    }
-
     std::uint16_t parseFixedDecimal(std::string_view text, std::size_t offset, std::size_t digitCount, const char *label)
     {
       std::uint16_t value = 0;
@@ -97,20 +73,19 @@ namespace orphen::harness
       return stream.str();
     }
 
-    std::vector<LoadedDiscTexturePage> loadAdjacentBmpaTexturePages(std::span<const std::uint8_t> bundle,
-                                                                    std::size_t recordOffset)
+    std::vector<LoadedDiscTexturePage> loadAdjacentBmpaTexturePages(const SceneResourceProvider &resources,
+                                                                    const SceneResourceRecord &mapRecord)
     {
       std::vector<LoadedDiscTexturePage> texturePages;
-      while (true)
+      const SceneResourceRecord *record = resources.nextRecordAfter(mapRecord);
+      while (record != nullptr)
       {
-        const std::optional<orphen::ported::resource::McbBundleRecord> record =
-            orphen::ported::resource::readMcbBundleRecordAt(bundle, recordOffset);
-        if (!record.has_value() || record->category != kTextureCategory)
+        if (record->category != kTextureCategory)
         {
           return texturePages;
         }
 
-        std::vector<std::uint8_t> decoded = orphen::ported::resource::decodeHeaderlessLzStream(record->payload);
+        std::vector<std::uint8_t> decoded = resources.decodeRecord(*record);
         if (!hasBmpaMagic(decoded))
         {
           return texturePages;
@@ -119,11 +94,13 @@ namespace orphen::harness
         texturePages.push_back({orphen::ported::resource::decodeBmpaTexture(decoded),
                                 record->resourceId,
                                 resourceIdHex(record->resourceId),
-                                record->offset,
-                                record->payload.size(),
+                                record->bundleRecordOffset,
+                                record->packedSize,
                                 decoded.size()});
-        recordOffset = record->offset + 8 + record->payload.size();
+        record = resources.nextRecordAfter(*record);
       }
+
+      return texturePages;
     }
 
   } // namespace
@@ -166,50 +143,34 @@ namespace orphen::harness
     return scenes;
   }
 
-  LoadedDiscMap loadFirstPsm2FromDiscScene(const std::filesystem::path &discRoot, McbSceneSelection selection)
+  LoadedDiscMap loadFirstPsm2FromSceneResources(const SceneResourceProvider &resources)
   {
-    const std::vector<std::uint8_t> mcb0Bytes = readBinaryFile(discRoot / "MCB0.BIN");
-    const auto table = orphen::ported::resource::loadMcb0Table(mcb0Bytes);
-    const auto &tableEntry = table.entryAt(selection.section, selection.entry);
-    if (!tableEntry.populated())
+    for (const SceneResourceRecord &record : resources.records())
     {
-      throw std::runtime_error("selected MCB scene slot is empty: " + sceneName(selection));
-    }
-
-    const std::vector<std::uint8_t> bundle = readBinaryFileRange(
-      discRoot / "MCB1.BIN", tableEntry.byteOffset, tableEntry.byteSize);
-
-    std::size_t recordOffset = 0;
-    while (true)
-    {
-      const std::optional<orphen::ported::resource::McbBundleRecord> record =
-          orphen::ported::resource::readMcbBundleRecordAt(bundle, recordOffset);
-      if (!record.has_value())
+      if (record.category == kMapCategory)
       {
-        break;
-      }
-
-      if (record->category == kMapCategory)
-      {
-        std::vector<std::uint8_t> decoded = orphen::ported::resource::decodeHeaderlessLzStream(record->payload);
+        std::vector<std::uint8_t> decoded = resources.decodeRecord(record);
         if (hasPsm2Magic(decoded))
         {
-          std::vector<LoadedDiscTexturePage> texturePages = loadAdjacentBmpaTexturePages(
-            bundle, record->offset + 8 + record->payload.size());
+          std::vector<LoadedDiscTexturePage> texturePages = loadAdjacentBmpaTexturePages(resources, record);
           return {std::move(decoded),
                   std::move(texturePages),
-                  record->resourceId,
-                  resourceIdHex(record->resourceId),
-                  record->offset,
-                  record->payload.size(),
+                  record.resourceId,
+                  resourceIdHex(record.resourceId),
+                  record.bundleRecordOffset,
+                  record.packedSize,
                   decoded.size()};
         }
       }
-
-      recordOffset = record->offset + 8 + record->payload.size();
     }
 
-    throw std::runtime_error("no MAP record decoded to PSM2 in " + sceneName(selection));
+    throw std::runtime_error("no MAP record decoded to PSM2 in " + sceneName(resources.selection()));
+  }
+
+  LoadedDiscMap loadFirstPsm2FromDiscScene(const std::filesystem::path &discRoot, McbSceneSelection selection)
+  {
+    const SceneResourceProvider resources = SceneResourceProvider::loadFromDisc(discRoot, selection);
+    return loadFirstPsm2FromSceneResources(resources);
   }
 
 } // namespace orphen::harness

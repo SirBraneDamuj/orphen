@@ -39,6 +39,10 @@ target_sources(orphen_port
     src/harness/map_viewer.h
     src/harness/disc_resource_loader.cpp
     src/harness/disc_resource_loader.h
+    src/harness/scene_resource_provider.cpp
+    src/harness/scene_resource_provider.h
+    src/harness/scene_resource_tree.cpp
+    src/harness/scene_resource_tree.h
         src/platform/sdl_gl_window.cpp
         src/platform/sdl_gl_window.h
     src/ported/resource/mcb_table_loader.cpp
@@ -53,13 +57,24 @@ target_sources(orphen_port
     src/ported/resource/bmpa_texture_decoder.h
     src/ported/resource/mcb_runtime.cpp
     src/ported/resource/mcb_runtime.h
+    src/ported/camera/original_camera_state.cpp
+    src/ported/camera/original_camera_state.h
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp
     src/ported/psm2/psm2_geometry_builder.h
     src/ported/psm2/psm2_runtime.h
+    src/ported/psc3/psc3_runtime.cpp
+    src/ported/psc3/psc3_runtime.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h
+        src/runtime/camera_view.h
+        src/runtime/player_debug_probe.cpp
+        src/runtime/player_debug_probe.h
+        src/runtime/probe_follow_camera.cpp
+        src/runtime/probe_follow_camera.h
+        src/runtime/psm2_ground_query.cpp
+        src/runtime/psm2_ground_query.h
         src/runtime/ps2_memory.h
 )
 

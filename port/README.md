@@ -7,14 +7,14 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 ## Layout
 
 - `src/ported/` - faithful native counterparts to specific original functions. Files here should keep the original `FUN_*` identity visible and avoid harness concerns.
-- `src/harness/` - PC-only viewer/debug code that consumes ported runtime data.
+- `src/harness/` - PC-only viewer/debug code plus host-side disc resource indexing for extracted game data.
 - `src/platform/` - SDL window, input, OpenGL context, frame presentation.
 - `src/runtime/` - portable game/runtime state that should eventually host analyzed systems from `../analyzed/`.
 - `src/runtime/ps2_memory.h` - a small fake EE RAM helper for systems that still depend on PS2-style absolute addresses.
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded PSM2 maps also decode adjacent BMPA texture records and bind them through the Section E texture page byte.
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages. Runtime update now owns a debug player probe that snaps to a rough PSM2 ground query and reports terrain flags as it crosses triangles. The probe camera uses a runtime over-the-shoulder rig feeding the ported original camera eye/target core (`FUN_00217d40`, `FUN_00217d10`, `FUN_00217a70`).
 
 ## Build
 
@@ -71,10 +71,19 @@ port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.ps
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --load-only
 ```
 
+To inspect the resources loaded by a disc scene:
+
+```sh
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --scene-tree --load-only
+```
+
+The scene tree currently groups MCB bundle records by category and prints record ids, bundle offsets, packed/decoded sizes, and known decoded signatures such as PSM2 and BMPA. It is a resource-level view; script object/spawn semantics come next.
+
 Controls:
 
-- `W/A/S/D` moves the camera target across the map.
-- `I/J/K/L` rotates the camera around the map.
+- `W/A/S/D` moves the runtime debug player probe relative to the current camera view.
+- `Space` jumps when the probe is grounded.
+- `J/L` rotates the over-the-shoulder camera around the probe; when released, it eases back toward the probe's facing direction. `I/K` adjusts pitch.
 - Left/right arrows cycle maps when running from `--disc-root`.
 - `Q/E` zoom out/in.
 - `R` resets the camera.
@@ -82,9 +91,14 @@ Controls:
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 
+The debug probe is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when the probe enters a new ground triangle.
+
+Disc-loaded scenes also render every decoded PSC3 model resource as a wireframe debug gallery near the origin. This shows the loaded object/model resources, but it is not faithful scene placement yet; script/entity spawn transforms still need to be decoded.
+
 ## Suggested Next Slices
 
-1. Add a resource root option and load original game files without redistributing them.
-2. Port the script VM core into `src/runtime/` with trace logging.
-3. Compare native script traces against PCSX2 logs for one selected scene.
-4. Add debug draw for script/entity positions before attempting faithful model rendering.
+1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene.
+2. Replace the debug probe's direct movement with a native lead-entity/controller field layout that mirrors the original `DAT_0058beb0` entity offsets.
+3. Refine the PSM2 ground query into a collision/step-height pass closer to `FUN_002262c0` and `FUN_00227840`.
+4. Port the original camera interpolation helpers (`FUN_00217b88`, `FUN_00217f38`, `FUN_00217fe8`) and let scripts drive the same eye/target camera state.
+5. Load the scene script record into runtime memory and start a trace-only VM bootstrap.

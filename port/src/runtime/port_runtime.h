@@ -3,10 +3,13 @@
 #include "harness/disc_resource_loader.h"
 #include "platform/sdl_gl_window.h"
 #include "harness/map_viewer.h"
+#include "runtime/player_debug_probe.h"
+#include "runtime/probe_follow_camera.h"
 #include "runtime/ps2_memory.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace orphen::port
 {
@@ -19,6 +22,7 @@ namespace orphen::port
     bool hasDiscScene = false;
     bool exitAfterUsage = false;
     bool loadOnly = false;
+    bool printSceneTree = false;
   };
 
   class PortRuntime
@@ -32,7 +36,14 @@ namespace orphen::port
   private:
     Ps2Memory memory_;
     orphen::harness::MapViewer mapViewer_;
+    PlayerDebugProbe playerProbe_;
+    ProbeFollowCamera probeCamera_;
     std::uint32_t frameCount_ = 0;
+    std::uint64_t trackedMapGeneration_ = 0;
+    std::optional<std::size_t> reportedGroundPrimitive_;
+
+    void resetPlayerProbeForLoadedMap();
+    void reportProbeGroundChange();
   };
 
 } // namespace orphen::port

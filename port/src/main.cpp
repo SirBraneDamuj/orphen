@@ -14,7 +14,7 @@ namespace
   void printUsage(const char *programName)
   {
     std::cout << "Usage: " << programName
-              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only]\n";
+              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only] [--scene-tree]\n";
   }
 
   void printPsm2Stats(std::string_view source, const orphen::ported::psm2::Psm2Stats &stats, std::size_t texturePageCount)
@@ -74,6 +74,11 @@ namespace
         config.loadOnly = true;
         continue;
       }
+      if (argument == "--scene-tree")
+      {
+        config.printSceneTree = true;
+        continue;
+      }
 
       throw std::runtime_error("unknown argument: " + std::string(argument));
     }
@@ -96,6 +101,10 @@ namespace
     if (!hasDiscRoot && config.hasDiscScene)
     {
       throw std::runtime_error("--scene requires --disc-root <dir>");
+    }
+    if (config.printSceneTree && !hasDiscRoot)
+    {
+      throw std::runtime_error("--scene-tree requires --disc-root <dir> --scene sNN_eMMM");
     }
   }
 
@@ -127,6 +136,10 @@ int main(int argc, char **argv)
     {
       orphen::harness::MapViewer loader;
       loadConfiguredMap(loader, config);
+      if (config.printSceneTree)
+      {
+        loader.printLoadedSceneTree(std::cout);
+      }
       printPsm2Stats(loader.loadedSourceDescription(), loader.loadedMap()->stats, loader.loadedTexturePageCount());
       return 0;
     }
