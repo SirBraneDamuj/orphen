@@ -276,21 +276,45 @@ namespace orphen::harness
       }
 
       const auto foot = toViewerSpace(probe.position);
-      const float markerHeight = 1.25f;
-      const float markerRadius = 0.35f;
+      const float bodyHeight = 1.25f;
+      const float bodyHalfWidth = 0.35f;
+      const float minX = foot.x - bodyHalfWidth;
+      const float maxX = foot.x + bodyHalfWidth;
+      const float minY = foot.y;
+      const float maxY = foot.y + bodyHeight;
+      const float minZ = foot.z - bodyHalfWidth;
+      const float maxZ = foot.z + bodyHalfWidth;
       glColor3f(1.0f, 0.15f, 0.82f);
       glBegin(GL_LINES);
-      glVertex3f(foot.x, foot.y, foot.z);
-      glVertex3f(foot.x, foot.y + markerHeight, foot.z);
-      glVertex3f(foot.x - markerRadius, foot.y + markerHeight * 0.45f, foot.z);
-      glVertex3f(foot.x + markerRadius, foot.y + markerHeight * 0.45f, foot.z);
-      glVertex3f(foot.x, foot.y + markerHeight * 0.45f, foot.z - markerRadius);
-      glVertex3f(foot.x, foot.y + markerHeight * 0.45f, foot.z + markerRadius);
+      glVertex3f(minX, minY, minZ);
+      glVertex3f(maxX, minY, minZ);
+      glVertex3f(maxX, minY, minZ);
+      glVertex3f(maxX, minY, maxZ);
+      glVertex3f(maxX, minY, maxZ);
+      glVertex3f(minX, minY, maxZ);
+      glVertex3f(minX, minY, maxZ);
+      glVertex3f(minX, minY, minZ);
+      glVertex3f(minX, maxY, minZ);
+      glVertex3f(maxX, maxY, minZ);
+      glVertex3f(maxX, maxY, minZ);
+      glVertex3f(maxX, maxY, maxZ);
+      glVertex3f(maxX, maxY, maxZ);
+      glVertex3f(minX, maxY, maxZ);
+      glVertex3f(minX, maxY, maxZ);
+      glVertex3f(minX, maxY, minZ);
+      glVertex3f(minX, minY, minZ);
+      glVertex3f(minX, maxY, minZ);
+      glVertex3f(maxX, minY, minZ);
+      glVertex3f(maxX, maxY, minZ);
+      glVertex3f(maxX, minY, maxZ);
+      glVertex3f(maxX, maxY, maxZ);
+      glVertex3f(minX, minY, maxZ);
+      glVertex3f(minX, maxY, maxZ);
 
-      const float facingLength = markerRadius * 2.4f;
-      glVertex3f(foot.x, foot.y + markerHeight * 0.2f, foot.z);
+      const float facingLength = bodyHalfWidth * 2.4f;
+      glVertex3f(foot.x, foot.y + bodyHeight * 0.45f, foot.z);
       glVertex3f(foot.x + std::cos(probe.facingRadians) * facingLength,
-                 foot.y + markerHeight * 0.2f,
+             foot.y + bodyHeight * 0.45f,
                  foot.z - std::sin(probe.facingRadians) * facingLength);
       glEnd();
 

@@ -28,7 +28,7 @@ namespace orphen::port
 
     if (mapViewer_.loadedMap() != nullptr)
     {
-      resetPlayerProbeForLoadedMap();
+      resetLeadPlayerForLoadedMap();
       if (config.printSceneTree)
       {
         mapViewer_.printLoadedSceneTree(std::cout);
@@ -49,7 +49,7 @@ namespace orphen::port
     memory_.clear();
     frameCount_ = 0;
     mapViewer_.resetCamera();
-    resetPlayerProbeForLoadedMap();
+    resetLeadPlayerForLoadedMap();
   }
 
   bool PortRuntime::update(float deltaSeconds, const InputSnapshot &input)
@@ -60,15 +60,15 @@ namespace orphen::port
 
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {
-      resetPlayerProbeForLoadedMap();
+      resetLeadPlayerForLoadedMap();
     }
     const auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
     {
       const auto cameraRelativeMove = probeCamera_.movementVectorForInput(input.moveX, input.moveY);
-      playerProbe_.update(clampedDelta, cameraRelativeMove.x, cameraRelativeMove.y, input.jumpRequested, loadedMap);
-      probeCamera_.update(clampedDelta, input.rotateX, input.rotateY, input.zoom, playerProbe_.state(), *loadedMap);
-      mapViewer_.setDebugPlayerProbe(playerProbe_.state());
+      leadPlayer_.update(clampedDelta, cameraRelativeMove, input.jumpRequested, loadedMap);
+      probeCamera_.update(clampedDelta, input.rotateX, input.rotateY, input.zoom, leadPlayer_.viewState(), *loadedMap);
+      mapViewer_.setDebugPlayerProbe(leadPlayer_.viewState());
       mapViewer_.setRuntimeCameraView(probeCamera_.view());
     }
     else
@@ -76,7 +76,7 @@ namespace orphen::port
       mapViewer_.setDebugPlayerProbe(std::nullopt);
       mapViewer_.setRuntimeCameraView(std::nullopt);
     }
-    reportProbeGroundChange();
+    reportLeadPlayerGroundChange();
 
     memory_.write(kHarnessFrameCounterAddress, frameCount_);
 
@@ -88,7 +88,7 @@ namespace orphen::port
     mapViewer_.render(framebufferWidth, framebufferHeight);
   }
 
-  void PortRuntime::resetPlayerProbeForLoadedMap()
+  void PortRuntime::resetLeadPlayerForLoadedMap()
   {
     const auto *loadedMap = mapViewer_.loadedMap();
     trackedMapGeneration_ = mapViewer_.loadedMapGeneration();
@@ -100,17 +100,17 @@ namespace orphen::port
       return;
     }
 
-    playerProbe_.resetToMap(*loadedMap);
-    probeCamera_.resetToProbe(playerProbe_.state(), *loadedMap);
-    mapViewer_.setDebugPlayerProbe(playerProbe_.state());
+    leadPlayer_.resetToMap(*loadedMap);
+    probeCamera_.resetToProbe(leadPlayer_.viewState(), *loadedMap);
+    mapViewer_.setDebugPlayerProbe(leadPlayer_.viewState());
     mapViewer_.setRuntimeCameraView(probeCamera_.view());
-    reportProbeGroundChange();
+    reportLeadPlayerGroundChange();
   }
 
-  void PortRuntime::reportProbeGroundChange()
+  void PortRuntime::reportLeadPlayerGroundChange()
   {
-    const auto &probeState = playerProbe_.state();
-    if (!probeState.groundHit.has_value())
+    const auto &leadState = leadPlayer_.viewState();
+    if (!leadState.groundHit.has_value())
     {
       if (reportedGroundPrimitive_.has_value())
       {
@@ -120,7 +120,7 @@ namespace orphen::port
       return;
     }
 
-    const auto &groundHit = *probeState.groundHit;
+    const auto &groundHit = *leadState.groundHit;
     if (reportedGroundPrimitive_ == groundHit.primitiveIndex)
     {
       return;

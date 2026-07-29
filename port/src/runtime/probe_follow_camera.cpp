@@ -101,18 +101,7 @@ namespace orphen::port
 
   orphen::ported::psm2::Vec3 ProbeFollowCamera::movementVectorForInput(float moveX, float moveY) const
   {
-    const auto &pose = camera_.pose();
-    orphen::ported::psm2::Vec3 forward{pose.forward.x, pose.forward.y, 0.0f};
-    const float forwardLength = std::sqrt(forward.x * forward.x + forward.y * forward.y);
-    if (forwardLength <= 0.0001f)
-    {
-      forward = normalizedHorizontal(cameraHeadingRadians_);
-    }
-    else
-    {
-      forward.x /= forwardLength;
-      forward.y /= forwardLength;
-    }
+    const orphen::ported::psm2::Vec3 forward = normalizedHorizontal(cameraHeadingRadians_);
 
     const orphen::ported::psm2::Vec3 right{forward.y, -forward.x, 0.0f};
     return {right.x * moveX + forward.x * moveY,

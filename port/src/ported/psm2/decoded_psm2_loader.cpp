@@ -130,6 +130,7 @@ namespace orphen::ported::psm2
 
         DRecord78 record78;
         record78.vertexIndices = {words[0], words[1], words[2], words[3]};
+        // These become DAT_003556b0 +0x00/+0x04 in the original 0x78 terrain record.
         record78.leadingWord = words[4] | (static_cast<std::uint32_t>(words[5]) << 16);
         record78.terrainFlags = words[10] | (static_cast<std::uint32_t>(words[11]) << 16);
         record78.selector = words[12];

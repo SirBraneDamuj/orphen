@@ -14,7 +14,7 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages. Runtime update now owns a debug player probe that snaps to a rough PSM2 ground query and reports terrain flags as it crosses triangles. The probe camera uses a runtime over-the-shoulder rig feeding the ported original camera eye/target core (`FUN_00217d40`, `FUN_00217d10`, `FUN_00217a70`).
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages. Runtime update now owns an original-shaped lead player entity that starts at the scene origin, maps keyboard input into original action bits, and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00227390`, `FUN_00227840`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. The follow camera uses a runtime over-the-shoulder rig feeding the ported original camera eye/target core (`FUN_00217d40`, `FUN_00217d10`, `FUN_00217a70`).
 
 ## Build
 
@@ -81,9 +81,9 @@ The scene tree currently groups MCB bundle records by category and prints record
 
 Controls:
 
-- `W/A/S/D` moves the runtime debug player probe relative to the current camera view.
-- `Space` jumps when the probe is grounded.
-- `J/L` rotates the over-the-shoulder camera around the probe; when released, it eases back toward the probe's facing direction. `I/K` adjusts pitch.
+- `W/A/S/D` moves the runtime lead player placeholder relative to the current camera view.
+- `Space` jumps when the lead player is grounded.
+- `J/L` rotates the over-the-shoulder camera around the lead player; when released, it eases back toward the player's facing direction. `I/K` adjusts pitch.
 - Left/right arrows cycle maps when running from `--disc-root`.
 - `Q/E` zoom out/in.
 - `R` resets the camera.
@@ -91,14 +91,14 @@ Controls:
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 
-The debug probe is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when the probe enters a new ground triangle.
+The current lead player placeholder is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when it enters a new ground triangle.
 
 Disc-loaded scenes also render every decoded PSC3 model resource as a wireframe debug gallery near the origin. This shows the loaded object/model resources, but it is not faithful scene placement yet; script/entity spawn transforms still need to be decoded.
 
 ## Suggested Next Slices
 
 1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene.
-2. Replace the debug probe's direct movement with a native lead-entity/controller field layout that mirrors the original `DAT_0058beb0` entity offsets.
-3. Refine the PSM2 ground query into a collision/step-height pass closer to `FUN_002262c0` and `FUN_00227840`.
+2. Port the directional entity/body blocker helpers (`FUN_00228380`, `FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) and dynamic entity support helper `FUN_00228cf0`.
+3. Replace keyboard-derived movement vectors with the original controller globals and analog smoothing path from `FUN_0023b5d8`/`FUN_00256ab0`.
 4. Port the original camera interpolation helpers (`FUN_00217b88`, `FUN_00217f38`, `FUN_00217fe8`) and let scripts drive the same eye/target camera state.
-5. Load the scene script record into runtime memory and start a trace-only VM bootstrap.
+5. Load the scene script record into runtime memory and wire terrain-toggle opcodes `0xA4`, `0xA5`, and `0xA6` into the loaded PSM2 terrain records.

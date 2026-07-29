@@ -22,9 +22,21 @@ namespace orphen::port
     orphen::ported::psm2::Vec3 normal{};
   };
 
+  struct Psm2TerrainQueryOptions
+  {
+    std::uint32_t rejectTerrainMask = 0;
+    bool requireOriginalTerrainSample = false;
+  };
+
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                  float x,
                                                  float y,
                                                  float referenceHeight);
+
+  std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                 float x,
+                                                 float y,
+                                                 float referenceHeight,
+                                                 const Psm2TerrainQueryOptions &options);
 
 } // namespace orphen::port

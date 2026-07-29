@@ -46,6 +46,15 @@ namespace orphen::port
                                                  float y,
                                                  float referenceHeight)
   {
+    return queryPsm2GroundAt(map, x, y, referenceHeight, {});
+  }
+
+  std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                 float x,
+                                                 float y,
+                                                 float referenceHeight,
+                                                 const Psm2TerrainQueryOptions &options)
+  {
     std::optional<Psm2GroundHit> bestHit;
     float bestScore = std::numeric_limits<float>::max();
 
@@ -84,6 +93,14 @@ namespace orphen::port
       const float height = first.z * w + second.z * u + third.z * v;
       const auto &record78 = map.DAT_003556b0_dRecords78[triangle.primitiveIndex];
       const bool sampledByOriginalTerrain = (record78.leadingWord & kOriginalTerrainSampleBit) != 0;
+      if (options.requireOriginalTerrainSample && !sampledByOriginalTerrain)
+      {
+        continue;
+      }
+      if ((record78.terrainFlags & options.rejectTerrainMask) != 0)
+      {
+        continue;
+      }
       const float score = candidateScore(height, referenceHeight, sampledByOriginalTerrain);
       if (score >= bestScore)
       {
