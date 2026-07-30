@@ -22,6 +22,15 @@ namespace orphen::port
     orphen::ported::psm2::Vec3 normal{};
   };
 
+  struct Psm2BlockerHit
+  {
+    std::size_t triangleIndex = 0;
+    std::size_t primitiveIndex = 0;
+    std::uint32_t record80Flags = 0;
+    std::array<orphen::ported::psm2::Vec3, 3> vertices{};
+    orphen::ported::psm2::Vec3 normal{};
+  };
+
   struct Psm2TerrainQueryOptions
   {
     std::uint32_t rejectTerrainMask = 0;
@@ -38,5 +47,14 @@ namespace orphen::port
                                                  float y,
                                                  float referenceHeight,
                                                  const Psm2TerrainQueryOptions &options);
+
+  std::optional<Psm2BlockerHit> queryPsm2ActiveBlockerAlong(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                            float startX,
+                                                            float startY,
+                                                            float endX,
+                                                            float endY,
+                                                            float baseHeight,
+                                                            float characterHeight,
+                                                            float radius);
 
 } // namespace orphen::port

@@ -140,7 +140,8 @@ namespace orphen::ported::psm2
         DRecord80 record80;
         record80.vertexIndices = record78.vertexIndices;
         record80.sectionEIndex = words[6];
-        record80.terrainFlags = record78.terrainFlags;
+        // Original DAT_003556ac +0x70 starts from the same source word as DAT_003556b0 +0x00.
+        record80.terrainFlags = record78.leadingWord;
 
         state.DAT_003556b0_dRecords78.push_back(record78);
         state.DAT_003556ac_dRecords80.push_back(record80);

@@ -68,7 +68,8 @@ namespace orphen::ported::player
 
   void OriginalPlayerController::update(float deltaSeconds,
                                         const OriginalPlayerFrameInput &input,
-                                        const OriginalTerrainSampler &terrainSampler)
+                                        const OriginalTerrainSampler &terrainSampler,
+                                        const OriginalMovementBlocker &movementBlocker)
   {
     const float clampedDeltaSeconds = std::clamp(deltaSeconds, 0.0f, 0.1f);
     entity_.desiredDeltaX30 = 0.0f;
@@ -84,7 +85,7 @@ namespace orphen::ported::player
       FUN_00256bb8_update_grounded_field_state(clampedDeltaSeconds, input);
     }
 
-    FUN_002262c0_integrate_physics(clampedDeltaSeconds, terrainSampler);
+    FUN_002262c0_integrate_physics(clampedDeltaSeconds, terrainSampler, movementBlocker);
 
     if (entity_.substateFrameA8 != std::numeric_limits<std::uint16_t>::max())
     {
@@ -288,7 +289,8 @@ namespace orphen::ported::player
   }
 
   void OriginalPlayerController::FUN_002262c0_integrate_physics(float deltaSeconds,
-                                                                const OriginalTerrainSampler &terrainSampler)
+                                                                const OriginalTerrainSampler &terrainSampler,
+                                                                const OriginalMovementBlocker &movementBlocker)
   {
     std::uint32_t nextCollisionFlags = 0;
     const bool wasGrounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
@@ -297,11 +299,29 @@ namespace orphen::ported::player
     const float attemptedX = startX + entity_.desiredDeltaX30;
     const float attemptedZ = startZ + entity_.desiredDeltaZ34;
 
-    std::optional<OriginalTerrainSample> destinationGround = FUN_00227390_validate_destination(attemptedX, attemptedZ, terrainSampler);
-    if (destinationGround.has_value() && canStepToHeight(entity_.positionY28,
-                                                         destinationGround->height,
-                                                         entity_.maxStepHeight80,
-                                                         wasGrounded))
+    auto validateMove = [&](float fromX, float fromZ, float toX, float toZ) -> std::optional<OriginalTerrainSample>
+    {
+      if (movementBlocker && movementBlocker(fromX,
+                                             fromZ,
+                                             toX,
+                                             toZ,
+                                             entity_.positionY28,
+                                             entity_.height58,
+                                             entity_.radius54))
+      {
+        return std::nullopt;
+      }
+
+      auto ground = FUN_00227390_validate_destination(toX, toZ, terrainSampler);
+      if (!ground.has_value() || !canStepToHeight(entity_.positionY28, ground->height, entity_.maxStepHeight80, wasGrounded))
+      {
+        return std::nullopt;
+      }
+      return ground;
+    };
+
+    std::optional<OriginalTerrainSample> destinationGround = validateMove(startX, startZ, attemptedX, attemptedZ);
+    if (destinationGround.has_value())
     {
       entity_.positionX20 = attemptedX;
       entity_.positionZ24 = attemptedZ;
@@ -314,8 +334,8 @@ namespace orphen::ported::player
 
       if (std::abs(entity_.desiredDeltaX30) > kMovementEpsilon)
       {
-        auto xOnlyGround = FUN_00227390_validate_destination(attemptedX, startZ, terrainSampler);
-        if (xOnlyGround.has_value() && canStepToHeight(entity_.positionY28, xOnlyGround->height, entity_.maxStepHeight80, wasGrounded))
+        auto xOnlyGround = validateMove(startX, startZ, attemptedX, startZ);
+        if (xOnlyGround.has_value())
         {
           entity_.positionX20 = attemptedX;
           entity_.groundHeight4c = xOnlyGround->height;
@@ -329,8 +349,8 @@ namespace orphen::ported::player
 
       if (std::abs(entity_.desiredDeltaZ34) > kMovementEpsilon)
       {
-        auto zOnlyGround = FUN_00227390_validate_destination(entity_.positionX20, attemptedZ, terrainSampler);
-        if (zOnlyGround.has_value() && canStepToHeight(entity_.positionY28, zOnlyGround->height, entity_.maxStepHeight80, wasGrounded))
+        auto zOnlyGround = validateMove(entity_.positionX20, entity_.positionZ24, entity_.positionX20, attemptedZ);
+        if (zOnlyGround.has_value())
         {
           entity_.positionZ24 = attemptedZ;
           entity_.groundHeight4c = zOnlyGround->height;

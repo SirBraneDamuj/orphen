@@ -23,6 +23,7 @@ namespace orphen::harness
   {
 
     constexpr double kPi = 3.14159265358979323846;
+    constexpr std::uint32_t kRecord80HiddenBit = 0x20;
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -428,6 +429,12 @@ namespace orphen::harness
     {
       for (const auto &triangle : map.derivedTriangles)
       {
+        if (triangle.primitiveIndex < map.DAT_003556ac_dRecords80.size() &&
+            (map.DAT_003556ac_dRecords80[triangle.primitiveIndex].terrainFlags & kRecord80HiddenBit) != 0)
+        {
+          continue;
+        }
+
         const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, triangle.primitiveIndex);
         const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
 

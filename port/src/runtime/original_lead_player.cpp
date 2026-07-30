@@ -49,14 +49,34 @@ namespace orphen::port
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
     const orphen::ported::player::OriginalPlayerFrameInput input{cameraRelativeMove, jumpAction, jumpAction};
-    controller_.update(deltaSeconds, input, [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
-                       {
+    const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
+    {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));
       if (!groundHit.has_value())
       {
         return std::optional<orphen::ported::player::OriginalTerrainSample>{};
       }
-      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)}; });
+      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)};
+    };
+    const auto movementBlocker = [map](float originalStartX,
+                                       float originalStartZ,
+                                       float originalEndX,
+                                       float originalEndZ,
+                                       float baseY,
+                                       float height,
+                                       float radius)
+    {
+      return queryPsm2ActiveBlockerAlong(*map,
+                                         originalStartX,
+                                         originalStartZ,
+                                         originalEndX,
+                                         originalEndZ,
+                                         baseY,
+                                         height,
+                                         radius)
+          .has_value();
+    };
+    controller_.update(deltaSeconds, input, terrainSampler, movementBlocker);
     refreshViewState(*map);
   }
 

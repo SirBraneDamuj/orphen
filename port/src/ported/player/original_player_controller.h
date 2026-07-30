@@ -30,6 +30,14 @@ namespace orphen::ported::player
                                                                                     float referenceY,
                                                                                     const OriginalTerrainQuery &query)>;
 
+  using OriginalMovementBlocker = std::function<bool(float originalStartX,
+                                                     float originalStartZ,
+                                                     float originalEndX,
+                                                     float originalEndZ,
+                                                     float baseY,
+                                                     float height,
+                                                     float radius)>;
+
   struct OriginalPlayerFrameInput
   {
     orphen::ported::psm2::Vec3 cameraRelativeMove{};
@@ -51,7 +59,10 @@ namespace orphen::ported::player
   {
   public:
     void resetAtOrigin(const OriginalTerrainSampler &terrainSampler);
-    void update(float deltaSeconds, const OriginalPlayerFrameInput &input, const OriginalTerrainSampler &terrainSampler);
+    void update(float deltaSeconds,
+                const OriginalPlayerFrameInput &input,
+                const OriginalTerrainSampler &terrainSampler,
+                const OriginalMovementBlocker &movementBlocker = {});
 
     OriginalPlayerSnapshot snapshot() const;
 
@@ -98,7 +109,9 @@ namespace orphen::ported::player
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,
                                                                            float originalZ,
                                                                            const OriginalTerrainSampler &terrainSampler) const;
-    void FUN_002262c0_integrate_physics(float deltaSeconds, const OriginalTerrainSampler &terrainSampler);
+    void FUN_002262c0_integrate_physics(float deltaSeconds,
+                                        const OriginalTerrainSampler &terrainSampler,
+                                        const OriginalMovementBlocker &movementBlocker);
   };
 
 } // namespace orphen::ported::player
