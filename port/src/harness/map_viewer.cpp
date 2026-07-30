@@ -314,7 +314,7 @@ namespace orphen::harness
       const float facingLength = bodyHalfWidth * 2.4f;
       glVertex3f(foot.x, foot.y + bodyHeight * 0.45f, foot.z);
       glVertex3f(foot.x + std::cos(probe.facingRadians) * facingLength,
-             foot.y + bodyHeight * 0.45f,
+                 foot.y + bodyHeight * 0.45f,
                  foot.z - std::sin(probe.facingRadians) * facingLength);
       glEnd();
 
@@ -839,9 +839,19 @@ namespace orphen::harness
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
 
+  orphen::ported::psm2::Psm2RuntimeState *MapViewer::loadedMap()
+  {
+    return map_.has_value() ? &*map_ : nullptr;
+  }
+
   const orphen::ported::psm2::Psm2RuntimeState *MapViewer::loadedMap() const
   {
     return map_.has_value() ? &*map_ : nullptr;
+  }
+
+  const SceneResourceProvider *MapViewer::loadedSceneResources() const
+  {
+    return sceneResources_.has_value() ? &*sceneResources_ : nullptr;
   }
 
 } // namespace orphen::harness

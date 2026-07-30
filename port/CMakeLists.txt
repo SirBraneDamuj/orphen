@@ -77,6 +77,10 @@ target_sources(orphen_port
         src/runtime/player_debug_probe.h
         src/runtime/probe_follow_camera.cpp
         src/runtime/probe_follow_camera.h
+        src/runtime/scene_script_interpreter.cpp
+        src/runtime/scene_script_interpreter.h
+        src/runtime/scene_script_state.cpp
+        src/runtime/scene_script_state.h
         src/runtime/psm2_ground_query.cpp
         src/runtime/psm2_ground_query.h
         src/runtime/ps2_memory.h

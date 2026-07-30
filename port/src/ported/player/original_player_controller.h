@@ -26,9 +26,9 @@ namespace orphen::ported::player
   };
 
   using OriginalTerrainSampler = std::function<std::optional<OriginalTerrainSample>(float originalX,
-                                                                                     float originalZ,
-                                                                                     float referenceY,
-                                                                                     const OriginalTerrainQuery &query)>;
+                                                                                    float originalZ,
+                                                                                    float referenceY,
+                                                                                    const OriginalTerrainQuery &query)>;
 
   struct OriginalPlayerFrameInput
   {
@@ -58,27 +58,27 @@ namespace orphen::ported::player
   private:
     struct OriginalLeadEntity
     {
-      std::uint16_t flags06 = 0;              // +0x06: animation/contact flags used by FUN_002534d8.
-      std::uint32_t collisionFlags0c = 0;     // +0x0C: physics result flags from FUN_002262c0; bit 0 is grounded.
-      float positionX20 = 0.0f;               // +0x20: world X.
-      float positionZ24 = 0.0f;               // +0x24: world Z, mapped to PSM2 horizontal Y in the port.
-      float positionY28 = 0.0f;               // +0x28: vertical position.
-      float previousY2c = 0.0f;               // +0x2C: previous/smoothed vertical position.
-      float desiredDeltaX30 = 0.0f;           // +0x30: per-frame X movement request consumed by physics.
-      float desiredDeltaZ34 = 0.0f;           // +0x34: per-frame Z movement request consumed by physics.
-      float desiredDeltaY38 = 0.0f;           // +0x38: per-frame vertical delta accumulated by physics.
-      float facingRadians5c = 0.0f;           // +0x5C: facing angle.
-      float verticalVelocity44 = 0.0f;        // +0x44: vertical velocity/jump vector field.
-      float verticalAcceleration48 = 24.0f;   // +0x48: downward acceleration used by FUN_002262c0.
-      float groundHeight4c = 0.0f;            // +0x4C: sampled ground height.
-      float previousGroundHeight50 = 0.0f;    // +0x50: previous sampled ground height.
-      float radius54 = 0.35f;                 // +0x54: collision radius.
-      float height58 = 1.25f;                 // +0x58: collision height.
-      float maxStepHeight80 = 0.75f;          // +0x80: maximum step-up height accepted by FUN_002262c0.
-      std::uint16_t state60 = 0;              // +0x60: field/player movement state.
-      std::uint32_t rejectTerrainMask74 = 0;  // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
+      std::uint16_t flags06 = 0;               // +0x06: animation/contact flags used by FUN_002534d8.
+      std::uint32_t collisionFlags0c = 0;      // +0x0C: physics result flags from FUN_002262c0; bit 0 is grounded.
+      float positionX20 = 0.0f;                // +0x20: world X.
+      float positionZ24 = 0.0f;                // +0x24: world Z, mapped to PSM2 horizontal Y in the port.
+      float positionY28 = 0.0f;                // +0x28: vertical position.
+      float previousY2c = 0.0f;                // +0x2C: previous/smoothed vertical position.
+      float desiredDeltaX30 = 0.0f;            // +0x30: per-frame X movement request consumed by physics.
+      float desiredDeltaZ34 = 0.0f;            // +0x34: per-frame Z movement request consumed by physics.
+      float desiredDeltaY38 = 0.0f;            // +0x38: per-frame vertical delta accumulated by physics.
+      float facingRadians5c = 0.0f;            // +0x5C: facing angle.
+      float verticalVelocity44 = 0.0f;         // +0x44: vertical velocity/jump vector field.
+      float verticalAcceleration48 = 24.0f;    // +0x48: downward acceleration used by FUN_002262c0.
+      float groundHeight4c = 0.0f;             // +0x4C: sampled ground height.
+      float previousGroundHeight50 = 0.0f;     // +0x50: previous sampled ground height.
+      float radius54 = 0.35f;                  // +0x54: collision radius.
+      float height58 = 1.25f;                  // +0x58: collision height.
+      float maxStepHeight80 = 0.75f;           // +0x80: maximum step-up height accepted by FUN_002262c0.
+      std::uint16_t state60 = 0;               // +0x60: field/player movement state.
+      std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
       std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
-      std::uint16_t substateA0 = 1;           // +0xA0: state submode; airborne jump uses 0x0C/0x0D/0x10.
+      std::uint16_t substateA0 = 1;            // +0xA0: state submode; airborne jump uses 0x0C/0x0D/0x10.
       std::uint16_t previousSubstateA2 = 0xffff;
       std::uint16_t stateResetA4 = 999;
       std::uint16_t substateFrameA8 = 0;

@@ -41,7 +41,9 @@ namespace orphen::harness
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
     void render(int framebufferWidth, int framebufferHeight) const;
 
+    orphen::ported::psm2::Psm2RuntimeState *loadedMap();
     const orphen::ported::psm2::Psm2RuntimeState *loadedMap() const;
+    const SceneResourceProvider *loadedSceneResources() const;
     const std::string &loadedSourceDescription() const { return loadedSourceDescription_; }
     std::size_t loadedTexturePageCount() const { return texturePages_.size(); }
     std::uint64_t loadedMapGeneration() const { return loadedMapGeneration_; }

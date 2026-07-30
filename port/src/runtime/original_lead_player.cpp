@@ -24,14 +24,14 @@ namespace orphen::port
     controller_.resetAtOrigin([&map](float originalX,
                                      float originalZ,
                                      float referenceY,
-                                     const orphen::ported::player::OriginalTerrainQuery &query) {
+                                     const orphen::ported::player::OriginalTerrainQuery &query)
+                              {
       const auto groundHit = queryPsm2GroundAt(map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));
       if (!groundHit.has_value())
       {
         return std::optional<orphen::ported::player::OriginalTerrainSample>{};
       }
-      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)};
-    });
+      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)}; });
     refreshViewState(map);
   }
 
@@ -49,17 +49,14 @@ namespace orphen::port
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
     const orphen::ported::player::OriginalPlayerFrameInput input{cameraRelativeMove, jumpAction, jumpAction};
-    controller_.update(deltaSeconds, input, [map](float originalX,
-                                                  float originalZ,
-                                                  float referenceY,
-                                                  const orphen::ported::player::OriginalTerrainQuery &query) {
+    controller_.update(deltaSeconds, input, [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
+                       {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));
       if (!groundHit.has_value())
       {
         return std::optional<orphen::ported::player::OriginalTerrainSample>{};
       }
-      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)};
-    });
+      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)}; });
     refreshViewState(*map);
   }
 

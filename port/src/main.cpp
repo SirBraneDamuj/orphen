@@ -17,17 +17,6 @@ namespace
               << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only] [--scene-tree]\n";
   }
 
-  void printPsm2Stats(std::string_view source, const orphen::ported::psm2::Psm2Stats &stats, std::size_t texturePageCount)
-  {
-    std::cout << "[psm2] loaded " << source
-              << " positions=" << stats.positionRecordCount
-              << " sectionB=" << stats.sectionBRecordCount
-              << " primitives=" << stats.primitiveRecordCount
-              << " triangles=" << stats.triangleCount
-              << " skipped=" << stats.skippedPrimitiveCount
-              << " textures=" << texturePageCount << '\n';
-  }
-
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
   {
     orphen::port::PortRuntimeConfig config;
@@ -108,17 +97,6 @@ namespace
     }
   }
 
-  void loadConfiguredMap(orphen::harness::MapViewer &loader, const orphen::port::PortRuntimeConfig &config)
-  {
-    if (!config.decodedPsm2Path.empty())
-    {
-      loader.loadDecodedPsm2(config.decodedPsm2Path);
-      return;
-    }
-
-    loader.loadDiscSceneMap(config.discRoot, config.discScene);
-  }
-
 } // namespace
 
 int main(int argc, char **argv)
@@ -134,13 +112,8 @@ int main(int argc, char **argv)
 
     if (config.loadOnly)
     {
-      orphen::harness::MapViewer loader;
-      loadConfiguredMap(loader, config);
-      if (config.printSceneTree)
-      {
-        loader.printLoadedSceneTree(std::cout);
-      }
-      printPsm2Stats(loader.loadedSourceDescription(), loader.loadedMap()->stats, loader.loadedTexturePageCount());
+      orphen::port::PortRuntime runtime;
+      runtime.initialize(config);
       return 0;
     }
 
