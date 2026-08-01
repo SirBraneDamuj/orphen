@@ -162,6 +162,15 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
 A gamepad is used when one is present: left stick moves, shoulder buttons orbit
 the camera, A jumps. The keyboard remains available as a digital fallback.
 
+The left stick goes through the ported `FUN_0023b3f0`, so it inherits the
+original's response curve: a deadzone of 60 out of 128 raw units means nothing
+happens below roughly 47 percent deflection, and the remaining 68 units rescale
+to 0..128 so the walk/run threshold of 100 lands near 88 percent. That deadzone
+is why there is a perceptible delay between pushing the stick and the character
+moving -- the stick has to travel almost halfway first. The keyboard follows
+FUN_0023b5d8's digital branch instead, which writes 128.0 outright, so a held
+key always runs.
+
 Controls:
 
 - `W/A/S/D` moves the runtime lead player relative to the current camera yaw.

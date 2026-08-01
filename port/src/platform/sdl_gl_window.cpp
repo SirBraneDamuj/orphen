@@ -4,6 +4,7 @@
 #include <SDL_opengl.h>
 
 #include "ported/camera/original_field_camera.h"
+#include "ported/input/original_analog_stick.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,12 +26,8 @@ namespace orphen::port
       return (positivePressed ? 1.0f : 0.0f) - (negativePressed ? 1.0f : 0.0f);
     }
 
-    // fGpffffb678 is compared against 40.0 by the camera and 100.0 by the
-    // grounded player state, and FUN_00253488 multiplies by it directly, so
-    // full stick deflection is 128.
+    // FUN_0023b5d8's digital branch writes 0x43000000 into DAT_003555e8.
     constexpr float kFullStickMagnitude = 128.0f;
-
-    constexpr float kStickDeadzone = 0.18f;
 
     float axisToUnit(int rawAxis)
     {
@@ -193,16 +190,37 @@ namespace orphen::port
     bool jumpHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
     // A gamepad, when present, overrides the keyboard for movement and camera.
+    bool usingAnalogStick = false;
     auto *controller = static_cast<SDL_GameController *>(controller_);
     if (controller != nullptr && SDL_GameControllerGetAttached(controller) == SDL_TRUE)
     {
-      const float leftX = axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
-      const float leftY = axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY));
+      // Feed the raw axes through the original conversion rather than a
+      // hand-picked deadzone. FUN_0023b3f0 ignores anything below 60 of 128,
+      // which is why the character does not start moving until the stick has
+      // travelled almost halfway.
+      const float rawRight = axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX)) *
+                             orphen::ported::input::kRawAxisRange;
+      const float rawUp = -axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY)) *
+                          orphen::ported::input::kRawAxisRange; // SDL reports +Y downward.
 
-      if (std::sqrt(leftX * leftX + leftY * leftY) > kStickDeadzone)
+      const auto stick = orphen::ported::input::FUN_0023b3f0_read_analog_stick(rawRight, rawUp);
+      if (stick.magnitude > 0.0f)
       {
-        input.moveX = leftX;
-        input.moveY = -leftY; // SDL reports +Y downward.
+        usingAnalogStick = true;
+        input.stickMagnitude = stick.magnitude;
+        input.stickAngle = stick.angle;
+        input.moveX = std::cos(stick.angle);
+        input.moveY = std::sin(stick.angle);
+      }
+      else
+      {
+        // Inside the deadzone the original reports a hard zero on both, and
+        // FUN_00256bb8 compares fGpffffb678 against 0.0 exactly.
+        usingAnalogStick = true;
+        input.stickMagnitude = 0.0f;
+        input.stickAngle = 0.0f;
+        input.moveX = 0.0f;
+        input.moveY = 0.0f;
       }
 
       cameraLeftHeld = cameraLeftHeld ||
@@ -233,21 +251,24 @@ namespace orphen::port
     input.rawPressedPad = static_cast<std::uint16_t>(input.rawHeldPad & ~previousRawHeldPad_);
     previousRawHeldPad_ = input.rawHeldPad;
 
-    // fGpffffb674 / fGpffffb678. The magnitude drives the camera deadzone and
-    // the walk/run split; the angle is measured so that pushing away from the
-    // camera is zero, matching how FUN_00256ab0 composes facing from the
-    // camera yaw. The exact original derivation lives in FUN_0023b5d8 and is
-    // still to be ported.
-    const float moveLength = std::sqrt(input.moveX * input.moveX + input.moveY * input.moveY);
-    if (moveLength > 0.0f)
+    if (!usingAnalogStick)
     {
-      input.stickMagnitude = std::min(moveLength, 1.0f) * kFullStickMagnitude;
-      input.stickAngle = std::atan2(input.moveX, input.moveY);
-    }
-    else
-    {
-      input.stickMagnitude = 0.0f;
-      input.stickAngle = 0.0f;
+      // Keyboard falls through the original's digital branch in FUN_0023b5d8,
+      // which writes DAT_003555e8 = 0x43000000 (128.0) outright -- a held
+      // direction on the d-pad always runs.
+      const float moveLength = std::sqrt(input.moveX * input.moveX + input.moveY * input.moveY);
+      if (moveLength > 0.0f)
+      {
+        input.stickMagnitude = kFullStickMagnitude;
+        input.stickAngle = std::atan2(input.moveY, input.moveX);
+        input.moveX /= moveLength;
+        input.moveY /= moveLength;
+      }
+      else
+      {
+        input.stickMagnitude = 0.0f;
+        input.stickAngle = 0.0f;
+      }
     }
   }
 

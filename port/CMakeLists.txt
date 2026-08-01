@@ -69,6 +69,8 @@ target_sources(orphen_port
     src/ported/player/original_player_controller.h
     src/ported/camera/original_camera_state.cpp
     src/ported/camera/original_camera_state.h
+    src/ported/input/original_analog_stick.cpp
+    src/ported/input/original_analog_stick.h
     src/ported/camera/original_field_camera.cpp
     src/ported/camera/original_field_camera.h
         src/runtime/port_runtime.cpp
