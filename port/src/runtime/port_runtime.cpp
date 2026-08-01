@@ -3,6 +3,10 @@
 #include "runtime/psm2_ground_query.h"
 
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include <algorithm>
 #include <iostream>
@@ -13,6 +17,58 @@ namespace orphen::port
   {
 
     constexpr std::uint32_t kHarnessFrameCounterAddress = 0x00001000;
+    constexpr float kRadiansToDegrees = 57.2957795f;
+
+    std::string formatNumber(float value, int precision = 2)
+    {
+      std::ostringstream stream;
+      stream << std::fixed << std::setprecision(precision) << value;
+      return stream.str();
+    }
+
+    // FUN_00256bb8 / FUN_002534d8 animation ids written into entity +0xA0.
+    const char *animationName(std::uint16_t animationId)
+    {
+      switch (animationId)
+      {
+      case orphen::ported::player::kAnimationStand: return "STAND";
+      case orphen::ported::player::kAnimationWalk: return "WALK";
+      case orphen::ported::player::kAnimationRun: return "RUN";
+      case orphen::ported::player::kAnimationJumpRise: return "RISE";
+      case orphen::ported::player::kAnimationJumpFall: return "FALL";
+      case orphen::ported::player::kAnimationLand: return "LAND";
+      case orphen::ported::player::kAnimationIdleFidget: return "FIDGET";
+      default: return "OTHER";
+      }
+    }
+
+    // Entity +0x60.
+    const char *stateName(std::uint16_t state)
+    {
+      switch (state)
+      {
+      case 0: return "IDLE";
+      case 1: return "MOVING";
+      case 2: return "AIR";
+      default: return "OTHER";
+      }
+    }
+
+    const char *cameraModeName(orphen::ported::camera::FieldCameraMode mode)
+    {
+      using Mode = orphen::ported::camera::FieldCameraMode;
+      switch (mode)
+      {
+      case Mode::None: return "AUTO";
+      case Mode::RotateNegative: return "R1";
+      case Mode::RotatePositive: return "L1";
+      case Mode::FaceTarget: return "FACE";
+      case Mode::DecayFast: return "DECAY";
+      case Mode::FixedStep: return "FIXED";
+      case Mode::EaseToGoal: return "EASE";
+      default: return "?";
+      }
+    }
 
   } // namespace
 
@@ -112,6 +168,7 @@ namespace orphen::port
       mapViewer_.setLeadPlayerView(std::nullopt);
     }
     reportLeadPlayerGroundChange();
+    updateHud(input, frameTicks);
 
     memory_.write(kHarnessFrameCounterAddress, frameCount_);
 
@@ -168,6 +225,49 @@ namespace orphen::port
               << " leading=0x" << std::hex << groundHit.leadingWord
               << " terrain=0x" << groundHit.terrainFlags << std::dec
               << (groundHit.sampledByOriginalTerrain ? " sampled" : " unsampled") << '\n';
+  }
+
+  void PortRuntime::updateHud(const InputSnapshot &input, std::uint32_t frameTicks)
+  {
+    const auto &lead = leadPlayer_.viewState();
+    std::vector<std::string> lines;
+
+    lines.push_back("ORPHEN PORT  " + mapViewer_.loadedSourceDescription() +
+                    "  FRAME " + std::to_string(frameCount_) +
+                    "  TICKS " + std::to_string(frameTicks));
+
+    lines.push_back("POS  " + formatNumber(lead.position.x) + ", " + formatNumber(lead.position.y) +
+                    ", " + formatNumber(lead.position.z) +
+                    "   FACING " + formatNumber(lead.facingRadians * kRadiansToDegrees, 1));
+
+    lines.push_back("STATE " + std::string(stateName(lead.state)) +
+                    "  ANIM " + animationName(lead.animationId) +
+                    " (" + std::to_string(lead.animationId) + ")" +
+                    "  FRM " + std::to_string(lead.substateFrame));
+
+    lines.push_back(std::string("GROUND ") + (lead.grounded ? "YES" : "NO") +
+                    "  VZ " + formatNumber(lead.verticalVelocity, 4) +
+                    "  FLAGS " + std::to_string(lead.collisionFlags));
+
+    lines.push_back("STICK " + formatNumber(input.stickMagnitude, 1) +
+                    "  GAIT " + std::string(lead.running ? "RUN" : "WALK") +
+                    "  (RUN ABOVE 100)");
+
+    lines.push_back("CAM  MODE " + std::string(cameraModeName(fieldCamera_.mode())) +
+                    "  YAW " + formatNumber(fieldCamera_.yawRadians() * kRadiansToDegrees, 1) +
+                    "  PITCH " + formatNumber(fieldCamera_.pitchRadians() * kRadiansToDegrees, 1) +
+                    "  DIST " + formatNumber(fieldCamera_.followDistance()));
+
+    if (lead.groundHit.has_value())
+    {
+      lines.push_back("TRI  PRIM " + std::to_string(lead.groundHit->primitiveIndex) +
+                      "  Z " + formatNumber(lead.groundHit->height) +
+                      "  TERRAIN " + std::to_string(lead.groundHit->terrainFlags));
+    }
+
+    lines.push_back("WASD MOVE  SPACE JUMP  J/L CAMERA  F WIRE  H HUD  R RESET");
+
+    mapViewer_.setHudLines(std::move(lines));
   }
 
   orphen::ported::camera::CameraGroundSampler PortRuntime::cameraGroundSampler()

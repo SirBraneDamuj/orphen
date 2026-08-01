@@ -154,6 +154,10 @@ namespace orphen::port
         {
           input.toggleWireframeRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_h)
+        {
+          input.toggleHudRequested = true;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
         {
           input.previousMapRequested = true;

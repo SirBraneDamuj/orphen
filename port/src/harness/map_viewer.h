@@ -2,6 +2,7 @@
 
 #include "harness/disc_resource_loader.h"
 #include "harness/scene_resource_provider.h"
+#include "harness/debug_text.h"
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
@@ -34,6 +35,8 @@ namespace orphen::harness
     void resetCamera();
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
     void render(int framebufferWidth, int framebufferHeight) const;
+    void setHudLines(std::vector<std::string> lines);
+    void toggleHud() { hudVisible_ = !hudVisible_; }
 
     orphen::ported::psm2::Psm2RuntimeState *loadedMap();
     const orphen::ported::psm2::Psm2RuntimeState *loadedMap() const;
@@ -59,6 +62,9 @@ namespace orphen::harness
     float cameraYawDegrees_ = 35.0f;
     float cameraPitchDegrees_ = -55.0f;
     orphen::ported::camera::CameraPose followCameraPose_;
+    DebugTextRenderer debugText_;
+    std::vector<std::string> hudLines_;
+    bool hudVisible_ = true;
     bool wireframe_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);

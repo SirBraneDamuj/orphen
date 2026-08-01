@@ -1,5 +1,7 @@
 #include "harness/map_viewer.h"
 
+#include <string>
+
 #include "harness/scene_resource_tree.h"
 #include "ported/psm2/decoded_psm2_loader.h"
 
@@ -564,6 +566,11 @@ namespace orphen::harness
     followCameraPose_ = pose;
   }
 
+  void MapViewer::setHudLines(std::vector<std::string> lines)
+  {
+    hudLines_ = std::move(lines);
+  }
+
   orphen::ported::psm2::Vec3 MapViewer::freeViewerMovement(float strafe, float forward) const
   {
     const auto basis = viewerGroundBasis(cameraYawDegrees_);
@@ -662,6 +669,11 @@ namespace orphen::harness
 
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
   {
+    if (input.toggleHudRequested)
+    {
+      hudVisible_ = !hudVisible_;
+    }
+
     constexpr float kPanSpeed = 0.75f;
     constexpr float kYawSpeed = 70.0f;
     constexpr float kPitchSpeed = 55.0f;
@@ -735,6 +747,11 @@ namespace orphen::harness
     glEnable(GL_DEPTH_TEST);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    if (hudVisible_)
+    {
+      debugText_.draw(framebufferWidth, framebufferHeight, hudLines_);
+    }
   }
 
   orphen::ported::psm2::Psm2RuntimeState *MapViewer::loadedMap()

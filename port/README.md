@@ -172,6 +172,20 @@ Controls:
 - `Q/E` zoom out/in in free viewer mode. The player follow camera currently uses the original normal field camera distance.
 - `R` resets the viewer camera.
 - `F` toggles wireframe.
+- `H` toggles the debug HUD.
+
+## Debug HUD
+
+`H` toggles an on-screen overlay showing position and facing, the entity `+0x60`
+state and `+0xA0` animation id with its substate frame, grounded flag and
+vertical velocity, stick magnitude with the resulting walk/run gait, camera mode
+/ yaw / pitch / distance, and the current ground triangle. There is no automated
+PCSX2 trace comparison, so this overlay plus `--frames` determinism is how
+behavior gets judged.
+
+`src/harness/debug_text.*` is a small stroke font for that overlay only. It is
+PC-only diagnostics and is unrelated to the original's text renderer
+(`FUN_002681c0` and its glyph tables), which draws through the GS.
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 

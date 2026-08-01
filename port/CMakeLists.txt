@@ -35,6 +35,8 @@ add_executable(orphen_port)
 target_sources(orphen_port
     PRIVATE
         src/main.cpp
+    src/harness/debug_text.cpp
+    src/harness/debug_text.h
     src/harness/map_viewer.cpp
     src/harness/map_viewer.h
     src/harness/disc_resource_loader.cpp

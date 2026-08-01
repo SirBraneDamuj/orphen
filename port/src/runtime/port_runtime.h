@@ -52,6 +52,7 @@ namespace orphen::port
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();
+    void updateHud(const InputSnapshot &input, std::uint32_t frameTicks);
   };
 
 } // namespace orphen::port
