@@ -29,6 +29,12 @@ namespace orphen::port
     // FUN_0023b5d8's digital branch writes 0x43000000 into DAT_003555e8.
     constexpr float kFullStickMagnitude = 128.0f;
 
+    // Raw pad face-button bits (see docs/debug_system.md and FUN_0023b5d8).
+    constexpr std::uint16_t kRawPadTriangle = 0x0010;
+    constexpr std::uint16_t kRawPadCircle = 0x0020;
+    constexpr std::uint16_t kRawPadCross = 0x0040;
+    constexpr std::uint16_t kRawPadSquare = 0x0080;
+
     float axisToUnit(int rawAxis)
     {
       return std::clamp(static_cast<float>(rawAxis) / 32767.0f, -1.0f, 1.0f);
@@ -163,10 +169,6 @@ namespace orphen::port
         {
           input.nextMapRequested = true;
         }
-        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_SPACE)
-        {
-          input.jumpRequested = true;
-        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
@@ -187,7 +189,14 @@ namespace orphen::port
     // Keyboard camera rotate maps onto the shoulder bits the original reads.
     bool cameraLeftHeld = keys[SDL_SCANCODE_J] != 0;
     bool cameraRightHeld = keys[SDL_SCANCODE_L] != 0;
-    bool jumpHeld = keys[SDL_SCANCODE_SPACE] != 0;
+    // Raw pad low byte, post-CONCAT11 inversion in FUN_0023b5d8. SDL's face
+    // buttons are positional and line up with the PS2 layout one for one, so
+    // an Xbox pad maps by position: Y is Triangle, B is Circle, A is Cross and
+    // X ("SDL Face West") is Square. Square is the jump binding.
+    bool triangleHeld = false;
+    bool circleHeld = false;
+    bool crossHeld = false;
+    bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
     // A gamepad, when present, overrides the keyboard for movement and camera.
     bool usingAnalogStick = false;
@@ -227,7 +236,10 @@ namespace orphen::port
                        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
       cameraRightHeld = cameraRightHeld ||
                         SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
-      jumpHeld = jumpHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A) != 0;
+      triangleHeld = triangleHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_Y) != 0;
+      circleHeld = circleHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B) != 0;
+      crossHeld = crossHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A) != 0;
+      squareHeld = squareHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X) != 0;
 
       if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK) != 0)
       {
@@ -243,13 +255,32 @@ namespace orphen::port
     {
       input.rawHeldPad |= orphen::ported::camera::kRawPadR1;
     }
-    if (jumpHeld)
+    if (triangleHeld)
     {
-      input.rawHeldPad |= 0x0080; // Square, the default jump binding.
+      input.rawHeldPad |= kRawPadTriangle;
+    }
+    if (circleHeld)
+    {
+      input.rawHeldPad |= kRawPadCircle;
+    }
+    if (crossHeld)
+    {
+      input.rawHeldPad |= kRawPadCross;
+    }
+    if (squareHeld)
+    {
+      input.rawHeldPad |= kRawPadSquare;
     }
 
+    // DAT_003555f6: newly pressed = held & ~previously held.
     input.rawPressedPad = static_cast<std::uint16_t>(input.rawHeldPad & ~previousRawHeldPad_);
     previousRawHeldPad_ = input.rawHeldPad;
+
+    // FUN_00256bb8 jumps on the mapped action bit 0x80, taken from the newly
+    // pressed set. Deriving it here means keyboard and pad share one path --
+    // previously the pad set the raw bit but never this flag, so jumping did
+    // not work on a controller at all.
+    input.jumpRequested = (input.rawPressedPad & kRawPadSquare) != 0;
 
     if (!usingAnalogStick)
     {

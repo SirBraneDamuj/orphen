@@ -160,7 +160,10 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
 `--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
 
 A gamepad is used when one is present: left stick moves, shoulder buttons orbit
-the camera, A jumps. The keyboard remains available as a digital fallback.
+the camera, and the face buttons map by position onto the PS2 layout, so on an
+Xbox pad Y is Triangle, B is Circle, A is Cross, and X (SDL "face west") is
+Square. Square is the jump binding, matching the PS2 game. The keyboard remains
+available as a digital fallback.
 
 The left stick goes through the ported `FUN_0023b3f0`, so it inherits the
 original's response curve: a deadzone of 60 out of 128 raw units means nothing
@@ -174,7 +177,7 @@ key always runs.
 Controls:
 
 - `W/A/S/D` moves the runtime lead player relative to the current camera yaw.
-- `Space` jumps when the lead player is grounded.
+- `Space`, or gamepad X / face west (Square), jumps when the lead player is grounded.
 - `J/L` orbits the player camera, mapped onto the original's L1/R1 raw pad bits (0x04/0x08). With no player active they rotate the free viewer camera instead.
 - `I/K` adjusts pitch in free viewer mode.
 - Left/right arrows cycle maps when running from `--disc-root`.
