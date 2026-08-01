@@ -17,9 +17,42 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages.
 
-Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The viewer uses the normal field camera defaults from `FUN_00216aa0`/`FUN_00216930` plus the normal branch's auto-focus yaw easing for its player camera.
+Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The camera is now a port of the original driver rather than a harness approximation -- see Camera below.
 
 The SCR interpreter/probe work has been removed from the normal load/update path. Script blobs can still be inspected through the scene tree, but the executable no longer runs a bootstrap SCR VM trace, mutates terrain from scripts, or installs a script-driven camera at startup. The previous PSC3 wireframe gallery was also removed from the active harness; PSC3 records are still visible in the resource tree, but they are not rendered as placeholder scene objects.
+
+## Camera
+
+`src/ported/camera/original_field_camera.*` ports `FUN_00216aa0` with the follow
+geometry from `FUN_00216968`. `PortRuntime` owns it; `MapViewer` only consumes a
+read-only pose. What it reproduces:
+
+- The derived follow geometry, which is what the original actually follows.
+  `FUN_00216968` turns distance 3.0 and pitch 21 degrees into
+  `fGpffffbaf8 = 3*cos(21) = 2.800741` horizontal trail and
+  `fGpffffbafc = 3*sin(21) - 0.2 = 0.875104` height. The resulting view pitch is
+  about -9.6 degrees, not -21; the 21 is only an input to the derivation.
+- Both rate-limited vertical follow ladders, which step in fixed increments
+  (0.01 / 0.02 / 0.04 and 0.02 / 0.03 / 0.05) and go proportional past the
+  outermost band.
+- Horizontal distance follow with the 0.016 deadzone and 0.04 / 0.08
+  accel/decel limiting, so the camera trails further while you run and closes
+  back in when you stop.
+- The six-case mode switch. L1 and R1 (raw pad 0x04 / 0x08) orbit at up to
+  8 deg/frame, ramping at 0.375 deg/frame; on release the yaw speed decays over
+  about 16 frames rather than stopping dead. Idle auto-focus eases behind the
+  player at 0.05 deg/frame up to 1.5 deg/frame.
+- The ground clamp that lifts the eye out of the floor, via the PSM2 terrain
+  query standing in for `FUN_00227798`.
+
+`bGpffffb6e0` is per-frame: `FUN_00251ed8` clears it every frame and
+`FUN_00216aa0` only raises it while a shoulder button is held, so what persists
+after a release is `cGpffffad08` plus the yaw speed accumulator.
+
+Not ported yet: the idle auto-camera handoff at `uGpffffad0c > 0x1c200`
+(reported through `idleTimedOut()`), free-look (`FUN_00218270`), the script
+camera (`FUN_00217b88`), manual modes 0x1b-0x1e (`FUN_00218710`, analyzed), and
+camera collision beyond the ground clamp.
 
 ## Timing Model
 
@@ -121,12 +154,15 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
 
 `--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
 
+A gamepad is used when one is present: left stick moves, shoulder buttons orbit
+the camera, A jumps. The keyboard remains available as a digital fallback.
+
 Controls:
 
-- `W/A/S/D` moves the runtime lead player relative to the current follow camera yaw. The follow camera keeps its target on the player and auto-rotates toward the player's observed movement direction.
+- `W/A/S/D` moves the runtime lead player relative to the current camera yaw.
 - `Space` jumps when the lead player is grounded.
-- `J/L` rotates the free viewer camera when no player is active.
-- `I/K` adjusts pitch in free viewer mode. The player follow camera currently uses the original normal field camera pitch.
+- `J/L` orbits the player camera, mapped onto the original's L1/R1 raw pad bits (0x04/0x08). With no player active they rotate the free viewer camera instead.
+- `I/K` adjusts pitch in free viewer mode.
 - Left/right arrows cycle maps when running from `--disc-root`.
 - `Q/E` zoom out/in in free viewer mode. The player follow camera currently uses the original normal field camera distance.
 - `R` resets the viewer camera.

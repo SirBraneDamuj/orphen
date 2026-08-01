@@ -1,9 +1,10 @@
 #pragma once
 
 #include "harness/disc_resource_loader.h"
-#include "platform/sdl_gl_window.h"
+#include "runtime/input_state.h"
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
+#include "ported/camera/original_field_camera.h"
 #include "runtime/ps2_memory.h"
 #include "ported/original_frame_timing.h"
 
@@ -40,12 +41,15 @@ namespace orphen::port
     Ps2Memory memory_;
     orphen::harness::MapViewer mapViewer_;
     OriginalLeadPlayer leadPlayer_;
+    orphen::ported::camera::OriginalFieldCamera fieldCamera_;
     std::uint32_t frameCount_ = 0;
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
+    float previousStickMagnitude_ = 0.0f;
 
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
+    orphen::ported::camera::CameraGroundSampler cameraGroundSampler();
   };
 
 } // namespace orphen::port

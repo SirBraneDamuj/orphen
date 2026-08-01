@@ -2,7 +2,7 @@
 
 #include "harness/disc_resource_loader.h"
 #include "harness/scene_resource_provider.h"
-#include "platform/sdl_gl_window.h"
+#include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
 #include "runtime/player_view_state.h"
@@ -25,8 +25,11 @@ namespace orphen::harness
     void loadDecodedPsm2(const std::filesystem::path &path);
     void loadDiscSceneMap(const std::filesystem::path &discRoot, McbSceneSelection selection);
     bool cycleDiscScene(int direction);
-    void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView, float deltaSeconds = 0.0f);
-    orphen::ported::psm2::Vec3 cameraRelativeMovement(float strafe, float forward) const;
+    void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
+    void setFollowCameraPose(const orphen::ported::camera::CameraPose &pose);
+    orphen::ported::psm2::Vec3 freeViewerMovement(float strafe, float forward) const;
+    bool hasLeadPlayerView() const { return leadPlayerView_.has_value(); }
+    float freeViewerYawDegrees() const { return cameraYawDegrees_; }
     void printLoadedSceneTree(std::ostream &output) const;
     void resetCamera();
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
@@ -55,11 +58,7 @@ namespace orphen::harness
     float cameraDistance_ = 12.0f;
     float cameraYawDegrees_ = 35.0f;
     float cameraPitchDegrees_ = -55.0f;
-    orphen::ported::camera::OriginalCameraState followCameraState_;
-    std::optional<orphen::ported::psm2::Vec3> previousLeadPlayerPosition_;
-    float followCameraYawRadians_ = 0.0f;
-    float followCameraYawVelocityRadians_ = 0.0f;
-    bool followCameraInitialized_ = false;
+    orphen::ported::camera::CameraPose followCameraPose_;
     bool wireframe_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);

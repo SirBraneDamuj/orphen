@@ -23,12 +23,6 @@ namespace orphen::harness
 
     constexpr double kPi = 3.14159265358979323846;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
-    constexpr float kOriginalFramesPerSecond = 60.0f;
-    constexpr float kNormalCameraAutoYawGainPerSecond = 0.125f * kOriginalFramesPerSecond;
-    constexpr float kNormalCameraAutoYawAccelerationPerSecond =
-        0.000872664445f * kOriginalFramesPerSecond * kOriginalFramesPerSecond; // fGpffff82d4.
-    constexpr float kNormalCameraAutoYawMaxSpeedPerSecond =
-        0.0261799339f * kOriginalFramesPerSecond; // fGpffff82d8.
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -85,58 +79,6 @@ namespace orphen::harness
       const float yawRadians = yawDegrees * static_cast<float>(kPi / 180.0);
       return {{std::cos(yawRadians), 0.0f, -std::sin(yawRadians)},
               {std::sin(yawRadians), 0.0f, std::cos(yawRadians)}};
-    }
-
-    float normalizeRadians(float angle)
-    {
-      return std::remainder(angle, static_cast<float>(kPi * 2.0));
-    }
-
-    float approach(float current, float target, float maxDelta)
-    {
-      if (current < target)
-      {
-        return std::min(current + maxDelta, target);
-      }
-      return std::max(current - maxDelta, target);
-    }
-
-    void advanceAutoFocusYaw(float &yawRadians,
-                             float &yawVelocityRadians,
-                             float desiredYawRadians,
-                             float deltaSeconds)
-    {
-      const float angleError = normalizeRadians(desiredYawRadians - yawRadians);
-      const float targetVelocity = std::clamp(angleError * kNormalCameraAutoYawGainPerSecond,
-                                              -kNormalCameraAutoYawMaxSpeedPerSecond,
-                                              kNormalCameraAutoYawMaxSpeedPerSecond);
-      yawVelocityRadians = approach(yawVelocityRadians,
-                                    targetVelocity,
-                                    kNormalCameraAutoYawAccelerationPerSecond * deltaSeconds);
-
-      float yawStep = yawVelocityRadians * deltaSeconds;
-      if (std::fabs(yawStep) > std::fabs(angleError))
-      {
-        yawStep = angleError;
-        yawVelocityRadians = 0.0f;
-      }
-      yawRadians = normalizeRadians(yawRadians + yawStep);
-    }
-
-    void dampAutoFocusYaw(float &yawVelocityRadians, float deltaSeconds)
-    {
-      yawVelocityRadians = approach(yawVelocityRadians,
-                                    0.0f,
-                                    kNormalCameraAutoYawAccelerationPerSecond * deltaSeconds);
-    }
-
-    orphen::ported::psm2::Vec3 originalCameraRelativeMovement(float yawRadians, float strafe, float forward)
-    {
-      const orphen::ported::psm2::Vec3 forwardBasis{std::cos(yawRadians), std::sin(yawRadians), 0.0f};
-      const orphen::ported::psm2::Vec3 rightBasis{std::sin(yawRadians), -std::cos(yawRadians), 0.0f};
-      return {rightBasis.x * strafe + forwardBasis.x * forward,
-              rightBasis.y * strafe + forwardBasis.y * forward,
-              0.0f};
     }
 
     void setPerspective(int framebufferWidth, int framebufferHeight, float verticalFovDegrees, float farPlaneHint)
@@ -605,60 +547,25 @@ namespace orphen::harness
     resetCamera();
   }
 
-  void MapViewer::setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView, float deltaSeconds)
+  void MapViewer::setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView)
   {
     if (!playerView.has_value())
     {
       leadPlayerView_.reset();
-      previousLeadPlayerPosition_.reset();
-      followCameraYawVelocityRadians_ = 0.0f;
-      followCameraInitialized_ = false;
       return;
     }
 
-    const auto previousLeadPosition = previousLeadPlayerPosition_;
     leadPlayerView_ = std::move(playerView);
-    const auto &leadPosition = leadPlayerView_->position;
-    cameraTarget_ = toViewerSpace(leadPosition);
-
-    if (!followCameraInitialized_)
-    {
-      followCameraState_.setNormalFieldFollow(leadPosition, followCameraYawRadians_);
-      previousLeadPlayerPosition_ = leadPosition;
-      followCameraInitialized_ = true;
-      return;
-    }
-
-    if (deltaSeconds > 0.0f && previousLeadPosition.has_value())
-    {
-      constexpr float kLeadMovementEpsilonSquared = 0.000001f;
-      const float deltaX = leadPosition.x - previousLeadPosition->x;
-      const float deltaY = leadPosition.y - previousLeadPosition->y;
-      const float movementSquared = deltaX * deltaX + deltaY * deltaY;
-      if (movementSquared > kLeadMovementEpsilonSquared)
-      {
-        advanceAutoFocusYaw(followCameraYawRadians_,
-                            followCameraYawVelocityRadians_,
-                            std::atan2(deltaY, deltaX),
-                            deltaSeconds);
-      }
-      else
-      {
-        dampAutoFocusYaw(followCameraYawVelocityRadians_, deltaSeconds);
-      }
-    }
-
-    previousLeadPlayerPosition_ = leadPosition;
-    followCameraState_.setNormalFieldFollow(leadPosition, followCameraYawRadians_);
+    cameraTarget_ = toViewerSpace(leadPlayerView_->position);
   }
 
-  orphen::ported::psm2::Vec3 MapViewer::cameraRelativeMovement(float strafe, float forward) const
+  void MapViewer::setFollowCameraPose(const orphen::ported::camera::CameraPose &pose)
   {
-    if (leadPlayerView_.has_value())
-    {
-      return originalCameraRelativeMovement(followCameraYawRadians_, strafe, forward);
-    }
+    followCameraPose_ = pose;
+  }
 
+  orphen::ported::psm2::Vec3 MapViewer::freeViewerMovement(float strafe, float forward) const
+  {
     const auto basis = viewerGroundBasis(cameraYawDegrees_);
     const float viewerX = basis.right.x * strafe + basis.forward.x * forward;
     const float viewerZ = basis.right.z * strafe + basis.forward.z * forward;
@@ -750,11 +657,7 @@ namespace orphen::harness
 
     cameraYawDegrees_ = 35.0f;
     cameraPitchDegrees_ = -55.0f;
-    followCameraState_ = {};
-    previousLeadPlayerPosition_.reset();
-    followCameraYawRadians_ = 0.0f;
-    followCameraYawVelocityRadians_ = 0.0f;
-    followCameraInitialized_ = false;
+    followCameraPose_ = {};
   }
 
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
@@ -799,9 +702,8 @@ namespace orphen::harness
     float renderCameraDistance = cameraDistance_;
     if (leadPlayerView_.has_value())
     {
-      const auto &pose = followCameraState_.pose();
-      const auto viewerEye = toViewerSpace(pose.eye);
-      const auto viewerTarget = toViewerSpace(pose.target);
+      const auto viewerEye = toViewerSpace(followCameraPose_.eye);
+      const auto viewerTarget = toViewerSpace(followCameraPose_.target);
       renderCameraDistance = viewerDistance(viewerEye, viewerTarget);
       setPerspective(framebufferWidth, framebufferHeight, 60.0f, renderCameraDistance * 8.0f);
       applyLookAtCamera(viewerEye, viewerTarget);

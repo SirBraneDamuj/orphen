@@ -1,5 +1,9 @@
 #pragma once
 
+#include "runtime/input_state.h"
+
+#include <cstdint>
+
 namespace orphen::port
 {
 
@@ -8,21 +12,6 @@ namespace orphen::port
     const char *title;
     int width;
     int height;
-  };
-
-  struct InputSnapshot
-  {
-    bool quitRequested = false;
-    bool resetRequested = false;
-    bool toggleWireframeRequested = false;
-    bool previousMapRequested = false;
-    bool nextMapRequested = false;
-    bool jumpRequested = false;
-    float moveX = 0.0f;
-    float moveY = 0.0f;
-    float rotateX = 0.0f;
-    float rotateY = 0.0f;
-    float zoom = 0.0f;
   };
 
   class SdlGlWindow
@@ -43,6 +32,8 @@ namespace orphen::port
 
   private:
     void *window_ = nullptr;
+    void *controller_ = nullptr;
+    std::uint16_t previousRawHeldPad_ = 0;
     void *glContext_ = nullptr;
     int width_ = 0;
     int height_ = 0;

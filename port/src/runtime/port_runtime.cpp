@@ -1,5 +1,9 @@
 #include "runtime/port_runtime.h"
 
+#include "runtime/psm2_ground_query.h"
+
+#include <cmath>
+
 #include <algorithm>
 #include <iostream>
 
@@ -68,9 +72,33 @@ namespace orphen::port
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
     {
-      const auto movementRequest = mapViewer_.cameraRelativeMovement(input.moveX, input.moveY);
+      // The player moves relative to the camera's yaw from the previous frame,
+      // then the camera follows the new position -- the same one-frame ordering
+      // the original has, since FUN_00251ed8 runs before FUN_00216aa0.
+      const float cameraYaw = fieldCamera_.yawRadians();
+      const orphen::ported::psm2::Vec3 forwardBasis{std::cos(cameraYaw), std::sin(cameraYaw), 0.0f};
+      const orphen::ported::psm2::Vec3 rightBasis{std::sin(cameraYaw), -std::cos(cameraYaw), 0.0f};
+      const orphen::ported::psm2::Vec3 movementRequest{
+          rightBasis.x * input.moveX + forwardBasis.x * input.moveY,
+          rightBasis.y * input.moveX + forwardBasis.y * input.moveY,
+          0.0f};
+
       leadPlayer_.update(frameTicks, movementRequest, input.jumpRequested, loadedMap);
-      mapViewer_.setLeadPlayerView(leadPlayer_.viewState(), stepSeconds);
+
+      const auto &leadState = leadPlayer_.viewState();
+      orphen::ported::camera::FieldCameraInput cameraInput;
+      cameraInput.rawHeldPad = input.rawHeldPad;
+      cameraInput.rawPressedPad = input.rawPressedPad;
+      cameraInput.stickAngle = input.stickAngle;
+      cameraInput.stickMagnitude = input.stickMagnitude;
+      cameraInput.previousStickMagnitude = previousStickMagnitude_;
+      cameraInput.autoFocusGoalYaw = leadState.facingRadians;
+      previousStickMagnitude_ = input.stickMagnitude;
+
+      fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
+
+      mapViewer_.setLeadPlayerView(leadState);
+      mapViewer_.setFollowCameraPose(fieldCamera_.pose());
     }
     else
     {
@@ -100,7 +128,11 @@ namespace orphen::port
     }
 
     leadPlayer_.resetToMap(*loadedMap);
+    previousStickMagnitude_ = 0.0f;
+    fieldCamera_.FUN_00216930_install_normal_field_defaults();
+    fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
     mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
+    mapViewer_.setFollowCameraPose(fieldCamera_.pose());
   }
 
   void PortRuntime::reportLeadPlayerGroundChange()
@@ -129,6 +161,26 @@ namespace orphen::port
               << " leading=0x" << std::hex << groundHit.leadingWord
               << " terrain=0x" << groundHit.terrainFlags << std::dec
               << (groundHit.sampledByOriginalTerrain ? " sampled" : " unsampled") << '\n';
+  }
+
+  orphen::ported::camera::CameraGroundSampler PortRuntime::cameraGroundSampler()
+  {
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap == nullptr)
+    {
+      return {};
+    }
+
+    // FUN_00227798, used by FUN_00216aa0 to keep the eye out of the floor.
+    return [loadedMap](float x, float y, float z) -> std::optional<float>
+    {
+      const auto hit = queryPsm2GroundAt(*loadedMap, x, y, z);
+      if (!hit.has_value())
+      {
+        return std::nullopt;
+      }
+      return hit->height;
+    };
   }
 
 } // namespace orphen::port

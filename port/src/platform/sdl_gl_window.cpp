@@ -3,6 +3,10 @@
 #include <SDL.h>
 #include <SDL_opengl.h>
 
+#include "ported/camera/original_field_camera.h"
+
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -21,14 +25,38 @@ namespace orphen::port
       return (positivePressed ? 1.0f : 0.0f) - (negativePressed ? 1.0f : 0.0f);
     }
 
+    // fGpffffb678 is compared against 40.0 by the camera and 100.0 by the
+    // grounded player state, and FUN_00253488 multiplies by it directly, so
+    // full stick deflection is 128.
+    constexpr float kFullStickMagnitude = 128.0f;
+
+    constexpr float kStickDeadzone = 0.18f;
+
+    float axisToUnit(int rawAxis)
+    {
+      return std::clamp(static_cast<float>(rawAxis) / 32767.0f, -1.0f, 1.0f);
+    }
+
   } // namespace
 
   SdlGlWindow::SdlGlWindow(WindowConfig config)
       : width_(config.width), height_(config.height)
   {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0)
     {
       throw sdlError("SDL_Init failed");
+    }
+
+    for (int joystickIndex = 0; joystickIndex < SDL_NumJoysticks(); ++joystickIndex)
+    {
+      if (SDL_IsGameController(joystickIndex) == SDL_TRUE)
+      {
+        controller_ = SDL_GameControllerOpen(joystickIndex);
+        if (controller_ != nullptr)
+        {
+          break;
+        }
+      }
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -87,6 +115,11 @@ namespace orphen::port
     if (window_ != nullptr)
     {
       SDL_DestroyWindow(static_cast<SDL_Window *>(window_));
+    }
+
+    if (controller_ != nullptr)
+    {
+      SDL_GameControllerClose(static_cast<SDL_GameController *>(controller_));
     }
 
     SDL_Quit();
@@ -149,6 +182,69 @@ namespace orphen::port
     input.rotateX = keyAxis(keys[SDL_SCANCODE_J] != 0, keys[SDL_SCANCODE_L] != 0);
     input.rotateY = keyAxis(keys[SDL_SCANCODE_K] != 0, keys[SDL_SCANCODE_I] != 0);
     input.zoom = keyAxis(keys[SDL_SCANCODE_Q] != 0, keys[SDL_SCANCODE_E] != 0);
+
+    // Keyboard camera rotate maps onto the shoulder bits the original reads.
+    bool cameraLeftHeld = keys[SDL_SCANCODE_J] != 0;
+    bool cameraRightHeld = keys[SDL_SCANCODE_L] != 0;
+    bool jumpHeld = keys[SDL_SCANCODE_SPACE] != 0;
+
+    // A gamepad, when present, overrides the keyboard for movement and camera.
+    auto *controller = static_cast<SDL_GameController *>(controller_);
+    if (controller != nullptr && SDL_GameControllerGetAttached(controller) == SDL_TRUE)
+    {
+      const float leftX = axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
+      const float leftY = axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY));
+
+      if (std::sqrt(leftX * leftX + leftY * leftY) > kStickDeadzone)
+      {
+        input.moveX = leftX;
+        input.moveY = -leftY; // SDL reports +Y downward.
+      }
+
+      cameraLeftHeld = cameraLeftHeld ||
+                       SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
+      cameraRightHeld = cameraRightHeld ||
+                        SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+      jumpHeld = jumpHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A) != 0;
+
+      if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK) != 0)
+      {
+        input.rawHeldPad |= orphen::ported::camera::kRawPadR3;
+      }
+    }
+
+    if (cameraLeftHeld)
+    {
+      input.rawHeldPad |= orphen::ported::camera::kRawPadL1;
+    }
+    if (cameraRightHeld)
+    {
+      input.rawHeldPad |= orphen::ported::camera::kRawPadR1;
+    }
+    if (jumpHeld)
+    {
+      input.rawHeldPad |= 0x0080; // Square, the default jump binding.
+    }
+
+    input.rawPressedPad = static_cast<std::uint16_t>(input.rawHeldPad & ~previousRawHeldPad_);
+    previousRawHeldPad_ = input.rawHeldPad;
+
+    // fGpffffb674 / fGpffffb678. The magnitude drives the camera deadzone and
+    // the walk/run split; the angle is measured so that pushing away from the
+    // camera is zero, matching how FUN_00256ab0 composes facing from the
+    // camera yaw. The exact original derivation lives in FUN_0023b5d8 and is
+    // still to be ported.
+    const float moveLength = std::sqrt(input.moveX * input.moveX + input.moveY * input.moveY);
+    if (moveLength > 0.0f)
+    {
+      input.stickMagnitude = std::min(moveLength, 1.0f) * kFullStickMagnitude;
+      input.stickAngle = std::atan2(input.moveX, input.moveY);
+    }
+    else
+    {
+      input.stickMagnitude = 0.0f;
+      input.stickAngle = 0.0f;
+    }
   }
 
   void SdlGlWindow::beginFrame(float red, float green, float blue)

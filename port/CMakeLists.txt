@@ -67,11 +67,14 @@ target_sources(orphen_port
     src/ported/player/original_player_controller.h
     src/ported/camera/original_camera_state.cpp
     src/ported/camera/original_camera_state.h
+    src/ported/camera/original_field_camera.cpp
+    src/ported/camera/original_field_camera.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h
         src/runtime/original_lead_player.cpp
         src/runtime/original_lead_player.h
         src/runtime/player_view_state.h
+        src/runtime/input_state.h
         src/runtime/psm2_ground_query.cpp
         src/runtime/psm2_ground_query.h
         src/runtime/ps2_memory.h
