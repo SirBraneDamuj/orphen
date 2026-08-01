@@ -126,14 +126,17 @@ namespace orphen::ported::player
 
     OriginalLeadEntity entity_;
 
+    // cGpffffb6e1 == 0x1D. Only in that camera sub-mode does FUN_00256ab0 ease
+    // facing through FUN_0023a320; every other path assigns it outright.
+    bool input0x1dTurnSmoothing_ = false;
+
     void FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate);
     void FUN_00252d88_return_to_idle_state();
     void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00253468_finish_landing();
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
-    void FUN_00256ab0_apply_movement_impulse(std::uint32_t frameTicks,
-                                             float movementStep,
+    void FUN_00256ab0_apply_movement_impulse(float movementStep,
                                              const orphen::ported::psm2::Vec3 &cameraRelativeMove);
     OriginalTerrainQuery terrainQueryForEntity() const;
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,

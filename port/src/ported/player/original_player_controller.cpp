@@ -15,7 +15,7 @@ namespace orphen::ported::player
     constexpr float kOriginalWalkStepPerFrame = 0.0230000000f;  // fGpffff8a50.
     constexpr float kOriginalRunStickThreshold = 100.0f;        // FUN_00256bb8.
     constexpr float kOriginalFallHeight = 0.370000005f;         // fGpffff8a48.
-    constexpr float kOriginalTurnRate = 0.0523598790f;          // fGpffff8a40 band; 3 deg/frame.
+    constexpr float kOriginal0x1dTurnRate = 0.069813155f;       // fGpffff8a40, 4 deg; camera sub-mode 0x1D only.
     constexpr float kOriginalAirControlUnit = 1.22070314e-05f;  // DAT_00352878.
     constexpr float kOriginalFullStickMagnitude = 128.0f;       // DAT_003555e8 at full deflection.
     constexpr float kOriginalJumpVelocity = 0.0529999994f;      // DAT_0035287c/DAT_00355000.
@@ -222,8 +222,7 @@ namespace orphen::ported::player
     const float speed = entity_.running ? kOriginalRunStepPerFrame : kOriginalWalkStepPerFrame;
 
     // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * speed * 0.03125, entity).
-    FUN_00256ab0_apply_movement_impulse(frameTicks,
-                                        orphen::ported::movementScaleForFrameTicks(frameTicks) * speed,
+    FUN_00256ab0_apply_movement_impulse(orphen::ported::movementScaleForFrameTicks(frameTicks) * speed,
                                         input.cameraRelativeMove);
 
     entity_.animationA0 = entity_.running ? kAnimationRun : kAnimationWalk;
@@ -306,14 +305,12 @@ namespace orphen::ported::player
       // FUN_00253488: FUN_00256ab0(DAT_003555bc * DAT_003555e8 * DAT_00352878),
       // where DAT_003555e8 is the analog magnitude.
       const float magnitude = input.stickMagnitude > 0.0f ? input.stickMagnitude : kOriginalFullStickMagnitude;
-      FUN_00256ab0_apply_movement_impulse(frameTicks,
-                                          static_cast<float>(frameTicks) * magnitude * kOriginalAirControlUnit,
+      FUN_00256ab0_apply_movement_impulse(static_cast<float>(frameTicks) * magnitude * kOriginalAirControlUnit,
                                           input.cameraRelativeMove);
     }
   }
 
-  void OriginalPlayerController::FUN_00256ab0_apply_movement_impulse(std::uint32_t frameTicks,
-                                                                     float movementStep,
+  void OriginalPlayerController::FUN_00256ab0_apply_movement_impulse(float movementStep,
                                                                      const orphen::ported::psm2::Vec3 &cameraRelativeMove)
   {
     const float movementMagnitude = horizontalMagnitude(cameraRelativeMove);
@@ -324,19 +321,24 @@ namespace orphen::ported::player
 
     const float goalFacing = std::atan2(cameraRelativeMove.y, cameraRelativeMove.x);
 
-    // The original turns toward the goal through FUN_0023a320 rather than
-    // snapping. It composes the goal from the camera yaw globals
-    // (fGpffffb0a4 + fGpffffb674 - fGpffff8a44); here the caller has already
-    // rotated the stick into world space, so the goal is taken from that.
-    const float maxTurn = kOriginalTurnRate * orphen::ported::movementScaleForFrameTicks(frameTicks);
-    const float turnDelta = shortestAngleDelta(entity_.facingRadians5c, goalFacing);
-    if (turnDelta > maxTurn)
+    // FUN_00256ab0 assigns facing DIRECTLY in the normal case:
+    //
+    //   else { fVar1 = (fGpffffb0a4 + fGpffffb674) - fGpffff8a44; }
+    //   *(param_2 + 0x5c) = FUN_00216690(fVar1);
+    //
+    // There is no rate limit -- the character turns instantly, which is what
+    // makes a stick reversal snap. The FUN_0023a320 lerp in that function is
+    // reached only when cGpffffb6e1 == 0x1D, one specific camera sub-mode, and
+    // even there the rate is scaled by ABS(cos(stickAngle)) * fGpffff8a40.
+    //
+    // The caller has already rotated the stick into world space, so the goal
+    // stands in for (fGpffffb0a4 + fGpffffb674 - fGpffff8a44).
+    if (input0x1dTurnSmoothing_)
     {
-      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c + maxTurn);
-    }
-    else if (turnDelta < -maxTurn)
-    {
-      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c - maxTurn);
+      const float maxTurn = kOriginal0x1dTurnRate * std::abs(std::cos(goalFacing));
+      const float turnDelta = shortestAngleDelta(entity_.facingRadians5c, goalFacing);
+      const float step = std::clamp(turnDelta, -maxTurn, maxTurn);
+      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c + step);
     }
     else
     {
