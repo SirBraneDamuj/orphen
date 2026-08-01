@@ -17,7 +17,7 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages.
 
-Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The camera is now a port of the original driver rather than a harness approximation -- see Camera below.
+Runtime update owns an original-shaped lead player entity that runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The camera is now a port of the original driver rather than a harness approximation -- see Camera below.
 
 The SCR interpreter/probe work has been removed from the normal load/update path. Script blobs can still be inspected through the scene tree, but the executable no longer runs a bootstrap SCR VM trace, mutates terrain from scripts, or installs a script-driven camera at startup. The previous PSC3 wireframe gallery was also removed from the active harness; PSC3 records are still visible in the resource tree, but they are not rendered as placeholder scene objects.
 
@@ -131,6 +131,11 @@ Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1
 ```sh
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
 ```
+
+The player spawns on the walkable triangle nearest the map's horizontal centre.
+The original places it from the scene's entity descriptors at `DAT_003556d8`,
+which `FUN_00211230` turns into runtime objects; that is not ported, and world
+origin is often not over terrain at all. Override with `--spawn x,y,z`.
 
 To validate the loader without opening a window:
 

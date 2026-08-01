@@ -19,6 +19,7 @@ namespace orphen::port
   void PortRuntime::initialize(const PortRuntimeConfig &config)
   {
     reset();
+    spawnOverride_ = config.spawnOverride;
 
     if (!config.decodedPsm2Path.empty())
     {
@@ -44,6 +45,12 @@ namespace orphen::port
                 << " triangles=" << stats.triangleCount
                 << " skipped=" << stats.skippedPrimitiveCount
                 << " textures=" << mapViewer_.loadedTexturePageCount() << '\n';
+
+      const auto &leadState = leadPlayer_.viewState();
+      std::cout << "[player] spawn=(" << leadState.position.x << ", " << leadState.position.y
+                << ", " << leadState.position.z << ")"
+                << (config.spawnOverride.has_value() ? " (--spawn)" : " (map centre)")
+                << " grounded=" << (leadState.grounded ? 1 : 0) << '\n';
     }
   }
 
@@ -127,7 +134,7 @@ namespace orphen::port
       return;
     }
 
-    leadPlayer_.resetToMap(*loadedMap);
+    leadPlayer_.resetToMap(*loadedMap, spawnOverride_);
     previousStickMagnitude_ = 0.0f;
     fieldCamera_.FUN_00216930_install_normal_field_defaults();
     fieldCamera_.snapToTarget(leadPlayer_.viewState().position);

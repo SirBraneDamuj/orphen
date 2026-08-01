@@ -78,6 +78,7 @@ namespace orphen::ported::player
   {
   public:
     void resetAtOrigin(const OriginalTerrainSampler &terrainSampler);
+    void resetAt(const orphen::ported::psm2::Vec3 &spawn, const OriginalTerrainSampler &terrainSampler);
 
     // frameTicks is DAT_003555bc: elapsed time in units of 0x20 per 60 Hz frame.
     // See ported/original_frame_timing.h.

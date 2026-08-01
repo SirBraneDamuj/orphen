@@ -70,7 +70,16 @@ namespace orphen::ported::player
 
   void OriginalPlayerController::resetAtOrigin(const OriginalTerrainSampler &terrainSampler)
   {
+    resetAt({}, terrainSampler);
+  }
+
+  void OriginalPlayerController::resetAt(const orphen::ported::psm2::Vec3 &spawn,
+                                         const OriginalTerrainSampler &terrainSampler)
+  {
     entity_ = {};
+    entity_.positionX20 = spawn.x;
+    entity_.positionZ24 = spawn.y;
+    entity_.positionY28 = spawn.z;
     entity_.verticalAcceleration48 = kOriginalGravity;
     entity_.radius54 = 0.35f;
     entity_.height58 = 1.25f;

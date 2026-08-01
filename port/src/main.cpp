@@ -60,6 +60,27 @@ namespace
         config.hasDiscScene = true;
         continue;
       }
+      if (argument == "--spawn")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--spawn requires x,y,z");
+        }
+        const std::string value = argv[++argumentIndex];
+        const std::size_t firstComma = value.find(',');
+        const std::size_t secondComma = firstComma == std::string::npos ? std::string::npos
+                                                                       : value.find(',', firstComma + 1);
+        if (firstComma == std::string::npos || secondComma == std::string::npos)
+        {
+          throw std::runtime_error("--spawn expects x,y,z");
+        }
+        orphen::ported::psm2::Vec3 spawn;
+        spawn.x = std::stof(value.substr(0, firstComma));
+        spawn.y = std::stof(value.substr(firstComma + 1, secondComma - firstComma - 1));
+        spawn.z = std::stof(value.substr(secondComma + 1));
+        config.spawnOverride = spawn;
+        continue;
+      }
       if (argument == "--load-only")
       {
         config.loadOnly = true;

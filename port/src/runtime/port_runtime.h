@@ -25,6 +25,7 @@ namespace orphen::port
     bool loadOnly = false;
     bool printSceneTree = false;
     std::uint32_t headlessFrameCount = 0;
+    std::optional<orphen::ported::psm2::Vec3> spawnOverride;
   };
 
   class PortRuntime
@@ -45,6 +46,7 @@ namespace orphen::port
     std::uint32_t frameCount_ = 0;
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
+    std::optional<orphen::ported::psm2::Vec3> spawnOverride_;
     float previousStickMagnitude_ = 0.0f;
 
     void resetLeadPlayerForLoadedMap();
