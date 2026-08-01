@@ -11,14 +11,45 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 - `src/platform/` - SDL window, input, OpenGL context, frame presentation.
 - `src/runtime/` - portable game/runtime state that should eventually host analyzed systems from `../analyzed/`.
 - `src/runtime/ps2_memory.h` - a small fake EE RAM helper for systems that still depend on PS2-style absolute addresses.
+- `attic/` - written but deliberately disconnected from the build. Nothing in `src/` includes it and `CMakeLists.txt` does not reference it. See `attic/README.md`.
 
 ## Current Milestone
 
 The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages.
 
-Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00227390`, `FUN_00227840`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The viewer uses the normal field camera defaults from `FUN_00216aa0`/`FUN_00216930` plus the normal branch's auto-focus yaw easing for its player camera.
+Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The viewer uses the normal field camera defaults from `FUN_00216aa0`/`FUN_00216930` plus the normal branch's auto-focus yaw easing for its player camera.
 
 The SCR interpreter/probe work has been removed from the normal load/update path. Script blobs can still be inspected through the scene tree, but the executable no longer runs a bootstrap SCR VM trace, mutates terrain from scripts, or installs a script-driven camera at startup. The previous PSC3 wireframe gallery was also removed from the active harness; PSC3 records are still visible in the resource tree, but they are not rendered as placeholder scene objects.
+
+## Timing Model
+
+The simulation runs on a fixed 60 Hz step, decoupled from the render rate. `main`
+accumulates wall-clock time and calls `PortRuntime::update` once per whole step,
+capping at 5 steps to skip rather than spiral after a stall. Edge-triggered input
+(jump, map cycle, wireframe) fires on exactly one step per render frame.
+
+This matters because every ported constant is per-frame, not per-second, and
+because state counters such as the entity `+0xA8` substate frame advance once per
+update. The previous wall-clock scaling changed the 4-frame jump startup from
+66 ms to 27 ms on a 144 Hz display.
+
+The original is not literally fixed-step either. `FUN_002000c0` recomputes
+`DAT_003555bc` every frame from the EE performance counter, rounds it to whole
+60 Hz frames at `0x20` ticks each, and clamps it to `[0x20, 0x80]`:
+
+```c
+DAT_003555bc = (PCR0 << 5) / 0x4b125c + 0x10U & 0xffffffe0;
+```
+
+Both axes scale by it — horizontal as `iGpffffb64c * fGpffff8a4c * 0.03125`
+(`FUN_00256bb8`) and vertical as `dt = (float)DAT_003555bc * 0.125` feeding
+`+0x38 += v*dt - (g*dt)*dt*0.5; v -= g*dt` (`FUN_002262c0`). So the tick count is
+carried through the port as a parameter (`ported/original_frame_timing.h`) rather
+than folded into the constants, and the harness passes the nominal `0x20`. A later
+slice can reproduce dropped-frame behavior by widening the tick count, which is
+what the original does — one longer update, not extra sub-steps.
+
+`--frames N` is exactly deterministic: two runs produce byte-identical output.
 
 ## Build
 

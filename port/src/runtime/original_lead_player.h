@@ -4,6 +4,8 @@
 #include "ported/psm2/psm2_runtime.h"
 #include "runtime/player_view_state.h"
 
+#include <cstdint>
+
 namespace orphen::port
 {
 
@@ -11,7 +13,7 @@ namespace orphen::port
   {
   public:
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map);
-    void update(float deltaSeconds,
+    void update(std::uint32_t frameTicks,
                 const orphen::ported::psm2::Vec3 &movementRequest,
                 bool jumpRequested,
                 const orphen::ported::psm2::Psm2RuntimeState *map);

@@ -1,5 +1,7 @@
 #include "ported/player/original_player_controller.h"
 
+#include "ported/original_frame_timing.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -9,12 +11,11 @@ namespace orphen::ported::player
   namespace
   {
 
-    constexpr float kOriginalFramesPerSecond = 60.0f;
-    constexpr float kOriginalNominalFrameTicks = 32.0f;
-    constexpr float kOriginalRunStepPerFrame = 0.0450000018f; // fGpffff8a4c.
-    constexpr float kOriginalAirControlStepPerFrame = kOriginalNominalFrameTicks * 128.0f * 1.22070314e-05f; // DAT_00352878 at full stick.
-    constexpr float kOriginalJumpVelocity = 0.0529999994f; // DAT_0035287c/DAT_00355000.
-    constexpr float kOriginalGravity = 0.000750000007f; // JUMP TEST G_FORCE 00075 at x100000 scale.
+    constexpr float kOriginalRunStepPerFrame = 0.0450000018f;   // fGpffff8a4c.
+    constexpr float kOriginalAirControlUnit = 1.22070314e-05f;  // DAT_00352878.
+    constexpr float kOriginalFullStickMagnitude = 128.0f;       // DAT_003555e8 at full deflection.
+    constexpr float kOriginalJumpVelocity = 0.0529999994f;      // DAT_0035287c/DAT_00355000.
+    constexpr float kOriginalGravity = 0.000750000007f;         // JUMP TEST G_FORCE 00075 at x100000 scale.
     constexpr float kLandingTolerance = 0.05f;
     constexpr float kMovementEpsilon = 0.0001f;
     constexpr std::uint32_t kPhysicsFlagGrounded = 0x0001;
@@ -38,16 +39,6 @@ namespace orphen::ported::player
     bool canStepToHeight(float currentHeight, float destinationHeight, float maxStepHeight, bool wasGrounded)
     {
       return !wasGrounded || destinationHeight - currentHeight <= maxStepHeight;
-    }
-
-    float originalFrameScale(float deltaSeconds)
-    {
-      return deltaSeconds * kOriginalFramesPerSecond;
-    }
-
-    float originalPhysicsStep(float deltaSeconds)
-    {
-      return originalFrameScale(deltaSeconds) * kOriginalNominalFrameTicks * 0.125f;
     }
 
   } // namespace
@@ -78,26 +69,28 @@ namespace orphen::ported::player
     }
   }
 
-  void OriginalPlayerController::update(float deltaSeconds,
+  void OriginalPlayerController::update(std::uint32_t frameTicks,
                                         const OriginalPlayerFrameInput &input,
                                         const OriginalTerrainSampler &terrainSampler,
                                         const OriginalMovementBlocker &movementBlocker)
   {
-    const float clampedDeltaSeconds = std::clamp(deltaSeconds, 0.0f, 0.1f);
+    // FUN_002000c0 clamps DAT_003555bc to [0x20, 0x80] before anything reads it.
+    const std::uint32_t clampedFrameTicks =
+        std::clamp(frameTicks, orphen::ported::kMinFrameTicks, orphen::ported::kMaxFrameTicks);
     entity_.desiredDeltaX30 = 0.0f;
     entity_.desiredDeltaZ34 = 0.0f;
     entity_.desiredDeltaY38 = 0.0f;
 
     if (entity_.state60 == 2)
     {
-      FUN_002534d8_update_airborne_state(clampedDeltaSeconds, input);
+      FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
     }
     else
     {
-      FUN_00256bb8_update_grounded_field_state(clampedDeltaSeconds, input);
+      FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input);
     }
 
-    FUN_002262c0_integrate_physics(clampedDeltaSeconds, terrainSampler, movementBlocker);
+    FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler, movementBlocker);
 
     if (entity_.substateFrameA8 != std::numeric_limits<std::uint16_t>::max())
     {
@@ -133,7 +126,7 @@ namespace orphen::ported::player
     entity_.pendingJumpImpulse = false;
   }
 
-  void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(float deltaSeconds,
+  void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
                                                                           const OriginalPlayerFrameInput &input)
   {
     const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
@@ -150,7 +143,11 @@ namespace orphen::ported::player
 
     if (hasMovementInput(input.cameraRelativeMove))
     {
-      FUN_00256ab0_apply_movement_impulse(kOriginalRunStepPerFrame * originalFrameScale(deltaSeconds),
+      // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * fGpffff8a4c * 0.03125, entity).
+      // The walk branch (fGpffff8a50 when fGpffffb678 <= 100.0) needs analog
+      // magnitude and lands with the input work in a later slice.
+      FUN_00256ab0_apply_movement_impulse(orphen::ported::movementScaleForFrameTicks(frameTicks) *
+                                              kOriginalRunStepPerFrame,
                                           input.cameraRelativeMove);
       if (entity_.state60 == 0)
       {
@@ -165,7 +162,7 @@ namespace orphen::ported::player
     }
   }
 
-  void OriginalPlayerController::FUN_002534d8_update_airborne_state(float deltaSeconds,
+  void OriginalPlayerController::FUN_002534d8_update_airborne_state(std::uint32_t frameTicks,
                                                                     const OriginalPlayerFrameInput &input)
   {
     const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
@@ -177,7 +174,7 @@ namespace orphen::ported::player
         {
           entity_.verticalVelocity44 = kOriginalJumpVelocity;
           entity_.pendingJumpImpulse = false;
-          FUN_00253488_apply_airborne_control(deltaSeconds, input);
+          FUN_00253488_apply_airborne_control(frameTicks, input);
           return;
         }
 
@@ -222,7 +219,7 @@ namespace orphen::ported::player
       return;
     }
 
-    FUN_00253488_apply_airborne_control(deltaSeconds, input);
+    FUN_00253488_apply_airborne_control(frameTicks, input);
   }
 
   void OriginalPlayerController::FUN_00253468_finish_landing()
@@ -234,12 +231,16 @@ namespace orphen::ported::player
     }
   }
 
-  void OriginalPlayerController::FUN_00253488_apply_airborne_control(float deltaSeconds,
+  void OriginalPlayerController::FUN_00253488_apply_airborne_control(std::uint32_t frameTicks,
                                                                      const OriginalPlayerFrameInput &input)
   {
     if (hasMovementInput(input.cameraRelativeMove))
     {
-      FUN_00256ab0_apply_movement_impulse(kOriginalAirControlStepPerFrame * originalFrameScale(deltaSeconds),
+      // FUN_00253488: FUN_00256ab0(DAT_003555bc * DAT_003555e8 * DAT_00352878).
+      // DAT_003555e8 is the analog magnitude; full deflection until the input
+      // slice lands.
+      FUN_00256ab0_apply_movement_impulse(static_cast<float>(frameTicks) * kOriginalFullStickMagnitude *
+                                              kOriginalAirControlUnit,
                                           input.cameraRelativeMove);
     }
   }
@@ -316,7 +317,7 @@ namespace orphen::ported::player
     return highestSample;
   }
 
-  void OriginalPlayerController::FUN_002262c0_integrate_physics(float deltaSeconds,
+  void OriginalPlayerController::FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
                                                                 const OriginalTerrainSampler &terrainSampler,
                                                                 const OriginalMovementBlocker &movementBlocker)
   {
@@ -410,7 +411,9 @@ namespace orphen::ported::player
     }
     else if (airborneState || !wasGrounded)
     {
-      const float physicsStep = originalPhysicsStep(deltaSeconds);
+      // FUN_002262c0: dt = (float)DAT_003555bc * 0.125, then
+      //   +0x38 += v*dt - (g*dt)*dt*0.5;  v -= g*dt.
+      const float physicsStep = orphen::ported::physicsStepForFrameTicks(frameTicks);
       entity_.desiredDeltaY38 += entity_.verticalVelocity44 * physicsStep -
                                  entity_.verticalAcceleration48 * physicsStep * physicsStep * 0.5f;
       entity_.verticalVelocity44 -= entity_.verticalAcceleration48 * physicsStep;

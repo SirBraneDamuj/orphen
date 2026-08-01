@@ -59,7 +59,10 @@ namespace orphen::ported::player
   {
   public:
     void resetAtOrigin(const OriginalTerrainSampler &terrainSampler);
-    void update(float deltaSeconds,
+
+    // frameTicks is DAT_003555bc: elapsed time in units of 0x20 per 60 Hz frame.
+    // See ported/original_frame_timing.h.
+    void update(std::uint32_t frameTicks,
                 const OriginalPlayerFrameInput &input,
                 const OriginalTerrainSampler &terrainSampler,
                 const OriginalMovementBlocker &movementBlocker = {});
@@ -101,16 +104,16 @@ namespace orphen::ported::player
 
     void FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate);
     void FUN_00252d88_return_to_idle_state();
-    void FUN_00256bb8_update_grounded_field_state(float deltaSeconds, const OriginalPlayerFrameInput &input);
-    void FUN_002534d8_update_airborne_state(float deltaSeconds, const OriginalPlayerFrameInput &input);
+    void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00253468_finish_landing();
-    void FUN_00253488_apply_airborne_control(float deltaSeconds, const OriginalPlayerFrameInput &input);
+    void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00256ab0_apply_movement_impulse(float movementStep, const orphen::ported::psm2::Vec3 &cameraRelativeMove);
     OriginalTerrainQuery terrainQueryForEntity() const;
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,
                                                                            float originalZ,
                                                                            const OriginalTerrainSampler &terrainSampler) const;
-    void FUN_002262c0_integrate_physics(float deltaSeconds,
+    void FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
                                         const OriginalTerrainSampler &terrainSampler,
                                         const OriginalMovementBlocker &movementBlocker);
   };

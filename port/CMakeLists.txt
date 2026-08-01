@@ -61,6 +61,7 @@ target_sources(orphen_port
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp
     src/ported/psm2/psm2_geometry_builder.h
+    src/ported/original_frame_timing.h
     src/ported/psm2/psm2_runtime.h
     src/ported/player/original_player_controller.cpp
     src/ported/player/original_player_controller.h

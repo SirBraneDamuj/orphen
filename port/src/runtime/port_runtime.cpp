@@ -51,11 +51,15 @@ namespace orphen::port
     resetLeadPlayerForLoadedMap();
   }
 
-  bool PortRuntime::update(float deltaSeconds, const InputSnapshot &input)
+  bool PortRuntime::update(const InputSnapshot &input, std::uint32_t frameTicks)
   {
     ++frameCount_;
-    const float clampedDelta = std::clamp(deltaSeconds, 0.0f, 0.1f);
-    mapViewer_.update(clampedDelta, input);
+    // The viewer's free camera and the follow-yaw easing still think in seconds.
+    // One simulation step is one nominal frame, so hand them that directly
+    // rather than wall-clock time -- this is what makes --frames deterministic.
+    const float stepSeconds = orphen::ported::kNominalFrameSeconds *
+                              (static_cast<float>(frameTicks) / static_cast<float>(orphen::ported::kNominalFrameTicks));
+    mapViewer_.update(stepSeconds, input);
 
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {
@@ -65,8 +69,8 @@ namespace orphen::port
     if (loadedMap != nullptr)
     {
       const auto movementRequest = mapViewer_.cameraRelativeMovement(input.moveX, input.moveY);
-      leadPlayer_.update(clampedDelta, movementRequest, input.jumpRequested, loadedMap);
-      mapViewer_.setLeadPlayerView(leadPlayer_.viewState(), clampedDelta);
+      leadPlayer_.update(frameTicks, movementRequest, input.jumpRequested, loadedMap);
+      mapViewer_.setLeadPlayerView(leadPlayer_.viewState(), stepSeconds);
     }
     else
     {

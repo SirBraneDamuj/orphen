@@ -5,6 +5,7 @@
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "runtime/ps2_memory.h"
+#include "ported/original_frame_timing.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +31,9 @@ namespace orphen::port
   public:
     void initialize(const PortRuntimeConfig &config);
     void reset();
-    bool update(float deltaSeconds, const InputSnapshot &input);
+    // One fixed 60 Hz simulation step. frameTicks is DAT_003555bc; the harness
+    // always passes the nominal 0x20 because main() drives a fixed accumulator.
+    bool update(const InputSnapshot &input, std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     void render(int framebufferWidth, int framebufferHeight) const;
 
   private:

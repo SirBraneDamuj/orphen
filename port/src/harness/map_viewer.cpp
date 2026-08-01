@@ -26,9 +26,9 @@ namespace orphen::harness
     constexpr float kOriginalFramesPerSecond = 60.0f;
     constexpr float kNormalCameraAutoYawGainPerSecond = 0.125f * kOriginalFramesPerSecond;
     constexpr float kNormalCameraAutoYawAccelerationPerSecond =
-      0.000872664445f * kOriginalFramesPerSecond * kOriginalFramesPerSecond; // fGpffff82d4.
+        0.000872664445f * kOriginalFramesPerSecond * kOriginalFramesPerSecond; // fGpffff82d4.
     constexpr float kNormalCameraAutoYawMaxSpeedPerSecond =
-      0.0261799339f * kOriginalFramesPerSecond; // fGpffff82d8.
+        0.0261799339f * kOriginalFramesPerSecond; // fGpffff82d8.
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -108,8 +108,8 @@ namespace orphen::harness
     {
       const float angleError = normalizeRadians(desiredYawRadians - yawRadians);
       const float targetVelocity = std::clamp(angleError * kNormalCameraAutoYawGainPerSecond,
-                                             -kNormalCameraAutoYawMaxSpeedPerSecond,
-                                             kNormalCameraAutoYawMaxSpeedPerSecond);
+                                              -kNormalCameraAutoYawMaxSpeedPerSecond,
+                                              kNormalCameraAutoYawMaxSpeedPerSecond);
       yawVelocityRadians = approach(yawVelocityRadians,
                                     targetVelocity,
                                     kNormalCameraAutoYawAccelerationPerSecond * deltaSeconds);
@@ -829,7 +829,7 @@ namespace orphen::harness
     }
 
     glDisable(GL_DEPTH_TEST);
-  drawOriginAxisIndicator(renderCameraDistance);
+    drawOriginAxisIndicator(renderCameraDistance);
     glEnable(GL_DEPTH_TEST);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);

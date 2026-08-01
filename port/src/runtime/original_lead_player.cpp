@@ -35,7 +35,7 @@ namespace orphen::port
     refreshViewState(map);
   }
 
-  void OriginalLeadPlayer::update(float deltaSeconds,
+  void OriginalLeadPlayer::update(std::uint32_t frameTicks,
                                   const orphen::ported::psm2::Vec3 &movementRequest,
                                   bool jumpRequested,
                                   const orphen::ported::psm2::Psm2RuntimeState *map)
@@ -76,7 +76,7 @@ namespace orphen::port
                                          radius)
           .has_value();
     };
-    controller_.update(deltaSeconds, input, terrainSampler, movementBlocker);
+    controller_.update(frameTicks, input, terrainSampler, movementBlocker);
     refreshViewState(*map);
   }
 

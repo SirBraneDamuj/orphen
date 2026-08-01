@@ -136,7 +136,7 @@ int main(int argc, char **argv)
       orphen::port::InputSnapshot input;
       for (std::uint32_t frameIndex = 0; frameIndex < config.headlessFrameCount; ++frameIndex)
       {
-        if (!runtime.update(1.0f / 60.0f, input))
+        if (!runtime.update(input))
         {
           break;
         }
@@ -149,7 +149,15 @@ int main(int argc, char **argv)
 
     runtime.initialize(config);
 
+    // The original is a 60 Hz title and every ported constant is per-frame, so
+    // the simulation runs on a fixed step decoupled from the render rate. See
+    // ported/original_frame_timing.h for how the original derives its own
+    // timestep; on hardware that holds 60 fps it is exactly one step per frame.
+    constexpr float kFixedStepSeconds = orphen::ported::kNominalFrameSeconds;
+    constexpr int kMaxStepsPerFrame = 5;
+
     auto previousTick = std::chrono::steady_clock::now();
+    float accumulatedSeconds = 0.0f;
     bool running = true;
 
     while (running)
@@ -169,9 +177,33 @@ int main(int argc, char **argv)
       if (input.resetRequested)
       {
         runtime.reset();
+        accumulatedSeconds = 0.0f;
       }
 
-      running = runtime.update(delta.count(), input);
+      accumulatedSeconds += delta.count();
+
+      // Drop simulation time rather than spiral after a stall (window drag,
+      // breakpoint, scene load). The original degrades by stretching its own
+      // timestep instead; we prefer to stay deterministic and skip.
+      const float maxAccumulated = kFixedStepSeconds * static_cast<float>(kMaxStepsPerFrame);
+      if (accumulatedSeconds > maxAccumulated)
+      {
+        accumulatedSeconds = maxAccumulated;
+      }
+
+      // Edge-triggered inputs must fire on exactly one simulation step even when
+      // a render frame drives several. Held axes carry across every step.
+      orphen::port::InputSnapshot stepInput = input;
+      while (running && accumulatedSeconds >= kFixedStepSeconds)
+      {
+        running = runtime.update(stepInput);
+        accumulatedSeconds -= kFixedStepSeconds;
+
+        stepInput.jumpRequested = false;
+        stepInput.toggleWireframeRequested = false;
+        stepInput.previousMapRequested = false;
+        stepInput.nextMapRequested = false;
+      }
 
       window.beginFrame(0.025f, 0.03f, 0.035f);
       runtime.render(window.width(), window.height());

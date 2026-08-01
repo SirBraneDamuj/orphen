@@ -9,14 +9,14 @@ namespace orphen::ported::camera
   {
 
     constexpr float kFieldFollowMode1eDistance = 5.0f;
-    constexpr float kFieldFollowMode1ePitchRadians = -0.97738421f; // DAT_00352290.
-    constexpr float kFieldFollowMode1eTargetHeight = 0.800000012f; // DAT_0035229c.
+    constexpr float kFieldFollowMode1ePitchRadians = -0.97738421f;    // DAT_00352290.
+    constexpr float kFieldFollowMode1eTargetHeight = 0.800000012f;    // DAT_0035229c.
     constexpr float kFieldFollowMode1eEyeHeightOffset = 0.400000036f; // DAT_003522a0.
-    constexpr float kNormalFieldCameraDistance = 3.0f; // FUN_00216930 -> FUN_00216968(3.0).
-    constexpr float kNormalFieldCameraPitchRadians = 0.366519094f; // uGpffff8224.
-    constexpr float kNormalFieldTargetHeight = 0.800000012f; // iGpffff8230.
-    constexpr float kNormalFieldEyeHeightOffset = -0.200000003f; // fGpffff8228/fGpffff822c.
-    constexpr float kNormalFieldOrientationEyeOffset = 0.400000036f; // fGpffff82e4/fGpffff82e8.
+    constexpr float kNormalFieldCameraDistance = 3.0f;                // FUN_00216930 -> FUN_00216968(3.0).
+    constexpr float kNormalFieldCameraPitchRadians = 0.366519094f;    // uGpffff8224.
+    constexpr float kNormalFieldTargetHeight = 0.800000012f;          // iGpffff8230.
+    constexpr float kNormalFieldEyeHeightOffset = -0.200000003f;      // fGpffff8228/fGpffff822c.
+    constexpr float kNormalFieldOrientationEyeOffset = 0.400000036f;  // fGpffff82e4/fGpffff82e8.
 
     orphen::ported::psm2::Vec3 normalize(const orphen::ported::psm2::Vec3 &value)
     {
