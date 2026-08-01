@@ -14,7 +14,7 @@ namespace orphen::port
     constexpr float kMinPitchDegrees = 8.0f;
     constexpr float kMaxPitchDegrees = 42.0f;
     constexpr float kMinDistance = 2.0f;
-    constexpr float kMaxDistance = 16.0f;
+    constexpr float kMaxDistance = 64.0f;
     constexpr float kYawSpeedDegrees = 45.0f;
     constexpr float kPitchSpeedDegrees = 22.5f;
     constexpr float kZoomSpeed = 2.0f;
@@ -71,11 +71,46 @@ namespace orphen::port
 
   void ProbeFollowCamera::resetToProbe(const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map)
   {
+    scriptPoseActive_ = false;
     cameraHeadingRadians_ = probe.facingRadians;
     manualYawOffsetRadians_ = 0.0f;
     pitchDegrees_ = kDefaultPitchDegrees;
     targetPitchDegrees_ = kDefaultPitchDegrees;
     distance_ = kDefaultDistance;
+    refreshPose(probe, map);
+  }
+
+  void ProbeFollowCamera::setScriptDistance(float distance, const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map)
+  {
+    distance_ = std::clamp(distance, kMinDistance, kMaxDistance);
+    if (scriptPoseActive_)
+    {
+      farPlaneHint_ = farPlaneForMap(map, distance_);
+    }
+    else
+    {
+      refreshPose(probe, map);
+    }
+  }
+
+  void ProbeFollowCamera::setScriptPose(const orphen::ported::psm2::Vec3 &eye,
+                                        const orphen::ported::psm2::Vec3 &target,
+                                        const orphen::ported::psm2::Psm2RuntimeState &map)
+  {
+    scriptPoseActive_ = true;
+    camera_.setEyeAndTarget(eye, target);
+    cameraHeadingRadians_ = camera_.pose().yawRadians;
+    farPlaneHint_ = farPlaneForMap(map, distance_);
+  }
+
+  void ProbeFollowCamera::clearScriptPose(const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map)
+  {
+    if (!scriptPoseActive_)
+    {
+      return;
+    }
+
+    scriptPoseActive_ = false;
     refreshPose(probe, map);
   }
 
@@ -86,6 +121,12 @@ namespace orphen::port
                                  const PlayerDebugProbeState &probe,
                                  const orphen::ported::psm2::Psm2RuntimeState &map)
   {
+    if (scriptPoseActive_)
+    {
+      farPlaneHint_ = farPlaneForMap(map, distance_);
+      return;
+    }
+
     manualYawOffsetRadians_ = wrapRadians(manualYawOffsetRadians_ + degreesToRadians(rotateX * kYawSpeedDegrees * deltaSeconds));
     if (std::abs(rotateX) < 0.001f)
     {

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <unordered_set>
 
 namespace orphen::port
 {
@@ -24,6 +25,7 @@ namespace orphen::port
     bool exitAfterUsage = false;
     bool loadOnly = false;
     bool printSceneTree = false;
+    std::uint32_t scriptFrameCount = 0;
   };
 
   class PortRuntime
@@ -44,6 +46,11 @@ namespace orphen::port
     std::uint64_t trackedMapGeneration_ = 0;
     std::uint64_t trackedScriptGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
+    std::optional<bool> reportedScriptCameraOverride_;
+    std::optional<float> reportedScriptCameraDistance_;
+    std::optional<std::uint64_t> reportedScriptFrameStop_;
+    std::unordered_set<std::uint64_t> reportedScriptRegisterTraces_;
+    std::optional<std::uint64_t> reportedScriptCoroutineState_;
 
     void syncSceneScriptForLoadedMap();
     void resetLeadPlayerForLoadedMap();

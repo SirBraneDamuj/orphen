@@ -14,6 +14,10 @@ namespace orphen::port
   namespace
   {
 
+    constexpr float kOpcodeB8CameraDistanceScale = 100000.0f;
+    constexpr float kScriptCameraCoordinateScale = 100000.0f;
+    constexpr float kScriptVisualParameterScale = 100000.0f;
+
     bool canRead(std::span<const std::uint8_t> bytes, std::size_t offset, std::size_t byteCount)
     {
       return offset <= bytes.size() && byteCount <= bytes.size() - offset;
@@ -25,6 +29,12 @@ namespace orphen::port
              (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
              (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
              (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+    }
+
+    std::uint16_t readLeU16Unchecked(std::span<const std::uint8_t> bytes, std::size_t offset)
+    {
+      return static_cast<std::uint16_t>(bytes[offset]) |
+             static_cast<std::uint16_t>(bytes[offset + 1] << 8);
     }
 
     std::int16_t readLeS16Unchecked(std::span<const std::uint8_t> bytes, std::size_t offset)
@@ -69,6 +79,56 @@ namespace orphen::port
       }
     }
 
+    void appendRegisterWrite(SceneScriptTraceSummary &trace,
+                             std::size_t offset,
+                             std::uint8_t opcode,
+                             std::uint32_t selector,
+                             std::uint32_t bank,
+                             std::uint32_t registerId,
+                             std::uint32_t previousValue,
+                             std::uint32_t operandValue,
+                             std::uint32_t writtenValue)
+    {
+      ++trace.registerMutations.totalWrites;
+      if (registerId < trace.registerMutations.registerWriteCounts.size())
+      {
+        ++trace.registerMutations.registerWriteCounts[registerId];
+      }
+      if (trace.registerMutations.sampleCount < trace.registerMutations.samples.size())
+      {
+        trace.registerMutations.samples[trace.registerMutations.sampleCount++] = SceneScriptRegisterWriteSample{
+            offset,
+            opcode,
+            selector,
+            bank,
+            registerId,
+            previousValue,
+            operandValue,
+            writtenValue,
+        };
+      }
+    }
+
+    void appendGlobalParameterWrite(SceneScriptTraceSummary &trace,
+                                    std::size_t offset,
+                                    std::uint8_t opcode,
+                                    std::span<const std::int32_t> values)
+    {
+      ++trace.globalParameterMutations.totalWrites;
+      if (trace.globalParameterMutations.sampleCount < trace.globalParameterMutations.samples.size())
+      {
+        SceneScriptGlobalParameterSample sample;
+        sample.offset = offset;
+        sample.opcode = opcode;
+        sample.valueCount = std::min(values.size(), sample.values.size());
+        for (std::size_t valueIndex = 0; valueIndex < sample.valueCount; ++valueIndex)
+        {
+          sample.values[valueIndex] = values[valueIndex];
+        }
+        trace.globalParameterMutations.samples[trace.globalParameterMutations.sampleCount++] = sample;
+      }
+    }
+
     bool isNoopStructuralOpcode(std::uint8_t opcode)
     {
       return opcode == 0x00 || opcode == 0x05 || opcode == 0x06;
@@ -104,14 +164,6 @@ namespace orphen::port
       std::uint16_t opcode = 0;
     };
 
-    struct ScriptVmState
-    {
-      std::array<std::uint32_t, 128> work{};
-      std::array<std::uint8_t, 2304> flags{};
-      std::array<std::uint32_t, 256> objectRegisters{};
-      std::array<std::uint8_t, 0x41> scriptSlots{};
-    };
-
     SceneScriptTraceStop traceStopFromVmExpressionStatus(VmExpressionStatus status)
     {
       switch (status)
@@ -132,7 +184,7 @@ namespace orphen::port
       return SceneScriptTraceStop::RequiresVmEvaluation;
     }
 
-    bool readFlagBit(const ScriptVmState &state, std::uint32_t flagId)
+    bool readFlagBit(const SceneScriptVmState &state, std::uint32_t flagId)
     {
       const std::size_t byteIndex = flagId >> 3;
       if (byteIndex >= state.flags.size())
@@ -143,7 +195,7 @@ namespace orphen::port
       return (state.flags[byteIndex] & (1u << (flagId & 7u))) != 0;
     }
 
-    void writeFlagBit(ScriptVmState &state, std::uint32_t flagId, bool value)
+    void writeFlagBit(SceneScriptVmState &state, std::uint32_t flagId, bool value)
     {
       const std::size_t byteIndex = flagId >> 3;
       if (byteIndex >= state.flags.size())
@@ -162,16 +214,34 @@ namespace orphen::port
       }
     }
 
-    std::uint32_t readObjectRegister(const ScriptVmState &state, std::uint32_t registerId)
+    std::uint32_t selectObjectRegisterBank(SceneScriptVmState &state, std::uint32_t selector)
     {
-      return registerId < state.objectRegisters.size() ? state.objectRegisters[registerId] : 0;
+      if (selector < 0x100)
+      {
+        state.currentObjectRegisterBank = selector;
+      }
+      return state.currentObjectRegisterBank;
     }
 
-    void writeObjectRegister(ScriptVmState &state, std::uint32_t registerId, std::uint32_t value)
+    std::uint32_t readObjectRegister(const SceneScriptVmState &state, std::uint32_t bank, std::uint32_t registerId)
     {
-      if (registerId < state.objectRegisters.size())
+      if (bank < state.objectRegisters.size() && registerId < state.objectRegisters[bank].size())
       {
-        state.objectRegisters[registerId] = value;
+        return state.objectRegisters[bank][registerId];
+      }
+      return 0;
+    }
+
+    std::size_t coroutineSlotIndex(std::int32_t value)
+    {
+      return static_cast<std::uint32_t>(value) & 3u;
+    }
+
+    void writeObjectRegister(SceneScriptVmState &state, std::uint32_t bank, std::uint32_t registerId, std::uint32_t value)
+    {
+      if (bank < state.objectRegisters.size() && registerId < state.objectRegisters[bank].size())
+      {
+        state.objectRegisters[bank][registerId] = value;
       }
     }
 
@@ -212,7 +282,7 @@ namespace orphen::port
                                           std::size_t startOffset,
                                           const SceneScriptTraceOptions &options,
                                           std::size_t depth,
-                                          ScriptVmState &state);
+                                          SceneScriptVmState &state);
 
     VmExpressionResult failExpression(VmExpressionStatus status, std::size_t offset, std::uint16_t opcode)
     {
@@ -246,7 +316,7 @@ namespace orphen::port
                                                 std::size_t startOffset,
                                                 const SceneScriptTraceOptions &options,
                                                 std::size_t depth,
-                                                ScriptVmState &state)
+                                                SceneScriptVmState &state)
     {
       return evaluateExpression(scriptBytes, startOffset, options, depth + 1, state);
     }
@@ -256,12 +326,92 @@ namespace orphen::port
                                                     std::uint8_t opcode,
                                                     const SceneScriptTraceOptions &options,
                                                     std::size_t depth,
-                                                    ScriptVmState &state)
+                                                    SceneScriptVmState &state)
     {
       switch (opcode)
       {
       case 0x32:
         return VmExpressionResult{VmExpressionStatus::Success, 0, opcodeOffset + 1, opcodeOffset + 1, opcode};
+      case 0x34:
+        return VmExpressionResult{VmExpressionStatus::Success, 0, opcodeOffset + 1, opcodeOffset + 1, opcode};
+      case 0x35:
+        return VmExpressionResult{VmExpressionStatus::Success, 1, opcodeOffset + 1, opcodeOffset + 1, opcode};
+      case 0x42:
+      case 0x44:
+      {
+        VmExpressionResult durationExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (durationExpression.status != VmExpressionStatus::Success)
+        {
+          return durationExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 1, durationExpression.nextOffset, durationExpression.nextOffset, opcode};
+      }
+      case 0x86:
+      case 0x88:
+        return VmExpressionResult{VmExpressionStatus::Success, 1, opcodeOffset + 1, opcodeOffset + 1, opcode};
+      case 0x91:
+      {
+        VmExpressionResult indexExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (indexExpression.status != VmExpressionStatus::Success)
+        {
+          return indexExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 1, indexExpression.nextOffset, indexExpression.nextOffset, opcode};
+      }
+      case 0x92:
+      {
+        VmExpressionResult indexExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (indexExpression.status != VmExpressionStatus::Success)
+        {
+          return indexExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, indexExpression.nextOffset, indexExpression.nextOffset, opcode};
+      }
+      case 0x95:
+        return VmExpressionResult{VmExpressionStatus::Success, 0, opcodeOffset + 1, opcodeOffset + 1, opcode};
+      case 0x9b:
+      {
+        VmExpressionResult trackExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (trackExpression.status != VmExpressionStatus::Success)
+        {
+          return trackExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 1, trackExpression.nextOffset, trackExpression.nextOffset, opcode};
+      }
+      case 0x9c:
+      {
+        VmExpressionResult slotExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (slotExpression.status != VmExpressionStatus::Success)
+        {
+          return slotExpression;
+        }
+        if (!canRead(scriptBytes, slotExpression.nextOffset, 1))
+        {
+          return failExpression(VmExpressionStatus::OutOfBoundsRead, slotExpression.nextOffset, opcode);
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, slotExpression.nextOffset + 1, slotExpression.nextOffset + 1, opcode};
+      }
+      case 0xbf:
+      case 0xc0:
+      {
+        std::size_t nextOffset = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 4; ++parameterIndex)
+        {
+          VmExpressionResult parameterExpression = evaluateNestedExpression(scriptBytes, nextOffset, options, depth, state);
+          if (parameterExpression.status != VmExpressionStatus::Success)
+          {
+            return parameterExpression;
+          }
+          nextOffset = parameterExpression.nextOffset;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, nextOffset, nextOffset, opcode};
+      }
       case 0x36:
       case 0x38:
       case 0x3d:
@@ -374,6 +524,21 @@ namespace orphen::port
         const bool spawned = typeExpression.value != 0x55;
         return VmExpressionResult{VmExpressionStatus::Success, spawned ? 1 : 0, typeExpression.nextOffset, typeExpression.nextOffset, opcode};
       }
+      case 0x53:
+      {
+        VmExpressionResult selectorExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (selectorExpression.status != VmExpressionStatus::Success)
+        {
+          return selectorExpression;
+        }
+        VmExpressionResult axisExpression = evaluateNestedExpression(scriptBytes, selectorExpression.nextOffset, options, depth, state);
+        if (axisExpression.status != VmExpressionStatus::Success)
+        {
+          return axisExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, axisExpression.nextOffset, axisExpression.nextOffset, opcode};
+      }
       case 0x61:
       {
         VmExpressionResult maskExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
@@ -386,11 +551,17 @@ namespace orphen::port
           return failExpression(VmExpressionStatus::OutOfBoundsRead, maskExpression.nextOffset, opcode);
         }
 
-        return VmExpressionResult{VmExpressionStatus::Success, 0, maskExpression.nextOffset + 1, maskExpression.nextOffset + 1, opcode};
+        const std::uint8_t selectorFlags = scriptBytes[maskExpression.nextOffset];
+        const bool gateAllowsTest = (state.controllerGateFlags & 0x100u) == 0 &&
+                                    (((selectorFlags & 0x7fu) == 0) || ((state.controllerGateFlags & 1u) != 0));
+        const std::uint32_t testedMask = (selectorFlags & 0x80u) != 0 ? state.alternateControlMask : state.primaryControlMask;
+        const bool matched = gateAllowsTest && ((testedMask & static_cast<std::uint32_t>(maskExpression.value)) != 0);
+        return VmExpressionResult{VmExpressionStatus::Success, matched ? 1 : 0, maskExpression.nextOffset + 1, maskExpression.nextOffset + 1, opcode};
       }
       case 0x59:
         return VmExpressionResult{VmExpressionStatus::Success, 0x100, opcodeOffset + 1, opcodeOffset + 1, opcode};
       case 0x5a:
+      case 0x5c:
       {
         VmExpressionResult tagExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
         if (tagExpression.status != VmExpressionStatus::Success)
@@ -399,6 +570,97 @@ namespace orphen::port
         }
 
         return VmExpressionResult{VmExpressionStatus::Success, 0, tagExpression.nextOffset, tagExpression.nextOffset, opcode};
+      }
+      case 0x5e:
+      case 0x5f:
+      {
+        VmExpressionResult magnitudeExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (magnitudeExpression.status != VmExpressionStatus::Success)
+        {
+          return magnitudeExpression;
+        }
+        VmExpressionResult angleExpression = evaluateNestedExpression(scriptBytes, magnitudeExpression.nextOffset, options, depth, state);
+        if (angleExpression.status != VmExpressionStatus::Success)
+        {
+          return angleExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success,
+                                  opcode == 0x5e ? magnitudeExpression.value : 0,
+                                  angleExpression.nextOffset,
+                                  angleExpression.nextOffset,
+                                  opcode};
+      }
+      case 0x6e:
+      {
+        VmExpressionResult x1Expression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (x1Expression.status != VmExpressionStatus::Success)
+        {
+          return x1Expression;
+        }
+        VmExpressionResult y1Expression = evaluateNestedExpression(scriptBytes, x1Expression.nextOffset, options, depth, state);
+        if (y1Expression.status != VmExpressionStatus::Success)
+        {
+          return y1Expression;
+        }
+        VmExpressionResult x2Expression = evaluateNestedExpression(scriptBytes, y1Expression.nextOffset, options, depth, state);
+        if (x2Expression.status != VmExpressionStatus::Success)
+        {
+          return x2Expression;
+        }
+        VmExpressionResult y2Expression = evaluateNestedExpression(scriptBytes, x2Expression.nextOffset, options, depth, state);
+        if (y2Expression.status != VmExpressionStatus::Success)
+        {
+          return y2Expression;
+        }
+
+        const bool hasDirection = x1Expression.value != x2Expression.value || y1Expression.value != y2Expression.value;
+        return VmExpressionResult{VmExpressionStatus::Success,
+                                  hasDirection ? 1 : 0,
+                                  y2Expression.nextOffset,
+                                  y2Expression.nextOffset,
+                                  opcode};
+      }
+      case 0x72:
+      {
+        VmExpressionResult startExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (startExpression.status != VmExpressionStatus::Success)
+        {
+          return startExpression;
+        }
+        VmExpressionResult targetExpression = evaluateNestedExpression(scriptBytes, startExpression.nextOffset, options, depth, state);
+        if (targetExpression.status != VmExpressionStatus::Success)
+        {
+          return targetExpression;
+        }
+        VmExpressionResult rateExpression = evaluateNestedExpression(scriptBytes, targetExpression.nextOffset, options, depth, state);
+        if (rateExpression.status != VmExpressionStatus::Success)
+        {
+          return rateExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success,
+                                  targetExpression.value,
+                                  rateExpression.nextOffset,
+                                  rateExpression.nextOffset,
+                                  opcode};
+      }
+      case 0x73:
+      case 0x74:
+      case 0x75:
+      {
+        VmExpressionResult firstExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (firstExpression.status != VmExpressionStatus::Success)
+        {
+          return firstExpression;
+        }
+        VmExpressionResult secondExpression = evaluateNestedExpression(scriptBytes, firstExpression.nextOffset, options, depth, state);
+        if (secondExpression.status != VmExpressionStatus::Success)
+        {
+          return secondExpression;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, secondExpression.nextOffset, secondExpression.nextOffset, opcode};
       }
       case 0x76:
       {
@@ -413,8 +675,19 @@ namespace orphen::port
           return registerExpression;
         }
 
+        const std::uint32_t selectorValue = static_cast<std::uint32_t>(selectorExpression.value);
+        const std::uint32_t registerBank = selectObjectRegisterBank(state, selectorValue);
         const std::uint32_t registerId = static_cast<std::uint32_t>(registerExpression.value);
-        return VmExpressionResult{VmExpressionStatus::Success, static_cast<std::int32_t>(readObjectRegister(state, registerId)), registerExpression.nextOffset, registerExpression.nextOffset, opcode};
+        std::uint32_t registerValue = readObjectRegister(state, registerBank, registerId);
+        if (registerId == 0x06 && registerValue == 0)
+        {
+          registerValue = 0x7fff;
+        }
+        else if (registerId == 0x05 && registerValue == 0)
+        {
+          registerValue = 1;
+        }
+        return VmExpressionResult{VmExpressionStatus::Success, static_cast<std::int32_t>(registerValue), registerExpression.nextOffset, registerExpression.nextOffset, opcode};
       }
       case 0x9f:
       {
@@ -439,6 +712,55 @@ namespace orphen::port
 
         return VmExpressionResult{VmExpressionStatus::Success, -1, opcodeOffset + 1, opcodeOffset + 1, opcode};
       }
+      case 0xa3:
+      {
+        VmExpressionResult slotExpression = evaluateNestedExpression(scriptBytes, opcodeOffset + 1, options, depth, state);
+        if (slotExpression.status != VmExpressionStatus::Success)
+        {
+          return slotExpression;
+        }
+
+        const std::size_t slotIndex = coroutineSlotIndex(slotExpression.value);
+        return VmExpressionResult{VmExpressionStatus::Success,
+                                  static_cast<std::int32_t>(state.coroutineSlots[slotIndex].returnWord),
+                                  slotExpression.nextOffset,
+                                  slotExpression.nextOffset,
+                                  opcode};
+      }
+      case 0xbd:
+      {
+        std::size_t nextOffset = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 4; ++parameterIndex)
+        {
+          VmExpressionResult parameterExpression = evaluateNestedExpression(scriptBytes, nextOffset, options, depth, state);
+          if (parameterExpression.status != VmExpressionStatus::Success)
+          {
+            return parameterExpression;
+          }
+          nextOffset = parameterExpression.nextOffset;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 0, nextOffset, nextOffset, opcode};
+      }
+      case 0xee:
+      case 0xef:
+      case 0xf0:
+      case 0xf1:
+      {
+        std::size_t nextOffset = opcodeOffset + 1;
+        const std::size_t parameterCount = opcode == 0xee ? 4 : (opcode == 0xef ? 3 : 2);
+        for (std::size_t parameterIndex = 0; parameterIndex < parameterCount; ++parameterIndex)
+        {
+          VmExpressionResult parameterExpression = evaluateNestedExpression(scriptBytes, nextOffset, options, depth, state);
+          if (parameterExpression.status != VmExpressionStatus::Success)
+          {
+            return parameterExpression;
+          }
+          nextOffset = parameterExpression.nextOffset;
+        }
+
+        return VmExpressionResult{VmExpressionStatus::Success, 1, nextOffset, nextOffset, opcode};
+      }
       default:
         return failExpression(VmExpressionStatus::UnsupportedOpcode, opcodeOffset, opcode);
       }
@@ -448,7 +770,7 @@ namespace orphen::port
                                           std::size_t startOffset,
                                           const SceneScriptTraceOptions &options,
                                           std::size_t depth,
-                                          ScriptVmState &state)
+                                          SceneScriptVmState &state)
     {
       if (depth > options.maxExpressionDepth)
       {
@@ -765,7 +1087,7 @@ namespace orphen::port
     bool consumeExpression(std::span<const std::uint8_t> scriptBytes,
                            std::size_t startOffset,
                            const SceneScriptTraceOptions &options,
-                           ScriptVmState &state,
+                           SceneScriptVmState &state,
                            std::size_t &nextOffset,
                            SceneScriptTraceStop &stopReason)
     {
@@ -779,6 +1101,51 @@ namespace orphen::port
 
       nextOffset = result.nextOffset;
       return true;
+    }
+
+    std::uint32_t packRgb(std::int32_t red, std::int32_t green, std::int32_t blue)
+    {
+      return ((static_cast<std::uint32_t>(red) & 0xffu) << 16) |
+             ((static_cast<std::uint32_t>(green) & 0xffu) << 8) |
+             (static_cast<std::uint32_t>(blue) & 0xffu);
+    }
+
+    bool evaluateExpressionValues(std::span<const std::uint8_t> scriptBytes,
+                                  std::size_t startOffset,
+                                  const SceneScriptTraceOptions &options,
+                                  SceneScriptVmState &state,
+                                  std::span<std::int32_t> values,
+                                  std::size_t &nextOffset,
+                                  SceneScriptTraceStop &stopReason)
+    {
+      std::size_t pc = startOffset;
+      for (std::int32_t &value : values)
+      {
+        VmExpressionResult expression = evaluateExpression(scriptBytes, pc, options, 0, state);
+        if (expression.status != VmExpressionStatus::Success)
+        {
+          nextOffset = expression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(expression.status);
+          return false;
+        }
+
+        value = expression.value;
+        pc = expression.nextOffset;
+      }
+
+      nextOffset = pc;
+      return true;
+    }
+
+    SceneScriptCameraRuntimeState::Vector cameraVectorFromRaw(const std::array<std::int32_t, 3> &rawValues)
+    {
+      SceneScriptCameraRuntimeState::Vector vector;
+      vector.hasValue = true;
+      vector.raw = rawValues;
+      vector.x = static_cast<float>(rawValues[0]) / kScriptCameraCoordinateScale;
+      vector.y = static_cast<float>(rawValues[1]) / kScriptCameraCoordinateScale;
+      vector.z = static_cast<float>(rawValues[2]) / kScriptCameraCoordinateScale;
+      return vector;
     }
 
     std::size_t applyRecord80TerrainFlag(orphen::ported::psm2::Psm2RuntimeState &terrainState,
@@ -879,7 +1246,8 @@ namespace orphen::port
                                  std::size_t opcodeOffset,
                                  std::uint8_t opcode,
                                  const SceneScriptTraceOptions &options,
-                                 ScriptVmState &state,
+                                 SceneScriptVmState &state,
+                                 SceneScriptTraceSummary &trace,
                                  std::size_t &nextOffset,
                                  SceneScriptTraceStop &stopReason)
     {
@@ -909,7 +1277,177 @@ namespace orphen::port
         return true;
       }
 
+      if (opcode == 0x45)
+      {
+        VmExpressionResult modeExpression = evaluateExpression(scriptBytes, opcodeOffset + 1, options, 0, state);
+        if (modeExpression.status != VmExpressionStatus::Success)
+        {
+          nextOffset = modeExpression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(modeExpression.status);
+          return false;
+        }
+
+        if (modeExpression.value == 0)
+        {
+          state.runtimeState.camera.overrideEnabled = false;
+          ++trace.cameraMutations.resetRequests;
+        }
+        trace.runtimeState = state.runtimeState;
+        nextOffset = modeExpression.nextOffset;
+        return true;
+      }
+
+      if (opcode == 0x33)
+      {
+        if (!canRead(scriptBytes, opcodeOffset + 1, sizeof(std::uint32_t)))
+        {
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+
+        const std::uint32_t byteCount = readLeU32Unchecked(scriptBytes, opcodeOffset + 1);
+        if (!canRead(scriptBytes, opcodeOffset + 1, byteCount))
+        {
+          nextOffset = opcodeOffset + 1;
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+
+        const std::size_t streamOffset = opcodeOffset + 1 + sizeof(std::uint32_t);
+        if (streamOffset < opcodeOffset + 1 + byteCount && scriptBytes[streamOffset] != 0x02)
+        {
+          writeFlagBit(state, 0x8ff, true);
+          writeFlagBit(state, 0x8fe, true);
+        }
+
+        nextOffset = opcodeOffset + 1 + byteCount;
+        return true;
+      }
+
+      if (opcode >= 0x3d && opcode <= 0x40)
+      {
+        VmExpressionResult flagExpression = evaluateExpression(scriptBytes, opcodeOffset + 1, options, 0, state);
+        if (flagExpression.status != VmExpressionStatus::Success)
+        {
+          nextOffset = flagExpression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(flagExpression.status);
+          return false;
+        }
+
+        const std::uint32_t flagId = static_cast<std::uint32_t>(flagExpression.value);
+        const bool previousValue = readFlagBit(state, flagId);
+        if (opcode == 0x3e)
+        {
+          writeFlagBit(state, flagId, true);
+        }
+        else if (opcode == 0x3f)
+        {
+          writeFlagBit(state, flagId, false);
+        }
+        else if (opcode == 0x40)
+        {
+          writeFlagBit(state, flagId, !previousValue);
+        }
+
+        nextOffset = flagExpression.nextOffset;
+        return true;
+      }
+
+      if (opcode == 0x41)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t streamIndex = 0; streamIndex < 2; ++streamIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+        if (!canRead(scriptBytes, pc, 1))
+        {
+          nextOffset = pc;
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+
+        nextOffset = pc + 1;
+        return true;
+      }
+
+      if (opcode == 0x43)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t streamIndex = 0; streamIndex < 3; ++streamIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x46)
+      {
+        std::array<std::int32_t, 6> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
+        {
+          return false;
+        }
+
+        const std::array<std::int32_t, 3> eyeValues{values[0], values[1], values[2]};
+        const std::array<std::int32_t, 3> targetValues{values[3], values[4], values[5]};
+        state.runtimeState.camera.eye = cameraVectorFromRaw(eyeValues);
+        state.runtimeState.camera.target = cameraVectorFromRaw(targetValues);
+        state.runtimeState.camera.overrideEnabled = true;
+        trace.runtimeState = state.runtimeState;
+        ++trace.cameraMutations.pairedPoseWrites;
+        return true;
+      }
+
+      if (opcode == 0x47 || opcode == 0x48)
+      {
+        std::array<std::int32_t, 3> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
+        {
+          return false;
+        }
+
+        if (opcode == 0x47)
+        {
+          state.runtimeState.camera.eye = cameraVectorFromRaw(values);
+          ++trace.cameraMutations.eyeWrites;
+        }
+        else
+        {
+          state.runtimeState.camera.target = cameraVectorFromRaw(values);
+          ++trace.cameraMutations.targetWrites;
+        }
+        state.runtimeState.camera.overrideEnabled = state.runtimeState.camera.eye.hasValue && state.runtimeState.camera.target.hasValue;
+        trace.runtimeState = state.runtimeState;
+        return true;
+      }
+
       if (opcode == 0x51)
+      {
+        if (!canRead(scriptBytes, opcodeOffset + 1, 1))
+        {
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+
+        nextOffset = opcodeOffset + 2;
+        return true;
+      }
+
+      if (opcode == 0x4c)
+      {
+        return consumeExpression(scriptBytes, opcodeOffset + 1, options, state, nextOffset, stopReason);
+      }
+
+      if (opcode == 0x6d)
       {
         if (!canRead(scriptBytes, opcodeOffset + 1, 1))
         {
@@ -925,6 +1463,237 @@ namespace orphen::port
       {
         std::size_t pc = opcodeOffset + 1;
         for (std::size_t componentIndex = 0; componentIndex < 4; ++componentIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x5c)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+        {
+          return false;
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x6c)
+      {
+        std::array<std::int32_t, 2> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
+        {
+          return false;
+        }
+        appendGlobalParameterWrite(trace, opcodeOffset, opcode, values);
+        return true;
+      }
+
+      if (opcode == 0xa7 || opcode == 0xbe || opcode == 0xde)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 2; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0xc9)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 6; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode >= 0x73 && opcode <= 0x75)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 2; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0xbd)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 4; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x7d || opcode == 0x7e)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+        {
+          return false;
+        }
+        if (!canRead(scriptBytes, pc, 1))
+        {
+          nextOffset = pc;
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+        ++pc;
+        if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+        {
+          return false;
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x63)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 7; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x85 || opcode == 0x87)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 2; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x90)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 4; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0x91 || opcode == 0x92 || opcode == 0xc8 || opcode == 0xca)
+      {
+        return consumeExpression(scriptBytes, opcodeOffset + 1, options, state, nextOffset, stopReason);
+      }
+
+      if (opcode == 0x9c)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+        {
+          return false;
+        }
+        if (!canRead(scriptBytes, pc, 1))
+        {
+          nextOffset = pc;
+          stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+          return false;
+        }
+
+        nextOffset = pc + 1;
+        return true;
+      }
+
+      if (opcode == 0xac)
+      {
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t parameterIndex = 0; parameterIndex < 4; ++parameterIndex)
+        {
+          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+          {
+            return false;
+          }
+        }
+
+        nextOffset = pc;
+        return true;
+      }
+
+      if (opcode == 0xad || opcode == 0xd5 || opcode == 0xd6 || opcode == 0xd7 || opcode == 0xe3 || opcode == 0xeb)
+      {
+        return consumeExpression(scriptBytes, opcodeOffset + 1, options, state, nextOffset, stopReason);
+      }
+
+      if (opcode >= 0xc1 && opcode <= 0xc7)
+      {
+        std::size_t expressionCount = 0;
+        switch (opcode)
+        {
+        case 0xc1:
+          expressionCount = 8;
+          break;
+        case 0xc2:
+        case 0xc4:
+        case 0xc6:
+          expressionCount = 2;
+          break;
+        case 0xc3:
+        case 0xc5:
+          expressionCount = 4;
+          break;
+        case 0xc7:
+          expressionCount = 1;
+          break;
+        default:
+          break;
+        }
+
+        std::size_t pc = opcodeOffset + 1;
+        for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
         {
           if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
           {
@@ -1030,7 +1799,9 @@ namespace orphen::port
         }
 
         const std::uint32_t registerId = static_cast<std::uint32_t>(registerExpression.value);
-        const std::uint32_t currentValue = readObjectRegister(state, registerId);
+        const std::uint32_t selectorValue = static_cast<std::uint32_t>(selectorExpression.value);
+        const std::uint32_t registerBank = selectObjectRegisterBank(state, selectorValue);
+        const std::uint32_t currentValue = readObjectRegister(state, registerBank, registerId);
         const std::uint32_t operandValue = static_cast<std::uint32_t>(valueExpression.value);
         std::uint32_t writtenValue = operandValue;
         switch (opcode)
@@ -1054,73 +1825,123 @@ namespace orphen::port
           break;
         }
 
-        writeObjectRegister(state, registerId, writtenValue);
+        writeObjectRegister(state, registerBank, registerId, writtenValue);
+        appendRegisterWrite(trace,
+                            opcodeOffset,
+                            opcode,
+                            selectorValue,
+                            registerBank,
+                            registerId,
+                            currentValue,
+                            operandValue,
+                            writtenValue);
         nextOffset = valueExpression.nextOffset;
         return true;
       }
 
       if (opcode == 0xb8)
       {
-        return consumeExpression(scriptBytes, opcodeOffset + 1, options, state, nextOffset, stopReason);
+        VmExpressionResult distanceExpression = evaluateExpression(scriptBytes, opcodeOffset + 1, options, 0, state);
+        if (distanceExpression.status != VmExpressionStatus::Success)
+        {
+          nextOffset = distanceExpression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(distanceExpression.status);
+          return false;
+        }
+
+        const float distance = static_cast<float>(distanceExpression.value) / kOpcodeB8CameraDistanceScale;
+        state.runtimeState.camera.hasDistance = true;
+        state.runtimeState.camera.rawDistance = distanceExpression.value;
+        state.runtimeState.camera.distance = distance;
+        state.runtimeState.camera.nearPlane = distance - 5.0f;
+        trace.runtimeState = state.runtimeState;
+        ++trace.cameraMutations.distanceWrites;
+        nextOffset = distanceExpression.nextOffset;
+        return true;
       }
 
       if (opcode == 0x96 || opcode == 0xb9 || opcode == 0xba)
       {
-        std::size_t pc = opcodeOffset + 1;
-        for (std::size_t componentIndex = 0; componentIndex < 3; ++componentIndex)
+        std::array<std::int32_t, 3> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
         {
-          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
-          {
-            return false;
-          }
+          return false;
         }
 
-        nextOffset = pc;
+        const std::uint32_t packedRgb = packRgb(values[0], values[1], values[2]);
+        if (opcode == 0x96)
+        {
+          state.runtimeState.visual.globalRgb = {true, packedRgb};
+          ++trace.visualMutations.globalRgbWrites;
+        }
+        else if (opcode == 0xb9)
+        {
+          state.runtimeState.visual.color1 = {true, packedRgb};
+          ++trace.visualMutations.color1Writes;
+        }
+        else
+        {
+          state.runtimeState.visual.color2 = {true, packedRgb};
+          ++trace.visualMutations.color2Writes;
+        }
+
+        trace.runtimeState = state.runtimeState;
         return true;
       }
 
       if (opcode == 0x97 || opcode == 0x98)
       {
-        std::size_t pc = opcodeOffset + 1;
-        for (std::size_t componentIndex = 0; componentIndex < 6; ++componentIndex)
+        std::array<std::int32_t, 6> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
         {
-          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
-          {
-            return false;
-          }
+          return false;
         }
 
-        nextOffset = pc;
+        if (opcode == 0x97)
+        {
+          state.runtimeState.visual.vectorRgb.hasValue = true;
+          state.runtimeState.visual.vectorRgb.x = static_cast<float>(values[0]) / kScriptVisualParameterScale;
+          state.runtimeState.visual.vectorRgb.y = static_cast<float>(values[1]) / kScriptVisualParameterScale;
+          state.runtimeState.visual.vectorRgb.z = static_cast<float>(values[2]) / kScriptVisualParameterScale;
+          state.runtimeState.visual.vectorRgb.packedRgb = packRgb(values[3], values[4], values[5]);
+          trace.runtimeState = state.runtimeState;
+          ++trace.visualMutations.vectorRgbWrites;
+        }
         return true;
       }
 
       if (opcode == 0x99)
       {
-        std::size_t pc = opcodeOffset + 1;
-        for (std::size_t componentIndex = 0; componentIndex < 3; ++componentIndex)
+        std::array<std::int32_t, 3> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
         {
-          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
-          {
-            return false;
-          }
+          return false;
         }
 
-        nextOffset = pc;
+        state.runtimeState.visual.simpleVector.hasValue = true;
+        state.runtimeState.visual.simpleVector.x = static_cast<float>(values[0]) / kScriptVisualParameterScale;
+        state.runtimeState.visual.simpleVector.y = static_cast<float>(values[1]) / kScriptVisualParameterScale;
+        state.runtimeState.visual.simpleVector.z = static_cast<float>(values[2]) / kScriptVisualParameterScale;
+        trace.runtimeState = state.runtimeState;
+        ++trace.visualMutations.simpleVectorWrites;
         return true;
       }
 
       if (opcode == 0x9a)
       {
-        std::size_t pc = opcodeOffset + 1;
-        for (std::size_t componentIndex = 0; componentIndex < 8; ++componentIndex)
+        std::array<std::int32_t, 8> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
         {
-          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
-          {
-            return false;
-          }
+          return false;
         }
 
-        nextOffset = pc;
+        state.runtimeState.visual.indexedDualRgbEvent.hasValue = true;
+        state.runtimeState.visual.indexedDualRgbEvent.index = static_cast<std::uint32_t>(values[0]);
+        state.runtimeState.visual.indexedDualRgbEvent.color1 = packRgb(values[1], values[2], values[3]);
+        state.runtimeState.visual.indexedDualRgbEvent.color2 = packRgb(values[4], values[5], values[6]);
+        state.runtimeState.visual.indexedDualRgbEvent.parameter = static_cast<std::uint32_t>(values[7]);
+        trace.runtimeState = state.runtimeState;
+        ++trace.visualMutations.indexedDualRgbEvents;
         return true;
       }
 
@@ -1141,9 +1962,10 @@ namespace orphen::port
         }
 
         const std::uint32_t slotIndex = static_cast<std::uint32_t>(slotExpression.value);
+        const std::uint32_t scriptOffset = readLeU32Unchecked(scriptBytes, slotExpression.nextOffset);
         if (slotIndex < 0x40 && slotIndex < state.scriptSlots.size())
         {
-          state.scriptSlots[slotIndex] = 1;
+          state.scriptSlots[slotIndex] = scriptOffset;
         }
 
         nextOffset = slotExpression.nextOffset + sizeof(std::uint32_t);
@@ -1160,10 +1982,14 @@ namespace orphen::port
           return false;
         }
 
-        const std::uint32_t slotIndex = static_cast<std::uint32_t>(slotExpression.value);
-        if (slotIndex < state.scriptSlots.size())
+        std::int32_t slotIndex = slotExpression.value;
+        if (slotIndex < 0)
         {
-          state.scriptSlots[slotIndex] = 0;
+          slotIndex = state.currentScriptSlot;
+        }
+        if (slotIndex >= 0 && static_cast<std::uint32_t>(slotIndex) < state.scriptSlots.size())
+        {
+          state.scriptSlots[static_cast<std::uint32_t>(slotIndex)] = 0;
         }
 
         nextOffset = slotExpression.nextOffset;
@@ -1172,39 +1998,58 @@ namespace orphen::port
 
       if (opcode == 0xa1)
       {
-        std::size_t pc = opcodeOffset + 1;
-        if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
+        VmExpressionResult slotExpression = evaluateExpression(scriptBytes, opcodeOffset + 1, options, 0, state);
+        if (slotExpression.status != VmExpressionStatus::Success)
         {
+          nextOffset = slotExpression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(slotExpression.status);
           return false;
         }
-        if (!canRead(scriptBytes, pc, sizeof(std::uint32_t)))
+        if (!canRead(scriptBytes, slotExpression.nextOffset, sizeof(std::uint32_t)))
         {
-          nextOffset = pc;
+          nextOffset = slotExpression.nextOffset;
           stopReason = SceneScriptTraceStop::OutOfBoundsRead;
           return false;
         }
 
-        nextOffset = pc + sizeof(std::uint32_t);
+        const std::size_t slotIndex = coroutineSlotIndex(slotExpression.value);
+        state.coroutineSlots[slotIndex].tableOffset = readLeU32Unchecked(scriptBytes, slotExpression.nextOffset);
+        state.coroutineSlots[slotIndex].timer = 0;
+        state.coroutineSlots[slotIndex].returnWord = 0;
+        nextOffset = slotExpression.nextOffset + sizeof(std::uint32_t);
         return true;
       }
 
       if (opcode == 0xa2)
       {
-        return consumeExpression(scriptBytes, opcodeOffset + 1, options, state, nextOffset, stopReason);
+        VmExpressionResult slotExpression = evaluateExpression(scriptBytes, opcodeOffset + 1, options, 0, state);
+        if (slotExpression.status != VmExpressionStatus::Success)
+        {
+          nextOffset = slotExpression.stopOffset;
+          stopReason = traceStopFromVmExpressionStatus(slotExpression.status);
+          return false;
+        }
+
+        SceneScriptCoroutineSlot &slot = state.coroutineSlots[coroutineSlotIndex(slotExpression.value)];
+        slot.tableOffset = 0;
+        slot.timer = 0;
+        nextOffset = slotExpression.nextOffset;
+        return true;
       }
 
       if (opcode == 0xbb)
       {
-        std::size_t pc = opcodeOffset + 1;
-        for (std::size_t componentIndex = 0; componentIndex < 2; ++componentIndex)
+        std::array<std::int32_t, 2> values{};
+        if (!evaluateExpressionValues(scriptBytes, opcodeOffset + 1, options, state, values, nextOffset, stopReason))
         {
-          if (!consumeExpression(scriptBytes, pc, options, state, pc, stopReason))
-          {
-            return false;
-          }
+          return false;
         }
 
-        nextOffset = pc;
+        state.runtimeState.visual.fadeRadii.hasValue = true;
+        state.runtimeState.visual.fadeRadii.innerRadius = static_cast<float>(values[0]) / kScriptVisualParameterScale;
+        state.runtimeState.visual.fadeRadii.outerRadius = static_cast<float>(values[1]) / kScriptVisualParameterScale;
+        trace.runtimeState = state.runtimeState;
+        ++trace.visualMutations.fadeRadiusWrites;
         return true;
       }
 
@@ -1227,17 +2072,18 @@ namespace orphen::port
       return false;
     }
 
-    SceneScriptTraceSummary traceSceneScriptEntrypoint(std::span<const std::uint8_t> scriptBytes,
-                                                       std::size_t entryIndex,
-                                                       std::uint32_t entryOffset,
-                                                       const SceneScriptTraceOptions &options,
-                                                       ScriptVmState &vmState,
-                                                       orphen::ported::psm2::Psm2RuntimeState *terrainState)
+    SceneScriptTraceSummary traceSceneScriptEntrypointInternal(std::span<const std::uint8_t> scriptBytes,
+                                                               std::size_t entryIndex,
+                                                               std::uint32_t entryOffset,
+                                                               const SceneScriptTraceOptions &options,
+                                                               SceneScriptVmState &vmState,
+                                                               orphen::ported::psm2::Psm2RuntimeState *terrainState)
     {
       SceneScriptTraceSummary trace;
       trace.entryIndex = entryIndex;
       trace.entryOffset = entryOffset;
       trace.stopOffset = entryOffset;
+      trace.runtimeState = vmState.runtimeState;
 
       if (entryOffset >= scriptBytes.size())
       {
@@ -1374,6 +2220,70 @@ namespace orphen::port
             continue;
           }
 
+          if (opcode == 0x02)
+          {
+            VmExpressionResult selectorExpression = evaluateExpression(scriptBytes, pc + 1, options, 0, vmState);
+            if (selectorExpression.status != VmExpressionStatus::Success)
+            {
+              appendEvent(trace, {SceneScriptTraceEventKind::LowOpcodeRequiresVm, selectorExpression.stopOffset, selectorExpression.opcode, selectorExpression.nextOffset, 0, returnStack.size()}, options);
+              trace.stopOffset = selectorExpression.stopOffset;
+              trace.stopReason = traceStopFromVmExpressionStatus(selectorExpression.status);
+              return trace;
+            }
+            if (!canRead(scriptBytes, selectorExpression.nextOffset, 1))
+            {
+              trace.stopOffset = selectorExpression.nextOffset;
+              trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+              return trace;
+            }
+
+            const std::uint8_t caseCount = scriptBytes[selectorExpression.nextOffset];
+            std::size_t caseOffset = selectorExpression.nextOffset + 1;
+            const std::size_t alignment = caseOffset & 3u;
+            if (alignment != 0)
+            {
+              caseOffset += 4u - alignment;
+            }
+
+            std::size_t targetDeltaOffset = caseOffset + static_cast<std::size_t>(caseCount) * 8u;
+            for (std::size_t caseIndex = 0; caseIndex < caseCount; ++caseIndex)
+            {
+              const std::size_t caseEntryOffset = caseOffset + caseIndex * 8u;
+              if (!canRead(scriptBytes, caseEntryOffset, 8))
+              {
+                trace.stopOffset = caseEntryOffset;
+                trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+                return trace;
+              }
+
+              if (readLeS32Unchecked(scriptBytes, caseEntryOffset) == selectorExpression.value)
+              {
+                targetDeltaOffset = caseEntryOffset + sizeof(std::uint32_t);
+                break;
+              }
+            }
+            if (!canRead(scriptBytes, targetDeltaOffset, sizeof(std::uint32_t)))
+            {
+              trace.stopOffset = targetDeltaOffset;
+              trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+              return trace;
+            }
+
+            const std::int64_t delta = signedDeltaFromLeU32(readLeU32Unchecked(scriptBytes, targetDeltaOffset));
+            std::size_t targetOffset = 0;
+            if (!addRelativeOffset(targetDeltaOffset, delta, targetOffset) || targetOffset >= scriptBytes.size())
+            {
+              appendEvent(trace, {SceneScriptTraceEventKind::RelativeAdvance, pc, opcode, targetOffset, delta, returnStack.size()}, options);
+              trace.stopOffset = targetDeltaOffset;
+              trace.stopReason = SceneScriptTraceStop::InvalidRelativeTarget;
+              return trace;
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::RelativeAdvance, pc, opcode, targetOffset, delta, returnStack.size()}, options);
+            pc = targetOffset;
+            continue;
+          }
+
           appendEvent(trace, {SceneScriptTraceEventKind::LowOpcodeRequiresVm, pc, opcode, pc + 1, 0, returnStack.size()}, options);
           trace.stopOffset = pc;
           trace.stopReason = SceneScriptTraceStop::RequiresVmEvaluation;
@@ -1390,7 +2300,204 @@ namespace orphen::port
           }
 
           const std::uint16_t extendedOpcode = static_cast<std::uint16_t>(scriptBytes[pc + 1] + 0x100u);
-          if (extendedOpcode == 0x149)
+          if (extendedOpcode == 0x100)
+          {
+            if (!canRead(scriptBytes, pc + 2, 1))
+            {
+              trace.stopOffset = pc + 2;
+              trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+              return trace;
+            }
+
+            const std::size_t nextOffset = pc + 3;
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if ((extendedOpcode >= 0x101 && extendedOpcode <= 0x108))
+          {
+            std::size_t expressionCount = 0;
+            switch (extendedOpcode)
+            {
+            case 0x101:
+            case 0x105:
+            case 0x107:
+              expressionCount = 3;
+              break;
+            case 0x102:
+            case 0x106:
+            case 0x108:
+              expressionCount = 8;
+              break;
+            case 0x103:
+              expressionCount = 2;
+              break;
+            case 0x104:
+              expressionCount = 7;
+              break;
+            default:
+              break;
+            }
+
+            std::size_t nextOffset = pc + 2;
+            for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x10a || extendedOpcode == 0x10b)
+          {
+            std::size_t nextOffset = pc + 2;
+            const std::size_t expressionCount = extendedOpcode == 0x10b ? 10 : 8;
+            for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x125 || extendedOpcode == 0x126)
+          {
+            if (!canRead(scriptBytes, pc + 2, sizeof(std::uint16_t)))
+            {
+              trace.stopOffset = pc + 2;
+              trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+              return trace;
+            }
+
+            std::size_t nextOffset = pc + 2 + sizeof(std::uint16_t);
+            const std::size_t expressionCount = extendedOpcode == 0x126 ? 2 : 1;
+            for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x127 || extendedOpcode == 0x128)
+          {
+            if (!canRead(scriptBytes, pc + 2, sizeof(std::uint16_t)))
+            {
+              trace.stopOffset = pc + 2;
+              trace.stopReason = SceneScriptTraceStop::OutOfBoundsRead;
+              return trace;
+            }
+
+            std::size_t nextOffset = pc + 2 + sizeof(std::uint16_t);
+            const std::size_t expressionCount = extendedOpcode == 0x128 ? 4 : 3;
+            for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x129)
+          {
+            std::size_t nextOffset = pc + 2;
+            for (std::size_t expressionIndex = 0; expressionIndex < 2; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x12a || extendedOpcode == 0x12b)
+          {
+            std::size_t nextOffset = pc + 2;
+            for (std::size_t expressionIndex = 0; expressionIndex < 3; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x140 || extendedOpcode == 0x141)
+          {
+            std::size_t nextOffset = pc + 2;
+            const std::size_t expressionCount = extendedOpcode == 0x141 ? 5 : 4;
+            for (std::size_t expressionIndex = 0; expressionIndex < expressionCount; ++expressionIndex)
+            {
+              if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+              {
+                appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+                trace.stopOffset = nextOffset;
+                return trace;
+              }
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x142)
+          {
+            std::size_t nextOffset = pc + 2;
+            if (!consumeExpression(scriptBytes, nextOffset, options, vmState, nextOffset, trace.stopReason))
+            {
+              appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+              trace.stopOffset = nextOffset;
+              return trace;
+            }
+
+            appendEvent(trace, {SceneScriptTraceEventKind::ExtendedOpcode, pc, extendedOpcode, nextOffset, 0, returnStack.size()}, options);
+            pc = nextOffset;
+            continue;
+          }
+
+          if (extendedOpcode == 0x146 || extendedOpcode == 0x149)
           {
             VmExpressionResult valueExpression = evaluateExpression(scriptBytes, pc + 2, options, 0, vmState);
             if (valueExpression.status != VmExpressionStatus::Success)
@@ -1531,8 +2638,10 @@ namespace orphen::port
 
         std::size_t nextOffset = pc + 1;
         SceneScriptTraceStop stopReason = SceneScriptTraceStop::StandardOpcodeDispatch;
-        if (skipKnownStandardOpcode(scriptBytes, pc, opcode, options, vmState, nextOffset, stopReason))
+        if (skipKnownStandardOpcode(scriptBytes, pc, opcode, options, vmState, trace, nextOffset, stopReason))
         {
+          ++trace.knownOpcodes.standardOpcodeCounts[opcode];
+          ++trace.knownOpcodes.totalStandardOpcodes;
           appendEvent(trace, {SceneScriptTraceEventKind::StandardOpcode, pc, opcode, nextOffset, 0, returnStack.size()}, options);
           pc = nextOffset;
           continue;
@@ -1557,10 +2666,10 @@ namespace orphen::port
   {
     std::vector<SceneScriptTraceSummary> traces;
     traces.reserve(entryOffsets.size());
-    ScriptVmState vmState;
+    SceneScriptVmState vmState;
     for (std::size_t entryIndex = 0; entryIndex < entryOffsets.size(); ++entryIndex)
     {
-      traces.push_back(traceSceneScriptEntrypoint(scriptBytes, entryIndex, entryOffsets[entryIndex], options, vmState, nullptr));
+      traces.push_back(traceSceneScriptEntrypointInternal(scriptBytes, entryIndex, entryOffsets[entryIndex], options, vmState, nullptr));
     }
     return traces;
   }
@@ -1572,12 +2681,22 @@ namespace orphen::port
   {
     std::vector<SceneScriptTraceSummary> traces;
     traces.reserve(entryOffsets.size());
-    ScriptVmState vmState;
+    SceneScriptVmState vmState;
     for (std::size_t entryIndex = 0; entryIndex < entryOffsets.size(); ++entryIndex)
     {
-      traces.push_back(traceSceneScriptEntrypoint(scriptBytes, entryIndex, entryOffsets[entryIndex], options, vmState, &terrainState));
+      traces.push_back(traceSceneScriptEntrypointInternal(scriptBytes, entryIndex, entryOffsets[entryIndex], options, vmState, &terrainState));
     }
     return traces;
+  }
+
+  SceneScriptTraceSummary traceSceneScriptEntrypoint(std::span<const std::uint8_t> scriptBytes,
+                                                     std::size_t entryIndex,
+                                                     std::uint32_t entryOffset,
+                                                     SceneScriptVmState &vmState,
+                                                     orphen::ported::psm2::Psm2RuntimeState *terrainState,
+                                                     SceneScriptTraceOptions options)
+  {
+    return traceSceneScriptEntrypointInternal(scriptBytes, entryIndex, entryOffset, options, vmState, terrainState);
   }
 
   std::string_view sceneScriptTraceStopName(SceneScriptTraceStop stopReason)

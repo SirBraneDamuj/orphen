@@ -12,6 +12,11 @@ namespace orphen::port
   {
   public:
     void resetToProbe(const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map);
+    void setScriptDistance(float distance, const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map);
+    void setScriptPose(const orphen::ported::psm2::Vec3 &eye,
+                       const orphen::ported::psm2::Vec3 &target,
+                       const orphen::ported::psm2::Psm2RuntimeState &map);
+    void clearScriptPose(const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map);
     void update(float deltaSeconds,
                 float rotateX,
                 float rotateY,
@@ -30,6 +35,7 @@ namespace orphen::port
     float targetPitchDegrees_ = 20.0f;
     float distance_ = 20.0f;
     float farPlaneHint_ = 1000.0f;
+    bool scriptPoseActive_ = false;
 
     void refreshPose(const PlayerDebugProbeState &probe, const orphen::ported::psm2::Psm2RuntimeState &map);
   };
