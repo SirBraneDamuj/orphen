@@ -37,6 +37,7 @@ namespace orphen::port
 
   void OriginalLeadPlayer::update(std::uint32_t frameTicks,
                                   const orphen::ported::psm2::Vec3 &movementRequest,
+                                  float stickMagnitude,
                                   bool jumpRequested,
                                   const orphen::ported::psm2::Psm2RuntimeState *map)
   {
@@ -48,7 +49,7 @@ namespace orphen::port
     }
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
-    const orphen::ported::player::OriginalPlayerFrameInput input{movementRequest, jumpAction, jumpAction};
+    const orphen::ported::player::OriginalPlayerFrameInput input{movementRequest, jumpAction, jumpAction, stickMagnitude};
     const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
     {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));
@@ -85,6 +86,13 @@ namespace orphen::port
     originalState_ = controller_.snapshot();
     viewState_.position = originalState_.position;
     viewState_.facingRadians = originalState_.facingRadians;
+    viewState_.state = originalState_.state;
+    viewState_.animationId = originalState_.animationId;
+    viewState_.substateFrame = originalState_.substateFrame;
+    viewState_.collisionFlags = originalState_.collisionFlags;
+    viewState_.verticalVelocity = originalState_.verticalVelocity;
+    viewState_.grounded = originalState_.grounded;
+    viewState_.running = originalState_.running;
     if (originalState_.grounded)
     {
       viewState_.groundHit = queryPsm2GroundAt(map, originalState_.position.x, originalState_.position.y, originalState_.position.z);

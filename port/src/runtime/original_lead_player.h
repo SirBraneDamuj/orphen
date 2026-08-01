@@ -15,6 +15,7 @@ namespace orphen::port
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map);
     void update(std::uint32_t frameTicks,
                 const orphen::ported::psm2::Vec3 &movementRequest,
+                float stickMagnitude,
                 bool jumpRequested,
                 const orphen::ported::psm2::Psm2RuntimeState *map);
 

@@ -10,6 +10,18 @@ namespace orphen::ported::player
 {
 
   constexpr std::uint32_t kOriginalMappedActionJump = 0x80;
+  constexpr std::uint32_t kOriginalMappedActionAttack = 0x20;
+  constexpr std::uint32_t kOriginalMappedActionInteract = 0x10;
+
+  // FUN_00256bb8 animation ids written by the grounded path, and the airborne
+  // ids from FUN_002534d8. Entity +0xA0 is an animation id, not a substate.
+  constexpr std::uint16_t kAnimationStand = 0x01;
+  constexpr std::uint16_t kAnimationWalk = 0x0b;
+  constexpr std::uint16_t kAnimationRun = 0x0e;
+  constexpr std::uint16_t kAnimationJumpRise = 0x0c;
+  constexpr std::uint16_t kAnimationJumpFall = 0x0d;
+  constexpr std::uint16_t kAnimationLand = 0x10;
+  constexpr std::uint16_t kAnimationIdleFidget = 0x17;
 
   struct OriginalTerrainSample
   {
@@ -43,6 +55,10 @@ namespace orphen::ported::player
     orphen::ported::psm2::Vec3 cameraRelativeMove{};
     std::uint32_t mappedHeldActions = 0;
     std::uint32_t mappedPressedActions = 0;
+
+    // fGpffffb678. FUN_00256bb8 walks at or below 100.0 and runs above it;
+    // FUN_00253488 scales air control by it directly. Full deflection is 128.
+    float stickMagnitude = 0.0f;
   };
 
   struct OriginalPlayerSnapshot
@@ -50,9 +66,12 @@ namespace orphen::ported::player
     orphen::ported::psm2::Vec3 position{};
     float facingRadians = 0.0f;
     std::uint16_t state = 0;
-    std::uint16_t substate = 0;
+    std::uint16_t animationId = 0;
+    std::uint16_t substateFrame = 0;
     std::uint32_t collisionFlags = 0;
+    float verticalVelocity = 0.0f;
     bool grounded = false;
+    bool running = false;
   };
 
   class OriginalPlayerController
@@ -81,6 +100,8 @@ namespace orphen::ported::player
       float desiredDeltaX30 = 0.0f;            // +0x30: per-frame X movement request consumed by physics.
       float desiredDeltaZ34 = 0.0f;            // +0x34: per-frame Z movement request consumed by physics.
       float desiredDeltaY38 = 0.0f;            // +0x38: per-frame vertical delta accumulated by physics.
+      float velocityX3c = 0.0f;                // +0x3C: per-frame X velocity published by FUN_00256ab0.
+      float velocityZ40 = 0.0f;                // +0x40: per-frame Z velocity published by FUN_00256ab0.
       float facingRadians5c = 0.0f;            // +0x5C: facing angle.
       float verticalVelocity44 = 0.0f;         // +0x44: vertical velocity/jump vector field.
       float verticalAcceleration48 = 24.0f;    // +0x48: downward acceleration used by FUN_002262c0.
@@ -92,11 +113,13 @@ namespace orphen::ported::player
       std::uint16_t state60 = 0;               // +0x60: field/player movement state.
       std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
       std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
-      std::uint16_t substateA0 = 1;            // +0xA0: state submode; airborne jump uses 0x0C/0x0D/0x10.
+      std::uint16_t animationA0 = 1;           // +0xA0: animation id; see FUN_00256bb8.
       std::uint16_t previousSubstateA2 = 0xffff;
       std::uint16_t stateResetA4 = 999;
       std::uint16_t substateFrameA8 = 0;
+      std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
       std::uint8_t motionFlags1bb = 0;
+      bool running = false;
       bool pendingJumpImpulse = false;
     };
 
@@ -108,7 +131,9 @@ namespace orphen::ported::player
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00253468_finish_landing();
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
-    void FUN_00256ab0_apply_movement_impulse(float movementStep, const orphen::ported::psm2::Vec3 &cameraRelativeMove);
+    void FUN_00256ab0_apply_movement_impulse(std::uint32_t frameTicks,
+                                             float movementStep,
+                                             const orphen::ported::psm2::Vec3 &cameraRelativeMove);
     OriginalTerrainQuery terrainQueryForEntity() const;
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,
                                                                            float originalZ,

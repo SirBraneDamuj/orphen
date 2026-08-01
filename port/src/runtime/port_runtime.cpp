@@ -83,7 +83,7 @@ namespace orphen::port
           rightBasis.y * input.moveX + forwardBasis.y * input.moveY,
           0.0f};
 
-      leadPlayer_.update(frameTicks, movementRequest, input.jumpRequested, loadedMap);
+      leadPlayer_.update(frameTicks, movementRequest, input.stickMagnitude, input.jumpRequested, loadedMap);
 
       const auto &leadState = leadPlayer_.viewState();
       orphen::ported::camera::FieldCameraInput cameraInput;

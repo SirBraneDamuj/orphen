@@ -12,6 +12,10 @@ namespace orphen::ported::player
   {
 
     constexpr float kOriginalRunStepPerFrame = 0.0450000018f;   // fGpffff8a4c.
+    constexpr float kOriginalWalkStepPerFrame = 0.0230000000f;  // fGpffff8a50.
+    constexpr float kOriginalRunStickThreshold = 100.0f;        // FUN_00256bb8.
+    constexpr float kOriginalFallHeight = 0.370000005f;         // fGpffff8a48.
+    constexpr float kOriginalTurnRate = 0.0523598790f;          // fGpffff8a40 band; 3 deg/frame.
     constexpr float kOriginalAirControlUnit = 1.22070314e-05f;  // DAT_00352878.
     constexpr float kOriginalFullStickMagnitude = 128.0f;       // DAT_003555e8 at full deflection.
     constexpr float kOriginalJumpVelocity = 0.0529999994f;      // DAT_0035287c/DAT_00355000.
@@ -34,6 +38,27 @@ namespace orphen::ported::player
     bool hasMovementInput(const orphen::ported::psm2::Vec3 &value)
     {
       return horizontalMagnitude(value) > kMovementEpsilon;
+    }
+
+    float wrapAngle(float radians)
+    {
+      constexpr float kPi = 3.14159265359f;
+      constexpr float kTwoPi = 6.28318530718f;
+      while (radians > kPi)
+      {
+        radians -= kTwoPi;
+      }
+      while (radians < -kPi)
+      {
+        radians += kTwoPi;
+      }
+      return radians;
+    }
+
+    // FUN_002166e8.
+    float shortestAngleDelta(float from, float to)
+    {
+      return wrapAngle(to - from);
     }
 
     bool canStepToHeight(float currentHeight, float destinationHeight, float maxStepHeight, bool wasGrounded)
@@ -104,16 +129,19 @@ namespace orphen::ported::player
     return {{entity_.positionX20, entity_.positionZ24, entity_.positionY28},
             entity_.facingRadians5c,
             entity_.state60,
-            entity_.substateA0,
+            entity_.animationA0,
+            entity_.substateFrameA8,
             entity_.collisionFlags0c,
-            grounded};
+            entity_.verticalVelocity44,
+            grounded,
+            entity_.running};
   }
 
   void OriginalPlayerController::FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate)
   {
     entity_.state60 = state;
     entity_.stateResetA4 = 999;
-    entity_.substateA0 = substate;
+    entity_.animationA0 = substate;
     entity_.previousSubstateA2 = 0xffff;
     entity_.flags06 &= 0xff38;
     entity_.substateFrameA8 = 0;
@@ -130,43 +158,73 @@ namespace orphen::ported::player
                                                                           const OriginalPlayerFrameInput &input)
   {
     const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
+
+    // 1. Forced fall. More than fGpffff8a48 above the ground under us hands off
+    //    to the airborne state with the falling animation, rather than merely
+    //    losing ground contact. This is what makes walking off a ledge work.
+    if (entity_.positionY28 - entity_.previousGroundHeight50 > kOriginalFallHeight)
+    {
+      entity_.motionFlags1bb = static_cast<std::uint8_t>((entity_.motionFlags1bb & 0xef) | 2);
+      entity_.collisionFlags0c &= ~kPhysicsFlagGrounded;
+      FUN_00225bf0_set_entity_state(2, kAnimationJumpFall);
+      return;
+    }
+
+    // 2. Jump. The original also refuses when an equipped item's weapon class is
+    //    below 7; there is no inventory here yet.
     const bool jumpPressed = (input.mappedPressedActions & kOriginalMappedActionJump) != 0;
     if (jumpPressed && grounded)
     {
       entity_.verticalVelocity44 = 0.0f;
       entity_.pendingJumpImpulse = true;
-      entity_.motionFlags1bb = (entity_.motionFlags1bb & 0xef) | 2;
+      entity_.motionFlags1bb = static_cast<std::uint8_t>((entity_.motionFlags1bb & 0xef) | 2);
       entity_.collisionFlags0c &= ~kPhysicsFlagGrounded;
-      FUN_00225bf0_set_entity_state(2, 0x0c);
+      FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
       return;
     }
 
-    if (hasMovementInput(input.cameraRelativeMove))
+    // Attack and interact (mapped 0x20 / 0x10) dispatch on weapon class in the
+    // original and are not ported; they fall through to locomotion here.
+
+    // 3. Locomotion or idle.
+    entity_.state60 = 0;
+    entity_.animationA0 = kAnimationStand;
+
+    if (!hasMovementInput(input.cameraRelativeMove) || input.stickMagnitude <= 0.0f)
     {
-      // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * fGpffff8a4c * 0.03125, entity).
-      // The walk branch (fGpffff8a50 when fGpffffb678 <= 100.0) needs analog
-      // magnitude and lands with the input work in a later slice.
-      FUN_00256ab0_apply_movement_impulse(orphen::ported::movementScaleForFrameTicks(frameTicks) *
-                                              kOriginalRunStepPerFrame,
-                                          input.cameraRelativeMove);
-      if (entity_.state60 == 0)
+      entity_.running = false;
+
+      // The idle fidget fires when the 16-bit tick accumulator rolls past its
+      // sign bit: 0x8000 ticks is 1024 frames, about 17 seconds at 60 fps.
+      const std::uint16_t previousTimer = entity_.idleTimer1b6;
+      entity_.idleTimer1b6 = static_cast<std::uint16_t>(previousTimer + static_cast<std::uint16_t>(frameTicks));
+      if (static_cast<std::int16_t>(entity_.idleTimer1b6) < 0)
       {
-        FUN_00225bf0_set_entity_state(1, 1);
+        entity_.animationA0 = kAnimationIdleFidget;
       }
       return;
     }
 
-    if (grounded && entity_.state60 != 0)
-    {
-      FUN_00252d88_return_to_idle_state();
-    }
+    // Walk below a stick magnitude of 100, run above it.
+    entity_.running = input.stickMagnitude > kOriginalRunStickThreshold;
+    entity_.state60 = 1;
+    entity_.idleTimer1b6 = 0;
+
+    const float speed = entity_.running ? kOriginalRunStepPerFrame : kOriginalWalkStepPerFrame;
+
+    // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * speed * 0.03125, entity).
+    FUN_00256ab0_apply_movement_impulse(frameTicks,
+                                        orphen::ported::movementScaleForFrameTicks(frameTicks) * speed,
+                                        input.cameraRelativeMove);
+
+    entity_.animationA0 = entity_.running ? kAnimationRun : kAnimationWalk;
   }
 
   void OriginalPlayerController::FUN_002534d8_update_airborne_state(std::uint32_t frameTicks,
                                                                     const OriginalPlayerFrameInput &input)
   {
     const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
-    if (entity_.substateA0 == 0x0c)
+    if (entity_.animationA0 == kAnimationJumpRise)
     {
       if (entity_.substateFrameA8 >= 4)
       {
@@ -182,29 +240,29 @@ namespace orphen::ported::player
         if (entity_.verticalVelocity44 < 0.0f)
         {
           entity_.motionFlags1bb = (entity_.motionFlags1bb & 0xef) | 2;
-          entity_.substateA0 = 0x0d;
+          entity_.animationA0 = kAnimationJumpFall;
         }
       }
 
       if (grounded)
       {
-        entity_.substateA0 = 0x10;
+        entity_.animationA0 = kAnimationLand;
         entity_.pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
     }
-    else if (entity_.substateA0 == 0x0d)
+    else if (entity_.animationA0 == kAnimationJumpFall)
     {
       if (grounded)
       {
-        entity_.substateA0 = 0x10;
+        entity_.animationA0 = kAnimationLand;
         entity_.pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
     }
-    else if (entity_.substateA0 == 0x10)
+    else if (entity_.animationA0 == kAnimationLand)
     {
       if (grounded)
       {
@@ -236,16 +294,17 @@ namespace orphen::ported::player
   {
     if (hasMovementInput(input.cameraRelativeMove))
     {
-      // FUN_00253488: FUN_00256ab0(DAT_003555bc * DAT_003555e8 * DAT_00352878).
-      // DAT_003555e8 is the analog magnitude; full deflection until the input
-      // slice lands.
-      FUN_00256ab0_apply_movement_impulse(static_cast<float>(frameTicks) * kOriginalFullStickMagnitude *
-                                              kOriginalAirControlUnit,
+      // FUN_00253488: FUN_00256ab0(DAT_003555bc * DAT_003555e8 * DAT_00352878),
+      // where DAT_003555e8 is the analog magnitude.
+      const float magnitude = input.stickMagnitude > 0.0f ? input.stickMagnitude : kOriginalFullStickMagnitude;
+      FUN_00256ab0_apply_movement_impulse(frameTicks,
+                                          static_cast<float>(frameTicks) * magnitude * kOriginalAirControlUnit,
                                           input.cameraRelativeMove);
     }
   }
 
-  void OriginalPlayerController::FUN_00256ab0_apply_movement_impulse(float movementStep,
+  void OriginalPlayerController::FUN_00256ab0_apply_movement_impulse(std::uint32_t frameTicks,
+                                                                     float movementStep,
                                                                      const orphen::ported::psm2::Vec3 &cameraRelativeMove)
   {
     const float movementMagnitude = horizontalMagnitude(cameraRelativeMove);
@@ -254,11 +313,37 @@ namespace orphen::ported::player
       return;
     }
 
-    const float normalizedX = cameraRelativeMove.x / movementMagnitude;
-    const float normalizedZ = cameraRelativeMove.y / movementMagnitude;
-    entity_.facingRadians5c = std::atan2(normalizedZ, normalizedX);
-    entity_.desiredDeltaX30 += movementStep * normalizedX;
-    entity_.desiredDeltaZ34 += movementStep * normalizedZ;
+    const float goalFacing = std::atan2(cameraRelativeMove.y, cameraRelativeMove.x);
+
+    // The original turns toward the goal through FUN_0023a320 rather than
+    // snapping. It composes the goal from the camera yaw globals
+    // (fGpffffb0a4 + fGpffffb674 - fGpffff8a44); here the caller has already
+    // rotated the stick into world space, so the goal is taken from that.
+    const float maxTurn = kOriginalTurnRate * orphen::ported::movementScaleForFrameTicks(frameTicks);
+    const float turnDelta = shortestAngleDelta(entity_.facingRadians5c, goalFacing);
+    if (turnDelta > maxTurn)
+    {
+      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c + maxTurn);
+    }
+    else if (turnDelta < -maxTurn)
+    {
+      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c - maxTurn);
+    }
+    else
+    {
+      entity_.facingRadians5c = wrapAngle(goalFacing);
+    }
+
+    // The impulse follows the facing the entity actually has, so a sharp input
+    // change arcs instead of teleporting the velocity.
+    const float facingX = std::cos(entity_.facingRadians5c);
+    const float facingZ = std::sin(entity_.facingRadians5c);
+
+    // +0x3C / +0x40: the per-frame velocity the original also publishes.
+    entity_.velocityX3c = movementStep * facingX;
+    entity_.velocityZ40 = movementStep * facingZ;
+    entity_.desiredDeltaX30 += entity_.velocityX3c;
+    entity_.desiredDeltaZ34 += entity_.velocityZ40;
   }
 
   OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity() const
@@ -404,7 +489,7 @@ namespace orphen::ported::player
     entity_.previousGroundHeight50 = entity_.groundHeight4c;
 
     const bool airborneState = entity_.state60 == 2;
-    const bool jumpStartup = airborneState && entity_.substateA0 == 0x0c && entity_.pendingJumpImpulse && entity_.substateFrameA8 < 4;
+    const bool jumpStartup = airborneState && entity_.animationA0 == kAnimationJumpRise && entity_.pendingJumpImpulse && entity_.substateFrameA8 < 4;
     if (jumpStartup)
     {
       entity_.desiredDeltaY38 = 0.0f;
