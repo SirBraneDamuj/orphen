@@ -16,7 +16,7 @@ namespace
   void printUsage(const char *programName)
   {
     std::cout << "Usage: " << programName
-              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only] [--scene-tree] [--script-frames <count>]\n";
+              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only] [--scene-tree] [--frames <count>]\n";
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -70,13 +70,13 @@ namespace
         config.printSceneTree = true;
         continue;
       }
-      if (argument == "--script-frames")
+      if (argument == "--frames" || argument == "--script-frames")
       {
         if (argumentIndex + 1 >= argc)
         {
-          throw std::runtime_error("--script-frames requires a count");
+          throw std::runtime_error(std::string(argument) + " requires a count");
         }
-        config.scriptFrameCount = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
+        config.headlessFrameCount = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
         continue;
       }
 
@@ -128,13 +128,13 @@ int main(int argc, char **argv)
       return 0;
     }
 
-    if (config.scriptFrameCount != 0)
+    if (config.headlessFrameCount != 0)
     {
       orphen::port::PortRuntime runtime;
       runtime.initialize(config);
 
       orphen::port::InputSnapshot input;
-      for (std::uint32_t frameIndex = 0; frameIndex < config.scriptFrameCount; ++frameIndex)
+      for (std::uint32_t frameIndex = 0; frameIndex < config.headlessFrameCount; ++frameIndex)
       {
         if (!runtime.update(1.0f / 60.0f, input))
         {

@@ -14,7 +14,11 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 
 ## Current Milestone
 
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages. Runtime update now owns an original-shaped lead player entity that starts at the scene origin, maps keyboard input into original action bits, and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00227390`, `FUN_00227840`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Disc scenes also copy the first category `0x0001` script blob into runtime-owned trace state, parse the five SCR header entry offsets used by `FUN_0025b6d0`, `FUN_0025b728`, `FUN_0025b778`, `FUN_0025b978`, and `FUN_0025b9a8`, and run a bounded side-effect-free bootstrap trace over structural opcodes and known setup-op operand shapes. The follow camera uses a runtime over-the-shoulder rig feeding the ported original camera eye/target core (`FUN_00217d40`, `FUN_00217d10`, `FUN_00217a70`).
+The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages.
+
+Runtime update owns an original-shaped lead player entity that starts at the scene origin and runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00227390`, `FUN_00227840`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The viewer uses the normal field camera defaults from `FUN_00216aa0`/`FUN_00216930` plus the normal branch's auto-focus yaw easing for its player camera.
+
+The SCR interpreter/probe work has been removed from the normal load/update path. Script blobs can still be inspected through the scene tree, but the executable no longer runs a bootstrap SCR VM trace, mutates terrain from scripts, or installs a script-driven camera at startup. The previous PSC3 wireframe gallery was also removed from the active harness; PSC3 records are still visible in the resource tree, but they are not rendered as placeholder scene objects.
 
 ## Build
 
@@ -77,28 +81,34 @@ To inspect the resources loaded by a disc scene:
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --scene-tree --load-only
 ```
 
-The scene tree currently groups MCB bundle records by category and prints record ids, bundle offsets, packed/decoded sizes, and known decoded signatures such as PSM2 and BMPA. At runtime, the category `0x0001` script record reports its decoded size, four-byte signature, five entry offsets, and a bounded bootstrap trace. The trace now carries a minimal VM state for work variables, flags, object registers, and script slots; evaluates conditionals and expression operands; and applies terrain opcodes `0xA4`, `0xA5`, and `0xA6` to the loaded PSM2 state. For `s01_e012`, all five bootstrap entrypoints complete and entry1 applies `0xA4` to `DRecord80` terrain flags. Object methods, spawned entities, and coroutine slots are still modeled only enough to consume operands and keep bootstrap flow moving.
+The scene tree currently groups MCB bundle records by category and prints record ids, bundle offsets, packed/decoded sizes, and known decoded signatures such as PSM2, BMPA, SCR, and PSC3. `s01_e024` is a useful early exploratory scene because it is much smaller than `s01_e012` and appears to be a debug scene:
+
+```sh
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
+```
+
+`--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
 
 Controls:
 
-- `W/A/S/D` moves the runtime lead player placeholder relative to the current camera view.
+- `W/A/S/D` moves the runtime lead player relative to the current follow camera yaw. The follow camera keeps its target on the player and auto-rotates toward the player's observed movement direction.
 - `Space` jumps when the lead player is grounded.
-- `J/L` rotates the over-the-shoulder camera around the lead player; when released, it eases back toward the player's facing direction. `I/K` adjusts pitch.
+- `J/L` rotates the free viewer camera when no player is active.
+- `I/K` adjusts pitch in free viewer mode. The player follow camera currently uses the original normal field camera pitch.
 - Left/right arrows cycle maps when running from `--disc-root`.
-- `Q/E` zoom out/in.
-- `R` resets the camera.
+- `Q/E` zoom out/in in free viewer mode. The player follow camera currently uses the original normal field camera distance.
+- `R` resets the viewer camera.
 - `F` toggles wireframe.
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 
-The current lead player placeholder is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when it enters a new ground triangle.
-
-Disc-loaded scenes also render every decoded PSC3 model resource as a wireframe debug gallery near the origin. This shows the loaded object/model resources, but it is not faithful scene placement yet; script/entity spawn transforms still need to be decoded.
+The current lead player is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when it enters a new ground triangle.
 
 ## Suggested Next Slices
 
 1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene.
-2. Port the directional entity/body blocker helpers (`FUN_00228380`, `FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) and dynamic entity support helper `FUN_00228cf0`.
-3. Replace keyboard-derived movement vectors with the original controller globals and analog smoothing path from `FUN_0023b5d8`/`FUN_00256ab0`.
-4. Port the original camera interpolation helpers (`FUN_00217b88`, `FUN_00217f38`, `FUN_00217fe8`) and let scripts drive the same eye/target camera state.
-5. Validate script-driven terrain activation across more scenes, especially paths that require scheduled coroutine slots or object-method side effects before hitting `0xA5`/`0xA6`.
+2. Replace keyboard-derived movement vectors with the original controller globals and analog smoothing path from `FUN_0023b5d8`/`FUN_00256ab0`.
+3. Port the directional entity/body blocker helpers (`FUN_00228380`, `FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) and dynamic entity support helper `FUN_00228cf0`.
+4. Rebuild camera behavior from the original camera state/update functions before adding a new follow camera.
+5. Bring SCR behavior back only as narrow, verified opcode slices tied to a concrete game behavior, not as a broad bootstrap VM requirement.

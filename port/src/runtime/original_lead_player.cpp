@@ -36,7 +36,7 @@ namespace orphen::port
   }
 
   void OriginalLeadPlayer::update(float deltaSeconds,
-                                  const orphen::ported::psm2::Vec3 &cameraRelativeMove,
+                                  const orphen::ported::psm2::Vec3 &movementRequest,
                                   bool jumpRequested,
                                   const orphen::ported::psm2::Psm2RuntimeState *map)
   {
@@ -48,7 +48,7 @@ namespace orphen::port
     }
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
-    const orphen::ported::player::OriginalPlayerFrameInput input{cameraRelativeMove, jumpAction, jumpAction};
+    const orphen::ported::player::OriginalPlayerFrameInput input{movementRequest, jumpAction, jumpAction};
     const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
     {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));

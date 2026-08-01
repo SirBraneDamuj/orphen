@@ -21,6 +21,8 @@ namespace orphen::ported::camera
     void setEye(const orphen::ported::psm2::Vec3 &eye);
     void setTarget(const orphen::ported::psm2::Vec3 &target);
     void setEyeAndTarget(const orphen::ported::psm2::Vec3 &eye, const orphen::ported::psm2::Vec3 &target);
+    void setNormalFieldFollow(const orphen::ported::psm2::Vec3 &leadPosition, float yawRadians);
+    void setFieldFollowMode1e(const orphen::ported::psm2::Vec3 &leadPosition, float yawRadians);
     void setVerticalEyeOffset(float offset);
 
     const CameraPose &pose() const { return pose_; }

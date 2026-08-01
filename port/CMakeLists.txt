@@ -57,30 +57,20 @@ target_sources(orphen_port
     src/ported/resource/bmpa_texture_decoder.h
     src/ported/resource/mcb_runtime.cpp
     src/ported/resource/mcb_runtime.h
-    src/ported/camera/original_camera_state.cpp
-    src/ported/camera/original_camera_state.h
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp
     src/ported/psm2/psm2_geometry_builder.h
     src/ported/psm2/psm2_runtime.h
-    src/ported/psc3/psc3_runtime.cpp
-    src/ported/psc3/psc3_runtime.h
     src/ported/player/original_player_controller.cpp
     src/ported/player/original_player_controller.h
+    src/ported/camera/original_camera_state.cpp
+    src/ported/camera/original_camera_state.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h
-        src/runtime/camera_view.h
         src/runtime/original_lead_player.cpp
         src/runtime/original_lead_player.h
-        src/runtime/player_debug_probe.cpp
-        src/runtime/player_debug_probe.h
-        src/runtime/probe_follow_camera.cpp
-        src/runtime/probe_follow_camera.h
-        src/runtime/scene_script_interpreter.cpp
-        src/runtime/scene_script_interpreter.h
-        src/runtime/scene_script_state.cpp
-        src/runtime/scene_script_state.h
+        src/runtime/player_view_state.h
         src/runtime/psm2_ground_query.cpp
         src/runtime/psm2_ground_query.h
         src/runtime/ps2_memory.h

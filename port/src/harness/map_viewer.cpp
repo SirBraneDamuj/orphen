@@ -2,7 +2,6 @@
 
 #include "harness/scene_resource_tree.h"
 #include "ported/psm2/decoded_psm2_loader.h"
-#include "ported/psc3/psc3_runtime.h"
 
 #include <SDL_opengl.h>
 
@@ -24,6 +23,12 @@ namespace orphen::harness
 
     constexpr double kPi = 3.14159265358979323846;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
+    constexpr float kOriginalFramesPerSecond = 60.0f;
+    constexpr float kNormalCameraAutoYawGainPerSecond = 0.125f * kOriginalFramesPerSecond;
+    constexpr float kNormalCameraAutoYawAccelerationPerSecond =
+      0.000872664445f * kOriginalFramesPerSecond * kOriginalFramesPerSecond; // fGpffff82d4.
+    constexpr float kNormalCameraAutoYawMaxSpeedPerSecond =
+      0.0261799339f * kOriginalFramesPerSecond; // fGpffff82d8.
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -67,6 +72,71 @@ namespace orphen::harness
     {
       const auto delta = viewerSubtract(left, right);
       return std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+    }
+
+    struct ViewerGroundBasis
+    {
+      orphen::ported::psm2::Vec3 right{};
+      orphen::ported::psm2::Vec3 forward{};
+    };
+
+    ViewerGroundBasis viewerGroundBasis(float yawDegrees)
+    {
+      const float yawRadians = yawDegrees * static_cast<float>(kPi / 180.0);
+      return {{std::cos(yawRadians), 0.0f, -std::sin(yawRadians)},
+              {std::sin(yawRadians), 0.0f, std::cos(yawRadians)}};
+    }
+
+    float normalizeRadians(float angle)
+    {
+      return std::remainder(angle, static_cast<float>(kPi * 2.0));
+    }
+
+    float approach(float current, float target, float maxDelta)
+    {
+      if (current < target)
+      {
+        return std::min(current + maxDelta, target);
+      }
+      return std::max(current - maxDelta, target);
+    }
+
+    void advanceAutoFocusYaw(float &yawRadians,
+                             float &yawVelocityRadians,
+                             float desiredYawRadians,
+                             float deltaSeconds)
+    {
+      const float angleError = normalizeRadians(desiredYawRadians - yawRadians);
+      const float targetVelocity = std::clamp(angleError * kNormalCameraAutoYawGainPerSecond,
+                                             -kNormalCameraAutoYawMaxSpeedPerSecond,
+                                             kNormalCameraAutoYawMaxSpeedPerSecond);
+      yawVelocityRadians = approach(yawVelocityRadians,
+                                    targetVelocity,
+                                    kNormalCameraAutoYawAccelerationPerSecond * deltaSeconds);
+
+      float yawStep = yawVelocityRadians * deltaSeconds;
+      if (std::fabs(yawStep) > std::fabs(angleError))
+      {
+        yawStep = angleError;
+        yawVelocityRadians = 0.0f;
+      }
+      yawRadians = normalizeRadians(yawRadians + yawStep);
+    }
+
+    void dampAutoFocusYaw(float &yawVelocityRadians, float deltaSeconds)
+    {
+      yawVelocityRadians = approach(yawVelocityRadians,
+                                    0.0f,
+                                    kNormalCameraAutoYawAccelerationPerSecond * deltaSeconds);
+    }
+
+    orphen::ported::psm2::Vec3 originalCameraRelativeMovement(float yawRadians, float strafe, float forward)
+    {
+      const orphen::ported::psm2::Vec3 forwardBasis{std::cos(yawRadians), std::sin(yawRadians), 0.0f};
+      const orphen::ported::psm2::Vec3 rightBasis{std::sin(yawRadians), -std::cos(yawRadians), 0.0f};
+      return {rightBasis.x * strafe + forwardBasis.x * forward,
+              rightBasis.y * strafe + forwardBasis.y * forward,
+              0.0f};
     }
 
     void setPerspective(int framebufferWidth, int framebufferHeight, float verticalFovDegrees, float farPlaneHint)
@@ -258,17 +328,17 @@ namespace orphen::harness
       glLineWidth(1.0f);
     }
 
-    void drawDebugPlayerProbe(const orphen::port::PlayerDebugProbeState &probe)
+    void drawLeadPlayer(const orphen::port::PlayerViewState &player)
     {
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
       glLineWidth(3.0f);
 
-      if (probe.groundHit.has_value())
+      if (player.groundHit.has_value())
       {
         glColor3f(1.0f, 0.86f, 0.18f);
         glBegin(GL_LINE_LOOP);
-        for (const auto &vertex : probe.groundHit->vertices)
+        for (const auto &vertex : player.groundHit->vertices)
         {
           const auto viewerVertex = toViewerSpace(vertex);
           glVertex3f(viewerVertex.x, viewerVertex.y + 0.05f, viewerVertex.z);
@@ -276,7 +346,7 @@ namespace orphen::harness
         glEnd();
       }
 
-      const auto foot = toViewerSpace(probe.position);
+      const auto foot = toViewerSpace(player.position);
       const float bodyHeight = 1.25f;
       const float bodyHalfWidth = 0.35f;
       const float minX = foot.x - bodyHalfWidth;
@@ -314,62 +384,12 @@ namespace orphen::harness
 
       const float facingLength = bodyHalfWidth * 2.4f;
       glVertex3f(foot.x, foot.y + bodyHeight * 0.45f, foot.z);
-      glVertex3f(foot.x + std::cos(probe.facingRadians) * facingLength,
+      glVertex3f(foot.x + std::cos(player.facingRadians) * facingLength,
                  foot.y + bodyHeight * 0.45f,
-                 foot.z - std::sin(probe.facingRadians) * facingLength);
+                 foot.z - std::sin(player.facingRadians) * facingLength);
       glEnd();
 
       glLineWidth(1.0f);
-    }
-
-    orphen::ported::psm2::Vec3 psc3GalleryVertex(const LoadedSceneModel &sceneModel,
-                                                 const orphen::ported::psm2::Vec3 &localVertex)
-    {
-      const auto &bounds = sceneModel.model.bounds;
-      const orphen::ported::psm2::Vec3 center{(bounds.min.x + bounds.max.x) * 0.5f,
-                                              (bounds.min.y + bounds.max.y) * 0.5f,
-                                              0.0f};
-      return {localVertex.x - center.x + sceneModel.galleryOffset.x,
-              localVertex.y - center.y + sceneModel.galleryOffset.y,
-              localVertex.z - bounds.min.z + sceneModel.galleryOffset.z};
-    }
-
-    void emitSceneModelVertex(const LoadedSceneModel &sceneModel, const orphen::ported::psm2::Vec3 &localVertex)
-    {
-      const auto viewerVertex = toViewerSpace(psc3GalleryVertex(sceneModel, localVertex));
-      glVertex3f(viewerVertex.x, viewerVertex.y, viewerVertex.z);
-    }
-
-    void drawSceneModelGallery(const std::vector<LoadedSceneModel> &sceneModels)
-    {
-      if (sceneModels.empty())
-      {
-        return;
-      }
-
-      glDisable(GL_TEXTURE_2D);
-      glBindTexture(GL_TEXTURE_2D, 0);
-      glLineWidth(1.0f);
-      glBegin(GL_LINES);
-
-      for (std::size_t modelIndex = 0; modelIndex < sceneModels.size(); ++modelIndex)
-      {
-        const auto &sceneModel = sceneModels[modelIndex];
-        const float colorMix = static_cast<float>(modelIndex % 13) / 12.0f;
-        glColor3f(0.25f + colorMix * 0.45f, 0.72f, 0.95f - colorMix * 0.35f);
-
-        for (const auto &triangle : sceneModel.model.triangles)
-        {
-          emitSceneModelVertex(sceneModel, triangle.vertices[0]);
-          emitSceneModelVertex(sceneModel, triangle.vertices[1]);
-          emitSceneModelVertex(sceneModel, triangle.vertices[1]);
-          emitSceneModelVertex(sceneModel, triangle.vertices[2]);
-          emitSceneModelVertex(sceneModel, triangle.vertices[2]);
-          emitSceneModelVertex(sceneModel, triangle.vertices[0]);
-        }
-      }
-
-      glEnd();
     }
 
     void emitVertex(const orphen::ported::psm2::Psm2RuntimeState &map, std::uint16_t vertexIndex)
@@ -514,7 +534,6 @@ namespace orphen::harness
     currentDiscSceneIndex_ = 0;
     sceneResources_.reset();
     setTexturePages({});
-    sceneModels_.clear();
     ++loadedMapGeneration_;
     resetCamera();
   }
@@ -580,95 +599,70 @@ namespace orphen::harness
     orphen::ported::psm2::Psm2RuntimeState loadedPsm2 = orphen::ported::psm2::loadDecodedPsm2(loadedMap.decodedPsm2);
     setTexturePages(std::move(loadedMap.texturePages));
     map_ = std::move(loadedPsm2);
-    loadSceneModels();
     loadedSourceDescription_ = sceneName(selection) + " map_" + loadedMap.resourceIdHex;
     currentDiscSceneIndex_ = sceneIndex;
     ++loadedMapGeneration_;
     resetCamera();
   }
 
-  void MapViewer::loadSceneModels()
+  void MapViewer::setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView, float deltaSeconds)
   {
-    sceneModels_.clear();
-    if (!sceneResources_.has_value())
+    if (!playerView.has_value())
     {
+      leadPlayerView_.reset();
+      previousLeadPlayerPosition_.reset();
+      followCameraYawVelocityRadians_ = 0.0f;
+      followCameraInitialized_ = false;
       return;
     }
 
-    std::size_t skippedPsc3Count = 0;
-    for (const SceneResourceRecord &record : sceneResources_->records())
+    const auto previousLeadPosition = previousLeadPlayerPosition_;
+    leadPlayerView_ = std::move(playerView);
+    const auto &leadPosition = leadPlayerView_->position;
+    cameraTarget_ = toViewerSpace(leadPosition);
+
+    if (!followCameraInitialized_)
     {
-      try
-      {
-        std::vector<std::uint8_t> decoded = sceneResources_->decodeRecord(record);
-        if (!orphen::ported::psc3::hasPsc3Magic(decoded))
-        {
-          continue;
-        }
-
-        auto model = orphen::ported::psc3::loadPsc3Model(decoded);
-        if (model.triangles.empty())
-        {
-          ++skippedPsc3Count;
-          continue;
-        }
-
-        sceneModels_.push_back({std::move(model), {}, record.category, record.resourceId});
-      }
-      catch (const std::exception &)
-      {
-        ++skippedPsc3Count;
-      }
-    }
-
-    layoutSceneModelGallery();
-    if (!sceneModels_.empty() || skippedPsc3Count != 0)
-    {
-      std::size_t triangleCount = 0;
-      for (const auto &sceneModel : sceneModels_)
-      {
-        triangleCount += sceneModel.model.triangles.size();
-      }
-      std::cout << "[scene-objects] loaded " << sceneModels_.size()
-                << " PSC3 resources as debug gallery triangles=" << triangleCount
-                << " skipped=" << skippedPsc3Count << '\n';
-    }
-  }
-
-  void MapViewer::layoutSceneModelGallery()
-  {
-    if (sceneModels_.empty())
-    {
+      followCameraState_.setNormalFieldFollow(leadPosition, followCameraYawRadians_);
+      previousLeadPlayerPosition_ = leadPosition;
+      followCameraInitialized_ = true;
       return;
     }
 
-    constexpr std::size_t kColumnCount = 8;
-    constexpr float kSpacing = 3.0f;
-    constexpr float kForwardStart = 4.0f;
-    const float centerOffset = (static_cast<float>(kColumnCount) - 1.0f) * 0.5f;
-
-    for (std::size_t modelIndex = 0; modelIndex < sceneModels_.size(); ++modelIndex)
+    if (deltaSeconds > 0.0f && previousLeadPosition.has_value())
     {
-      const std::size_t column = modelIndex % kColumnCount;
-      const std::size_t row = modelIndex / kColumnCount;
-      sceneModels_[modelIndex].galleryOffset = {kForwardStart + static_cast<float>(row) * kSpacing,
-                                                (static_cast<float>(column) - centerOffset) * kSpacing,
-                                                0.0f};
+      constexpr float kLeadMovementEpsilonSquared = 0.000001f;
+      const float deltaX = leadPosition.x - previousLeadPosition->x;
+      const float deltaY = leadPosition.y - previousLeadPosition->y;
+      const float movementSquared = deltaX * deltaX + deltaY * deltaY;
+      if (movementSquared > kLeadMovementEpsilonSquared)
+      {
+        advanceAutoFocusYaw(followCameraYawRadians_,
+                            followCameraYawVelocityRadians_,
+                            std::atan2(deltaY, deltaX),
+                            deltaSeconds);
+      }
+      else
+      {
+        dampAutoFocusYaw(followCameraYawVelocityRadians_, deltaSeconds);
+      }
     }
+
+    previousLeadPlayerPosition_ = leadPosition;
+    followCameraState_.setNormalFieldFollow(leadPosition, followCameraYawRadians_);
   }
 
-  void MapViewer::setDebugPlayerProbe(std::optional<orphen::port::PlayerDebugProbeState> probe)
+  orphen::ported::psm2::Vec3 MapViewer::cameraRelativeMovement(float strafe, float forward) const
   {
-    debugPlayerProbe_ = std::move(probe);
-    if (debugPlayerProbe_.has_value() && !runtimeCameraView_.has_value())
+    if (leadPlayerView_.has_value())
     {
-      cameraTarget_ = toViewerSpace(debugPlayerProbe_->position);
+      return originalCameraRelativeMovement(followCameraYawRadians_, strafe, forward);
     }
-  }
 
-  void MapViewer::setRuntimeCameraView(std::optional<orphen::port::RuntimeCameraView> view)
-  {
-    runtimeCameraView_ = std::move(view);
+    const auto basis = viewerGroundBasis(cameraYawDegrees_);
+    const float viewerX = basis.right.x * strafe + basis.forward.x * forward;
+    const float viewerZ = basis.right.z * strafe + basis.forward.z * forward;
+    return {viewerX, -viewerZ, 0.0f};
   }
 
   void MapViewer::printLoadedSceneTree(std::ostream &output) const
@@ -743,7 +737,6 @@ namespace orphen::harness
 
   void MapViewer::resetCamera()
   {
-    runtimeCameraView_.reset();
     if (map_.has_value() && map_->bounds.valid)
     {
       cameraTarget_ = toViewerSpace(boundsCenter(map_->bounds));
@@ -757,6 +750,11 @@ namespace orphen::harness
 
     cameraYawDegrees_ = 35.0f;
     cameraPitchDegrees_ = -55.0f;
+    followCameraState_ = {};
+    previousLeadPlayerPosition_.reset();
+    followCameraYawRadians_ = 0.0f;
+    followCameraYawVelocityRadians_ = 0.0f;
+    followCameraInitialized_ = false;
   }
 
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
@@ -780,42 +778,37 @@ namespace orphen::harness
       cycleDiscScene(1);
     }
 
-    if (runtimeCameraView_.has_value())
+    if (!leadPlayerView_.has_value())
     {
-      return;
-    }
-
-    cameraYawDegrees_ += input.rotateX * kYawSpeed * deltaSeconds;
-    cameraPitchDegrees_ = std::clamp(cameraPitchDegrees_ + input.rotateY * kPitchSpeed * deltaSeconds, -85.0f, -10.0f);
-
-    if (!debugPlayerProbe_.has_value())
-    {
-      const float yawRadians = cameraYawDegrees_ * static_cast<float>(kPi / 180.0);
+      cameraYawDegrees_ += input.rotateX * kYawSpeed * deltaSeconds;
+      cameraPitchDegrees_ = std::clamp(cameraPitchDegrees_ + input.rotateY * kPitchSpeed * deltaSeconds, -85.0f, -10.0f);
       const float panDistance = std::max(cameraDistance_, 10.0f) * kPanSpeed * deltaSeconds;
-      const orphen::ported::psm2::Vec3 right{std::cos(yawRadians), 0.0f, -std::sin(yawRadians)};
-      const orphen::ported::psm2::Vec3 forward{std::sin(yawRadians), 0.0f, std::cos(yawRadians)};
+      const auto basis = viewerGroundBasis(cameraYawDegrees_);
 
-      cameraTarget_.x += (right.x * input.moveX + forward.x * input.moveY) * panDistance;
-      cameraTarget_.z += (right.z * input.moveX + forward.z * input.moveY) * panDistance;
+      cameraTarget_.x += (basis.right.x * input.moveX + basis.forward.x * input.moveY) * panDistance;
+      cameraTarget_.z += (basis.right.z * input.moveX + basis.forward.z * input.moveY) * panDistance;
+      cameraDistance_ *= std::exp(-input.zoom * kZoomSpeed * deltaSeconds);
+      cameraDistance_ = std::max(cameraDistance_, 1.0f);
     }
-    cameraDistance_ *= std::exp(-input.zoom * kZoomSpeed * deltaSeconds);
-    cameraDistance_ = std::max(cameraDistance_, 1.0f);
   }
 
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
     ensureTexturesUploaded();
 
-    const bool hasRuntimeCamera = runtimeCameraView_.has_value();
-    const float verticalFovDegrees = hasRuntimeCamera ? runtimeCameraView_->verticalFovDegrees : 60.0f;
-    const float farPlaneHint = hasRuntimeCamera ? runtimeCameraView_->farPlaneHint : cameraDistance_ * 8.0f;
-    setPerspective(framebufferWidth, framebufferHeight, verticalFovDegrees, farPlaneHint);
-    if (hasRuntimeCamera)
+    float renderCameraDistance = cameraDistance_;
+    if (leadPlayerView_.has_value())
     {
-      applyLookAtCamera(toViewerSpace(runtimeCameraView_->eye), toViewerSpace(runtimeCameraView_->target));
+      const auto &pose = followCameraState_.pose();
+      const auto viewerEye = toViewerSpace(pose.eye);
+      const auto viewerTarget = toViewerSpace(pose.target);
+      renderCameraDistance = viewerDistance(viewerEye, viewerTarget);
+      setPerspective(framebufferWidth, framebufferHeight, 60.0f, renderCameraDistance * 8.0f);
+      applyLookAtCamera(viewerEye, viewerTarget);
     }
     else
     {
+      setPerspective(framebufferWidth, framebufferHeight, 60.0f, cameraDistance_ * 8.0f);
       applyCamera(cameraTarget_, cameraDistance_, cameraYawDegrees_, cameraPitchDegrees_);
     }
 
@@ -825,22 +818,18 @@ namespace orphen::harness
     glDisable(GL_CULL_FACE);
     glPolygonMode(GL_FRONT_AND_BACK, wireframe_ ? GL_LINE : GL_FILL);
 
-    const float gridRadius = hasRuntimeCamera
-                                 ? std::clamp(viewerDistance(toViewerSpace(runtimeCameraView_->eye), toViewerSpace(runtimeCameraView_->target)) * 2.0f, 2.0f, 40.0f)
-                                 : cameraDistance_;
-    drawGrid(gridRadius);
+    drawGrid(renderCameraDistance);
     if (map_.has_value())
     {
       drawMap(*map_, uploadedTextureIds_);
     }
-    drawSceneModelGallery(sceneModels_);
-    if (debugPlayerProbe_.has_value())
+    if (leadPlayerView_.has_value())
     {
-      drawDebugPlayerProbe(*debugPlayerProbe_);
+      drawLeadPlayer(*leadPlayerView_);
     }
 
     glDisable(GL_DEPTH_TEST);
-    drawOriginAxisIndicator(gridRadius);
+  drawOriginAxisIndicator(renderCameraDistance);
     glEnable(GL_DEPTH_TEST);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);

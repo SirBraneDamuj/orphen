@@ -94,6 +94,7 @@ namespace orphen::ported::player
       std::uint16_t stateResetA4 = 999;
       std::uint16_t substateFrameA8 = 0;
       std::uint8_t motionFlags1bb = 0;
+      bool pendingJumpImpulse = false;
     };
 
     OriginalLeadEntity entity_;

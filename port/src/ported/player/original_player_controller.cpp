@@ -9,10 +9,12 @@ namespace orphen::ported::player
   namespace
   {
 
-    constexpr float kRunSpeed = 6.875f;
-    constexpr float kAirControlSpeed = 3.25f;
-    constexpr float kJumpVelocity = 8.0f;
-    constexpr float kGravity = 24.0f;
+    constexpr float kOriginalFramesPerSecond = 60.0f;
+    constexpr float kOriginalNominalFrameTicks = 32.0f;
+    constexpr float kOriginalRunStepPerFrame = 0.0450000018f; // fGpffff8a4c.
+    constexpr float kOriginalAirControlStepPerFrame = kOriginalNominalFrameTicks * 128.0f * 1.22070314e-05f; // DAT_00352878 at full stick.
+    constexpr float kOriginalJumpVelocity = 0.0529999994f; // DAT_0035287c/DAT_00355000.
+    constexpr float kOriginalGravity = 0.000750000007f; // JUMP TEST G_FORCE 00075 at x100000 scale.
     constexpr float kLandingTolerance = 0.05f;
     constexpr float kMovementEpsilon = 0.0001f;
     constexpr std::uint32_t kPhysicsFlagGrounded = 0x0001;
@@ -38,12 +40,22 @@ namespace orphen::ported::player
       return !wasGrounded || destinationHeight - currentHeight <= maxStepHeight;
     }
 
+    float originalFrameScale(float deltaSeconds)
+    {
+      return deltaSeconds * kOriginalFramesPerSecond;
+    }
+
+    float originalPhysicsStep(float deltaSeconds)
+    {
+      return originalFrameScale(deltaSeconds) * kOriginalNominalFrameTicks * 0.125f;
+    }
+
   } // namespace
 
   void OriginalPlayerController::resetAtOrigin(const OriginalTerrainSampler &terrainSampler)
   {
     entity_ = {};
-    entity_.verticalAcceleration48 = kGravity;
+    entity_.verticalAcceleration48 = kOriginalGravity;
     entity_.radius54 = 0.35f;
     entity_.height58 = 1.25f;
     entity_.maxStepHeight80 = 0.75f;
@@ -118,6 +130,7 @@ namespace orphen::ported::player
   {
     FUN_00225bf0_set_entity_state(0, 1);
     entity_.motionFlags1bb &= static_cast<std::uint8_t>(~0x12);
+    entity_.pendingJumpImpulse = false;
   }
 
   void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(float deltaSeconds,
@@ -127,7 +140,8 @@ namespace orphen::ported::player
     const bool jumpPressed = (input.mappedPressedActions & kOriginalMappedActionJump) != 0;
     if (jumpPressed && grounded)
     {
-      entity_.verticalVelocity44 = kJumpVelocity;
+      entity_.verticalVelocity44 = 0.0f;
+      entity_.pendingJumpImpulse = true;
       entity_.motionFlags1bb = (entity_.motionFlags1bb & 0xef) | 2;
       entity_.collisionFlags0c &= ~kPhysicsFlagGrounded;
       FUN_00225bf0_set_entity_state(2, 0x0c);
@@ -136,7 +150,8 @@ namespace orphen::ported::player
 
     if (hasMovementInput(input.cameraRelativeMove))
     {
-      FUN_00256ab0_apply_movement_impulse(kRunSpeed * deltaSeconds, input.cameraRelativeMove);
+      FUN_00256ab0_apply_movement_impulse(kOriginalRunStepPerFrame * originalFrameScale(deltaSeconds),
+                                          input.cameraRelativeMove);
       if (entity_.state60 == 0)
       {
         FUN_00225bf0_set_entity_state(1, 1);
@@ -158,6 +173,14 @@ namespace orphen::ported::player
     {
       if (entity_.substateFrameA8 >= 4)
       {
+        if (entity_.substateFrameA8 == 4 && entity_.pendingJumpImpulse)
+        {
+          entity_.verticalVelocity44 = kOriginalJumpVelocity;
+          entity_.pendingJumpImpulse = false;
+          FUN_00253488_apply_airborne_control(deltaSeconds, input);
+          return;
+        }
+
         entity_.motionFlags1bb |= 2;
         if (entity_.verticalVelocity44 < 0.0f)
         {
@@ -169,6 +192,7 @@ namespace orphen::ported::player
       if (grounded)
       {
         entity_.substateA0 = 0x10;
+        entity_.pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
@@ -178,6 +202,7 @@ namespace orphen::ported::player
       if (grounded)
       {
         entity_.substateA0 = 0x10;
+        entity_.pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
@@ -192,6 +217,7 @@ namespace orphen::ported::player
     }
     else
     {
+      entity_.pendingJumpImpulse = false;
       FUN_00252d88_return_to_idle_state();
       return;
     }
@@ -201,6 +227,7 @@ namespace orphen::ported::player
 
   void OriginalPlayerController::FUN_00253468_finish_landing()
   {
+    entity_.pendingJumpImpulse = false;
     if ((entity_.motionFlags1bb & 2) != 0)
     {
       entity_.motionFlags1bb &= static_cast<std::uint8_t>(~2);
@@ -212,7 +239,8 @@ namespace orphen::ported::player
   {
     if (hasMovementInput(input.cameraRelativeMove))
     {
-      FUN_00256ab0_apply_movement_impulse(kAirControlSpeed * deltaSeconds, input.cameraRelativeMove);
+      FUN_00256ab0_apply_movement_impulse(kOriginalAirControlStepPerFrame * originalFrameScale(deltaSeconds),
+                                          input.cameraRelativeMove);
     }
   }
 
@@ -375,11 +403,17 @@ namespace orphen::ported::player
     entity_.previousGroundHeight50 = entity_.groundHeight4c;
 
     const bool airborneState = entity_.state60 == 2;
-    if (airborneState || !wasGrounded)
+    const bool jumpStartup = airborneState && entity_.substateA0 == 0x0c && entity_.pendingJumpImpulse && entity_.substateFrameA8 < 4;
+    if (jumpStartup)
     {
-      entity_.desiredDeltaY38 += entity_.verticalVelocity44 * deltaSeconds -
-                                 entity_.verticalAcceleration48 * deltaSeconds * deltaSeconds * 0.5f;
-      entity_.verticalVelocity44 -= entity_.verticalAcceleration48 * deltaSeconds;
+      entity_.desiredDeltaY38 = 0.0f;
+    }
+    else if (airborneState || !wasGrounded)
+    {
+      const float physicsStep = originalPhysicsStep(deltaSeconds);
+      entity_.desiredDeltaY38 += entity_.verticalVelocity44 * physicsStep -
+                                 entity_.verticalAcceleration48 * physicsStep * physicsStep * 0.5f;
+      entity_.verticalVelocity44 -= entity_.verticalAcceleration48 * physicsStep;
     }
     else
     {
@@ -398,7 +432,7 @@ namespace orphen::ported::player
       nextCollisionFlags |= kPhysicsFlagFalling;
     }
 
-    if (destinationGround.has_value() && entity_.verticalVelocity44 <= 0.0f &&
+    if (!jumpStartup && destinationGround.has_value() && entity_.verticalVelocity44 <= 0.0f &&
         attemptedY <= destinationGround->height + kLandingTolerance)
     {
       attemptedY = destinationGround->height;
