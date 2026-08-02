@@ -149,6 +149,42 @@ namespace orphen::ported::psm2
       }
     }
 
+    // FUN_0022b5a8's tail: PSM2 header word 13 points at a count dword followed
+    // by count 16-byte records, which the original stores at DAT_003556e8 with
+    // the count in DAT_003556e4. This is the map's object placement table --
+    // where scene objects stand -- and script opcode 0x51 is what turns entries
+    // into entities. Note the section is only 2-byte aligned in practice, which
+    // is why the original reads it a dword at a time through FUN_0022b4e0
+    // rather than casting.
+    void loadObjectPlacements(std::span<const std::uint8_t> decodedPsm2,
+                              std::uint32_t sectionOffset,
+                              Psm2RuntimeState &state)
+    {
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+
+      const std::size_t sectionBase = sectionOffset;
+      const std::int16_t rawCount = static_cast<std::int16_t>(readU32(decodedPsm2, sectionBase) & 0xffff);
+      const std::size_t count = positiveCount(rawCount);
+      state.DAT_003556e8_objectPlacements.reserve(count);
+
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        const std::size_t recordBase = sectionBase + 4 + index * 0x10;
+        ObjectPlacementRecord record;
+        record.position.x = readF32(decodedPsm2, recordBase + 0x00);
+        record.position.y = readF32(decodedPsm2, recordBase + 0x04);
+        record.position.z = readF32(decodedPsm2, recordBase + 0x08);
+        record.angle = static_cast<std::int8_t>(decodedPsm2[recordBase + 0x0C]);
+        record.group = static_cast<std::int8_t>(decodedPsm2[recordBase + 0x0D]);
+        record.id = static_cast<std::int8_t>(decodedPsm2[recordBase + 0x0E]);
+        record.param = decodedPsm2[recordBase + 0x0F];
+        state.DAT_003556e8_objectPlacements.push_back(record);
+      }
+    }
+
     void loadSectionE(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
     {
       if (sectionOffset == 0)
@@ -188,6 +224,7 @@ namespace orphen::ported::psm2
     loadSectionC(decodedPsm2, readU32(decodedPsm2, 0x08), state);
     loadSectionD(decodedPsm2, readU32(decodedPsm2, 0x0c), state);
     loadSectionE(decodedPsm2, readU32(decodedPsm2, 0x14), state);
+    loadObjectPlacements(decodedPsm2, readU32(decodedPsm2, 0x34), state);
 
     buildPsm2DerivedGeometry(state);
 
@@ -195,6 +232,7 @@ namespace orphen::ported::psm2
     state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();
     state.stats.primitiveRecordCount = state.DAT_003556ac_dRecords80.size();
     state.stats.triangleCount = state.derivedTriangles.size();
+    state.stats.objectPlacementCount = state.DAT_003556e8_objectPlacements.size();
 
     return state;
   }

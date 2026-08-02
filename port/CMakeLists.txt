@@ -66,6 +66,13 @@ target_sources(orphen_port
     src/ported/entity/entity_pool.cpp
     src/ported/entity/entity_pool.h
     src/ported/entity/original_entity.h
+    src/ported/script/scene_command_interpreter.cpp
+    src/ported/script/scene_command_interpreter.h
+    src/ported/script/scene_script_opcodes.cpp
+    src/ported/script/scene_script.cpp
+    src/ported/script/scene_script.h
+    src/ported/script/script_trace.cpp
+    src/ported/script/script_trace.h
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp

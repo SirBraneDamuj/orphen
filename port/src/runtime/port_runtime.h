@@ -8,6 +8,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/resource/elf_data_reader.h"
+#include "ported/script/scene_script.h"
 #include "runtime/ps2_memory.h"
 #include "ported/original_frame_timing.h"
 
@@ -27,6 +28,7 @@ namespace orphen::port
     bool exitAfterUsage = false;
     bool loadOnly = false;
     bool printSceneTree = false;
+    bool printScriptReport = false;
     std::uint32_t headlessFrameCount = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
     // Retail executable, read for static tables such as the entity descriptors.
@@ -49,6 +51,8 @@ namespace orphen::port
     Ps2Memory memory_;
     orphen::harness::MapViewer mapViewer_;
     orphen::ported::entity::EntityPool entityPool_;
+    orphen::ported::script::SceneScript sceneScript_;
+    orphen::ported::script::ScriptTrace scriptTrace_;
     OriginalLeadPlayer leadPlayer_;
     orphen::ported::camera::OriginalFieldCamera fieldCamera_;
     std::uint32_t frameCount_ = 0;
@@ -60,6 +64,9 @@ namespace orphen::port
     orphen::ported::entity::EntityDescriptorTable descriptorTable_;
 
     void loadExecutable(const PortRuntimeConfig &config);
+    void runSceneScript();
+    void printScriptReport() const;
+    orphen::ported::script::ScriptEnvironment scriptEnvironment();
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();

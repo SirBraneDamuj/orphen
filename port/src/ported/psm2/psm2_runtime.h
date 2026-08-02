@@ -67,6 +67,20 @@ namespace orphen::ported::psm2
     std::array<std::uint8_t, 3> cornerIndices{};
   };
 
+  // One entry of the map's object placement table: PSM2 header word 13, parsed
+  // by FUN_0022b5a8 into DAT_003556e8 with count DAT_003556e4, stride 0x10.
+  // Script opcode 0x51 walks this table and spawns every record whose group byte
+  // matches its operand -- so this, not the script, is where scene objects are
+  // positioned. See analyzed/ops/0x51_set_pw_all_dispatch.c.
+  struct ObjectPlacementRecord
+  {
+    Vec3 position;              // +0x00, +0x04, +0x08 as floats
+    std::int8_t angle = 0;      // +0x0C: angle * (pi/4) + (pi/2)
+    std::int8_t group = 0;      // +0x0D: matched against opcode 0x51's operand
+    std::int8_t id = 0;         // +0x0E: matched against the 0x4E lookup table
+    std::uint8_t param = 0;     // +0x0F
+  };
+
   struct Psm2Stats
   {
     std::size_t positionRecordCount = 0;
@@ -74,6 +88,7 @@ namespace orphen::ported::psm2
     std::size_t primitiveRecordCount = 0;
     std::size_t triangleCount = 0;
     std::size_t skippedPrimitiveCount = 0;
+    std::size_t objectPlacementCount = 0;
   };
 
   struct Psm2RuntimeState
@@ -83,6 +98,7 @@ namespace orphen::ported::psm2
     std::vector<DRecord80> DAT_003556ac_dRecords80;
     std::vector<DRecord78> DAT_003556b0_dRecords78;
     std::vector<SectionERecord> DAT_003556b4_sectionERecords;
+    std::vector<ObjectPlacementRecord> DAT_003556e8_objectPlacements;
     std::vector<TriangleRecord> derivedTriangles;
     Bounds3 bounds;
     Psm2Stats stats;

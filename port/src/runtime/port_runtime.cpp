@@ -94,6 +94,11 @@ namespace orphen::port
     if (mapViewer_.loadedMap() != nullptr)
     {
       resetLeadPlayerForLoadedMap();
+      runSceneScript();
+      if (config.printScriptReport)
+      {
+        printScriptReport();
+      }
       if (config.printSceneTree)
       {
         mapViewer_.printLoadedSceneTree(std::cout);
@@ -146,6 +151,204 @@ namespace orphen::port
 
     descriptorTable_ = orphen::ported::entity::EntityDescriptorTable(&executable_.value());
     std::cout << "[elf] loaded " << path.string() << " for static tables\n";
+  }
+
+  orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment()
+  {
+    orphen::ported::script::ScriptEnvironment environment;
+    environment.entityPool = &entityPool_;
+    environment.descriptors = &descriptorTable_;
+    environment.state = &sceneScript_.state();
+    environment.map = mapViewer_.loadedMap();
+
+    // FUN_00227070 stands in as the existing PSM2 ground query, the same one the
+    // camera uses. The lax overload is right here: script placements are
+    // authored, not walked to, so a strict walkability test would reject valid
+    // spots.
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap != nullptr)
+    {
+      environment.terrainHeight = [loadedMap](float x, float y) -> std::optional<float>
+      {
+        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, 0.0f);
+        if (!hit.has_value())
+        {
+          return std::nullopt;
+        }
+        return hit->height;
+      };
+    }
+
+    environment.teleportLead = [this](float x, float y, float z)
+    {
+      const auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      leadPlayer_.resetToMap(*map, orphen::ported::psm2::Vec3{x, y, z});
+      fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+    };
+
+    return environment;
+  }
+
+  void PortRuntime::runSceneScript()
+  {
+    scriptTrace_.reset();
+    sceneScript_ = {};
+
+    const auto *resources = mapViewer_.loadedSceneResources();
+    if (resources == nullptr)
+    {
+      return;
+    }
+
+    // MCB category 1 is the scene script. Its resource id is scene-private and
+    // is not an index into the flat SCR.BIN archive.
+    const auto *record = resources->findFirst(1);
+    if (record == nullptr)
+    {
+      std::cout << "[scr] scene has no script record\n";
+      return;
+    }
+
+    const std::vector<std::uint8_t> decoded = resources->decodeRecord(*record);
+    if (!sceneScript_.load(decoded))
+    {
+      std::cout << "[scr] script blob too small to hold a header (" << decoded.size() << " bytes)\n";
+      return;
+    }
+
+    // FUN_0022a418 runs header word 0 and word 1 at load, from different points
+    // in the bootstrap. The per-frame entry and the actor-state entries exist
+    // but are not driven yet.
+    const auto environment = scriptEnvironment();
+    sceneScript_.FUN_0025b6d0_run_init(environment, scriptTrace_);
+    const bool initClean = !sceneScript_.lastRunOverran() && !sceneScript_.lastRunHaltedOnUnimplemented();
+    const std::uint16_t initHaltOpcode = sceneScript_.lastHaltOpcode();
+    const std::uint32_t initHaltOffset = sceneScript_.lastHaltOffset();
+    const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
+
+    sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
+
+    std::cout << "[scr] script " << decoded.size() << " bytes, init 0x" << std::hex
+              << sceneScript_.entryOffset(orphen::ported::script::SceneScriptEntry::Init)
+              << " start 0x" << sceneScript_.entryOffset(orphen::ported::script::SceneScriptEntry::Start)
+              << std::dec << ", spawned " << entityPool_.scriptSpawnedCount() << " entities\n";
+
+    if (!initClean)
+    {
+      std::cout << "[scr] init halted: ";
+      if (initHaltedOnUnimplemented)
+      {
+        std::cout << "unimplemented opcode 0x" << std::hex << initHaltOpcode
+                  << " at 0x" << initHaltOffset << std::dec << '\n';
+      }
+      else
+      {
+        std::cout << "stream overran the blob\n";
+      }
+    }
+    if (sceneScript_.lastRunOverran() || sceneScript_.lastRunHaltedOnUnimplemented())
+    {
+      std::cout << "[scr] start halted: ";
+      if (sceneScript_.lastRunHaltedOnUnimplemented())
+      {
+        std::cout << "unimplemented opcode 0x" << std::hex << sceneScript_.lastHaltOpcode()
+                  << " at 0x" << sceneScript_.lastHaltOffset() << std::dec << '\n';
+      }
+      else
+      {
+        std::cout << "stream overran the blob\n";
+      }
+    }
+  }
+
+  void PortRuntime::printScriptReport() const
+  {
+    std::cout << "\n=== scene script report ===\n";
+    if (!sceneScript_.loaded())
+    {
+      std::cout << "no script loaded\n";
+      return;
+    }
+
+    std::cout << "header:";
+    for (std::size_t index = 0; index < orphen::ported::script::kSceneScriptHeaderWordCount; ++index)
+    {
+      std::cout << " [" << index << "]=0x" << std::hex << sceneScript_.headerWord(index) << std::dec;
+    }
+    std::cout << "\nentries run:";
+    for (const std::string &entry : scriptTrace_.entriesRun())
+    {
+      std::cout << ' ' << entry;
+    }
+    std::cout << '\n';
+
+    std::cout << "texture pages:";
+    for (std::uint16_t pageId : sceneScript_.texturePageIds())
+    {
+      std::cout << " 0x" << std::hex << pageId << std::dec;
+    }
+    std::cout << "\npreloaded resources:";
+    for (std::uint16_t resourceId : scriptTrace_.preloadedResources())
+    {
+      std::cout << " 0x" << std::hex << resourceId << std::dec;
+    }
+    std::cout << '\n';
+
+    std::cout << "opcodes reached:\n";
+    for (const auto &entry : scriptTrace_.opcodes())
+    {
+      std::cout << "  0x" << std::hex << entry.first << std::dec
+                << "  hits=" << entry.second.hitCount
+                << "  first=0x" << std::hex << entry.second.firstOffset << std::dec
+                << (entry.second.implemented ? "  implemented" : "  UNIMPLEMENTED") << '\n';
+    }
+    std::cout << "unimplemented: " << scriptTrace_.unimplementedOpcodeCount() << " distinct, "
+              << scriptTrace_.unimplementedHitCount() << " hits\n";
+
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap != nullptr)
+    {
+      std::cout << "map object placements: " << loadedMap->DAT_003556e8_objectPlacements.size() << '\n';
+      for (std::size_t index = 0; index < loadedMap->DAT_003556e8_objectPlacements.size(); ++index)
+      {
+        const auto &record = loadedMap->DAT_003556e8_objectPlacements[index];
+        std::cout << "  #" << index << " pos=(" << record.position.x << ", " << record.position.y
+                  << ", " << record.position.z << ")"
+                  << " angle=" << static_cast<int>(record.angle)
+                  << " group=" << static_cast<int>(record.group)
+                  << " id=" << static_cast<int>(record.id)
+                  << " param=" << static_cast<int>(record.param) << '\n';
+      }
+    }
+
+    std::cout << "spawns: " << scriptTrace_.spawns().size() << '\n';
+    for (const auto &spawn : scriptTrace_.spawns())
+    {
+      std::cout << "  type=0x" << std::hex << spawn.typeId << std::dec
+                << " slot=" << (spawn.allocated ? std::to_string(spawn.slot) : std::string("none"))
+                << (spawn.descriptorResolved ? " descriptor" : " NO-DESCRIPTOR")
+                << (spawn.positioned ? " placed" : " unplaced")
+                << (spawn.grounded ? " grounded" : "")
+                << " at (" << spawn.x << ", " << spawn.y << ", " << spawn.z << ")\n";
+    }
+
+    if (scriptTrace_.leadTeleported())
+    {
+      std::cout << "lead teleported by script to (" << scriptTrace_.leadTeleportX() << ", "
+                << scriptTrace_.leadTeleportY() << ", " << scriptTrace_.leadTeleportZ() << ")\n";
+    }
+    else
+    {
+      std::cout << "lead not teleported by script; using the centroid fallback\n";
+    }
+
+    std::cout << "object scripts registered but not ticked: "
+              << scriptTrace_.registeredScripts().size() << '\n';
+    std::cout << "=== end scene script report ===\n\n";
   }
 
   void PortRuntime::reset()

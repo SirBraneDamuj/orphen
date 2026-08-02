@@ -64,6 +64,11 @@ namespace
         config.hasDiscScene = true;
         continue;
       }
+      if (argument == "--scr-report")
+      {
+        config.printScriptReport = true;
+        continue;
+      }
       if (argument == "--elf")
       {
         if (argumentIndex + 1 >= argc)
