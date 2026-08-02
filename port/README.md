@@ -133,9 +133,11 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
 ```
 
 The player spawns on the walkable triangle nearest the map's horizontal centre.
-The original places it from the scene's entity descriptors at `DAT_003556d8`,
-which `FUN_00211230` turns into runtime objects; that is not ported, and world
-origin is often not over terrain at all. Override with `--spawn x,y,z`.
+A scene has no spawn point of its own: `FUN_0022a418` copies the position staged
+in `DAT_00325340` into entity pool slot 0, and that was written by the *previous*
+map's warp (`FUN_0022b2c0`, reached from script opcodes `0x8B`/`0x8C`). Booting
+cold into a scene has nothing to read, and world origin is often not over terrain
+at all. Override with `--spawn x,y,z`. See `analyzed/map_bootstrap_sequence.c`.
 
 To validate the loader without opening a window:
 

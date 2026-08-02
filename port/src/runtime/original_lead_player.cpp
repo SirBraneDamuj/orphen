@@ -21,11 +21,13 @@ namespace orphen::port
 
   orphen::ported::psm2::Vec3 chooseSpawnPoint(const orphen::ported::psm2::Psm2RuntimeState &map)
   {
-    // The original places the player from the scene's entity descriptors at
-    // DAT_003556d8, which FUN_00211230 turns into runtime objects. That is not
-    // ported, so pick the walkable triangle nearest the map's horizontal centre
-    // instead -- world origin is often not over terrain at all, and the player
-    // then falls forever.
+    // A scene has no spawn point of its own. FUN_0022a418 copies the position
+    // staged in DAT_00325340 into pool slot 0, and that was written by the
+    // *previous* map's warp (FUN_0022b2c0, reached from script opcodes 0x8B and
+    // 0x8C). Booting cold into a scene therefore has nothing to read, so pick
+    // the walkable triangle nearest the map's horizontal centre instead --
+    // world origin is often not over terrain at all, and the player then falls
+    // forever. See analyzed/map_bootstrap_sequence.c.
     orphen::ported::psm2::Vec3 spawn{};
     if (!map.bounds.valid)
     {

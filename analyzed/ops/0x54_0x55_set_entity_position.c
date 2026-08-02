@@ -4,14 +4,18 @@
 // Summary:
 // - Evaluates 4 expressions: entity index (or 0x100 for current), x, y, z coordinates.
 // - Normalizes coordinates by fGpffff8c40 (global scale factor).
-// - Selects target entity: if index==0x100 uses puGpffffb0d4, else &DAT_0058beb0[index*0xEC].
+// - Selects target entity: if index==0x100 uses puGpffffb0d4, else the pool slot at
+//   &DAT_0058beb0 + index*0x1D8 (the decompiler's `index*0xEC` is over an
+//   `undefined2 *`, i.e. halfwords).
 // - Calls FUN_002662e0 to write coordinates to entity offsets:
 //     +0x20: X position
 //     +0x24: Y position
 //     +0x28: Z position
 //     +0x4C: Z position (duplicate)
 // - If opcode is 0x55 (not 0x54): additionally calls FUN_00227070(x, y, entity) to calculate
-//   terrain height and stores result at entity+0x26 (likely ground/floor reference).
+//   terrain height and stores the result at entity+0x4C, the ground-height field.
+//   (The decompiled `puGpffffb0d4 + 0x26` is halfword arithmetic; the byte offset is 0x4C.
+//   FUN_002662e0 seeds the same field with z, and slot 0's copy is the global DAT_0058befc.)
 // - Updates puGpffffb0d4 to point to selected entity.
 // - Returns 0.
 //
@@ -25,13 +29,14 @@
 // - 0x55: Position update with terrain height calculation (useful for placing entities on ground).
 // - FUN_002662e0 is a simple position setter (4 writes to entity structure).
 // - FUN_00227070 is a complex terrain/collision height calculation function (285 lines).
-// - Entity pool: base 0x0058beb0, stride 0xEC (236 bytes), max 256 entities.
+// - Entity pool: base 0x0058beb0, stride 0x1D8 (472 bytes), 256 slots.
+//   See analyzed/entity_pool_and_descriptors.c for the three confirmations.
 //
 // PS2 notes:
 // - fGpffff8c40 is world space coordinate scale (script integers → world floats).
 // - Entity offsets +0x20/24/28 are standard 3D position fields (X, Y, Z).
 // - Offset +0x4C stores Z duplicate (possibly shadow/projection reference).
-// - Offset +0x26 stores terrain height (when opcode 0x55 used).
+// - Offset +0x4C stores terrain height (when opcode 0x55 used).
 // - FUN_00227070 uses scratchpad RAM (0x5C bytes allocation) for height calculation.
 // - Height calculation likely involves collision mesh traversal or height map lookup.
 //
@@ -61,7 +66,7 @@ extern uint8_t DAT_0058beb0; // Entity pool base address
 // +0x20: float X position
 // +0x24: float Y position
 // +0x28: float Z position
-// +0x26: terrain height (set by opcode 0x55 via FUN_00227070)
+// +0x4C: terrain height (set by opcode 0x55 via FUN_00227070)
 // +0x4C: float Z position duplicate
 
 // Original signature: undefined8 FUN_0025eeb0(void)
@@ -89,7 +94,7 @@ uint64_t opcode_0x54_0x55_set_entity_position(void)
   // If index != 0x100, select from entity pool
   if (iStack_80 != 0x100)
   {
-    entity_ptr = (void *)(&DAT_0058beb0 + iStack_80 * 0xEC);
+    entity_ptr = (void *)((uint8_t *)&DAT_0058beb0 + iStack_80 * 0x1D8);
   }
 
   iVar5 = 2; // Countdown: 2, 1, 0 (3 coordinates)
@@ -113,7 +118,7 @@ uint64_t opcode_0x54_0x55_set_entity_position(void)
   if (opcode == 0x55)
   {
     terrain_height = FUN_00227070(afStack_90[0], afStack_90[1], puGpffffb0d4);
-    *(uint32_t *)((uint8_t *)puGpffffb0d4 + 0x26) = terrain_height;
+    *(uint32_t *)((uint8_t *)puGpffffb0d4 + 0x4C) = terrain_height;
   }
 
   return 0;
@@ -162,11 +167,11 @@ uint64_t opcode_0x54_0x55_set_entity_position(void)
  * - Uses scratchpad RAM (0x5C byte allocation) for calculations
  * - Likely performs collision mesh traversal or height map lookup
  * - Returns terrain height at given XY coordinates for entity placement
- * - Result stored at entity+0x26 (2 bytes, likely int16 or float16)
+ * - Result stored at entity+0x4C as a float (the ground-height field)
  *
  * TODO:
  * - Analyze FUN_00227070 to understand height calculation algorithm
- * - Determine exact format of entity+0x26 (terrain height storage)
+ * - entity+0x4C is a float; +0x50 holds the previous frame's value
  * - Find example scripts showing 0x54 vs 0x55 usage patterns
  * - Document entity+0x4C purpose (why duplicate Z coordinate?)
  * - Investigate coordinate system (Y-up vs Z-up, right/left-handed)

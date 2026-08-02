@@ -14,7 +14,13 @@
 // Related:
 // - FUN_00265dc0: Entity pool allocator (searches DAT_005a96b0 status array for free slot).
 // - FUN_00229c40: Entity initializer by type (219-line function loading descriptors/models).
-// - Entity pool: DAT_0058beb0, stride 0xEC, status array DAT_005a96b0.
+// - Entity pool: DAT_0058beb0, stride 0x1D8 (472 bytes), status array DAT_005a96b0.
+//   CORRECTION: earlier revisions of this file said stride 0xEC. FUN_00265dc0
+//   indexes `&DAT_0058beb0 + slot * 0xec` over an `undefined2 *`, so 0xEC is a
+//   halfword count and the byte stride is 0x1D8. Confirmed by
+//   FUN_00229c40's FUN_00267e78(entity, 0x1d8) clear and by
+//   0x58BEB0 + 256*0x1D8 = 0x5A96B0, exactly where DAT_005a96b0 starts.
+//   See analyzed/entity_pool_and_descriptors.c.
 // - Type 0x55 is special-cased (possibly reserved/invalid for direct spawning).
 
 // PS2 Architecture:
@@ -34,7 +40,7 @@ extern void FUN_00229c40(void *entity_ptr, int32_t type_id); // Entity initializ
 // Entity pool constants
 extern uint8_t DAT_005a96b0[]; // Entity slot status array (0=free, -1/0xFF=allocated)
 extern void *DAT_0058beb0;     // Entity pool base address
-#define ENTITY_STRIDE 0xEC     // 236 bytes per entity
+#define ENTITY_STRIDE 0x1D8    // 472 bytes per entity (0xEC halfwords)
 
 bool opcode_0x52_spawn_entity_by_type(void)
 {
@@ -75,14 +81,14 @@ bool opcode_0x52_spawn_entity_by_type(void)
  *   ├─> FUN_0025c258(stack_var)           [Evaluates expression for type ID]
  *   ├─> FUN_00265dc0(10, 0xF6)            [Finds free entity slot in pool]
  *   │     └─> Searches DAT_005a96b0[10..266] for 0x00 byte
- *   │         Returns &DAT_0058beb0[slot_index * 0xEC]
+ *   │         Returns &DAT_0058beb0[slot_index * 0x1D8]
  *   └─> FUN_00229c40(entity_ptr, type_id) [Initializes entity by type]
  *         └─> FUN_00229980(entity, type, ...)  [Loads descriptor]
  *             FUN_00267e78(entity, 0x1D8)      [Clears entity memory]
  *             FUN_0026bfc0(0x34C050, type)     [Type-specific setup]
  *
  * Memory Layout:
- * - DAT_0058beb0: Entity pool base (256 slots * 0xEC bytes = 59904 bytes)
+ * - DAT_0058beb0: Entity pool base (256 slots * 0x1D8 bytes = 121344 bytes)
  * - DAT_005a96b0: Parallel status array (256 bytes, 0=free, 0xFF=allocated)
  * - Pool range [10, 266): 246 available slots for dynamic spawning
  * - Slots 0-9 likely reserved for system entities

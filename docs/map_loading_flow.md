@@ -39,7 +39,9 @@ See the "Process Section 1" block in `analyzed/parse_map_data.c` for exact loops
 - `FUN_0022d258()`
 - `FUN_00211230()` (commented as "Final map initialization")
 
-These appear to be the post-parse setup where the static entity descriptors are turned into runtime objects.
+These are **not** entity instantiation. All four are terrain/render setup: each loops `0 .. DAT_00355688` over the Section D records at `DAT_003556ac` (0x80 stride) and `DAT_003556b0` (0x78 stride). `FUN_00211230` in particular builds GIF/VIF packets for the terrain geometry and is already analyzed as `analyzed/packet_vertex_emitter.c`; it never reads `DAT_003556d8`. The earlier reading of this step as "static entity descriptors turned into runtime objects" was wrong and is corrected here.
+
+Runtime objects come from the SCR script instead — see `analyzed/map_bootstrap_sequence.c` for the real load order and `analyzed/entity_pool_and_descriptors.c` for the pool the spawn opcodes allocate from.
 
 Runtime entity memory comes from the entity allocator:
 
@@ -55,8 +57,8 @@ Runtime entity memory comes from the entity allocator:
 
 ## Open thread / next targets
 
-- Map→entity instantiation: analyze `FUN_00211230` to document how entries at `DAT_003556d8` are mapped to runtime objects and which fields in the 32-byte records are type/pos/flags.
-- Tie-in with SCR.BIN scene loader: `scene_loader_and_initializer.c` shows archive type 1 (likely SCR.BIN) loads per-scene object arrays; confirm how script-driven actors combine with map’s static entity list.
+- What the Section A 32-byte records at `DAT_003556d8` are actually *for*. `parse_map_data` copies six raw dwords per record and no consumer has been fully traced. The one lead found is `FUN_00208450:86`, which indexes the table by a halfword held in the per-tile Section J records at `DAT_003556e0` during per-frame floor processing — suggesting per-tile markers rather than spawnable actors. Unconfirmed.
+- Tie-in with SCR.BIN scene loader: confirmed in `analyzed/map_bootstrap_sequence.c` — `FUN_0025b390` reads the SCR file index from the MCB entry's halfword at `+4` and loads it through `FUN_00223268(1, id, 0x1849a00)`. Note the archive-type table in `docs/disc_file_system_analysis.md` lists type 1 as unknown and type 6 as SCR.BIN; the call site plainly passes 1, so that table needs rechecking against `FUN_00223268` itself.
 
 ## Quick references
 

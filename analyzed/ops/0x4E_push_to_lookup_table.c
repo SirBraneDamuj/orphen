@@ -5,7 +5,13 @@
 
 // Behavior:
 // - Evaluates 2 expressions (value1, value2).
-// - Reads 1 immediate byte from stream (value3).
+// - Reads one raw 32-bit word from the stream (value3), between the two
+//   expressions. Stream order is: expr1, dword, expr2.
+//   CORRECTION: this file previously called FUN_0025c1d0 a byte read. It is an
+//   unaligned 32-bit load (both branches of its alignment test do the same
+//   thing -- an lwl/lwr idiom) and it advances the pointer by 4. Decoding it as
+//   a byte desyncs the stream immediately; see the s01_e024 init entry, where
+//   the operand is 0x00000055 and the next statement is 0x51.
 // - If table not full (DAT_0035504c < 0x10), stores 3-value entry:
 //   - Stores at DAT_00571d00 + (count * 0xC) in 12-byte stride.
 //   - Entry structure: [value1:u32] [value3:u8] [value2:u32]
@@ -17,7 +23,7 @@
 // - DAT_0035504c: Table entry counter (0-16 entries max)
 // - DAT_00571d00: Table base address (16 entries * 12 bytes = 192 bytes)
 // - Entry offsets: +0x00 (value1), +0x04 (value3), +0x08 (value2)
-// - FUN_0025c1d0: Reads immediate byte from stream, advances pointer
+// - FUN_0025c1d0: Reads an unaligned 32-bit word from the stream, advances by 4
 // - FUN_0026bfc0: Debug printf function (error/warning output)
 // - 0x34ce88: Error message string (table overflow warning)
 
@@ -38,7 +44,7 @@
 // External declarations
 typedef void (*bytecode_evaluator_t)(void *);
 extern bytecode_evaluator_t FUN_0025c258;          // Bytecode expression evaluator
-extern uint32_t FUN_0025c1d0(void);                // Read immediate byte from stream
+extern uint32_t FUN_0025c1d0(void);                // Read unaligned u32 from stream, advance 4
 extern void FUN_0026bfc0(uint32_t error_msg_addr); // Debug printf (error output)
 
 // Bytecode stream pointer
@@ -59,7 +65,7 @@ uint64_t opcode_0x4e_push_to_lookup_table(void)
   // Evaluate first expression (value1)
   FUN_0025c258(value1);
 
-  // Read immediate byte from stream (value3)
+  // Read one raw 32-bit word from the stream (value3)
   value3 = FUN_0025c1d0();
 
   // Evaluate second expression (value2)
