@@ -76,6 +76,7 @@ namespace orphen::port
   {
     reset();
     spawnOverride_ = config.spawnOverride;
+    loadExecutable(config);
 
     if (!config.decodedPsm2Path.empty())
     {
@@ -108,6 +109,39 @@ namespace orphen::port
                 << (config.spawnOverride.has_value() ? " (--spawn)" : " (map centre)")
                 << " grounded=" << (leadState.grounded ? 1 : 0) << '\n';
     }
+  }
+
+  void PortRuntime::loadExecutable(const PortRuntimeConfig &config)
+  {
+    // The entity descriptors the spawn path needs are static tables inside the
+    // retail executable, not disc resources. This is optional: without it the
+    // port still runs, it just cannot report a spawned object's collision size.
+    std::filesystem::path path = config.executablePath;
+    if (path.empty() && !config.discRoot.empty())
+    {
+      const std::filesystem::path candidate = config.discRoot / "SLUS_200.11";
+      if (std::filesystem::exists(candidate))
+      {
+        path = candidate;
+      }
+    }
+
+    if (path.empty())
+    {
+      std::cout << "[elf] no executable given; entity descriptors unavailable\n";
+      return;
+    }
+
+    executable_ = orphen::ported::resource::ElfDataReader::tryOpen(path.string());
+    if (!executable_.has_value())
+    {
+      std::cout << "[elf] could not read " << path.string()
+                << "; entity descriptors unavailable\n";
+      return;
+    }
+
+    descriptorTable_ = orphen::ported::entity::EntityDescriptorTable(&executable_.value());
+    std::cout << "[elf] loaded " << path.string() << " for static tables\n";
   }
 
   void PortRuntime::reset()

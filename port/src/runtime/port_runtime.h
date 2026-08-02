@@ -5,6 +5,8 @@
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
+#include "ported/entity/entity_descriptor_table.h"
+#include "ported/resource/elf_data_reader.h"
 #include "runtime/ps2_memory.h"
 #include "ported/original_frame_timing.h"
 
@@ -26,6 +28,10 @@ namespace orphen::port
     bool printSceneTree = false;
     std::uint32_t headlessFrameCount = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
+    // Retail executable, read for static tables such as the entity descriptors.
+    // Optional: when empty, SLUS_200.11 is looked for in the disc root, and when
+    // that is missing too the port runs without descriptor data.
+    std::filesystem::path executablePath;
   };
 
   class PortRuntime
@@ -48,7 +54,10 @@ namespace orphen::port
     std::optional<std::size_t> reportedGroundPrimitive_;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride_;
     float previousStickMagnitude_ = 0.0f;
+    std::optional<orphen::ported::resource::ElfDataReader> executable_;
+    orphen::ported::entity::EntityDescriptorTable descriptorTable_;
 
+    void loadExecutable(const PortRuntimeConfig &config);
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();

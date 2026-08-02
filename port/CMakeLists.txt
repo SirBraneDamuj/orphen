@@ -59,6 +59,10 @@ target_sources(orphen_port
     src/ported/resource/bmpa_texture_decoder.h
     src/ported/resource/mcb_runtime.cpp
     src/ported/resource/mcb_runtime.h
+    src/ported/resource/elf_data_reader.cpp
+    src/ported/resource/elf_data_reader.h
+    src/ported/entity/entity_descriptor_table.cpp
+    src/ported/entity/entity_descriptor_table.h
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp

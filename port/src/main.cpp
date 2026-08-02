@@ -16,7 +16,11 @@ namespace
   void printUsage(const char *programName)
   {
     std::cout << "Usage: " << programName
-              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM] [--load-only] [--scene-tree] [--frames <count>]\n";
+              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM]"
+                 " [--load-only] [--scene-tree] [--frames <count>] [--spawn x,y,z]"
+                 " [--elf <SLUS_200.11>]\n"
+                 "  --elf  read static tables (entity descriptors) from the retail\n"
+                 "         executable. Defaults to SLUS_200.11 in the disc root.\n";
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -58,6 +62,15 @@ namespace
         }
         config.discScene = orphen::harness::parseSceneName(argv[++argumentIndex]);
         config.hasDiscScene = true;
+        continue;
+      }
+      if (argument == "--elf")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--elf requires a path to SLUS_200.11");
+        }
+        config.executablePath = std::filesystem::path(argv[++argumentIndex]);
         continue;
       }
       if (argument == "--spawn")
