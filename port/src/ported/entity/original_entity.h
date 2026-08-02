@@ -42,8 +42,14 @@ namespace orphen::ported::entity
     float verticalAcceleration48 = 24.0f;    // +0x48: downward acceleration used by FUN_002262c0.
     float groundHeight4c = 0.0f;             // +0x4C: sampled ground height; opcode 0x55 writes here.
     float previousGroundHeight50 = 0.0f;     // +0x50: previous sampled ground height.
-    float radius54 = 0.35f;                  // +0x54: collision radius, descriptor +0x08.
-    float height58 = 1.25f;                  // +0x58: collision height, descriptor +0x0C.
+    // Defaults are type id 1's static descriptor (DAT_00318b68 + 0x00, the
+    // record FUN_0022a418 falls back to when DAT_0058beb0 == 0 -- the lead
+    // player's own type), read directly out of SLUS_200.11: radius0x08 =
+    // 0.15, height0x0c = 0.8. Prior placeholders of 0.35/1.25 were guesses
+    // and made the lead player noticeably wider and taller than every
+    // descriptor-driven script actor, which use this same table.
+    float radius54 = 0.15f;                  // +0x54: collision radius, descriptor +0x08.
+    float height58 = 0.8f;                   // +0x58: collision height, descriptor +0x0C.
     float facingRadians5c = 0.0f;            // +0x5C: facing angle.
     std::uint16_t state60 = 0;               // +0x60: field/player movement state.
     std::uint16_t fadeRamp62 = 0;            // +0x62: FUN_0023a568's fade ramp position.

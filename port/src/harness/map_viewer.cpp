@@ -321,8 +321,10 @@ namespace orphen::harness
       }
 
       const auto foot = toViewerSpace(player.position);
-      const float bodyHeight = 1.25f;
-      const float bodyHalfWidth = 0.35f;
+      // Matches OriginalEntity's radius54/height58 defaults: type id 1's
+      // static descriptor (DAT_00318b68), the lead player's own type.
+      const float bodyHeight = 0.8f;
+      const float bodyHalfWidth = 0.15f;
       const float minX = foot.x - bodyHalfWidth;
       const float maxX = foot.x + bodyHalfWidth;
       const float minY = foot.y;

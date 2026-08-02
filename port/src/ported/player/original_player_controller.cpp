@@ -81,8 +81,11 @@ namespace orphen::ported::player
     entity().positionZ24 = spawn.y;
     entity().positionY28 = spawn.z;
     entity().verticalAcceleration48 = kOriginalGravity;
-    entity().radius54 = 0.35f;
-    entity().height58 = 1.25f;
+    // radius54/height58 come from OriginalEntity's own defaults (type id 1's
+    // descriptor). maxStepHeight80 is left at 0.75 rather than the
+    // descriptor's 0.8727 -- see entity_pool.cpp's FUN_00229c40_initialize,
+    // which flags that field as more likely a slope limit than a step height
+    // and leaves it unresolved.
     entity().maxStepHeight80 = 0.75f;
     FUN_00252d88_return_to_idle_state();
 
