@@ -63,6 +63,9 @@ target_sources(orphen_port
     src/ported/resource/elf_data_reader.h
     src/ported/entity/entity_descriptor_table.cpp
     src/ported/entity/entity_descriptor_table.h
+    src/ported/entity/entity_pool.cpp
+    src/ported/entity/entity_pool.h
+    src/ported/entity/original_entity.h
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp

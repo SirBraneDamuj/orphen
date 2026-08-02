@@ -6,6 +6,7 @@
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
 #include "ported/entity/entity_descriptor_table.h"
+#include "ported/entity/entity_pool.h"
 #include "ported/resource/elf_data_reader.h"
 #include "runtime/ps2_memory.h"
 #include "ported/original_frame_timing.h"
@@ -47,6 +48,7 @@ namespace orphen::port
   private:
     Ps2Memory memory_;
     orphen::harness::MapViewer mapViewer_;
+    orphen::ported::entity::EntityPool entityPool_;
     OriginalLeadPlayer leadPlayer_;
     orphen::ported::camera::OriginalFieldCamera fieldCamera_;
     std::uint32_t frameCount_ = 0;

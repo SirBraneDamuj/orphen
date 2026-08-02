@@ -13,6 +13,11 @@ namespace orphen::port
   class OriginalLeadPlayer
   {
   public:
+    // The lead player is entity pool slot 0 in the original. Binding here means
+    // the controller writes into that slot directly rather than into a private
+    // copy, so script opcodes that address entity 0 see the real player.
+    void bindEntity(orphen::ported::entity::OriginalEntity &slot) { controller_.bindEntity(slot); }
+
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,
                     const std::optional<orphen::ported::psm2::Vec3> &spawnOverride = std::nullopt);
     void update(std::uint32_t frameTicks,

@@ -74,6 +74,10 @@ namespace orphen::port
 
   void PortRuntime::initialize(const PortRuntimeConfig &config)
   {
+    // Bind before reset: the lead player is pool slot 0, so the controller must
+    // already be writing there when resetToMap places it.
+    leadPlayer_.bindEntity(entityPool_.leadPlayer());
+
     reset();
     spawnOverride_ = config.spawnOverride;
     loadExecutable(config);

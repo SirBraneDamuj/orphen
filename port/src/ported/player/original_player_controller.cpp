@@ -76,29 +76,29 @@ namespace orphen::ported::player
   void OriginalPlayerController::resetAt(const orphen::ported::psm2::Vec3 &spawn,
                                          const OriginalTerrainSampler &terrainSampler)
   {
-    entity_ = {};
-    entity_.positionX20 = spawn.x;
-    entity_.positionZ24 = spawn.y;
-    entity_.positionY28 = spawn.z;
-    entity_.verticalAcceleration48 = kOriginalGravity;
-    entity_.radius54 = 0.35f;
-    entity_.height58 = 1.25f;
-    entity_.maxStepHeight80 = 0.75f;
+    entity() = orphen::ported::entity::OriginalEntity{};
+    entity().positionX20 = spawn.x;
+    entity().positionZ24 = spawn.y;
+    entity().positionY28 = spawn.z;
+    entity().verticalAcceleration48 = kOriginalGravity;
+    entity().radius54 = 0.35f;
+    entity().height58 = 1.25f;
+    entity().maxStepHeight80 = 0.75f;
     FUN_00252d88_return_to_idle_state();
 
     if (terrainSampler)
     {
-      const auto groundSample = terrainSampler(entity_.positionX20,
-                                               entity_.positionZ24,
-                                               entity_.positionY28,
+      const auto groundSample = terrainSampler(entity().positionX20,
+                                               entity().positionZ24,
+                                               entity().positionY28,
                                                terrainQueryForEntity());
       if (groundSample.has_value())
       {
-        entity_.groundHeight4c = groundSample->height;
-        entity_.previousGroundHeight50 = groundSample->height;
-        entity_.positionY28 = groundSample->height;
-        entity_.previousY2c = groundSample->height;
-        entity_.collisionFlags0c = kPhysicsFlagGrounded;
+        entity().groundHeight4c = groundSample->height;
+        entity().previousGroundHeight50 = groundSample->height;
+        entity().positionY28 = groundSample->height;
+        entity().previousY2c = groundSample->height;
+        entity().collisionFlags0c = kPhysicsFlagGrounded;
       }
     }
   }
@@ -111,11 +111,11 @@ namespace orphen::ported::player
     // FUN_002000c0 clamps DAT_003555bc to [0x20, 0x80] before anything reads it.
     const std::uint32_t clampedFrameTicks =
         std::clamp(frameTicks, orphen::ported::kMinFrameTicks, orphen::ported::kMaxFrameTicks);
-    entity_.desiredDeltaX30 = 0.0f;
-    entity_.desiredDeltaZ34 = 0.0f;
-    entity_.desiredDeltaY38 = 0.0f;
+    entity().desiredDeltaX30 = 0.0f;
+    entity().desiredDeltaZ34 = 0.0f;
+    entity().desiredDeltaY38 = 0.0f;
 
-    if (entity_.state60 == 2)
+    if (entity().state60 == 2)
     {
       FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
     }
@@ -126,55 +126,55 @@ namespace orphen::ported::player
 
     FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler, movementBlocker);
 
-    if (entity_.substateFrameA8 != std::numeric_limits<std::uint16_t>::max())
+    if (entity().substateFrameA8 != std::numeric_limits<std::uint16_t>::max())
     {
-      ++entity_.substateFrameA8;
+      ++entity().substateFrameA8;
     }
   }
 
   OriginalPlayerSnapshot OriginalPlayerController::snapshot() const
   {
-    const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
-    return {{entity_.positionX20, entity_.positionZ24, entity_.positionY28},
-            entity_.facingRadians5c,
-            entity_.state60,
-            entity_.animationA0,
-            entity_.substateFrameA8,
-            entity_.collisionFlags0c,
-            entity_.verticalVelocity44,
+    const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    return {{entity().positionX20, entity().positionZ24, entity().positionY28},
+            entity().facingRadians5c,
+            entity().state60,
+            entity().animationA0,
+            entity().substateFrameA8,
+            entity().collisionFlags0c,
+            entity().verticalVelocity44,
             grounded,
-            entity_.running};
+            entity().running};
   }
 
   void OriginalPlayerController::FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate)
   {
-    entity_.state60 = state;
-    entity_.stateResetA4 = 999;
-    entity_.animationA0 = substate;
-    entity_.previousSubstateA2 = 0xffff;
-    entity_.flags06 &= 0xff38;
-    entity_.substateFrameA8 = 0;
+    entity().state60 = state;
+    entity().stateResetA4 = 999;
+    entity().animationA0 = substate;
+    entity().previousSubstateA2 = 0xffff;
+    entity().flags06 &= 0xff38;
+    entity().substateFrameA8 = 0;
   }
 
   void OriginalPlayerController::FUN_00252d88_return_to_idle_state()
   {
     FUN_00225bf0_set_entity_state(0, 1);
-    entity_.motionFlags1bb &= static_cast<std::uint8_t>(~0x12);
-    entity_.pendingJumpImpulse = false;
+    entity().motionFlags1bb &= static_cast<std::uint8_t>(~0x12);
+    entity().pendingJumpImpulse = false;
   }
 
   void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
                                                                           const OriginalPlayerFrameInput &input)
   {
-    const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
 
     // 1. Forced fall. More than fGpffff8a48 above the ground under us hands off
     //    to the airborne state with the falling animation, rather than merely
     //    losing ground contact. This is what makes walking off a ledge work.
-    if (entity_.positionY28 - entity_.previousGroundHeight50 > kOriginalFallHeight)
+    if (entity().positionY28 - entity().previousGroundHeight50 > kOriginalFallHeight)
     {
-      entity_.motionFlags1bb = static_cast<std::uint8_t>((entity_.motionFlags1bb & 0xef) | 2);
-      entity_.collisionFlags0c &= ~kPhysicsFlagGrounded;
+      entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
+      entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
       FUN_00225bf0_set_entity_state(2, kAnimationJumpFall);
       return;
     }
@@ -184,10 +184,10 @@ namespace orphen::ported::player
     const bool jumpPressed = (input.mappedPressedActions & kOriginalMappedActionJump) != 0;
     if (jumpPressed && grounded)
     {
-      entity_.verticalVelocity44 = 0.0f;
-      entity_.pendingJumpImpulse = true;
-      entity_.motionFlags1bb = static_cast<std::uint8_t>((entity_.motionFlags1bb & 0xef) | 2);
-      entity_.collisionFlags0c &= ~kPhysicsFlagGrounded;
+      entity().verticalVelocity44 = 0.0f;
+      entity().pendingJumpImpulse = true;
+      entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
+      entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
       FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
       return;
     }
@@ -196,81 +196,81 @@ namespace orphen::ported::player
     // original and are not ported; they fall through to locomotion here.
 
     // 3. Locomotion or idle.
-    entity_.state60 = 0;
-    entity_.animationA0 = kAnimationStand;
+    entity().state60 = 0;
+    entity().animationA0 = kAnimationStand;
 
     if (!hasMovementInput(input.cameraRelativeMove) || input.stickMagnitude <= 0.0f)
     {
-      entity_.running = false;
+      entity().running = false;
 
       // The idle fidget fires when the 16-bit tick accumulator rolls past its
       // sign bit: 0x8000 ticks is 1024 frames, about 17 seconds at 60 fps.
-      const std::uint16_t previousTimer = entity_.idleTimer1b6;
-      entity_.idleTimer1b6 = static_cast<std::uint16_t>(previousTimer + static_cast<std::uint16_t>(frameTicks));
-      if (static_cast<std::int16_t>(entity_.idleTimer1b6) < 0)
+      const std::uint16_t previousTimer = entity().idleTimer1b6;
+      entity().idleTimer1b6 = static_cast<std::uint16_t>(previousTimer + static_cast<std::uint16_t>(frameTicks));
+      if (static_cast<std::int16_t>(entity().idleTimer1b6) < 0)
       {
-        entity_.animationA0 = kAnimationIdleFidget;
+        entity().animationA0 = kAnimationIdleFidget;
       }
       return;
     }
 
     // Walk below a stick magnitude of 100, run above it.
-    entity_.running = input.stickMagnitude > kOriginalRunStickThreshold;
-    entity_.state60 = 1;
-    entity_.idleTimer1b6 = 0;
+    entity().running = input.stickMagnitude > kOriginalRunStickThreshold;
+    entity().state60 = 1;
+    entity().idleTimer1b6 = 0;
 
-    const float speed = entity_.running ? kOriginalRunStepPerFrame : kOriginalWalkStepPerFrame;
+    const float speed = entity().running ? kOriginalRunStepPerFrame : kOriginalWalkStepPerFrame;
 
     // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * speed * 0.03125, entity).
     FUN_00256ab0_apply_movement_impulse(orphen::ported::movementScaleForFrameTicks(frameTicks) * speed,
                                         input.cameraRelativeMove);
 
-    entity_.animationA0 = entity_.running ? kAnimationRun : kAnimationWalk;
+    entity().animationA0 = entity().running ? kAnimationRun : kAnimationWalk;
   }
 
   void OriginalPlayerController::FUN_002534d8_update_airborne_state(std::uint32_t frameTicks,
                                                                     const OriginalPlayerFrameInput &input)
   {
-    const bool grounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
-    if (entity_.animationA0 == kAnimationJumpRise)
+    const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    if (entity().animationA0 == kAnimationJumpRise)
     {
-      if (entity_.substateFrameA8 >= 4)
+      if (entity().substateFrameA8 >= 4)
       {
-        if (entity_.substateFrameA8 == 4 && entity_.pendingJumpImpulse)
+        if (entity().substateFrameA8 == 4 && entity().pendingJumpImpulse)
         {
-          entity_.verticalVelocity44 = kOriginalJumpVelocity;
-          entity_.pendingJumpImpulse = false;
+          entity().verticalVelocity44 = kOriginalJumpVelocity;
+          entity().pendingJumpImpulse = false;
           FUN_00253488_apply_airborne_control(frameTicks, input);
           return;
         }
 
-        entity_.motionFlags1bb |= 2;
-        if (entity_.verticalVelocity44 < 0.0f)
+        entity().motionFlags1bb |= 2;
+        if (entity().verticalVelocity44 < 0.0f)
         {
-          entity_.motionFlags1bb = (entity_.motionFlags1bb & 0xef) | 2;
-          entity_.animationA0 = kAnimationJumpFall;
+          entity().motionFlags1bb = (entity().motionFlags1bb & 0xef) | 2;
+          entity().animationA0 = kAnimationJumpFall;
         }
       }
 
       if (grounded)
       {
-        entity_.animationA0 = kAnimationLand;
-        entity_.pendingJumpImpulse = false;
+        entity().animationA0 = kAnimationLand;
+        entity().pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
     }
-    else if (entity_.animationA0 == kAnimationJumpFall)
+    else if (entity().animationA0 == kAnimationJumpFall)
     {
       if (grounded)
       {
-        entity_.animationA0 = kAnimationLand;
-        entity_.pendingJumpImpulse = false;
+        entity().animationA0 = kAnimationLand;
+        entity().pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
         return;
       }
     }
-    else if (entity_.animationA0 == kAnimationLand)
+    else if (entity().animationA0 == kAnimationLand)
     {
       if (grounded)
       {
@@ -280,7 +280,7 @@ namespace orphen::ported::player
     }
     else
     {
-      entity_.pendingJumpImpulse = false;
+      entity().pendingJumpImpulse = false;
       FUN_00252d88_return_to_idle_state();
       return;
     }
@@ -290,10 +290,10 @@ namespace orphen::ported::player
 
   void OriginalPlayerController::FUN_00253468_finish_landing()
   {
-    entity_.pendingJumpImpulse = false;
-    if ((entity_.motionFlags1bb & 2) != 0)
+    entity().pendingJumpImpulse = false;
+    if ((entity().motionFlags1bb & 2) != 0)
     {
-      entity_.motionFlags1bb &= static_cast<std::uint8_t>(~2);
+      entity().motionFlags1bb &= static_cast<std::uint8_t>(~2);
     }
   }
 
@@ -336,30 +336,30 @@ namespace orphen::ported::player
     if (input0x1dTurnSmoothing_)
     {
       const float maxTurn = kOriginal0x1dTurnRate * std::abs(std::cos(goalFacing));
-      const float turnDelta = shortestAngleDelta(entity_.facingRadians5c, goalFacing);
+      const float turnDelta = shortestAngleDelta(entity().facingRadians5c, goalFacing);
       const float step = std::clamp(turnDelta, -maxTurn, maxTurn);
-      entity_.facingRadians5c = wrapAngle(entity_.facingRadians5c + step);
+      entity().facingRadians5c = wrapAngle(entity().facingRadians5c + step);
     }
     else
     {
-      entity_.facingRadians5c = wrapAngle(goalFacing);
+      entity().facingRadians5c = wrapAngle(goalFacing);
     }
 
     // The impulse follows the facing the entity actually has, so a sharp input
     // change arcs instead of teleporting the velocity.
-    const float facingX = std::cos(entity_.facingRadians5c);
-    const float facingZ = std::sin(entity_.facingRadians5c);
+    const float facingX = std::cos(entity().facingRadians5c);
+    const float facingZ = std::sin(entity().facingRadians5c);
 
     // +0x3C / +0x40: the per-frame velocity the original also publishes.
-    entity_.velocityX3c = movementStep * facingX;
-    entity_.velocityZ40 = movementStep * facingZ;
-    entity_.desiredDeltaX30 += entity_.velocityX3c;
-    entity_.desiredDeltaZ34 += entity_.velocityZ40;
+    entity().velocityX3c = movementStep * facingX;
+    entity().velocityZ40 = movementStep * facingZ;
+    entity().desiredDeltaX30 += entity().velocityX3c;
+    entity().desiredDeltaZ34 += entity().velocityZ40;
   }
 
   OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity() const
   {
-    return {entity_.rejectTerrainMask74, true};
+    return {entity().rejectTerrainMask74, true};
   }
 
   std::optional<OriginalTerrainSample> OriginalPlayerController::FUN_00227390_validate_destination(
@@ -373,7 +373,7 @@ namespace orphen::ported::player
     }
 
     const OriginalTerrainQuery query = terrainQueryForEntity();
-    const float radius = entity_.radius54;
+    const float radius = entity().radius54;
     const std::array<orphen::ported::psm2::Vec3, 4> footprintOffsets{{{-radius, -radius, 0.0f},
                                                                       {radius, -radius, 0.0f},
                                                                       {radius, radius, 0.0f},
@@ -385,7 +385,7 @@ namespace orphen::ported::player
     {
       const auto sample = terrainSampler(originalX + offset.x,
                                          originalZ + offset.y,
-                                         entity_.positionY28,
+                                         entity().positionY28,
                                          query);
       if (!sample.has_value())
       {
@@ -404,7 +404,7 @@ namespace orphen::ported::player
       return std::nullopt;
     }
 
-    if (entity_.requiredTerrainMask78 != 0 && (commonTerrainFlags & entity_.requiredTerrainMask78) == 0)
+    if (entity().requiredTerrainMask78 != 0 && (commonTerrainFlags & entity().requiredTerrainMask78) == 0)
     {
       return std::nullopt;
     }
@@ -418,11 +418,11 @@ namespace orphen::ported::player
                                                                 const OriginalMovementBlocker &movementBlocker)
   {
     std::uint32_t nextCollisionFlags = 0;
-    const bool wasGrounded = (entity_.collisionFlags0c & kPhysicsFlagGrounded) != 0;
-    const float startX = entity_.positionX20;
-    const float startZ = entity_.positionZ24;
-    const float attemptedX = startX + entity_.desiredDeltaX30;
-    const float attemptedZ = startZ + entity_.desiredDeltaZ34;
+    const bool wasGrounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    const float startX = entity().positionX20;
+    const float startZ = entity().positionZ24;
+    const float attemptedX = startX + entity().desiredDeltaX30;
+    const float attemptedZ = startZ + entity().desiredDeltaZ34;
 
     auto validateMove = [&](float fromX, float fromZ, float toX, float toZ) -> std::optional<OriginalTerrainSample>
     {
@@ -430,15 +430,15 @@ namespace orphen::ported::player
                                              fromZ,
                                              toX,
                                              toZ,
-                                             entity_.positionY28,
-                                             entity_.height58,
-                                             entity_.radius54))
+                                             entity().positionY28,
+                                             entity().height58,
+                                             entity().radius54))
       {
         return std::nullopt;
       }
 
       auto ground = FUN_00227390_validate_destination(toX, toZ, terrainSampler);
-      if (!ground.has_value() || !canStepToHeight(entity_.positionY28, ground->height, entity_.maxStepHeight80, wasGrounded))
+      if (!ground.has_value() || !canStepToHeight(entity().positionY28, ground->height, entity().maxStepHeight80, wasGrounded))
       {
         return std::nullopt;
       }
@@ -448,22 +448,22 @@ namespace orphen::ported::player
     std::optional<OriginalTerrainSample> destinationGround = validateMove(startX, startZ, attemptedX, attemptedZ);
     if (destinationGround.has_value())
     {
-      entity_.positionX20 = attemptedX;
-      entity_.positionZ24 = attemptedZ;
-      entity_.groundHeight4c = destinationGround->height;
+      entity().positionX20 = attemptedX;
+      entity().positionZ24 = attemptedZ;
+      entity().groundHeight4c = destinationGround->height;
     }
     else
     {
       nextCollisionFlags |= kPhysicsFlagBlocked;
       destinationGround.reset();
 
-      if (std::abs(entity_.desiredDeltaX30) > kMovementEpsilon)
+      if (std::abs(entity().desiredDeltaX30) > kMovementEpsilon)
       {
         auto xOnlyGround = validateMove(startX, startZ, attemptedX, startZ);
         if (xOnlyGround.has_value())
         {
-          entity_.positionX20 = attemptedX;
-          entity_.groundHeight4c = xOnlyGround->height;
+          entity().positionX20 = attemptedX;
+          entity().groundHeight4c = xOnlyGround->height;
           destinationGround = xOnlyGround;
         }
         else
@@ -472,13 +472,13 @@ namespace orphen::ported::player
         }
       }
 
-      if (std::abs(entity_.desiredDeltaZ34) > kMovementEpsilon)
+      if (std::abs(entity().desiredDeltaZ34) > kMovementEpsilon)
       {
-        auto zOnlyGround = validateMove(entity_.positionX20, entity_.positionZ24, entity_.positionX20, attemptedZ);
+        auto zOnlyGround = validateMove(entity().positionX20, entity().positionZ24, entity().positionX20, attemptedZ);
         if (zOnlyGround.has_value())
         {
-          entity_.positionZ24 = attemptedZ;
-          entity_.groundHeight4c = zOnlyGround->height;
+          entity().positionZ24 = attemptedZ;
+          entity().groundHeight4c = zOnlyGround->height;
           destinationGround = zOnlyGround;
         }
         else
@@ -489,67 +489,67 @@ namespace orphen::ported::player
 
       if (!destinationGround.has_value())
       {
-        destinationGround = FUN_00227390_validate_destination(entity_.positionX20, entity_.positionZ24, terrainSampler);
+        destinationGround = FUN_00227390_validate_destination(entity().positionX20, entity().positionZ24, terrainSampler);
         if (destinationGround.has_value())
         {
-          entity_.groundHeight4c = destinationGround->height;
+          entity().groundHeight4c = destinationGround->height;
         }
       }
     }
 
-    entity_.previousGroundHeight50 = entity_.groundHeight4c;
+    entity().previousGroundHeight50 = entity().groundHeight4c;
 
-    const bool airborneState = entity_.state60 == 2;
-    const bool jumpStartup = airborneState && entity_.animationA0 == kAnimationJumpRise && entity_.pendingJumpImpulse && entity_.substateFrameA8 < 4;
+    const bool airborneState = entity().state60 == 2;
+    const bool jumpStartup = airborneState && entity().animationA0 == kAnimationJumpRise && entity().pendingJumpImpulse && entity().substateFrameA8 < 4;
     if (jumpStartup)
     {
-      entity_.desiredDeltaY38 = 0.0f;
+      entity().desiredDeltaY38 = 0.0f;
     }
     else if (airborneState || !wasGrounded)
     {
       // FUN_002262c0: dt = (float)DAT_003555bc * 0.125, then
       //   +0x38 += v*dt - (g*dt)*dt*0.5;  v -= g*dt.
       const float physicsStep = orphen::ported::physicsStepForFrameTicks(frameTicks);
-      entity_.desiredDeltaY38 += entity_.verticalVelocity44 * physicsStep -
-                                 entity_.verticalAcceleration48 * physicsStep * physicsStep * 0.5f;
-      entity_.verticalVelocity44 -= entity_.verticalAcceleration48 * physicsStep;
+      entity().desiredDeltaY38 += entity().verticalVelocity44 * physicsStep -
+                                 entity().verticalAcceleration48 * physicsStep * physicsStep * 0.5f;
+      entity().verticalVelocity44 -= entity().verticalAcceleration48 * physicsStep;
     }
     else
     {
-      entity_.verticalVelocity44 = 0.0f;
-      entity_.desiredDeltaY38 = 0.0f;
+      entity().verticalVelocity44 = 0.0f;
+      entity().desiredDeltaY38 = 0.0f;
     }
 
-    const float previousY = entity_.positionY28;
-    float attemptedY = entity_.positionY28 + entity_.desiredDeltaY38;
-    if (entity_.verticalVelocity44 > 0.0f)
+    const float previousY = entity().positionY28;
+    float attemptedY = entity().positionY28 + entity().desiredDeltaY38;
+    if (entity().verticalVelocity44 > 0.0f)
     {
       nextCollisionFlags |= kPhysicsFlagRising;
     }
-    else if (entity_.verticalVelocity44 < 0.0f)
+    else if (entity().verticalVelocity44 < 0.0f)
     {
       nextCollisionFlags |= kPhysicsFlagFalling;
     }
 
-    if (!jumpStartup && destinationGround.has_value() && entity_.verticalVelocity44 <= 0.0f &&
+    if (!jumpStartup && destinationGround.has_value() && entity().verticalVelocity44 <= 0.0f &&
         attemptedY <= destinationGround->height + kLandingTolerance)
     {
       attemptedY = destinationGround->height;
-      entity_.verticalVelocity44 = 0.0f;
+      entity().verticalVelocity44 = 0.0f;
       nextCollisionFlags |= kPhysicsFlagGrounded | kPhysicsFlagVerticalCollision;
     }
 
     if (!airborneState && (nextCollisionFlags & kPhysicsFlagGrounded) != 0)
     {
-      attemptedY = entity_.groundHeight4c;
+      attemptedY = entity().groundHeight4c;
     }
 
-    entity_.positionY28 = attemptedY;
-    entity_.previousY2c = previousY;
-    entity_.collisionFlags0c = nextCollisionFlags;
-    entity_.desiredDeltaX30 = 0.0f;
-    entity_.desiredDeltaZ34 = 0.0f;
-    entity_.desiredDeltaY38 = 0.0f;
+    entity().positionY28 = attemptedY;
+    entity().previousY2c = previousY;
+    entity().collisionFlags0c = nextCollisionFlags;
+    entity().desiredDeltaX30 = 0.0f;
+    entity().desiredDeltaZ34 = 0.0f;
+    entity().desiredDeltaY38 = 0.0f;
   }
 
 } // namespace orphen::ported::player
