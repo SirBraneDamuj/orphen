@@ -19,7 +19,72 @@ The current executable opens a resizable SDL window, creates an OpenGL context, 
 
 Runtime update owns an original-shaped lead player entity that runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The camera is now a port of the original driver rather than a harness approximation -- see Camera below.
 
-The SCR interpreter/probe work has been removed from the normal load/update path. Script blobs can still be inspected through the scene tree, but the executable no longer runs a bootstrap SCR VM trace, mutates terrain from scripts, or installs a script-driven camera at startup. The previous PSC3 wireframe gallery was also removed from the active harness; PSC3 records are still visible in the resource tree, but they are not rendered as placeholder scene objects.
+Scenes now bootstrap from their SCR script -- see Scene Script below. The previous PSC3 wireframe gallery is still gone; PSC3 records are visible in the resource tree but are not rendered, so script-spawned objects draw as labelled boxes rather than models.
+
+## Scene Script
+
+`src/ported/script/` is a narrow, faithful port of the SCR bytecode VM:
+`FUN_0025bc68`'s three dispatch tables with the 16-deep call stack, plus
+`FUN_0025c258` and `FUN_0025bf70` as methods of the same object, because
+`pbGpffffbd60` and `DAT_00355cd0` are one address and there is only ever one
+stream pointer.
+
+`src/ported/script/scene_script.*` is `FUN_0025b390`'s header plus all five
+entrypoints as named functions. Words 0 and 1 run at load, which is what
+`FUN_0022a418` does -- it invokes `FUN_0025b6d0` and `FUN_0025b728` from
+different points in the bootstrap, with a lot of state setup between them. The
+per-frame entry (`FUN_0025b778`, word 2) and the two actor-state entries are
+written and reachable through `runEntry`, but nothing drives them yet. That is
+the extension point: turning them on pulls in frame sync (`0x33`), dialogue,
+waits, and the 65-slot object-script table.
+
+**Unimplemented opcodes halt rather than fall through.** An opcode whose operands
+go unconsumed desyncs everything after it, so one honest stop beats a cascade of
+invented instructions. `--scr-report` prints where it stopped, every opcode
+reached with hit counts and first offsets, the spawn list, and the map's
+placement table.
+
+### Where scene objects actually come from
+
+Not the script. PSM2 header word 13 holds a count followed by 16-byte placement
+records -- position, angle byte, group byte, id byte, param -- which
+`FUN_0022b5a8` parses into `DAT_003556e8`. Opcodes `0x4F` and `0x51` walk that
+table and instantiate entries by group:
+
+- `0x4F` takes groups 0, 4 and 5, mapping the record id into the map-streamed
+  descriptor bands (`id - 1 + 0x272`, `+0x373`, `+0x474`).
+- `0x51 <group>` takes one group, looking the record id up in the 16-entry table
+  `0x4E` fills. Group 3 spawns type `0x3A` unconditionally.
+
+Type `0x55` is a "marker, not an actor" sentinel: `0x52` refuses it and `0x51`
+skips lookup entries carrying it.
+
+The script-to-world coordinate scale is `fGpffff8c40` = 100000.0, not the 4096
+fixed point used elsewhere in the engine. With the `0x0F` literal's built-in
+`* 100`, a script value of 1000 is one world unit.
+
+### Entity pool
+
+`src/ported/entity/` is the pool at `DAT_0058beb0`: 256 slots of **0x1D8** bytes
+(the decompiled `slot * 0xec` is over an `undefined2 *`, so it is halfwords), with
+the status array `DAT_005a96b0` landing exactly at the end of it. Scripts
+allocate from `[10, 256)`; **slot 0 is the lead player**, which is why
+`DAT_0058bed0` is the camera's read of the player's world X. The player
+controller writes through a pointer bound to that slot.
+
+Collision radius and height come from the type descriptor, which lives in static
+tables inside `SLUS_200.11` rather than in any disc resource.
+`src/ported/resource/elf_data_reader.*` maps PS2 virtual addresses to file
+offsets so those tables can be read directly. It is optional: `--elf` overrides,
+the disc root is searched for `SLUS_200.11`, and without it objects fall back to
+a default box size and say so. Ids from `0x272` up ship with the map and cannot
+be resolved this way at all.
+
+### State of play
+
+`s01_e024` runs both load-time entries to a clean block end with **zero**
+unimplemented opcodes and spawns 14 entities. Story maps get further than they
+used to but still stop; the report names the opcode and offset each time.
 
 ## Camera
 
@@ -132,12 +197,21 @@ Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
 ```
 
-The player spawns on the walkable triangle nearest the map's horizontal centre.
 A scene has no spawn point of its own: `FUN_0022a418` copies the position staged
 in `DAT_00325340` into entity pool slot 0, and that was written by the *previous*
 map's warp (`FUN_0022b2c0`, reached from script opcodes `0x8B`/`0x8C`). Booting
-cold into a scene has nothing to read, and world origin is often not over terrain
-at all. Override with `--spawn x,y,z`. See `analyzed/map_bootstrap_sequence.c`.
+cold into a scene has nothing to read. See `analyzed/map_bootstrap_sequence.c`.
+
+So the port picks, in order: `--spawn x,y,z`; a script teleport (`0xAB`); the
+first group 2 placement record; otherwise the walkable triangle nearest the map's
+horizontal centre. The console says which was used.
+
+Group 2 records standing in for the player start is an **inference**, not
+something read out of the original. The evidence is that `s01_e024`'s init
+registers `(id 1, type 0x55)` and then runs `0x51` with group 2, and
+`FUN_0025eb48` explicitly declines to spawn type `0x55`, whose descriptor is 0.1
+by 0.1 -- so those records are authored positions that deliberately produce no
+entity, sitting in the middle of the scene's content.
 
 To validate the loader without opening a window:
 
@@ -157,6 +231,7 @@ The scene tree currently groups MCB bundle records by category and prints record
 ```sh
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only --scr-report
 ```
 
 `--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
@@ -203,12 +278,23 @@ PC-only diagnostics and is unrelated to the original's text renderer
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 
+Script-spawned objects are drawn as pink wireframe boxes at their descriptor's
+collision size, labelled `#slot Ttype Mmodel` on a camera-facing billboard.
+Objects whose descriptor could not be resolved are duller, drawn at a default
+size, and labelled `?`.
+
 The current lead player is drawn in magenta, and its current ground triangle is highlighted in yellow. The console prints the primitive index, triangle index, height, leading word, and terrain flags when it enters a new ground triangle.
 
 ## Suggested Next Slices
 
-1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene.
+1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene. Still outstanding.
 2. Replace keyboard-derived movement vectors with the original controller globals and analog smoothing path from `FUN_0023b5d8`/`FUN_00256ab0`.
 3. Port the directional entity/body blocker helpers (`FUN_00228380`, `FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) and dynamic entity support helper `FUN_00228cf0`.
 4. Rebuild camera behavior from the original camera state/update functions before adding a new follow camera.
-5. Bring SCR behavior back only as narrow, verified opcode slices tied to a concrete game behavior, not as a broad bootstrap VM requirement.
+5. Keep widening SCR opcode coverage the same way: run a scene, read where it
+   halted, port that opcode from `src/`. `0xB7`, `0xBD`, `0xAC`, `0xE2`, `0xE5`
+   and `0x149` are the next ones the story maps hit.
+6. Render PSC3 models in place of the placeholder boxes, and resolve the
+   map-streamed descriptors (ids from `0x272`) so those objects get real sizes.
+7. Drive the per-frame script entry and the object-script slots behind a flag,
+   once frame sync and waits are modelled.

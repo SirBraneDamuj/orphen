@@ -80,6 +80,10 @@ namespace orphen::port
 
     reset();
     spawnOverride_ = config.spawnOverride;
+    if (spawnOverride_.has_value())
+    {
+      spawnSourceLabel_ = "--spawn";
+    }
     loadExecutable(config);
 
     if (!config.decodedPsm2Path.empty())
@@ -115,7 +119,7 @@ namespace orphen::port
       const auto &leadState = leadPlayer_.viewState();
       std::cout << "[player] spawn=(" << leadState.position.x << ", " << leadState.position.y
                 << ", " << leadState.position.z << ")"
-                << (config.spawnOverride.has_value() ? " (--spawn)" : (std::string(" (") + spawnSourceLabel_ + ")"))
+                << " (" << spawnSourceLabel_ << ")"
                 << " grounded=" << (leadState.grounded ? 1 : 0) << '\n';
     }
   }
@@ -408,7 +412,7 @@ namespace orphen::port
     }
     else
     {
-      std::cout << "lead not teleported by script; using the centroid fallback\n";
+      std::cout << "lead not teleported by script; spawn source is " << spawnSourceLabel_ << '\n';
     }
 
     std::cout << "object scripts registered but not ticked: "
@@ -572,6 +576,16 @@ namespace orphen::port
       lines.push_back("TRI  PRIM " + std::to_string(lead.groundHit->primitiveIndex) +
                       "  Z " + formatNumber(lead.groundHit->height) +
                       "  TERRAIN " + std::to_string(lead.groundHit->terrainFlags));
+    }
+
+    if (sceneScript_.loaded())
+    {
+      lines.push_back("SCR  OBJECTS " + std::to_string(entityPool_.scriptSpawnedCount()) +
+                      "  PLACEMENTS " +
+                      std::to_string(mapViewer_.loadedMap() != nullptr
+                                         ? mapViewer_.loadedMap()->DAT_003556e8_objectPlacements.size()
+                                         : 0) +
+                      "  UNIMPL " + std::to_string(scriptTrace_.unimplementedOpcodeCount()));
     }
 
     lines.push_back("WASD MOVE  SPACE JUMP  J/L CAMERA  F WIRE  H HUD  R RESET");
