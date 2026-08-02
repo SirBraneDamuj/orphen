@@ -142,6 +142,7 @@ namespace orphen::ported::player
             entity().substateFrameA8,
             entity().collisionFlags0c,
             entity().verticalVelocity44,
+            entity().height58,
             grounded,
             entity().running};
   }

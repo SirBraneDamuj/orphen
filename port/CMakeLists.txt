@@ -83,6 +83,12 @@ target_sources(orphen_port
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_geometry_builder.cpp
     src/ported/psm2/psm2_geometry_builder.h
+    src/ported/psm2/psm2_material_expansion.cpp
+    src/ported/psm2/psm2_material_expansion.h
+    src/ported/render/original_view_projection.cpp
+    src/ported/render/original_view_projection.h
+    src/ported/render/original_map_visibility.cpp
+    src/ported/render/original_map_visibility.h
     src/ported/original_frame_timing.h
     src/ported/psm2/psm2_runtime.h
     src/ported/player/original_player_controller.cpp

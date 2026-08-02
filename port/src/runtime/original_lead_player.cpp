@@ -210,6 +210,7 @@ namespace orphen::port
     viewState_.substateFrame = originalState_.substateFrame;
     viewState_.collisionFlags = originalState_.collisionFlags;
     viewState_.verticalVelocity = originalState_.verticalVelocity;
+    viewState_.bodyHeight = originalState_.bodyHeight;
     viewState_.grounded = originalState_.grounded;
     viewState_.running = originalState_.running;
     if (originalState_.grounded)

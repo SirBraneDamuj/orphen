@@ -316,7 +316,7 @@ namespace orphen::port
       }
 
       const auto &record80 = map.DAT_003556ac_dRecords80[triangle.primitiveIndex];
-      if ((record80.terrainFlags & kRecord80HiddenBit) != 0)
+      if ((record80.primitiveFlags & kRecord80HiddenBit) != 0)
       {
         continue;
       }
@@ -349,7 +349,7 @@ namespace orphen::port
 
       return Psm2BlockerHit{triangleIndex,
                             triangle.primitiveIndex,
-                            record80.terrainFlags,
+                            record80.primitiveFlags,
                             {first, second, third},
                             normal};
     }

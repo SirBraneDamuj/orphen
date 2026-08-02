@@ -86,6 +86,9 @@ namespace orphen::ported::player
     std::uint16_t substateFrame = 0;
     std::uint32_t collisionFlags = 0;
     float verticalVelocity = 0.0f;
+    // Entity +0x58. The original reads it as DAT_0058bf08 -- pool slot 0's
+    // collision height -- for the renderer's occlusion probe.
+    float bodyHeight = 0.0f;
     bool grounded = false;
     bool running = false;
   };

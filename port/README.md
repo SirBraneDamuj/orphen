@@ -174,6 +174,76 @@ Not ported yet: the idle auto-camera handoff at `uGpffffad0c > 0x1c200`
 camera (`FUN_00217b88`), manual modes 0x1b-0x1e (`FUN_00218710`, analyzed), and
 camera collision beyond the ground clamp.
 
+## Rendering
+
+`src/ported/render/` is a port of the map draw pipeline. `docs/rendering_pipeline_analysis.md`
+is the reading it is built from; the short version is that the original builds
+each primitive's GS packet once at load (`FUN_00211230`) and then, per frame,
+decides which of them to call and in what order (`FUN_00209140`).
+
+- `original_view_projection.*` ports `FUN_0020bec8` and `FUN_0020bd58` with the
+  matrix helpers. The view is `translate(-eye) * rotZ(yaw + pi/2) *
+  rotX(-pi/2 - pitch) * rotZ(roll) * scale(-1, 1, -1)`, in row-vector order.
+  The projection's x scale is `powf(2, fGpffffb6e8) * 3840`, so `fGpffffb6e8` is
+  a **log2 zoom** and its default of 1.0 gives the shipped 7680.
+- Combined with the GS geometry measured from the repo's GS dump
+  (`SCISSOR_1 = 640x224`, `XYOFFSET_1` centre 320 x 112), that is **67.4 degrees
+  horizontal and 54.8 vertical** -- not the 60 vertical the harness used to
+  assume. The port keeps the vertical exactly and widens horizontally with the
+  window ("Hor+"), so a 4:3 window reproduces the shipped framing and a wider
+  one reveals more to the sides. That deliberately differs from the game's own
+  widescreen path (`cGpffffb66e`, a fixed 0.77 x squeeze).
+- `original_map_visibility.*` ports the per-frame loop: the sphere-vs-frustum
+  reject, the per-primitive occlusion fade, and the 4096-bucket back-to-front
+  depth sort. It runs on the fixed simulation step, not in `render()`, because
+  the fade byte is per-frame state.
+
+### Why walls go see-through
+
+Two things together, and the port has both now. **Backface culling** makes a
+wall single-sided -- the GS has no culling hardware, the original does it in the
+VU1 program at `0xE0`, but the winding is fully determined by `FUN_0022c6e8`'s
+corner order, so GL reproduces it. And the **occlusion fade**: a byte at
+0x80-record `+0x2E` walks from `0x80` down to `0x5C` and back up to `0x7E` at
+one step per frame, and any primitive standing in front of the player, above
+`playerZ + 0.38`, that covers the player's projected rectangle, fades.
+
+The overlap test (`FUN_002099d8` / `FUN_00209928`) assumes a consistent
+screen-space winding, so a back-facing primitive passes every edge trivially and
+always reads as covering the player. That is why a room's near wall goes
+translucent when the camera is outside it.
+
+The near-plane path has its *own*, looser condition set (`FUN_0020a2c0`): blend
+flag, overlap and height only. That path is ported; the polygon clip it wraps
+(`FUN_0020b600`) is not -- GL clips those primitives instead, and
+`--render-report` counts them rather than staying quiet about it.
+
+**Not everything is single-sided.** Flag `0x1` on the record is the two-sided
+bit: `FUN_00211230:190` hands it to VU1 as a byte of its own, `packet + 9`, next
+to the vertex count. On `s01_e024` exactly 32 of 1630 primitives carry it and
+they are exactly 16 coincident perpendicular pairs -- the hanging chains, built
+as crossed planes. Culling those makes each plane vanish from one side, so
+`drawPrimitive` skips culling for them. `--probe x,y,z[,r]` dumps the records
+around a world point with their flags, which is how that was pinned down.
+
+### Draw distance and fog
+
+`DAT_00355628` defaults to 32.0 (`FUN_0022a360`) and is overridden per scene by
+script (`FUN_00263cb8`), which is not wired up yet -- `--draw-distance` is there
+to experiment with in the meantime. Fog starts at a quarter of the draw distance
+and ends at it, and the PRIM word only carries the fog bit when that start is
+below 5.0, so a stock 32.0 map renders unfogged.
+
+### PSM2 record fixes this needed
+
+Reading `FUN_0022b5a8:184-245` properly turned up three things the loader had
+wrong: the flag word is w4 alone (w5 is a colour index, and the high half of the
+flags is runtime-only), w6..w9 are four material-slot selectors rather than one
+section E index, and w15 is the section B index whose entry is the primitive's
+**face normal**. `psm2_material_expansion.*` ports `FUN_0022c3d8`, which expands
+those selectors and turns the colour index into real per-vertex colours out of
+the map's palette (PSM2 header word `0x10`), replacing the placeholder shading.
+
 ## Timing Model
 
 The simulation runs on a fixed 60 Hz step, decoupled from the render rate. `main`
@@ -296,6 +366,16 @@ port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 12
 to, and whether that behavior is ported; with `--frames` it also reports tick
 counts per type. Both reports resolve straight from the pool, so `--load-only`
 gives a useful answer before a single frame has run.
+
+`--probe x,y,z[,radius]` dumps every primitive whose bounds come within radius
+of a world point -- flags, terrain flags, centre, radius, plane normal, corner
+count and material slots. It is a hypothesis-testing tool, not part of the port.
+
+`--render-report` prints what the map visibility pass culled, faded and drew,
+how many primitives straddle the near plane (which GL clips rather than
+`FUN_0020b600`), and two oracles that can be checked without looking at a
+picture: whether the plane normals agree with the map's own `0x100` ceiling
+flag, and how much of the drawn set faces the camera.
 
 `--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
 

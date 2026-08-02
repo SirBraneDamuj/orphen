@@ -14,6 +14,8 @@
 #include "ported/script/scene_script.h"
 #include "runtime/ps2_memory.h"
 #include "ported/original_frame_timing.h"
+#include "ported/render/original_map_visibility.h"
+#include "ported/render/original_view_projection.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +35,13 @@ namespace orphen::port
     bool printSceneTree = false;
     bool printScriptReport = false;
     bool printActorReport = false;
+    bool printRenderReport = false;
+    // DAT_00355628 override, for experimenting before the script opcode that
+    // normally sets it (FUN_00263cb8) is wired up.
+    std::optional<float> drawDistanceOverride;
+    // --probe: dump the primitives around a world point and stop.
+    std::optional<orphen::ported::psm2::Vec3> probeCentre;
+    float probeRadius = 2.0f;
     // Drive the scene script's per-frame entry and its object-script slots.
     // Off by default so the existing determinism baseline is unchanged.
     bool runScriptTick = false;
@@ -66,6 +75,8 @@ namespace orphen::port
     orphen::ported::script::ScriptTrace scriptTrace_;
     OriginalLeadPlayer leadPlayer_;
     orphen::ported::camera::OriginalFieldCamera fieldCamera_;
+    orphen::ported::render::ViewProjection renderCamera_;
+    orphen::ported::render::MapVisibilityReport visibilityReport_;
     std::uint32_t frameCount_ = 0;
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
@@ -79,6 +90,7 @@ namespace orphen::port
     bool runScriptTick_ = false;
     bool printActorReport_ = false;
     bool printScriptReport_ = false;
+    bool printRenderReport_ = false;
     // Set once, the first time a per-frame script run stops on an unimplemented
     // opcode, so a halting tick says so instead of failing silently every frame.
     mutable bool reportedTickHalt_ = false;
@@ -89,6 +101,9 @@ namespace orphen::port
     void applySceneMarkerSpawn();
     void printScriptReport() const;
     void printActorReport() const;
+    void printRenderReport() const;
+    void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
+    void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
     void reportTickHalt(const char *what) const;
     orphen::ported::script::ScriptEnvironment scriptEnvironment();
     orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);

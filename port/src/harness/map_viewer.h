@@ -6,6 +6,8 @@
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_map_visibility.h"
+#include "ported/render/original_view_projection.h"
 #include "runtime/player_view_state.h"
 #include "runtime/scene_object_view.h"
 
@@ -30,6 +32,20 @@ namespace orphen::harness
     void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
     void setSceneObjectViews(orphen::port::SceneObjectViewList objects);
     void setFollowCameraPose(const orphen::ported::camera::CameraPose &pose);
+
+    // The ported render pipeline's output for this frame. PortRuntime owns
+    // both because the visibility pass mutates per-primitive fade state and so
+    // has to run on the fixed simulation step, not on the render rate.
+    void setRenderCamera(const orphen::ported::render::ViewProjection &viewProjection);
+    void setMapDrawList(std::vector<orphen::ported::render::MapDrawItem> drawList);
+    // DAT_00355628. Bounds the GL far plane and the fog band.
+    void setDrawDistance(float drawDistance);
+    float drawDistance() const { return drawDistance_; }
+    // Last framebuffer size seen by render(), so the next update() can widen
+    // the cull frustum to whatever the window actually shows. Zero until the
+    // first render, which is what headless --frames runs stay at.
+    int lastFramebufferWidth() const { return lastFramebufferWidth_; }
+    int lastFramebufferHeight() const { return lastFramebufferHeight_; }
     orphen::ported::psm2::Vec3 freeViewerMovement(float strafe, float forward) const;
     bool hasLeadPlayerView() const { return leadPlayerView_.has_value(); }
     float freeViewerYawDegrees() const { return cameraYawDegrees_; }
@@ -65,6 +81,12 @@ namespace orphen::harness
     float cameraYawDegrees_ = 35.0f;
     float cameraPitchDegrees_ = -55.0f;
     orphen::ported::camera::CameraPose followCameraPose_;
+    std::optional<orphen::ported::render::ViewProjection> renderCamera_;
+    std::vector<orphen::ported::render::MapDrawItem> mapDrawList_;
+    mutable int lastFramebufferWidth_ = 0;
+    mutable int lastFramebufferHeight_ = 0;
+    // DAT_00355628, seeded from DAT_0032538c's 32.0 default (FUN_0022a360).
+    float drawDistance_ = 32.0f;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;
@@ -74,6 +96,7 @@ namespace orphen::harness
     void setTexturePages(std::vector<LoadedDiscTexturePage> texturePages);
     void releaseUploadedTextures() const;
     void ensureTexturesUploaded() const;
+    void applyFogState(bool enabled) const;
   };
 
 } // namespace orphen::harness

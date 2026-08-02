@@ -27,6 +27,35 @@ namespace orphen::harness
     constexpr double kPi = 3.14159265358979323846;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
 
+    // Flag bit 0 is the two-sided bit. FUN_00211230:190 hands it to the VU1
+    // program as a byte of its own -- `*(byte *)(packet + 9) = flags & 1` --
+    // at the offset beside the vertex count and material parameters, which is
+    // where a per-primitive cull toggle belongs.
+    //
+    // On s01_e024 exactly 32 of 1630 primitives carry it, and they are exactly
+    // 16 coincident perpendicular pairs: the four hanging chains at
+    // (+/-0.45, +/-4.30), four vertical segments each, built as crossed planes.
+    // Nothing else in the map sets it. Culling those is what made them vanish
+    // from one side.
+    constexpr std::uint32_t kRecord80TwoSidedBit = 0x1;
+
+    // The original's frustum ends at DAT_00355628 and it fogs everything out
+    // before that, so nothing needs to survive past it. The margin keeps
+    // primitives whose centre is inside the draw distance but whose far
+    // corners are not from being clipped by GL.
+    constexpr float kFarPlaneMargin = 8.0f;
+
+    // FUN_0022a418:344-354. Fog starts a quarter of the way out and ends at
+    // the draw distance; the colour block at DAT_0035566C..0x00355680 is
+    // 0x505050.
+    constexpr float kFogStartFraction = 0.25f;
+    constexpr float kFogColourChannel = 0x50 / 255.0f;
+
+    // FUN_00211230:131 / FUN_0020a2c0:499 pick the PRIM word with the FGE bit
+    // set only when the fog start is nearer than this, so a map with a long
+    // draw distance renders unfogged.
+    constexpr float kFogEnableStartLimit = 5.0f;
+
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
       std::ifstream file(path, std::ios::binary);
@@ -362,10 +391,27 @@ namespace orphen::harness
                             const orphen::ported::psm2::Vec3 &viewerAnchor,
                             float glyphHeight)
     {
+      // Rows 0 and 1 of the modelview are the world directions that map to
+      // view-space +x and +y. Which way those point on screen depends on the
+      // projection, and the two camera paths disagree: the free viewer's
+      // glFrustum is y-up, while the ported camera's view space is y-down and
+      // its projection negates y to compensate (see glCameraFor). Taking the
+      // sign from the projection's diagonal keeps this correct for both
+      // instead of baking in one convention.
       float modelview[16] = {};
+      float projection[16] = {};
       glGetFloatv(GL_MODELVIEW_MATRIX, modelview);
-      const orphen::ported::psm2::Vec3 right{modelview[0], modelview[4], modelview[8]};
-      const orphen::ported::psm2::Vec3 up{modelview[1], modelview[5], modelview[9]};
+      glGetFloatv(GL_PROJECTION_MATRIX, projection);
+
+      const float horizontalSign = projection[0] < 0.0f ? -1.0f : 1.0f;
+      const float verticalSign = projection[5] < 0.0f ? -1.0f : 1.0f;
+
+      const orphen::ported::psm2::Vec3 right{modelview[0] * horizontalSign,
+                                             modelview[4] * horizontalSign,
+                                             modelview[8] * horizontalSign};
+      const orphen::ported::psm2::Vec3 up{modelview[1] * verticalSign,
+                                          modelview[5] * verticalSign,
+                                          modelview[9] * verticalSign};
 
       const float glyphWidth = glyphHeight * 0.62f;
       const float advance = glyphWidth * 1.25f;
@@ -474,87 +520,160 @@ namespace orphen::harness
       glVertex3f(viewerPosition.x, viewerPosition.y, viewerPosition.z);
     }
 
-    std::optional<std::size_t> texturePageForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map, std::size_t primitiveIndex)
+    // Material slot 0 is the base pass. FUN_0022c3d8 has already resolved the
+    // selector, so the type byte here is the texture page and a negative type
+    // means the primitive is untextured rather than missing.
+    const orphen::ported::psm2::MaterialSlot *baseSlotForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                                   std::size_t primitiveIndex)
     {
       if (primitiveIndex >= map.DAT_003556ac_dRecords80.size())
       {
-        return std::nullopt;
+        return nullptr;
       }
+      return &map.DAT_003556ac_dRecords80[primitiveIndex].materialSlots[0];
+    }
 
-      const std::uint16_t sectionEIndex = map.DAT_003556ac_dRecords80[primitiveIndex].sectionEIndex;
-      if (sectionEIndex >= 0x8000 || static_cast<std::size_t>(sectionEIndex) >= map.DAT_003556b4_sectionERecords.size())
+    std::optional<std::size_t> texturePageForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map, std::size_t primitiveIndex)
+    {
+      const auto *slot = baseSlotForPrimitive(map, primitiveIndex);
+      if (slot == nullptr || !slot->textured())
       {
         return std::nullopt;
       }
 
-      return map.DAT_003556b4_sectionERecords[sectionEIndex].bytes[8];
+      return slot->type;
     }
 
     std::pair<float, float> textureCoordinateForCorner(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                        const orphen::ported::psm2::TriangleRecord &triangle,
                                                        std::size_t triangleCornerIndex)
     {
-      if (triangle.primitiveIndex >= map.DAT_003556ac_dRecords80.size())
-      {
-        return {0.0f, 0.0f};
-      }
-
-      const std::uint16_t sectionEIndex = map.DAT_003556ac_dRecords80[triangle.primitiveIndex].sectionEIndex;
-      if (sectionEIndex >= 0x8000 || static_cast<std::size_t>(sectionEIndex) >= map.DAT_003556b4_sectionERecords.size())
+      const auto *slot = baseSlotForPrimitive(map, triangle.primitiveIndex);
+      if (slot == nullptr || !slot->textured())
       {
         return {0.0f, 0.0f};
       }
 
       const std::uint8_t sourceCorner = triangle.cornerIndices[triangleCornerIndex] & 3;
-      const auto &record = map.DAT_003556b4_sectionERecords[sectionEIndex];
-      return {static_cast<float>(record.bytes[sourceCorner * 2]) / 256.0f,
-              static_cast<float>(record.bytes[sourceCorner * 2 + 1]) / 256.0f};
+      return {static_cast<float>(slot->textureCoordinates[sourceCorner * 2]) / 256.0f,
+              static_cast<float>(slot->textureCoordinates[sourceCorner * 2 + 1]) / 256.0f};
+    }
+
+    // The GS treats 0x80 as fully opaque, so the fade byte divides by 128. A
+    // fade of 0 means the primitive is not fading at all -- see
+    // FUN_00209140's ceiling branch, which emits 0 rather than the byte.
+    float alphaForFade(std::uint8_t fade)
+    {
+      if (fade == 0)
+      {
+        return 1.0f;
+      }
+      return std::min(1.0f, static_cast<float>(fade) / 128.0f);
     }
 
     void emitTexturedVertex(const orphen::ported::psm2::Psm2RuntimeState &map,
                             const orphen::ported::psm2::TriangleRecord &triangle,
-                            std::size_t triangleCornerIndex)
+                            std::size_t triangleCornerIndex,
+                            float alpha,
+                            bool modulateByFlatColour)
     {
+      const auto &record80 = map.DAT_003556ac_dRecords80[triangle.primitiveIndex];
+      const std::uint8_t corner = triangle.cornerIndices[triangleCornerIndex] & 3;
+
+      // FUN_00211230:266-289. Textured primitives take the vertex colour
+      // straight; untextured ones modulate it against the slot's flat colour
+      // with a >> 6, which is why the flat colours look like 0x40 mid greys.
+      std::uint32_t colour = record80.vertexColours[corner];
+      float red = static_cast<float>(colour & 0xff) / 128.0f;
+      float green = static_cast<float>((colour >> 8) & 0xff) / 128.0f;
+      float blue = static_cast<float>((colour >> 16) & 0xff) / 128.0f;
+
+      if (modulateByFlatColour)
+      {
+        const std::uint32_t flat = record80.materialSlots[0].flatColour();
+        red *= static_cast<float>(flat & 0xff) / 64.0f;
+        green *= static_cast<float>((flat >> 8) & 0xff) / 64.0f;
+        blue *= static_cast<float>((flat >> 16) & 0xff) / 64.0f;
+      }
+
+      glColor4f(std::min(red, 1.0f), std::min(green, 1.0f), std::min(blue, 1.0f), alpha);
+
       const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex);
       glTexCoord2f(u, v);
       emitVertex(map, triangle.vertexIndices[triangleCornerIndex]);
     }
 
-    void drawMap(const orphen::ported::psm2::Psm2RuntimeState &map, const std::vector<unsigned int> &textureIds)
+    void drawPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                       const std::vector<unsigned int> &textureIds,
+                       std::size_t primitiveIndex,
+                       float alpha,
+                       bool cullingEnabled)
     {
-      for (const auto &triangle : map.derivedTriangles)
+      const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, primitiveIndex);
+      const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
+
+      if (hasTexture)
       {
-        if (triangle.primitiveIndex < map.DAT_003556ac_dRecords80.size() &&
-            (map.DAT_003556ac_dRecords80[triangle.primitiveIndex].terrainFlags & kRecord80HiddenBit) != 0)
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, textureIds[*texturePage]);
+      }
+      else
+      {
+        glDisable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
+      }
+
+      const bool modulate = !hasTexture;
+      const auto &record80 = map.DAT_003556ac_dRecords80[primitiveIndex];
+
+      const bool twoSided = (record80.primitiveFlags & kRecord80TwoSidedBit) != 0;
+      if (cullingEnabled && twoSided)
+      {
+        glDisable(GL_CULL_FACE);
+      }
+
+      glBegin(GL_TRIANGLES);
+      for (std::size_t offset = 0; offset < record80.triangleCount; ++offset)
+      {
+        const auto &triangle = map.derivedTriangles[record80.firstTriangle + offset];
+        emitTexturedVertex(map, triangle, 0, alpha, modulate);
+        emitTexturedVertex(map, triangle, 1, alpha, modulate);
+        emitTexturedVertex(map, triangle, 2, alpha, modulate);
+      }
+      glEnd();
+
+      if (cullingEnabled && twoSided)
+      {
+        glEnable(GL_CULL_FACE);
+      }
+    }
+
+    // Back to front over the depth buckets the visibility pass produced.
+    void drawMap(const orphen::ported::psm2::Psm2RuntimeState &map,
+                 const std::vector<unsigned int> &textureIds,
+                 const std::vector<orphen::ported::render::MapDrawItem> &drawList,
+                 bool cullingEnabled)
+    {
+      for (const auto &item : drawList)
+      {
+        drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade), cullingEnabled);
+      }
+
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    // The whole map, unsorted and opaque. Used by the free-fly viewer, which
+    // has no player and so no occlusion fade to compute.
+    void drawMapUnsorted(const orphen::ported::psm2::Psm2RuntimeState &map, const std::vector<unsigned int> &textureIds)
+    {
+      for (std::size_t primitiveIndex = 0; primitiveIndex < map.DAT_003556ac_dRecords80.size(); ++primitiveIndex)
+      {
+        if ((map.DAT_003556ac_dRecords80[primitiveIndex].primitiveFlags & kRecord80HiddenBit) != 0)
         {
           continue;
         }
-
-        const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, triangle.primitiveIndex);
-        const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
-
-        if (hasTexture)
-        {
-          glEnable(GL_TEXTURE_2D);
-          glBindTexture(GL_TEXTURE_2D, textureIds[*texturePage]);
-          glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        }
-        else
-        {
-          glDisable(GL_TEXTURE_2D);
-          glBindTexture(GL_TEXTURE_2D, 0);
-        }
-
-        glBegin(GL_TRIANGLES);
-        const float shade = 0.35f + 0.35f * static_cast<float>(triangle.primitiveIndex % 17) / 16.0f;
-        if (!hasTexture)
-        {
-          glColor3f(0.22f + shade * 0.35f, 0.42f + shade * 0.25f, 0.50f + shade * 0.30f);
-        }
-        emitTexturedVertex(map, triangle, 0);
-        emitTexturedVertex(map, triangle, 1);
-        emitTexturedVertex(map, triangle, 2);
-        glEnd();
+        drawPrimitive(map, textureIds, primitiveIndex, 1.0f, false);
       }
 
       glDisable(GL_TEXTURE_2D);
@@ -702,6 +821,41 @@ namespace orphen::harness
     followCameraPose_ = pose;
   }
 
+  void MapViewer::setRenderCamera(const orphen::ported::render::ViewProjection &viewProjection)
+  {
+    renderCamera_ = viewProjection;
+  }
+
+  void MapViewer::setMapDrawList(std::vector<orphen::ported::render::MapDrawItem> drawList)
+  {
+    mapDrawList_ = std::move(drawList);
+  }
+
+  void MapViewer::setDrawDistance(float drawDistance)
+  {
+    drawDistance_ = drawDistance;
+  }
+
+  // FUN_0022a418 derives the fog band from the draw distance, and the PRIM
+  // word only carries the fog-enable bit when the band starts close in. GL's
+  // linear fog is the nearest equivalent to what the GS does per vertex.
+  void MapViewer::applyFogState(bool enabled) const
+  {
+    const float fogStart = drawDistance_ * kFogStartFraction;
+    if (!enabled || fogStart >= kFogEnableStartLimit)
+    {
+      glDisable(GL_FOG);
+      return;
+    }
+
+    const GLfloat fogColour[4] = {kFogColourChannel, kFogColourChannel, kFogColourChannel, 1.0f};
+    glFogi(GL_FOG_MODE, GL_LINEAR);
+    glFogfv(GL_FOG_COLOR, fogColour);
+    glFogf(GL_FOG_START, fogStart);
+    glFogf(GL_FOG_END, drawDistance_);
+    glEnable(GL_FOG);
+  }
+
   void MapViewer::setHudLines(std::vector<std::string> lines)
   {
     hudLines_ = std::move(lines);
@@ -846,15 +1000,28 @@ namespace orphen::harness
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
     ensureTexturesUploaded();
+    lastFramebufferWidth_ = framebufferWidth;
+    lastFramebufferHeight_ = framebufferHeight;
+
+    // The ported camera works in game space; the free viewer still works in
+    // the viewer space this file has always used, so only one of the two
+    // paths applies the axis remap.
+    const bool useOriginalCamera = leadPlayerView_.has_value() && renderCamera_.has_value();
 
     float renderCameraDistance = cameraDistance_;
-    if (leadPlayerView_.has_value())
+    if (useOriginalCamera)
     {
-      const auto viewerEye = toViewerSpace(followCameraPose_.eye);
-      const auto viewerTarget = toViewerSpace(followCameraPose_.target);
-      renderCameraDistance = viewerDistance(viewerEye, viewerTarget);
-      setPerspective(framebufferWidth, framebufferHeight, 60.0f, renderCameraDistance * 8.0f);
-      applyLookAtCamera(viewerEye, viewerTarget);
+      renderCameraDistance = viewerDistance(toViewerSpace(followCameraPose_.eye),
+                                            toViewerSpace(followCameraPose_.target));
+      const auto camera = orphen::ported::render::glCameraFor(*renderCamera_,
+                                                              framebufferWidth,
+                                                              framebufferHeight,
+                                                              orphen::ported::render::constants::kNearPlane,
+                                                              drawDistance_ + kFarPlaneMargin);
+      glMatrixMode(GL_PROJECTION);
+      glLoadMatrixf(camera.projection.data());
+      glMatrixMode(GL_MODELVIEW);
+      glLoadMatrixf(camera.modelView.data());
     }
     else
     {
@@ -865,14 +1032,44 @@ namespace orphen::harness
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_CULL_FACE);
     glPolygonMode(GL_FRONT_AND_BACK, wireframe_ ? GL_LINE : GL_FILL);
 
-    drawGrid(renderCameraDistance);
+    // Backface culling is what makes a wall single-sided, and with the fade it
+    // is why the camera outside a room sees through it. The GS has no culling
+    // hardware -- the original does this in the VU1 microprogram at 0xE0 --
+    // but the winding is fully determined by the corner order FUN_0022c6e8
+    // uses, so GL can reproduce it. The free viewer keeps culling off so map
+    // inspection still shows both sides.
+    if (useOriginalCamera && !wireframe_)
+    {
+      glEnable(GL_CULL_FACE);
+      glCullFace(GL_BACK);
+      glFrontFace(GL_CCW);
+    }
+    else
+    {
+      glDisable(GL_CULL_FACE);
+    }
+
+    applyFogState(useOriginalCamera);
+
+    if (!useOriginalCamera)
+    {
+      drawGrid(renderCameraDistance);
+    }
     if (map_.has_value())
     {
-      drawMap(*map_, uploadedTextureIds_);
+      if (useOriginalCamera)
+      {
+        drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_);
+      }
+      else
+      {
+        drawMapUnsorted(*map_, uploadedTextureIds_);
+      }
     }
+    glDisable(GL_FOG);
+    glDisable(GL_CULL_FACE);
     if (leadPlayerView_.has_value())
     {
       drawLeadPlayer(*leadPlayerView_);

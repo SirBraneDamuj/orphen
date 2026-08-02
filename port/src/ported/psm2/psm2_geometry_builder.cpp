@@ -20,6 +20,53 @@ namespace orphen::ported::psm2
                          { return static_cast<std::size_t>(index) < positionCount; });
     }
 
+    // fGpffff8578 (0x003524e8) = pi/2, the constant FUN_0022cbd8 subtracts the
+    // elevation from to get a slope angle.
+    constexpr float kHalfPi = 1.57079601f;
+
+    // DAT_003524e4 (0.000174532892, one hundredth of a degree).
+    constexpr float kSlopeTieBreak = 0.000174532892f;
+
+    // FUN_0022caf8. The raw, unnormalized plane normal: (v1 - v0) x (v2 - v0),
+    // with the components written back in the order z, y, x. This is what
+    // fixes the winding, and so what backface culling has to agree with.
+    Vec3 planeNormalFor(const Vec3 &first, const Vec3 &second, const Vec3 &third)
+    {
+      const Vec3 toSecond = subtract(second, first);
+      const Vec3 toThird = subtract(third, first);
+      return {toSecond.y * toThird.z - toSecond.z * toThird.y,
+              toSecond.z * toThird.x - toSecond.x * toThird.z,
+              toSecond.x * toThird.y - toSecond.y * toThird.x};
+    }
+
+    // FUN_0022cbd8. Same plane, but built from the consecutive edges
+    // (v1 - v0) x (v2 - v1) and then normalized. A degenerate triangle falls
+    // back to straight up, exactly as the original does.
+    Vec3 unitNormalFor(const Vec3 &first, const Vec3 &second, const Vec3 &third)
+    {
+      const Vec3 firstEdge = subtract(second, first);
+      const Vec3 secondEdge = subtract(third, second);
+      const Vec3 normal{firstEdge.y * secondEdge.z - firstEdge.z * secondEdge.y,
+                        firstEdge.z * secondEdge.x - firstEdge.x * secondEdge.z,
+                        firstEdge.x * secondEdge.y - firstEdge.y * secondEdge.x};
+
+      const float length = std::sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+      if (length == 0.0f)
+      {
+        return {0.0f, 0.0f, 1.0f};
+      }
+      return {normal.x / length, normal.y / length, normal.z / length};
+    }
+
+    // The angle FUN_0022cbd8 stores at 0x78 +0x70 / +0x74. FUN_0022d258
+    // compares it against DAT_003524ec (0.872664452, 50 degrees) to decide
+    // whether a surface is walkable, so it is a slope, not an elevation.
+    float slopeAngleFor(const Vec3 &unitNormal)
+    {
+      const float horizontal = std::sqrt(unitNormal.x * unitNormal.x + unitNormal.y * unitNormal.y);
+      return kHalfPi - std::atan2(unitNormal.z, horizontal);
+    }
+
     void appendTriangle(Psm2RuntimeState &state,
                         std::size_t primitiveIndex,
                         std::uint16_t firstIndex,
@@ -114,15 +161,47 @@ namespace orphen::ported::psm2
       }
       record80.radius = radius;
 
+      record80.firstTriangle = state.derivedTriangles.size();
+
+      // FUN_0022c6e8:106-126. A triangle takes corners (0, 1, 2); a quad is
+      // split as (3, 0, 1) and (1, 2, 3), and each half gets its own plane.
+      // The corner order here is what defines the winding for the whole
+      // renderer, so it must not be "tidied".
+      const auto plane = [&](std::uint8_t a, std::uint8_t b, std::uint8_t c, std::size_t slot)
+      {
+        const Vec3 &first = positionForIndex(state, indices[a]);
+        const Vec3 &second = positionForIndex(state, indices[b]);
+        const Vec3 &third = positionForIndex(state, indices[c]);
+        record78.planeNormal[slot] = planeNormalFor(first, second, third);
+        record78.unitNormal[slot] = unitNormalFor(first, second, third);
+        record78.slopeAngle[slot] = slopeAngleFor(record78.unitNormal[slot]);
+      };
+
       if (isTriangle)
       {
+        plane(0, 1, 2, 0);
+        record78.planeNormal[1] = record78.planeNormal[0];
+        record78.unitNormal[1] = record78.unitNormal[0];
+        record78.slopeAngle[1] = record78.slopeAngle[0];
+
         appendTriangle(state, primitiveIndex, indices[0], indices[1], indices[2], 0, 1, 2);
       }
       else
       {
+        plane(3, 0, 1, 0);
+        plane(1, 2, 3, 1);
+        // FUN_0022c6e8:122-124: identical slopes on the two halves are nudged
+        // apart by DAT_003524e4 so the terrain query can tell them apart.
+        if (record78.slopeAngle[0] == record78.slopeAngle[1])
+        {
+          record78.slopeAngle[1] += kSlopeTieBreak;
+        }
+
         appendTriangle(state, primitiveIndex, indices[3], indices[0], indices[1], 3, 0, 1);
         appendTriangle(state, primitiveIndex, indices[1], indices[2], indices[3], 1, 2, 3);
       }
+
+      record80.triangleCount = state.derivedTriangles.size() - record80.firstTriangle;
     }
   }
 

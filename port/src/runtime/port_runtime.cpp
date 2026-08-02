@@ -101,6 +101,11 @@ namespace orphen::port
     }
     runScriptTick_ = config.runScriptTick;
     printActorReport_ = config.printActorReport;
+    printRenderReport_ = config.printRenderReport;
+    if (config.drawDistanceOverride.has_value())
+    {
+      mapViewer_.setDrawDistance(*config.drawDistanceOverride);
+    }
     printScriptReport_ = config.printScriptReport;
     loadExecutable(config);
 
@@ -133,6 +138,11 @@ namespace orphen::port
                 << " triangles=" << stats.triangleCount
                 << " skipped=" << stats.skippedPrimitiveCount
                 << " textures=" << mapViewer_.loadedTexturePageCount() << '\n';
+
+      if (config.probeCentre.has_value())
+      {
+        printPrimitiveProbe(*config.probeCentre, config.probeRadius);
+      }
 
       const auto &leadState = leadPlayer_.viewState();
       std::cout << "[player] spawn=(" << leadState.position.x << ", " << leadState.position.y
@@ -497,6 +507,160 @@ namespace orphen::port
     {
       printActorReport();
     }
+    if (printRenderReport_)
+    {
+      printRenderReport();
+    }
+  }
+
+  // Dumps every primitive whose bounds come within `radius` of a world point,
+  // with the fields that decide how it draws. This is a hypothesis-testing
+  // tool for questions like "why did that thing vanish", not part of the port.
+  void PortRuntime::printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const
+  {
+    const auto *map = mapViewer_.loadedMap();
+    if (map == nullptr)
+    {
+      std::cout << "[probe] no map loaded\n";
+      return;
+    }
+
+    std::cout << "[probe] primitives within " << radius << " of ("
+              << centre.x << ", " << centre.y << ", " << centre.z << ")\n";
+
+    for (std::size_t index = 0; index < map->DAT_003556ac_dRecords80.size(); ++index)
+    {
+      const auto &record80 = map->DAT_003556ac_dRecords80[index];
+      const auto &record78 = map->DAT_003556b0_dRecords78[index];
+      if (orphen::ported::psm2::distance(record80.center, centre) > radius + record80.radius)
+      {
+        continue;
+      }
+
+      std::cout << "  #" << index
+                << " flags=0x" << std::hex << record80.primitiveFlags
+                << " terrain=0x" << record78.terrainFlags << std::dec
+                << " centre=(" << formatNumber(record80.center.x) << "," << formatNumber(record80.center.y)
+                << "," << formatNumber(record80.center.z) << ")"
+                << " r=" << formatNumber(record80.radius)
+                << " n=(" << formatNumber(record78.unitNormal[0].x) << ","
+                << formatNumber(record78.unitNormal[0].y) << ","
+                << formatNumber(record78.unitNormal[0].z) << ")"
+                << " corners=" << ((record80.primitiveFlags & 0x4000) != 0 ? 3 : 4)
+                << " alpha=0x" << std::hex << static_cast<int>(record80.staticAlpha) << std::dec;
+
+      for (std::size_t slot = 0; slot < record80.materialSlots.size(); ++slot)
+      {
+        const auto &material = record80.materialSlots[slot];
+        if (!material.present())
+        {
+          continue;
+        }
+        std::cout << " | slot" << slot << " type=0x" << std::hex << static_cast<int>(material.type)
+                  << " a=0x" << static_cast<int>(material.alpha)
+                  << " f=0x" << static_cast<int>(material.flags) << std::dec;
+      }
+      std::cout << '\n';
+    }
+  }
+
+  // What the ported render pipeline did on the last frame, plus the one thing
+  // that cannot be checked by looking at a picture: whether the winding the
+  // plane normals imply agrees with the map's own ceiling flag. FUN_00227840
+  // marks downward-facing primitives with 0x100 on 0x78 +0x00, so their unit
+  // normal should point down. A large disagreement count means backface
+  // culling is inverted, not that the map is broken.
+  void PortRuntime::printRenderReport() const
+  {
+    const auto *map = mapViewer_.loadedMap();
+    if (map == nullptr)
+    {
+      std::cout << "[render] no map loaded\n";
+      return;
+    }
+
+    constexpr std::uint32_t kCeilingBit = 0x100;
+    constexpr std::uint32_t kTwoSidedBit = 0x1;
+    // A wall's normal is horizontal, so "not pointing up" is only a winding
+    // error when it points *down*. Splitting the three cases is what makes
+    // this number readable.
+    constexpr float kFlatThreshold = 0.001f;
+    std::size_t ceilingCount = 0;
+    std::size_t ceilingPointingDown = 0;
+    std::size_t otherUp = 0;
+    std::size_t otherDown = 0;
+    std::size_t otherFlat = 0;
+    std::size_t fadingNow = 0;
+    std::size_t twoSided = 0;
+
+    for (std::size_t index = 0; index < map->DAT_003556b0_dRecords78.size(); ++index)
+    {
+      const auto &record78 = map->DAT_003556b0_dRecords78[index];
+      const float normalZ = record78.unitNormal[0].z;
+      if ((record78.leadingWord & kCeilingBit) != 0)
+      {
+        ++ceilingCount;
+        if (normalZ < 0.0f)
+        {
+          ++ceilingPointingDown;
+        }
+      }
+      else if (normalZ > kFlatThreshold)
+      {
+        ++otherUp;
+      }
+      else if (normalZ < -kFlatThreshold)
+      {
+        ++otherDown;
+      }
+      else
+      {
+        ++otherFlat;
+      }
+
+      if (map->DAT_003556ac_dRecords80[index].dynamicFade < orphen::ported::psm2::kFadeCeiling)
+      {
+        ++fadingNow;
+      }
+      if ((map->DAT_003556ac_dRecords80[index].primitiveFlags & kTwoSidedBit) != 0)
+      {
+        ++twoSided;
+      }
+    }
+
+    std::cout << "[render] draw distance " << mapViewer_.drawDistance()
+              << " fog " << (mapViewer_.drawDistance() * 0.25f < 5.0f ? "on" : "off") << '\n'
+              << "[render] primitives=" << visibilityReport_.primitiveCount
+              << " drawn=" << visibilityReport_.drawn
+              << " hidden=" << visibilityReport_.hiddenSkipped
+              << " behind-near-plane=" << visibilityReport_.nearRejected
+              << " outside-sides=" << visibilityReport_.sideRejected
+              << " beyond-draw-distance=" << visibilityReport_.drawDistanceRejected
+              << " near-clipped=" << visibilityReport_.nearClipped << '\n'
+              << "[render] of the drawn set, " << visibilityReport_.drawnFrontFacing
+              << " face the camera and " << visibilityReport_.drawnBackFacing
+              << " face away (culled unless two-sided)\n"
+              << "[render] fade: " << visibilityReport_.faded << " fading of "
+              << visibilityReport_.fadeCandidates << " candidates; blocked by blend "
+              << visibilityReport_.fadeBlockedByBlend << ", height "
+              << visibilityReport_.fadeBlockedByHeight << ", band "
+              << visibilityReport_.fadeBlockedByBand << ", overlap "
+              << visibilityReport_.fadeBlockedByOverlap << '\n'
+              << "[render] " << fadingNow << " primitives hold a fade below the ceiling value\n"
+              << "[render] winding oracle: " << ceilingPointingDown << '/' << ceilingCount
+              << " 0x100 primitives point down; others: " << otherUp << " up, "
+              << otherDown << " down, " << otherFlat << " vertical\n"
+              << "[render] " << twoSided << " primitives are two-sided (flag 0x1) and skip culling\n";
+
+    // The near-plane polygon clip itself is not ported: the original hands
+    // those primitives to FUN_00209ca0 -> FUN_0020b600, while the port draws
+    // them whole and lets GL clip. The fade path for them *is* ported, and it
+    // is the looser of the two condition sets.
+    if (visibilityReport_.nearClipped > 0)
+    {
+      std::cout << "[render] " << visibilityReport_.nearClipped
+                << " primitives straddle the near plane; GL clips them rather than FUN_0020b600\n";
+    }
   }
 
   // Resolves every live entity's behavior straight from the pool rather than
@@ -648,10 +812,12 @@ namespace orphen::port
 
       mapViewer_.setLeadPlayerView(leadState);
       mapViewer_.setFollowCameraPose(fieldCamera_.pose());
+      updateMapVisibility(*loadedMap, leadState);
     }
     else
     {
       mapViewer_.setLeadPlayerView(std::nullopt);
+      mapViewer_.setMapDrawList({});
     }
     reportLeadPlayerGroundChange();
     updateHud(input, frameTicks);
@@ -659,6 +825,44 @@ namespace orphen::port
     memory_.write(kHarnessFrameCounterAddress, frameCount_);
 
     return true;
+  }
+
+  // FUN_00208ee8 then FUN_00208f28: build the camera matrices, then walk the
+  // map deciding what is visible, what fades and in what order it draws. This
+  // runs on the simulation step rather than in render() because the fade byte
+  // is per-frame state -- the original's 0x80-record +0x2E -- and stepping it
+  // at the render rate would make it frame-rate dependent.
+  void PortRuntime::updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map,
+                                        const PlayerViewState &leadState)
+  {
+    orphen::ported::render::FieldCameraView cameraView;
+    cameraView.eye = fieldCamera_.pose().eye;
+    cameraView.yawRadians = fieldCamera_.yawRadians();
+    cameraView.pitchRadians = fieldCamera_.pitchRadians();
+    renderCamera_ = orphen::ported::render::FUN_0020bec8_build(cameraView);
+
+    orphen::ported::render::MapVisibilityInput visibilityInput;
+    visibilityInput.DAT_0058bed0_playerPosition = leadState.position;
+    visibilityInput.DAT_0058bf08_playerHeadOffset = leadState.bodyHeight;
+    visibilityInput.drawDistance = mapViewer_.drawDistance();
+
+    // The original culls at a fixed 90 degrees, wider than the 67.4 it draws.
+    // A window wider than about 17:9 needs more than that, so widen rather
+    // than pop geometry out at the edges. Headless runs have no framebuffer
+    // yet and stay on the original's value, which keeps --frames deterministic.
+    const int width = mapViewer_.lastFramebufferWidth();
+    const int height = mapViewer_.lastFramebufferHeight();
+    if (width > 0 && height > 0)
+    {
+      const auto camera = orphen::ported::render::glCameraFor(
+          renderCamera_, width, height, orphen::ported::render::constants::kNearPlane, visibilityInput.drawDistance);
+      visibilityInput.horizontalCullHalfTangent = std::max(1.0f, camera.horizontalHalfTangent);
+      visibilityInput.verticalCullHalfTangent = std::max(1.0f, camera.verticalHalfTangent);
+    }
+
+    mapViewer_.setRenderCamera(renderCamera_);
+    mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
+        map, renderCamera_, visibilityInput, &visibilityReport_));
   }
 
   void PortRuntime::render(int framebufferWidth, int framebufferHeight) const

@@ -80,6 +80,43 @@ namespace
         config.printActorReport = true;
         continue;
       }
+      if (argument == "--probe")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--probe needs x,y,z[,radius]");
+        }
+        const std::string value = argv[++argumentIndex];
+        float parsed[4] = {0.0f, 0.0f, 0.0f, 2.0f};
+        std::size_t start = 0;
+        for (int field = 0; field < 4 && start <= value.size(); ++field)
+        {
+          const std::size_t comma = value.find(',', start);
+          parsed[field] = std::stof(value.substr(start, comma - start));
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        config.probeCentre = orphen::ported::psm2::Vec3{parsed[0], parsed[1], parsed[2]};
+        config.probeRadius = parsed[3];
+        continue;
+      }
+      if (argument == "--render-report")
+      {
+        config.printRenderReport = true;
+        continue;
+      }
+      if (argument == "--draw-distance")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--draw-distance needs a value");
+        }
+        config.drawDistanceOverride = std::stof(argv[++argumentIndex]);
+        continue;
+      }
       if (argument == "--scr-report")
       {
         config.printScriptReport = true;

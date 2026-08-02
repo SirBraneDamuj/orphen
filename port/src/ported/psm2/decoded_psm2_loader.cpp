@@ -1,6 +1,7 @@
 #include "ported/psm2/decoded_psm2_loader.h"
 
 #include "ported/psm2/psm2_geometry_builder.h"
+#include "ported/psm2/psm2_material_expansion.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -128,10 +129,13 @@ namespace orphen::ported::psm2
           words[wordIndex] = readU16(decodedPsm2, recordOffset + wordIndex * 2);
         }
 
+        // Field assignment follows FUN_0022b5a8:191-244 word for word. w4 is
+        // the flag word on its own -- the original zero-extends it into both
+        // 0x78 +0x00 and 0x80 +0x70 and leaves the high half for runtime bits.
+        // w5 is a colour index, not the top half of the flags.
         DRecord78 record78;
         record78.vertexIndices = {words[0], words[1], words[2], words[3]};
-        // These become DAT_003556b0 +0x00/+0x04 in the original 0x78 terrain record.
-        record78.leadingWord = words[4] | (static_cast<std::uint32_t>(words[5]) << 16);
+        record78.leadingWord = words[4];
         record78.terrainFlags = words[10] | (static_cast<std::uint32_t>(words[11]) << 16);
         record78.selector = words[12];
         record78.byte12 = static_cast<std::uint8_t>(words[13] & 0xff);
@@ -139,9 +143,24 @@ namespace orphen::ported::psm2
 
         DRecord80 record80;
         record80.vertexIndices = record78.vertexIndices;
-        record80.sectionEIndex = words[6];
-        // Original DAT_003556ac +0x70 starts from the same source word as DAT_003556b0 +0x00.
-        record80.terrainFlags = record78.leadingWord;
+        record80.colourIndex = words[5];
+        record80.blendParam = static_cast<std::uint8_t>(words[14] & 0xff);
+        record80.staticAlpha = static_cast<std::uint8_t>((words[14] >> 8) & 0xff);
+        record80.normalIndex = words[15];
+        record80.primitiveFlags = record78.leadingWord;
+        if (static_cast<std::size_t>(record80.normalIndex) < state.DAT_003556a4_sectionBRecords.size())
+        {
+          record80.normal = state.DAT_003556a4_sectionBRecords[record80.normalIndex].normal;
+        }
+
+        // w6..w9 land in the first halfword of each material slot, which
+        // FUN_0022c3d8 then expands in place. They are kept alongside the
+        // expanded slot rather than inside it because the expansion
+        // overwrites those bytes.
+        record80.slotSelectors = {static_cast<std::int16_t>(words[6]),
+                                  static_cast<std::int16_t>(words[7]),
+                                  static_cast<std::int16_t>(words[8]),
+                                  static_cast<std::int16_t>(words[9])};
 
         state.DAT_003556b0_dRecords78.push_back(record78);
         state.DAT_003556ac_dRecords80.push_back(record80);
@@ -185,6 +204,28 @@ namespace orphen::ported::psm2
       }
     }
 
+    // FUN_0022b5a8:535-563: an s16 count followed by count RGB triples, staged
+    // at DAT_00355bdc with the count in DAT_00355be0. FUN_0022c3d8 turns
+    // 0x80-record indices into per-vertex colours out of this.
+    void loadPalette(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
+    {
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+
+      const std::size_t sectionBase = sectionOffset;
+      const std::size_t colourCount = positiveCount(readS16(decodedPsm2, sectionBase));
+      requireRange(decodedPsm2, sectionBase + 2, colourCount * 3, "PSM2 colour palette");
+
+      state.DAT_00355bdc_palette.reserve(colourCount);
+      for (std::size_t colourIndex = 0; colourIndex < colourCount; ++colourIndex)
+      {
+        const std::size_t base = sectionBase + 2 + colourIndex * 3;
+        state.DAT_00355bdc_palette.push_back({decodedPsm2[base], decodedPsm2[base + 1], decodedPsm2[base + 2]});
+      }
+    }
+
     void loadSectionE(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
     {
       if (sectionOffset == 0)
@@ -220,17 +261,23 @@ namespace orphen::ported::psm2
 
     Psm2RuntimeState state;
 
+    // Section B before section D: FUN_0022b5a8 resolves each primitive's face
+    // normal out of B as it parses D.
     loadSectionB(decodedPsm2, readU32(decodedPsm2, 0x30), state);
     loadSectionC(decodedPsm2, readU32(decodedPsm2, 0x08), state);
     loadSectionD(decodedPsm2, readU32(decodedPsm2, 0x0c), state);
     loadSectionE(decodedPsm2, readU32(decodedPsm2, 0x14), state);
+    loadPalette(decodedPsm2, readU32(decodedPsm2, 0x10), state);
     loadObjectPlacements(decodedPsm2, readU32(decodedPsm2, 0x34), state);
 
+    // FUN_0022b5a8's tail order: FUN_0022c3d8 then FUN_0022c6e8.
+    expandPsm2Materials(state);
     buildPsm2DerivedGeometry(state);
 
     state.stats.positionRecordCount = state.DAT_0035569c_sectionCRecords.size();
     state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();
     state.stats.primitiveRecordCount = state.DAT_003556ac_dRecords80.size();
+    state.stats.paletteColourCount = state.DAT_00355bdc_palette.size();
     state.stats.triangleCount = state.derivedTriangles.size();
     state.stats.objectPlacementCount = state.DAT_003556e8_objectPlacements.size();
 
