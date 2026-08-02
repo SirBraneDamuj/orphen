@@ -8,6 +8,7 @@
 #include <SDL_opengl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -336,6 +337,136 @@ namespace orphen::harness
       glLineWidth(1.0f);
     }
 
+    // Draws a short label at a world position, facing the camera. The basis
+    // comes out of the current modelview matrix rather than being passed in, so
+    // this works from either camera path without either of them knowing.
+    std::string hexLabel(std::int32_t value)
+    {
+      static const char *digits = "0123456789ABCDEF";
+      const std::uint32_t unsignedValue = static_cast<std::uint32_t>(value);
+      std::string text;
+      bool started = false;
+      for (int shift = 28; shift >= 0; shift -= 4)
+      {
+        const std::uint32_t nibble = (unsignedValue >> shift) & 0xF;
+        if (nibble != 0 || started || shift == 0)
+        {
+          text.push_back(digits[nibble]);
+          started = true;
+        }
+      }
+      return text;
+    }
+
+    void drawBillboardLabel(const std::string &text,
+                            const orphen::ported::psm2::Vec3 &viewerAnchor,
+                            float glyphHeight)
+    {
+      float modelview[16] = {};
+      glGetFloatv(GL_MODELVIEW_MATRIX, modelview);
+      const orphen::ported::psm2::Vec3 right{modelview[0], modelview[4], modelview[8]};
+      const orphen::ported::psm2::Vec3 up{modelview[1], modelview[5], modelview[9]};
+
+      const float glyphWidth = glyphHeight * 0.62f;
+      const float advance = glyphWidth * 1.25f;
+      const float totalWidth = advance * static_cast<float>(text.size());
+      float penOffset = -totalWidth * 0.5f;
+
+      glBegin(GL_LINES);
+      for (char character : text)
+      {
+        const char upperCase = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+        int segmentCount = 0;
+        const StrokeSegment *segments = glyphStrokeSegments(upperCase, segmentCount);
+        for (int index = 0; index < segmentCount; ++index)
+        {
+          const StrokeSegment &segment = segments[index];
+          const float x0 = penOffset + segment.x0 * glyphWidth;
+          const float x1 = penOffset + segment.x1 * glyphWidth;
+          const float y0 = segment.y0 * glyphHeight;
+          const float y1 = segment.y1 * glyphHeight;
+          glVertex3f(viewerAnchor.x + right.x * x0 + up.x * y0,
+                     viewerAnchor.y + right.y * x0 + up.y * y0,
+                     viewerAnchor.z + right.z * x0 + up.z * y0);
+          glVertex3f(viewerAnchor.x + right.x * x1 + up.x * y1,
+                     viewerAnchor.y + right.y * x1 + up.y * y1,
+                     viewerAnchor.z + right.z * x1 + up.z * y1);
+        }
+        penOffset += advance;
+      }
+      glEnd();
+    }
+
+    void emitBoxEdges(float minX, float minY, float minZ, float maxX, float maxY, float maxZ)
+    {
+      glVertex3f(minX, minY, minZ); glVertex3f(maxX, minY, minZ);
+      glVertex3f(maxX, minY, minZ); glVertex3f(maxX, minY, maxZ);
+      glVertex3f(maxX, minY, maxZ); glVertex3f(minX, minY, maxZ);
+      glVertex3f(minX, minY, maxZ); glVertex3f(minX, minY, minZ);
+      glVertex3f(minX, maxY, minZ); glVertex3f(maxX, maxY, minZ);
+      glVertex3f(maxX, maxY, minZ); glVertex3f(maxX, maxY, maxZ);
+      glVertex3f(maxX, maxY, maxZ); glVertex3f(minX, maxY, maxZ);
+      glVertex3f(minX, maxY, maxZ); glVertex3f(minX, maxY, minZ);
+      glVertex3f(minX, minY, minZ); glVertex3f(minX, maxY, minZ);
+      glVertex3f(maxX, minY, minZ); glVertex3f(maxX, maxY, minZ);
+      glVertex3f(maxX, minY, maxZ); glVertex3f(maxX, maxY, maxZ);
+      glVertex3f(minX, minY, maxZ); glVertex3f(minX, maxY, maxZ);
+    }
+
+    // Script-spawned entities, drawn as pink boxes at the collision size their
+    // type descriptor gives. An entity whose descriptor could not be resolved --
+    // ids from 0x272 up ship with the map, not the executable -- is drawn in a
+    // duller shade at a default size and labelled so, rather than pretending to
+    // a size nobody knows.
+    void drawSceneObjects(const orphen::port::SceneObjectViewList &objects)
+    {
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glLineWidth(2.0f);
+
+      for (const auto &object : objects)
+      {
+        const auto foot = toViewerSpace(object.position);
+        const float halfWidth = object.descriptorResolved ? std::max(object.radius, 0.05f) : 0.25f;
+        const float height = object.descriptorResolved ? std::max(object.height, 0.1f) : 0.6f;
+
+        if (object.descriptorResolved)
+        {
+          glColor3f(1.0f, 0.35f, 0.72f);
+        }
+        else
+        {
+          glColor3f(0.62f, 0.28f, 0.5f);
+        }
+
+        glBegin(GL_LINES);
+        emitBoxEdges(foot.x - halfWidth, foot.y, foot.z - halfWidth,
+                     foot.x + halfWidth, foot.y + height, foot.z + halfWidth);
+
+        const float facingLength = halfWidth * 2.0f;
+        glVertex3f(foot.x, foot.y + height * 0.5f, foot.z);
+        glVertex3f(foot.x + std::cos(object.facingRadians) * facingLength,
+                   foot.y + height * 0.5f,
+                   foot.z - std::sin(object.facingRadians) * facingLength);
+        glEnd();
+
+        std::string label = "#" + std::to_string(object.slot) + " T" + hexLabel(object.typeId);
+        if (object.descriptorResolved)
+        {
+          label += " M" + std::to_string(object.modelIndex);
+        }
+        else
+        {
+          label += " ?";
+        }
+
+        glColor3f(1.0f, 0.72f, 0.9f);
+        drawBillboardLabel(label, {foot.x, foot.y + height + 0.14f, foot.z}, 0.11f);
+      }
+
+      glLineWidth(1.0f);
+    }
+
     void emitVertex(const orphen::ported::psm2::Psm2RuntimeState &map, std::uint16_t vertexIndex)
     {
       const auto &source = map.DAT_0035569c_sectionCRecords.at(vertexIndex).position;
@@ -549,6 +680,11 @@ namespace orphen::harness
     resetCamera();
   }
 
+  void MapViewer::setSceneObjectViews(orphen::port::SceneObjectViewList objects)
+  {
+    sceneObjectViews_ = std::move(objects);
+  }
+
   void MapViewer::setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView)
   {
     if (!playerView.has_value())
@@ -740,6 +876,10 @@ namespace orphen::harness
     if (leadPlayerView_.has_value())
     {
       drawLeadPlayer(*leadPlayerView_);
+    }
+    if (!sceneObjectViews_.empty())
+    {
+      drawSceneObjects(sceneObjectViews_);
     }
 
     glDisable(GL_DEPTH_TEST);

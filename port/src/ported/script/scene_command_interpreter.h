@@ -93,6 +93,15 @@ namespace orphen::ported::script
     static constexpr std::size_t kEventCounterCount = 256;
     std::uint8_t DAT_003437b8_eventCounters[kEventCounterCount]{};
 
+    // uGpffffb704 / uGpffffb708 (0xB9, 0xBA) and fGpffffb70c / fGpffffb710
+    // (0xBB). Global colours and the fade radius pair; recorded, not yet used.
+    std::uint32_t uGpffffb704_color1 = 0;
+    std::uint32_t uGpffffb708_color2 = 0;
+    // DAT_0032538c / fGpffffb6b8 / fGpffffb6bc, set by 0xB8.
+    float DAT_0032538c_cameraDistance = 0.0f;
+    float fGpffffb70c_fadeNear = 0.0f;
+    float fGpffffb710_fadeFar = 0.0f;
+
     // Resource ids the script asked about through opcodes 0x3D..0x40. The port
     // has no resource manager, so these are recorded and answered "not loaded".
     std::vector<std::uint32_t> resourceQueries;
@@ -207,6 +216,11 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025e560_resource_flag();      // 0x3D..0x40
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
     std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
+    void FUN_00263d10_set_global_color();                // 0xB9, 0xBA
+    void FUN_00263db0_set_fade_radius_pair();            // 0xBB
+    void FUN_00263cb8_set_camera_distance();             // 0xB8
+    std::uint32_t FUN_0025f0d8_select_slot_by_index();   // 0x58
+    std::uint32_t FUN_0025f150_select_by_record_index(); // 0x5A
     std::uint32_t FUN_0025eaf0_init_selected();  // 0x50
     std::uint32_t FUN_0025eb48_set_pw_all();     // 0x51
     std::uint32_t FUN_0025edc8_spawn_by_type();  // 0x52

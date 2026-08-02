@@ -9,64 +9,59 @@ namespace orphen::harness
   namespace
   {
 
-    struct Stroke
-    {
-      float x0, y0, x1, y1;
-    };
-
     // Each glyph is a short run of segments on a 0..1 box, +Y up. Kept
     // deliberately blocky: this only has to be readable at 11 px.
-    const Stroke *glyphStrokes(char character, int &strokeCount)
+    const StrokeSegment *glyphStrokesImpl(char character, int &strokeCount)
     {
-      static const Stroke k0[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 1}};
-      static const Stroke k1[] = {{0.5f, 0, 0.5f, 1}, {0.2f, 0.8f, 0.5f, 1}};
-      static const Stroke k2[] = {{0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}, {0, 0.5f, 0, 0}, {0, 0, 1, 0}};
-      static const Stroke k3[] = {{0, 1, 1, 1}, {1, 1, 1, 0}, {1, 0, 0, 0}, {0, 0.5f, 1, 0.5f}};
-      static const Stroke k4[] = {{0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 1, 1, 0}};
-      static const Stroke k5[] = {{1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
-      static const Stroke k6[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 0.5f}, {1, 0.5f, 0, 0.5f}};
-      static const Stroke k7[] = {{0, 1, 1, 1}, {1, 1, 0.3f, 0}};
-      static const Stroke k8[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0.5f, 1, 0.5f}};
-      static const Stroke k9[] = {{1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}};
+      static const StrokeSegment k0[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 1}};
+      static const StrokeSegment k1[] = {{0.5f, 0, 0.5f, 1}, {0.2f, 0.8f, 0.5f, 1}};
+      static const StrokeSegment k2[] = {{0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}, {0, 0.5f, 0, 0}, {0, 0, 1, 0}};
+      static const StrokeSegment k3[] = {{0, 1, 1, 1}, {1, 1, 1, 0}, {1, 0, 0, 0}, {0, 0.5f, 1, 0.5f}};
+      static const StrokeSegment k4[] = {{0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 1, 1, 0}};
+      static const StrokeSegment k5[] = {{1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
+      static const StrokeSegment k6[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 0.5f}, {1, 0.5f, 0, 0.5f}};
+      static const StrokeSegment k7[] = {{0, 1, 1, 1}, {1, 1, 0.3f, 0}};
+      static const StrokeSegment k8[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0.5f, 1, 0.5f}};
+      static const StrokeSegment k9[] = {{1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}};
 
-      static const Stroke kA[] = {{0, 0, 0.5f, 1}, {0.5f, 1, 1, 0}, {0.2f, 0.4f, 0.8f, 0.4f}};
-      static const Stroke kB[] = {{0, 0, 0, 1}, {0, 1, 0.8f, 1}, {0.8f, 1, 0.8f, 0.5f}, {0.8f, 0.5f, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
-      static const Stroke kC[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}};
-      static const Stroke kD[] = {{0, 0, 0, 1}, {0, 1, 0.7f, 1}, {0.7f, 1, 1, 0.7f}, {1, 0.7f, 1, 0.3f}, {1, 0.3f, 0.7f, 0}, {0.7f, 0, 0, 0}};
-      static const Stroke kE[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0.5f, 0.7f, 0.5f}};
-      static const Stroke kF[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0.5f, 0.7f, 0.5f}};
-      static const Stroke kG[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 0.5f}, {1, 0.5f, 0.5f, 0.5f}};
-      static const Stroke kH[] = {{0, 0, 0, 1}, {1, 0, 1, 1}, {0, 0.5f, 1, 0.5f}};
-      static const Stroke kI[] = {{0.5f, 0, 0.5f, 1}, {0.2f, 1, 0.8f, 1}, {0.2f, 0, 0.8f, 0}};
-      static const Stroke kJ[] = {{1, 1, 1, 0.2f}, {1, 0.2f, 0.5f, 0}, {0.5f, 0, 0, 0.2f}};
-      static const Stroke kK[] = {{0, 0, 0, 1}, {1, 1, 0, 0.5f}, {0, 0.5f, 1, 0}};
-      static const Stroke kL[] = {{0, 1, 0, 0}, {0, 0, 1, 0}};
-      static const Stroke kM[] = {{0, 0, 0, 1}, {0, 1, 0.5f, 0.5f}, {0.5f, 0.5f, 1, 1}, {1, 1, 1, 0}};
-      static const Stroke kN[] = {{0, 0, 0, 1}, {0, 1, 1, 0}, {1, 0, 1, 1}};
-      static const Stroke kO[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}};
-      static const Stroke kP[] = {{0, 0, 0, 1}, {0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}};
-      static const Stroke kQ[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0.6f, 0.4f, 1, 0}};
-      static const Stroke kR[] = {{0, 0, 0, 1}, {0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}, {0.4f, 0.5f, 1, 0}};
-      static const Stroke kS[] = {{1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
-      static const Stroke kT[] = {{0, 1, 1, 1}, {0.5f, 1, 0.5f, 0}};
-      static const Stroke kU[] = {{0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 1}};
-      static const Stroke kV[] = {{0, 1, 0.5f, 0}, {0.5f, 0, 1, 1}};
-      static const Stroke kW[] = {{0, 1, 0.2f, 0}, {0.2f, 0, 0.5f, 0.6f}, {0.5f, 0.6f, 0.8f, 0}, {0.8f, 0, 1, 1}};
-      static const Stroke kX[] = {{0, 0, 1, 1}, {0, 1, 1, 0}};
-      static const Stroke kY[] = {{0, 1, 0.5f, 0.5f}, {1, 1, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f, 0}};
-      static const Stroke kZ[] = {{0, 1, 1, 1}, {1, 1, 0, 0}, {0, 0, 1, 0}};
+      static const StrokeSegment kA[] = {{0, 0, 0.5f, 1}, {0.5f, 1, 1, 0}, {0.2f, 0.4f, 0.8f, 0.4f}};
+      static const StrokeSegment kB[] = {{0, 0, 0, 1}, {0, 1, 0.8f, 1}, {0.8f, 1, 0.8f, 0.5f}, {0.8f, 0.5f, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
+      static const StrokeSegment kC[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+      static const StrokeSegment kD[] = {{0, 0, 0, 1}, {0, 1, 0.7f, 1}, {0.7f, 1, 1, 0.7f}, {1, 0.7f, 1, 0.3f}, {1, 0.3f, 0.7f, 0}, {0.7f, 0, 0, 0}};
+      static const StrokeSegment kE[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0.5f, 0.7f, 0.5f}};
+      static const StrokeSegment kF[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0.5f, 0.7f, 0.5f}};
+      static const StrokeSegment kG[] = {{1, 1, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 0.5f}, {1, 0.5f, 0.5f, 0.5f}};
+      static const StrokeSegment kH[] = {{0, 0, 0, 1}, {1, 0, 1, 1}, {0, 0.5f, 1, 0.5f}};
+      static const StrokeSegment kI[] = {{0.5f, 0, 0.5f, 1}, {0.2f, 1, 0.8f, 1}, {0.2f, 0, 0.8f, 0}};
+      static const StrokeSegment kJ[] = {{1, 1, 1, 0.2f}, {1, 0.2f, 0.5f, 0}, {0.5f, 0, 0, 0.2f}};
+      static const StrokeSegment kK[] = {{0, 0, 0, 1}, {1, 1, 0, 0.5f}, {0, 0.5f, 1, 0}};
+      static const StrokeSegment kL[] = {{0, 1, 0, 0}, {0, 0, 1, 0}};
+      static const StrokeSegment kM[] = {{0, 0, 0, 1}, {0, 1, 0.5f, 0.5f}, {0.5f, 0.5f, 1, 1}, {1, 1, 1, 0}};
+      static const StrokeSegment kN[] = {{0, 0, 0, 1}, {0, 1, 1, 0}, {1, 0, 1, 1}};
+      static const StrokeSegment kO[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}};
+      static const StrokeSegment kP[] = {{0, 0, 0, 1}, {0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}};
+      static const StrokeSegment kQ[] = {{0, 0, 1, 0}, {1, 0, 1, 1}, {1, 1, 0, 1}, {0, 1, 0, 0}, {0.6f, 0.4f, 1, 0}};
+      static const StrokeSegment kR[] = {{0, 0, 0, 1}, {0, 1, 1, 1}, {1, 1, 1, 0.5f}, {1, 0.5f, 0, 0.5f}, {0.4f, 0.5f, 1, 0}};
+      static const StrokeSegment kS[] = {{1, 1, 0, 1}, {0, 1, 0, 0.5f}, {0, 0.5f, 1, 0.5f}, {1, 0.5f, 1, 0}, {1, 0, 0, 0}};
+      static const StrokeSegment kT[] = {{0, 1, 1, 1}, {0.5f, 1, 0.5f, 0}};
+      static const StrokeSegment kU[] = {{0, 1, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 1}};
+      static const StrokeSegment kV[] = {{0, 1, 0.5f, 0}, {0.5f, 0, 1, 1}};
+      static const StrokeSegment kW[] = {{0, 1, 0.2f, 0}, {0.2f, 0, 0.5f, 0.6f}, {0.5f, 0.6f, 0.8f, 0}, {0.8f, 0, 1, 1}};
+      static const StrokeSegment kX[] = {{0, 0, 1, 1}, {0, 1, 1, 0}};
+      static const StrokeSegment kY[] = {{0, 1, 0.5f, 0.5f}, {1, 1, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f, 0}};
+      static const StrokeSegment kZ[] = {{0, 1, 1, 1}, {1, 1, 0, 0}, {0, 0, 1, 0}};
 
-      static const Stroke kMinus[] = {{0.1f, 0.5f, 0.9f, 0.5f}};
-      static const Stroke kPlus[] = {{0.1f, 0.5f, 0.9f, 0.5f}, {0.5f, 0.15f, 0.5f, 0.85f}};
-      static const Stroke kDot[] = {{0.4f, 0, 0.6f, 0}};
-      static const Stroke kComma[] = {{0.5f, 0.15f, 0.3f, -0.15f}};
-      static const Stroke kColon[] = {{0.4f, 0.7f, 0.6f, 0.7f}, {0.4f, 0.25f, 0.6f, 0.25f}};
-      static const Stroke kSlash[] = {{0, 0, 1, 1}};
-      static const Stroke kEquals[] = {{0.1f, 0.65f, 0.9f, 0.65f}, {0.1f, 0.35f, 0.9f, 0.35f}};
-      static const Stroke kLParen[] = {{0.7f, 1, 0.3f, 0.6f}, {0.3f, 0.6f, 0.3f, 0.4f}, {0.3f, 0.4f, 0.7f, 0}};
-      static const Stroke kRParen[] = {{0.3f, 1, 0.7f, 0.6f}, {0.7f, 0.6f, 0.7f, 0.4f}, {0.7f, 0.4f, 0.3f, 0}};
-      static const Stroke kLBracket[] = {{0.7f, 1, 0.3f, 1}, {0.3f, 1, 0.3f, 0}, {0.3f, 0, 0.7f, 0}};
-      static const Stroke kRBracket[] = {{0.3f, 1, 0.7f, 1}, {0.7f, 1, 0.7f, 0}, {0.7f, 0, 0.3f, 0}};
+      static const StrokeSegment kMinus[] = {{0.1f, 0.5f, 0.9f, 0.5f}};
+      static const StrokeSegment kPlus[] = {{0.1f, 0.5f, 0.9f, 0.5f}, {0.5f, 0.15f, 0.5f, 0.85f}};
+      static const StrokeSegment kDot[] = {{0.4f, 0, 0.6f, 0}};
+      static const StrokeSegment kComma[] = {{0.5f, 0.15f, 0.3f, -0.15f}};
+      static const StrokeSegment kColon[] = {{0.4f, 0.7f, 0.6f, 0.7f}, {0.4f, 0.25f, 0.6f, 0.25f}};
+      static const StrokeSegment kSlash[] = {{0, 0, 1, 1}};
+      static const StrokeSegment kEquals[] = {{0.1f, 0.65f, 0.9f, 0.65f}, {0.1f, 0.35f, 0.9f, 0.35f}};
+      static const StrokeSegment kLParen[] = {{0.7f, 1, 0.3f, 0.6f}, {0.3f, 0.6f, 0.3f, 0.4f}, {0.3f, 0.4f, 0.7f, 0}};
+      static const StrokeSegment kRParen[] = {{0.3f, 1, 0.7f, 0.6f}, {0.7f, 0.6f, 0.7f, 0.4f}, {0.7f, 0.4f, 0.3f, 0}};
+      static const StrokeSegment kLBracket[] = {{0.7f, 1, 0.3f, 1}, {0.3f, 1, 0.3f, 0}, {0.3f, 0, 0.7f, 0}};
+      static const StrokeSegment kRBracket[] = {{0.3f, 1, 0.7f, 1}, {0.7f, 1, 0.7f, 0}, {0.7f, 0, 0.3f, 0}};
 
 #define ORPHEN_GLYPH(table)                                              \
   strokeCount = static_cast<int>(sizeof(table) / sizeof(table[0]));      \
@@ -132,10 +127,15 @@ namespace orphen::harness
 
   } // namespace
 
+  const StrokeSegment *glyphStrokeSegments(char character, int &segmentCount)
+  {
+    return glyphStrokesImpl(character, segmentCount);
+  }
+
   void DebugTextRenderer::drawGlyph(char character, float originX, float originY, float scale) const
   {
     int strokeCount = 0;
-    const Stroke *strokes = glyphStrokes(character, strokeCount);
+    const StrokeSegment *strokes = glyphStrokesImpl(character, strokeCount);
     if (strokes == nullptr)
     {
       return;
@@ -143,7 +143,7 @@ namespace orphen::harness
 
     for (int strokeIndex = 0; strokeIndex < strokeCount; ++strokeIndex)
     {
-      const Stroke &stroke = strokes[strokeIndex];
+      const StrokeSegment &stroke = strokes[strokeIndex];
       glVertex2f(originX + stroke.x0 * scale, originY - stroke.y0 * scale);
       glVertex2f(originX + stroke.x1 * scale, originY - stroke.y1 * scale);
     }

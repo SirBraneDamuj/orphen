@@ -442,6 +442,85 @@ namespace orphen::ported::script
     return previous < 99 ? 1u : 0u;
   }
 
+  // 0xB9 / 0xBA (FUN_00263d10, FUN_00263d60): three expressions packed 0xRRGGBB
+  // into one of two global colour registers, exactly like 0x96.
+  void SceneCommandInterpreter::FUN_00263d10_set_global_color()
+  {
+    const std::uint32_t red = FUN_0025c258_evaluate();
+    const std::uint32_t green = FUN_0025c258_evaluate();
+    const std::uint32_t blue = FUN_0025c258_evaluate();
+    const std::uint32_t packed = (red << 16) | (green << 8) | blue;
+    if (currentOpcode_ == 0xB9)
+    {
+      environment_.state->uGpffffb704_color1 = packed;
+    }
+    else
+    {
+      environment_.state->uGpffffb708_color2 = packed;
+    }
+  }
+
+  // 0xBB (FUN_00263db0): a near and far fade radius, on the same 100000 scale as
+  // world coordinates. The original warns when the near radius is under 2.0.
+  void SceneCommandInterpreter::FUN_00263db0_set_fade_radius_pair()
+  {
+    const float nearRadius =
+        static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    const float farRadius =
+        static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    environment_.state->fGpffffb70c_fadeNear = nearRadius;
+    environment_.state->fGpffffb710_fadeFar = farRadius;
+  }
+
+  // 0xB8 (FUN_00263cb8): camera follow distance, on the same 100000 scale as
+  // world coordinates. The original also derives fGpffffb6bc as distance - 5.
+  // Recorded only: the ported field camera owns its own distance and taking a
+  // script value into it without the rest of the script camera would be worse
+  // than leaving it alone.
+  void SceneCommandInterpreter::FUN_00263cb8_set_camera_distance()
+  {
+    const float distance =
+        static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    environment_.state->DAT_0032538c_cameraDistance = distance;
+  }
+
+  // 0x58 (FUN_0025f0d8): select a pool slot by index.
+  std::uint32_t SceneCommandInterpreter::FUN_0025f0d8_select_slot_by_index()
+  {
+    const std::uint32_t index = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (index < orphen::ported::entity::kEntitySlotCount)
+    {
+      currentEntity_ = index;
+      return 1;
+    }
+    return 0;
+  }
+
+  // 0x5A (FUN_0025f150): select the first live pool object whose +0x4C record
+  // index matches. The port does not carry the record index on the entity yet,
+  // so this matches on slot instead and reports failure when nothing matches --
+  // scripts branch on the return value, so a wrong "found" would be worse than
+  // an honest "not found".
+  std::uint32_t SceneCommandInterpreter::FUN_0025f150_select_by_record_index()
+  {
+    const std::uint32_t wanted = FUN_0025c258_evaluate();
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+    if (wanted < orphen::ported::entity::kEntitySlotCount &&
+        environment_.entityPool->status(wanted) != orphen::ported::entity::SlotStatus::Free)
+    {
+      currentEntity_ = wanted;
+      return 1;
+    }
+    return 0;
+  }
+
   // 0x51 (FUN_0025eb48): one raw byte selects a group, then every object
   // placement record in the map whose +0x0D group byte matches is turned into an
   // entity at the record's position and angle.
@@ -706,9 +785,17 @@ namespace orphen::ported::script
       FUN_0025eeb0_set_entity_position();
       return 0;
 
+    case 0x58:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_0025f0d8_select_slot_by_index();
+
     case 0x59:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       return FUN_0025f120_get_slot_index();
+
+    case 0x5A:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_0025f150_select_by_record_index();
 
     case 0x77:
     case 0x78:
@@ -718,6 +805,22 @@ namespace orphen::ported::script
     case 0x7C:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       return FUN_00260360_modify_object_register();
+
+    case 0xB8:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      FUN_00263cb8_set_camera_distance();
+      return 0;
+
+    case 0xB9:
+    case 0xBA:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      FUN_00263d10_set_global_color();
+      return 0;
+
+    case 0xBB:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      FUN_00263db0_set_fade_radius_pair();
+      return 0;
 
     case 0xBC:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);

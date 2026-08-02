@@ -115,7 +115,7 @@ namespace orphen::port
       const auto &leadState = leadPlayer_.viewState();
       std::cout << "[player] spawn=(" << leadState.position.x << ", " << leadState.position.y
                 << ", " << leadState.position.z << ")"
-                << (config.spawnOverride.has_value() ? " (--spawn)" : " (map centre)")
+                << (config.spawnOverride.has_value() ? " (--spawn)" : (std::string(" (") + spawnSourceLabel_ + ")"))
                 << " grounded=" << (leadState.grounded ? 1 : 0) << '\n';
     }
   }
@@ -231,6 +231,8 @@ namespace orphen::port
     const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
 
     sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
+    applySceneMarkerSpawn();
+    publishSceneObjectViews();
 
     std::cout << "[scr] script " << decoded.size() << " bytes, init 0x" << std::hex
               << sceneScript_.entryOffset(orphen::ported::script::SceneScriptEntry::Init)
@@ -263,6 +265,69 @@ namespace orphen::port
         std::cout << "stream overran the blob\n";
       }
     }
+  }
+
+  // A scene has no spawn point of its own: FUN_0022a418 copies whatever the
+  // previous map's warp staged into DAT_00325340, and a cold boot has nothing.
+  // The nearest thing the scene itself carries is a group 2 placement record.
+  //
+  // The evidence that these are markers rather than props: the init script
+  // registers the lookup entry (id 1, type 0x55) and then runs 0x51 with group
+  // 2, and FUN_0025eb48 explicitly breaks out without spawning when the looked
+  // up type is 0x55. Type 0x55's descriptor is 0.1 by 0.1 with flags 0x400 --
+  // too small to be an object. So group 2 records are authored positions that
+  // deliberately produce no entity.
+  //
+  // Standing them in for the spawn point is an inference, not something read out
+  // of the original, and the console says which was used. --spawn still wins.
+  void PortRuntime::applySceneMarkerSpawn()
+  {
+    if (spawnOverride_.has_value() || scriptTrace_.leadTeleported())
+    {
+      return;
+    }
+
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap == nullptr)
+    {
+      return;
+    }
+
+    for (const auto &record : loadedMap->DAT_003556e8_objectPlacements)
+    {
+      if (record.group != 2)
+      {
+        continue;
+      }
+      leadPlayer_.resetToMap(*loadedMap, record.position);
+      fieldCamera_.FUN_00216930_install_normal_field_defaults();
+      fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+      mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
+      mapViewer_.setFollowCameraPose(fieldCamera_.pose());
+      spawnSourceLabel_ = "scene marker";
+      return;
+    }
+  }
+
+  void PortRuntime::publishSceneObjectViews()
+  {
+    SceneObjectViewList views;
+    entityPool_.forEachScriptSpawned(
+        [&views](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
+        {
+          SceneObjectView view;
+          view.slot = slot;
+          view.typeId = entity.typeId00;
+          view.modelIndex = entity.modelIndex;
+          view.position = {entity.positionX20, entity.positionZ24, entity.positionY28};
+          view.facingRadians = entity.facingRadians5c;
+          view.radius = entity.radius54;
+          view.height = entity.height58;
+          view.groundHeight = entity.groundHeight4c;
+          view.descriptorResolved = entity.modelIndex >= 0;
+          views.push_back(view);
+        });
+    mapViewer_.setSceneObjectViews(std::move(views));
   }
 
   void PortRuntime::printScriptReport() const
@@ -432,6 +497,9 @@ namespace orphen::port
       return;
     }
 
+    entityPool_.reset();
+    mapViewer_.setSceneObjectViews({});
+    leadPlayer_.bindEntity(entityPool_.leadPlayer());
     leadPlayer_.resetToMap(*loadedMap, spawnOverride_);
     previousStickMagnitude_ = 0.0f;
     fieldCamera_.FUN_00216930_install_normal_field_defaults();

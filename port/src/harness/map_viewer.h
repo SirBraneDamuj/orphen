@@ -7,6 +7,7 @@
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
 #include "runtime/player_view_state.h"
+#include "runtime/scene_object_view.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +28,7 @@ namespace orphen::harness
     void loadDiscSceneMap(const std::filesystem::path &discRoot, McbSceneSelection selection);
     bool cycleDiscScene(int direction);
     void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
+    void setSceneObjectViews(orphen::port::SceneObjectViewList objects);
     void setFollowCameraPose(const orphen::ported::camera::CameraPose &pose);
     orphen::ported::psm2::Vec3 freeViewerMovement(float strafe, float forward) const;
     bool hasLeadPlayerView() const { return leadPlayerView_.has_value(); }
@@ -55,6 +57,7 @@ namespace orphen::harness
     std::optional<SceneResourceProvider> sceneResources_;
     std::vector<LoadedDiscTexturePage> texturePages_;
     std::optional<orphen::port::PlayerViewState> leadPlayerView_;
+    orphen::port::SceneObjectViewList sceneObjectViews_;
     mutable std::vector<unsigned int> uploadedTextureIds_;
     mutable bool textureUploadDirty_ = false;
     orphen::ported::psm2::Vec3 cameraTarget_{};

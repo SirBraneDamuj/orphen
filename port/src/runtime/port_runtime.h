@@ -59,12 +59,15 @@ namespace orphen::port
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride_;
+    const char *spawnSourceLabel_ = "map centre";
     float previousStickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
     orphen::ported::entity::EntityDescriptorTable descriptorTable_;
 
     void loadExecutable(const PortRuntimeConfig &config);
     void runSceneScript();
+    void publishSceneObjectViews();
+    void applySceneMarkerSpawn();
     void printScriptReport() const;
     orphen::ported::script::ScriptEnvironment scriptEnvironment();
     void resetLeadPlayerForLoadedMap();

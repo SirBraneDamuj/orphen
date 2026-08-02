@@ -92,6 +92,7 @@ target_sources(orphen_port
         src/runtime/original_lead_player.cpp
         src/runtime/original_lead_player.h
         src/runtime/player_view_state.h
+        src/runtime/scene_object_view.h
         src/runtime/input_state.h
         src/runtime/psm2_ground_query.cpp
         src/runtime/psm2_ground_query.h
