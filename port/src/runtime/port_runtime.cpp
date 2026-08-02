@@ -613,7 +613,14 @@ namespace orphen::port
         reportTickHalt("tick");
       }
 
-      leadPlayer_.update(frameTicks, movementRequest, input.stickMagnitude, input.jumpRequested, loadedMap);
+      // Raw pad 0x0020 is Circle. Held, it gates the debug mid-air jump.
+      constexpr std::uint16_t kRawPadCircle = 0x0020;
+      leadPlayer_.update(frameTicks,
+                         movementRequest,
+                         input.stickMagnitude,
+                         input.jumpRequested,
+                         (input.rawHeldPad & kRawPadCircle) != 0,
+                         loadedMap);
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 

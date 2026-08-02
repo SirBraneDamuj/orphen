@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 
 namespace orphen::ported::player
@@ -32,10 +33,20 @@ namespace orphen::ported::player
     bool sampledByOriginalTerrain = false;
   };
 
+  // FUN_00227390's workspace +0x2C and +0x30: the actor's feet and the top of
+  // its head. Terrain above the head is not ground, and a ceiling between the
+  // two means there is no ground answer at all.
+  struct OriginalTerrainBody
+  {
+    float feetHeight = 0.0f;
+    float headHeight = 0.0f;
+  };
+
   struct OriginalTerrainQuery
   {
     std::uint32_t rejectTerrainMask = 0;
     bool requireOriginalTerrainSample = true;
+    std::optional<OriginalTerrainBody> body;
   };
 
   using OriginalTerrainSampler = std::function<std::optional<OriginalTerrainSample>(float originalX,
@@ -60,6 +71,10 @@ namespace orphen::ported::player
     // fGpffffb678. FUN_00256bb8 walks at or below 100.0 and runs above it;
     // FUN_00253488 scales air control by it directly. Full deflection is 128.
     float stickMagnitude = 0.0f;
+
+    // Circle held (raw pad 0x0020). Not an input the original's field movement
+    // reads; it gates the harness's debug mid-air jump, below.
+    bool debugMidairJumpHeld = false;
   };
 
   struct OriginalPlayerSnapshot
@@ -116,9 +131,13 @@ namespace orphen::ported::player
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00256ab0_apply_movement_impulse(float movementStep,
                                              const orphen::ported::psm2::Vec3 &cameraRelativeMove);
-    OriginalTerrainQuery terrainQueryForEntity() const;
+    // bodyBaseHeight is the entity +0x28 the query should be posed from. It is
+    // a parameter rather than a read of the entity because FUN_002262c0 raises
+    // +0x28 before re-querying and hands the *raised* height to FUN_00227390.
+    OriginalTerrainQuery terrainQueryForEntity(float bodyBaseHeight) const;
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,
                                                                            float originalZ,
+                                                                           float bodyBaseHeight,
                                                                            const OriginalTerrainSampler &terrainSampler) const;
     void FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
                                         const OriginalTerrainSampler &terrainSampler,

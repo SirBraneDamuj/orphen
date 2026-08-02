@@ -16,7 +16,12 @@ namespace orphen::port
 
     Psm2TerrainQueryOptions toPsm2TerrainQueryOptions(const orphen::ported::player::OriginalTerrainQuery &query)
     {
-      return {query.rejectTerrainMask, query.requireOriginalTerrainSample};
+      Psm2TerrainQueryOptions options{query.rejectTerrainMask, query.requireOriginalTerrainSample, {}};
+      if (query.body.has_value())
+      {
+        options.body = Psm2ActorBody{query.body->feetHeight, query.body->headHeight};
+      }
+      return options;
     }
 
   orphen::ported::psm2::Vec3 chooseSpawnPoint(const orphen::ported::psm2::Psm2RuntimeState &map)
@@ -39,10 +44,32 @@ namespace orphen::port
 
     // Use the same strictness the controller does, or the spawn lands on a
     // triangle the player is not allowed to stand on and starts ungrounded.
-    const Psm2TerrainQueryOptions walkable{0, true};
-    if (const auto centreHit = queryPsm2GroundAt(map, centreX, centreY, map.bounds.max.z, walkable))
+    // "The same" now includes the body: a surface can be walkable and still be
+    // somewhere the player does not fit, because a ceiling is inside them. Ask
+    // once without a body to find the surface, then stand the body on it and
+    // ask again -- a spot that stops answering is one the controller would
+    // refuse on the first frame.
+    const Psm2TerrainQueryOptions walkable{0, true, {}};
+    const float bodyHeight = orphen::ported::entity::OriginalEntity{}.height58;
+    const auto standableHeight = [&map, &walkable, bodyHeight](float x, float y, float reference) -> std::optional<float>
     {
-      return {centreX, centreY, centreHit->height};
+      const auto loose = queryPsm2GroundAt(map, x, y, reference, walkable);
+      if (!loose.has_value())
+      {
+        return std::nullopt;
+      }
+      const Psm2TerrainQueryOptions standing{0, true, Psm2ActorBody{loose->height, loose->height + bodyHeight}};
+      const auto fitted = queryPsm2GroundAt(map, x, y, loose->height, standing);
+      if (!fitted.has_value())
+      {
+        return std::nullopt;
+      }
+      return fitted->height;
+    };
+
+    if (const auto centreHeight = standableHeight(centreX, centreY, map.bounds.max.z))
+    {
+      return {centreX, centreY, *centreHeight};
     }
 
     // Nothing under the centre: fall back to the sampled triangle whose centroid
@@ -81,8 +108,8 @@ namespace orphen::port
       }
 
       // Confirm the controller's own query accepts this spot before taking it.
-      const auto hit = queryPsm2GroundAt(map, centroid.x, centroid.y, centroid.z + 1.0f, walkable);
-      if (!hit.has_value())
+      const auto hitHeight = standableHeight(centroid.x, centroid.y, centroid.z + 1.0f);
+      if (!hitHeight.has_value())
       {
         continue;
       }
@@ -93,7 +120,7 @@ namespace orphen::port
       if (distanceSquared < bestDistanceSquared)
       {
         bestDistanceSquared = distanceSquared;
-        spawn = {centroid.x, centroid.y, hit->height};
+        spawn = {centroid.x, centroid.y, *hitHeight};
         found = true;
       }
     }
@@ -129,6 +156,7 @@ namespace orphen::port
                                   const orphen::ported::psm2::Vec3 &movementRequest,
                                   float stickMagnitude,
                                   bool jumpRequested,
+                                  bool debugMidairJumpHeld,
                                   const orphen::ported::psm2::Psm2RuntimeState *map)
   {
     if (map == nullptr)
@@ -139,7 +167,8 @@ namespace orphen::port
     }
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
-    const orphen::ported::player::OriginalPlayerFrameInput input{movementRequest, jumpAction, jumpAction, stickMagnitude};
+    const orphen::ported::player::OriginalPlayerFrameInput input{
+        movementRequest, jumpAction, jumpAction, stickMagnitude, debugMidairJumpHeld};
     const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
     {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));

@@ -194,7 +194,9 @@ namespace orphen::port
     // an Xbox pad maps by position: Y is Triangle, B is Circle, A is Cross and
     // X ("SDL Face West") is Square. Square is the jump binding.
     bool triangleHeld = false;
-    bool circleHeld = false;
+    // B stands in for Circle on the keyboard so the debug mid-air jump
+    // (hold Circle, press jump) is reachable without a pad.
+    bool circleHeld = keys[SDL_SCANCODE_B] != 0;
     bool crossHeld = false;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 

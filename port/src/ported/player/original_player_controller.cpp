@@ -91,7 +91,7 @@ namespace orphen::ported::player
       const auto groundSample = terrainSampler(entity().positionX20,
                                                entity().positionZ24,
                                                entity().positionY28,
-                                               terrainQueryForEntity());
+                                               terrainQueryForEntity(entity().positionY28));
       if (groundSample.has_value())
       {
         entity().groundHeight4c = groundSample->height;
@@ -232,6 +232,23 @@ namespace orphen::ported::player
                                                                     const OriginalPlayerFrameInput &input)
   {
     const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+
+    // Harness debug affordance, not something the original's airborne state
+    // does: holding Circle re-arms the jump button in mid-air. It restarts
+    // state 2 / animation 0x0C exactly as FUN_00256bb8's grounded branch does,
+    // so the jump runs the same 4-frame startup and the same +0x44 seed --
+    // which is what makes it useful for reaching a ceiling to test against.
+    if (input.debugMidairJumpHeld && (input.mappedPressedActions & kOriginalMappedActionJump) != 0)
+    {
+      entity().verticalVelocity44 = 0.0f;
+      entity().pendingJumpImpulse = true;
+      entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
+      entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
+      FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
+      FUN_00253488_apply_airborne_control(frameTicks, input);
+      return;
+    }
+
     if (entity().animationA0 == kAnimationJumpRise)
     {
       if (entity().substateFrameA8 >= 4)
@@ -357,14 +374,20 @@ namespace orphen::ported::player
     entity().desiredDeltaZ34 += entity().velocityZ40;
   }
 
-  OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity() const
+  OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity(float bodyBaseHeight) const
   {
-    return {entity().rejectTerrainMask74, true};
+    // FUN_00227390 computes the body extent once per call and hands the same
+    // pair to all four corner samples, including the ones probing a destination
+    // the entity has not reached yet.
+    return {entity().rejectTerrainMask74,
+            true,
+            OriginalTerrainBody{bodyBaseHeight, bodyBaseHeight + entity().height58}};
   }
 
   std::optional<OriginalTerrainSample> OriginalPlayerController::FUN_00227390_validate_destination(
       float originalX,
       float originalZ,
+      float bodyBaseHeight,
       const OriginalTerrainSampler &terrainSampler) const
   {
     if (!terrainSampler)
@@ -372,7 +395,7 @@ namespace orphen::ported::player
       return std::nullopt;
     }
 
-    const OriginalTerrainQuery query = terrainQueryForEntity();
+    const OriginalTerrainQuery query = terrainQueryForEntity(bodyBaseHeight);
     const float radius = entity().radius54;
     const std::array<orphen::ported::psm2::Vec3, 4> footprintOffsets{{{-radius, -radius, 0.0f},
                                                                       {radius, -radius, 0.0f},
@@ -385,7 +408,7 @@ namespace orphen::ported::player
     {
       const auto sample = terrainSampler(originalX + offset.x,
                                          originalZ + offset.y,
-                                         entity().positionY28,
+                                         bodyBaseHeight,
                                          query);
       if (!sample.has_value())
       {
@@ -437,7 +460,7 @@ namespace orphen::ported::player
         return std::nullopt;
       }
 
-      auto ground = FUN_00227390_validate_destination(toX, toZ, terrainSampler);
+      auto ground = FUN_00227390_validate_destination(toX, toZ, entity().positionY28, terrainSampler);
       if (!ground.has_value() || !canStepToHeight(entity().positionY28, ground->height, entity().maxStepHeight80, wasGrounded))
       {
         return std::nullopt;
@@ -489,7 +512,10 @@ namespace orphen::ported::player
 
       if (!destinationGround.has_value())
       {
-        destinationGround = FUN_00227390_validate_destination(entity().positionX20, entity().positionZ24, terrainSampler);
+        destinationGround = FUN_00227390_validate_destination(entity().positionX20,
+                                                              entity().positionZ24,
+                                                              entity().positionY28,
+                                                              terrainSampler);
         if (destinationGround.has_value())
         {
           entity().groundHeight4c = destinationGround->height;
@@ -529,6 +555,28 @@ namespace orphen::ported::player
     else if (entity().verticalVelocity44 < 0.0f)
     {
       nextCollisionFlags |= kPhysicsFlagFalling;
+    }
+
+    // FUN_002262c0 at 0x00226cb4: an upward step is provisional. The original
+    // writes the raised height into entity +0x28 in the delay slot of the
+    // FUN_00227390 call, so the query is posed from where the actor is trying
+    // to get to. If it comes back 0 -- no ground, or ground above the feet --
+    // the rise is given back whole (+0x28 restored from workspace +0x0C) and
+    // the vertical velocity is zeroed, flagging 0x4 alongside the 0x8 rise.
+    // That is the only place upward motion is cancelled, and it is what stops
+    // a jump at a room's ceiling instead of passing through it.
+    if (entity().desiredDeltaY38 > 0.0f)
+    {
+      const auto headroom = FUN_00227390_validate_destination(entity().positionX20,
+                                                              entity().positionZ24,
+                                                              attemptedY,
+                                                              terrainSampler);
+      if (!headroom.has_value() || headroom->height > attemptedY)
+      {
+        nextCollisionFlags |= kPhysicsFlagVerticalCollision;
+        entity().verticalVelocity44 = 0.0f;
+        attemptedY = previousY;
+      }
     }
 
     if (!jumpStartup && destinationGround.has_value() && entity().verticalVelocity44 <= 0.0f &&

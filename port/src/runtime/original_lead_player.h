@@ -24,6 +24,7 @@ namespace orphen::port
                 const orphen::ported::psm2::Vec3 &movementRequest,
                 float stickMagnitude,
                 bool jumpRequested,
+                bool debugMidairJumpHeld,
                 const orphen::ported::psm2::Psm2RuntimeState *map);
 
     const PlayerViewState &viewState() const { return viewState_; }

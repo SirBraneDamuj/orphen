@@ -11,6 +11,21 @@ namespace orphen::port
 
     constexpr float kBarycentricEpsilon = -0.0005f;
     constexpr std::uint32_t kOriginalTerrainSampleBit = 0x800;
+
+    // FUN_00227840 splits the sampled primitives on this bit: it sets the
+    // workspace's +0x22 winding selector to 0xFF for them, and FUN_00227d28
+    // then reverses every edge test (`0.0 < cross` rejects instead of
+    // `cross < 0.0`). Reversed winding in the XY projection means the surface
+    // faces down -- these are the ceilings. In s01_e024, 427 of the 435
+    // primitives carrying it point straight down and not one up-facing
+    // primitive has it.
+    //
+    // The original never records a ceiling's height as ground: the 0x100 branch
+    // at 0x0022799c clears the "have recorded" flag instead of writing +0x50.
+    // A ceiling at or below the head only *stops* the scan, so the query falls
+    // out holding 128.0 -- no ground -- which is what makes FUN_00227390 fail
+    // and bumps the actor's head.
+    constexpr std::uint32_t kCeilingBit = 0x100;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
     constexpr float kSteepBlockerMaxAbsNormalZ = 0.5f;
     constexpr float kBlockerHeightPadding = 0.05f;
@@ -215,7 +230,6 @@ namespace orphen::port
         continue;
       }
 
-      const float height = first.z * w + second.z * u + third.z * v;
       const auto &record78 = map.DAT_003556b0_dRecords78[triangle.primitiveIndex];
       const bool sampledByOriginalTerrain = (record78.leadingWord & kOriginalTerrainSampleBit) != 0;
       if (options.requireOriginalTerrainSample && !sampledByOriginalTerrain)
@@ -226,6 +240,31 @@ namespace orphen::port
       {
         continue;
       }
+
+      const float height = first.z * w + second.z * u + third.z * v;
+
+      if ((record78.leadingWord & kCeilingBit) != 0)
+      {
+        // A ceiling is never ground. One that has come down inside the body
+        // kills the sample outright, which is the port's stand-in for the
+        // original's scan aborting at it. The original's literal test is only
+        // `height <= head`; requiring it to also be above the feet is what
+        // keeps the underside of the floor being stood on out of it, since the
+        // port has no cell list whose order would have found that floor first.
+        if (options.body.has_value() && height > options.body->feetHeight && height <= options.body->headHeight)
+        {
+          return std::nullopt;
+        }
+        continue;
+      }
+
+      // FUN_00227840 will not settle on a surface above the head, so an upper
+      // storey cannot be mistaken for the ground under the actor's feet.
+      if (options.body.has_value() && height > options.body->headHeight)
+      {
+        continue;
+      }
+
       const float score = candidateScore(height, referenceHeight, sampledByOriginalTerrain);
       if (score >= bestScore)
       {

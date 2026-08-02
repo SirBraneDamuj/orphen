@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace orphen::port
@@ -31,10 +32,25 @@ namespace orphen::port
     orphen::ported::psm2::Vec3 normal{};
   };
 
+  // The actor's vertical extent, staged by FUN_00227390 in its collision
+  // workspace: +0x2C is entity +0x28 (the feet) and +0x30 is that plus entity
+  // +0x58 (the top of the head). FUN_00227840 reads +0x30 and will not settle
+  // on a surface above it (`c.le.S f0,0x30(s0)` at 0x002279b4 / 0x00227a44).
+  struct Psm2ActorBody
+  {
+    float feetHeight = 0.0f;
+    float headHeight = 0.0f;
+  };
+
   struct Psm2TerrainQueryOptions
   {
     std::uint32_t rejectTerrainMask = 0;
     bool requireOriginalTerrainSample = false;
+
+    // Unset for callers that are not standing anywhere -- the viewer, the
+    // camera ground clamp, spawn selection. Those get the plain ground answer
+    // with no head limit and no ceiling test.
+    std::optional<Psm2ActorBody> body;
   };
 
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
