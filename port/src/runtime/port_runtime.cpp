@@ -70,6 +70,21 @@ namespace orphen::port
       }
     }
 
+    const char *actorHandlerSourceName(orphen::ported::entity::ActorHandlerSource source)
+    {
+      using Source = orphen::ported::entity::ActorHandlerSource;
+      switch (source)
+      {
+      case Source::Streamed: return "streamed";
+      case Source::Shared: return "shared";
+      case Source::Secondary: return "secondary";
+      case Source::Tertiary: return "tertiary";
+      case Source::Primary: return "primary";
+      case Source::None:
+      default: return "none";
+      }
+    }
+
   } // namespace
 
   void PortRuntime::initialize(const PortRuntimeConfig &config)
@@ -84,6 +99,9 @@ namespace orphen::port
     {
       spawnSourceLabel_ = "--spawn";
     }
+    runScriptTick_ = config.runScriptTick;
+    printActorReport_ = config.printActorReport;
+    printScriptReport_ = config.printScriptReport;
     loadExecutable(config);
 
     if (!config.decodedPsm2Path.empty())
@@ -154,7 +172,21 @@ namespace orphen::port
     }
 
     descriptorTable_ = orphen::ported::entity::EntityDescriptorTable(&executable_.value());
+    actorDispatchTable_ = orphen::ported::entity::ActorDispatchTable(&executable_.value());
     std::cout << "[elf] loaded " << path.string() << " for static tables\n";
+  }
+
+  orphen::ported::entity::ActorEnvironment PortRuntime::actorEnvironment(std::uint32_t frameTicks)
+  {
+    orphen::ported::entity::ActorEnvironment environment;
+    environment.entityPool = &entityPool_;
+    environment.dispatchTable = &actorDispatchTable_;
+    environment.frameTicks = frameTicks;
+    // FUN_00266368 reads the flag bank that lives in the script state, so the
+    // actor tick borrows it rather than owning a second copy.
+    environment.eventFlag = [this](std::uint32_t flagId)
+    { return sceneScript_.state().FUN_00266368_eventFlag(flagId); };
+    return environment;
   }
 
   orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment()
@@ -415,9 +447,124 @@ namespace orphen::port
       std::cout << "lead not teleported by script; spawn source is " << spawnSourceLabel_ << '\n';
     }
 
-    std::cout << "object scripts registered but not ticked: "
-              << scriptTrace_.registeredScripts().size() << '\n';
+    std::cout << "per-frame entry: " << scriptTrace_.tickRunCount() << " runs, "
+              << scriptTrace_.slotRunCount() << " object-script slot runs\n";
+    std::cout << "object script slots occupied: " << sceneScript_.occupiedObjectScriptSlots()
+              << " of " << orphen::ported::script::kObjectScriptSlotCount
+              << (runScriptTick_ ? " (ticked)" : " (not ticked; pass --scr-tick)") << '\n';
     std::cout << "=== end scene script report ===\n\n";
+  }
+
+  // A per-frame script entry that halts does so on every frame, so this reports
+  // the first occurrence and then stays quiet. Silence here would be the worst
+  // outcome: the tick would look like it was running when it was stopping on its
+  // second opcode.
+  void PortRuntime::reportTickHalt(const char *what) const
+  {
+    if (reportedTickHalt_)
+    {
+      return;
+    }
+    if (!sceneScript_.lastRunOverran() && !sceneScript_.lastRunHaltedOnUnimplemented())
+    {
+      return;
+    }
+    reportedTickHalt_ = true;
+    std::cout << "[scr] " << what << " halted on frame " << frameCount_ << ": ";
+    if (sceneScript_.lastRunHaltedOnUnimplemented())
+    {
+      std::cout << "unimplemented opcode 0x" << std::hex << sceneScript_.lastHaltOpcode()
+                << " at 0x" << sceneScript_.lastHaltOffset() << std::dec << '\n';
+    }
+    else
+    {
+      std::cout << "stream overran the blob\n";
+    }
+    std::cout << "[scr] further per-frame halts are not reported\n";
+  }
+
+  void PortRuntime::printExitReports() const
+  {
+    // The load-time script report is a load inventory. When frames have run it
+    // is worth printing again, because the per-frame entry and the object-script
+    // slots reach opcodes the load-time entries never do.
+    if (printScriptReport_ && frameCount_ > 0)
+    {
+      std::cout << "(after " << frameCount_ << " frames)";
+      printScriptReport();
+    }
+    if (printActorReport_)
+    {
+      printActorReport();
+    }
+  }
+
+  // Resolves every live entity's behavior straight from the pool rather than
+  // from the trace, so the report is meaningful under --load-only, before a
+  // single frame has run. Trace counts are appended when frames have run.
+  void PortRuntime::printActorReport() const
+  {
+    std::cout << "\n=== actor report ===\n";
+    if (!actorDispatchTable_.available())
+    {
+      std::cout << "no executable loaded; the actor behavior tables could not be read.\n"
+                   "Pass --elf <SLUS_200.11> or put it in the disc root.\n";
+    }
+
+    std::size_t live = 0;
+    entityPool_.forEachScriptSpawned(
+        [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
+        {
+          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            return;
+          }
+          ++live;
+          const auto handler = actorDispatchTable_.FUN_00239ce0_resolve(entity.typeId00);
+          const bool implemented =
+              handler.address != 0 &&
+              orphen::ported::entity::actorHandlerIsImplemented(handler.address);
+          const char *name = orphen::ported::entity::actorHandlerName(handler.address);
+
+          std::cout << "  slot=" << slot
+                    << " type=0x" << std::hex << entity.typeId00 << std::dec
+                    << " " << actorHandlerSourceName(handler.source);
+          if (handler.address != 0)
+          {
+            std::cout << " -> 0x" << std::hex << handler.address << std::dec;
+            if (name != nullptr)
+            {
+              std::cout << ' ' << name;
+            }
+            std::cout << (implemented ? "  implemented" : "  UNIMPLEMENTED");
+          }
+          else
+          {
+            std::cout << "  UNRESOLVED";
+          }
+          std::cout << '\n';
+        });
+
+    std::cout << "live actors: " << live << " (slots 0 and 1 are not ticked by FUN_00239ce0)\n";
+
+    if (!actorTrace_.types().empty())
+    {
+      std::cout << "dispatched over " << frameCount_ << " frames:\n";
+      for (const auto &entry : actorTrace_.types())
+      {
+        std::cout << "  type=0x" << std::hex << entry.first << std::dec
+                  << " entities=" << entry.second.entityCount
+                  << " ticks=" << entry.second.tickCount
+                  << " firstSlot=" << entry.second.firstSlot
+                  << (entry.second.implemented ? "  implemented" : "  UNIMPLEMENTED") << '\n';
+      }
+      std::cout << "skipped: hidden=" << actorTrace_.hiddenCount()
+                << " suspended=" << actorTrace_.suspendedCount()
+                << " fading=" << actorTrace_.fadingCount() << '\n';
+      std::cout << "unimplemented behaviors: " << actorTrace_.unimplementedTypeCount()
+                << " distinct types, " << actorTrace_.unimplementedEntityCount() << " entities\n";
+    }
+    std::cout << "=== end actor report ===\n\n";
   }
 
   void PortRuntime::reset()
@@ -456,7 +603,29 @@ namespace orphen::port
           rightBasis.y * input.moveX + forwardBasis.y * input.moveY,
           0.0f};
 
+      // FUN_002239c8's order: FUN_0025b778 (the script tick) runs before the
+      // lead player update, FUN_00239ce0 (the actors) after it, and
+      // FUN_0025b918 (the late object-script slots) after that. The camera,
+      // FUN_00216aa0, comes last.
+      if (runScriptTick_ && sceneScript_.loaded())
+      {
+        sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(), scriptTrace_);
+        reportTickHalt("tick");
+      }
+
       leadPlayer_.update(frameTicks, movementRequest, input.stickMagnitude, input.jumpRequested, loadedMap);
+
+      orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
+
+      if (runScriptTick_ && sceneScript_.loaded())
+      {
+        sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(), scriptTrace_);
+        reportTickHalt("late slots");
+      }
+
+      // Behaviors can move and turn entities, so the render views are rebuilt
+      // every frame now rather than only at load.
+      publishSceneObjectViews();
 
       const auto &leadState = leadPlayer_.viewState();
       orphen::ported::camera::FieldCameraInput cameraInput;
@@ -586,6 +755,10 @@ namespace orphen::port
                                          ? mapViewer_.loadedMap()->DAT_003556e8_objectPlacements.size()
                                          : 0) +
                       "  UNIMPL " + std::to_string(scriptTrace_.unimplementedOpcodeCount()));
+      lines.push_back(std::string("ACTORS TICK ") + (runScriptTick_ ? "ON" : "OFF") +
+                      "  SLOTS " + std::to_string(sceneScript_.occupiedObjectScriptSlots()) +
+                      "  LIVE " + std::to_string(actorTrace_.tickedEntityCount()) +
+                      "  NOBEHAVIOR " + std::to_string(actorTrace_.unimplementedEntityCount()));
     }
 
     lines.push_back("WASD MOVE  SPACE JUMP  J/L CAMERA  F WIRE  H HUD  R RESET");

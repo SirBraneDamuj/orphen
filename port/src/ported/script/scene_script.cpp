@@ -34,7 +34,6 @@ namespace orphen::ported::script
   {
     blob_.clear();
     texturePageIds_.clear();
-    objectScriptSlots_.clear();
     // FUN_0025b390 clears the work array and the object-script slots at load.
     state_ = SceneScriptState{};
 
@@ -78,6 +77,31 @@ namespace orphen::ported::script
     return headerWord(static_cast<std::size_t>(entry));
   }
 
+  bool SceneScript::runAtOffset(std::uint32_t offset,
+                                const ScriptEnvironment &environment,
+                                ScriptTrace &trace,
+                                std::size_t selectedEntity)
+  {
+    SceneCommandInterpreter interpreter(blob_, environment, trace);
+    if (selectedEntity != kNoSelectedEntity)
+    {
+      interpreter.selectEntity(selectedEntity);
+    }
+    const bool completed = interpreter.FUN_0025bc68_run(offset);
+
+    // A halt is sticky across a tick: once any slot has stopped on an
+    // unimplemented opcode, the run is not clean, and reporting only the last
+    // slot's result would hide it.
+    lastRunOverran_ = lastRunOverran_ || interpreter.overran();
+    if (interpreter.haltedOnUnimplemented() && !lastRunHaltedOnUnimplemented_)
+    {
+      lastRunHaltedOnUnimplemented_ = true;
+      lastHaltOpcode_ = interpreter.haltOpcode();
+      lastHaltOffset_ = interpreter.haltOffset();
+    }
+    return completed;
+  }
+
   bool SceneScript::runEntry(SceneScriptEntry entry,
                              const ScriptEnvironment &environment,
                              ScriptTrace &trace)
@@ -93,13 +117,7 @@ namespace orphen::ported::script
     }
 
     const std::uint32_t offset = entryOffset(entry);
-    SceneCommandInterpreter interpreter(blob_, environment, trace);
-    const bool completed = interpreter.FUN_0025bc68_run(offset);
-
-    lastRunOverran_ = interpreter.overran();
-    lastRunHaltedOnUnimplemented_ = interpreter.haltedOnUnimplemented();
-    lastHaltOpcode_ = interpreter.haltOpcode();
-    lastHaltOffset_ = interpreter.haltOffset();
+    const bool completed = runAtOffset(offset, environment, trace, kNoSelectedEntity);
 
     // An entry whose body is a single block end is legitimately empty -- header
     // word 4 in s01_e024 is exactly that.
@@ -107,6 +125,89 @@ namespace orphen::ported::script
     trace.noteEntryRun(sceneScriptEntryName(entry), offset, empty);
 
     return completed;
+  }
+
+  bool SceneScript::FUN_0025b778_run_tick(const ScriptEnvironment &environment, ScriptTrace &trace)
+  {
+    lastRunOverran_ = false;
+    lastRunHaltedOnUnimplemented_ = false;
+    lastHaltOpcode_ = 0;
+    lastHaltOffset_ = 0;
+
+    if (!loaded())
+    {
+      return false;
+    }
+
+    // The per-frame entry itself.
+    const std::uint32_t tickOffset = entryOffset(SceneScriptEntry::Tick);
+    trace.recordTickRun();
+    bool completed = runAtOffset(tickOffset, environment, trace, kNoSelectedEntity);
+
+    // FUN_0025ce30 would run here. Not modelled -- see the header.
+
+    // The 62 general slots, in order, each with the current-slot global set so
+    // opcode 0x9E can retire the slot it is running in.
+    for (std::size_t slot = 0; slot < SceneScriptState::kGeneralSlotCount; ++slot)
+    {
+      const std::uint32_t offset = state_.DAT_00355cf4_objectScriptSlots[slot];
+      if (offset == 0)
+      {
+        continue;
+      }
+      state_.DAT_00355cf8_currentSlot = static_cast<std::int32_t>(slot);
+      trace.recordSlotRun();
+      completed = runAtOffset(offset, environment, trace, kNoSelectedEntity) && completed;
+    }
+    state_.DAT_00355cf8_currentSlot = -1;
+
+    // The lead-bound slot, with both entity selection globals on pool slot 0.
+    const std::uint32_t leadOffset = state_.DAT_00355cf4_objectScriptSlots[SceneScriptState::kLeadSlot];
+    if (leadOffset != 0)
+    {
+      completed = runAtOffset(leadOffset, environment, trace, 0) && completed;
+    }
+
+    // FUN_0025cfb8 (letterbox) and the debug flag dump would follow.
+    return completed;
+  }
+
+  bool SceneScript::FUN_0025b918_run_late_slots(const ScriptEnvironment &environment, ScriptTrace &trace)
+  {
+    if (!loaded())
+    {
+      return false;
+    }
+
+    bool completed = true;
+    for (std::size_t slot = SceneScriptState::kFirstLateSlot;
+         slot < SceneScriptState::kFirstLateSlot + 2;
+         ++slot)
+    {
+      const std::uint32_t offset = state_.DAT_00355cf4_objectScriptSlots[slot];
+      if (offset == 0)
+      {
+        continue;
+      }
+      state_.DAT_00355cf8_currentSlot = static_cast<std::int32_t>(slot);
+      trace.recordSlotRun();
+      completed = runAtOffset(offset, environment, trace, kNoSelectedEntity) && completed;
+    }
+    state_.DAT_00355cf8_currentSlot = -1;
+    return completed;
+  }
+
+  std::size_t SceneScript::occupiedObjectScriptSlots() const
+  {
+    std::size_t count = 0;
+    for (std::size_t slot = 0; slot < SceneScriptState::kObjectScriptSlots; ++slot)
+    {
+      if (state_.DAT_00355cf4_objectScriptSlots[slot] != 0)
+      {
+        ++count;
+      }
+    }
+    return count;
   }
 
   bool SceneScript::FUN_0025b6d0_run_init(const ScriptEnvironment &environment, ScriptTrace &trace)

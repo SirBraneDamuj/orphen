@@ -66,6 +66,12 @@ target_sources(orphen_port
     src/ported/entity/entity_pool.cpp
     src/ported/entity/entity_pool.h
     src/ported/entity/original_entity.h
+    src/ported/entity/actor_dispatch_table.cpp
+    src/ported/entity/actor_dispatch_table.h
+    src/ported/entity/actor_frame_update.cpp
+    src/ported/entity/actor_frame_update.h
+    src/ported/entity/actor_trace.cpp
+    src/ported/entity/actor_trace.h
     src/ported/script/scene_command_interpreter.cpp
     src/ported/script/scene_command_interpreter.h
     src/ported/script/scene_script_opcodes.cpp

@@ -20,7 +20,12 @@ namespace orphen::ported::script
   constexpr std::size_t kSceneScriptHeaderWordCount = 11;
 
   // Cleared by FUN_0025b390 as 65 dwords immediately after the script body.
+  // The table itself lives in SceneScriptState, next to the rest of the
+  // script-visible globals.
   constexpr std::size_t kObjectScriptSlotCount = 65;
+
+  // Passed to runAtOffset when no entity should be pre-selected.
+  constexpr std::size_t kNoSelectedEntity = static_cast<std::size_t>(-1);
 
   // DAT_00355060, cleared as 128 dwords.
   // DAT_00355060 is 128 words; see SceneScriptState::kWorkWordCount.
@@ -61,10 +66,32 @@ namespace orphen::ported::script
     bool FUN_0025b6d0_run_init(const ScriptEnvironment &environment, ScriptTrace &trace);
     bool FUN_0025b728_run_start(const ScriptEnvironment &environment, ScriptTrace &trace);
 
-    // FUN_0025b778 and the two actor-state entries. Present so the extension
-    // point is obvious and so the per-frame path is a call away rather than a
-    // rewrite; nothing in the runtime drives them yet.
     bool runEntry(SceneScriptEntry entry, const ScriptEnvironment &environment, ScriptTrace &trace);
+
+    // FUN_0025b778: the per-frame path. Runs header word 2, then every occupied
+    // general slot 0x00..0x3D in order, then the lead-bound slot 0x40 with the
+    // entity selection pointed at pool slot 0.
+    //
+    // The slots are not coroutines: each holds a fixed entry offset and is
+    // re-entered from the top every frame, running to a block end. Nothing in
+    // the original ever suspends the interpreter mid-stream. See
+    // analyzed/scene_script_frame_entry.c.
+    //
+    // Two things FUN_0025b778 does that the port deliberately does not: the
+    // letterbox bars (FUN_0025cfb8, a GS packet) and the debug work-flag dump.
+    // A third, FUN_0025ce30's deferred trigger queue, is not modelled at all --
+    // no scene the port runs fills it, and a silent stub would be worse than a
+    // named absence.
+    bool FUN_0025b778_run_tick(const ScriptEnvironment &environment, ScriptTrace &trace);
+
+    // FUN_0025b918: slots 0x3E and 0x3F, which the frame function runs later,
+    // after the entity updates rather than before them.
+    bool FUN_0025b918_run_late_slots(const ScriptEnvironment &environment, ScriptTrace &trace);
+
+    // The two actor-state entries. Header word 3 is the player's interaction
+    // hook (FUN_00252828) and word 4 is the entity teardown hook (FUN_00265ec0);
+    // neither is per-frame, so neither is driven by the tick above. Reachable
+    // through runEntry when those paths are ported.
 
     // Reported by the last runEntry call.
     bool lastRunOverran() const { return lastRunOverran_; }
@@ -72,11 +99,9 @@ namespace orphen::ported::script
     std::uint16_t lastHaltOpcode() const { return lastHaltOpcode_; }
     std::uint32_t lastHaltOffset() const { return lastHaltOffset_; }
 
-    // DAT_00355cf4: the 65-slot object-script pointer table, and DAT_00355060.
-    // FUN_0025d380 registers scripts into the first free slot. The port records
-    // registrations without ticking them, so the report can say how much is
-    // waiting behind the per-frame path.
-    const std::vector<std::uint32_t> &registeredObjectScripts() const { return objectScriptSlots_; }
+    // How many of the 65 object-script slots currently hold an entry, so the
+    // report can say how much the per-frame path is carrying.
+    std::size_t occupiedObjectScriptSlots() const;
 
     // The script-visible globals, so callers can hand them to the interpreter
     // and inspect them afterwards.
@@ -87,8 +112,13 @@ namespace orphen::ported::script
     std::vector<std::uint8_t> blob_;
     std::uint32_t headerWords_[kSceneScriptHeaderWordCount]{};
     std::vector<std::uint16_t> texturePageIds_;
-    std::vector<std::uint32_t> objectScriptSlots_;
     SceneScriptState state_;
+
+    // Shared by runEntry and the slot loops.
+    bool runAtOffset(std::uint32_t offset,
+                     const ScriptEnvironment &environment,
+                     ScriptTrace &trace,
+                     std::size_t selectedEntity);
 
     bool lastRunOverran_ = false;
     bool lastRunHaltedOnUnimplemented_ = false;

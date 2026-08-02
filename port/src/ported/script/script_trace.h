@@ -50,6 +50,13 @@ namespace orphen::ported::script
 
     void noteEntryRun(const std::string &name, std::uint32_t offset, bool empty);
 
+    // The per-frame entry runs every frame, so it is counted rather than listed;
+    // 600 identical lines in entriesRun_ would bury everything else.
+    void recordTickRun() { ++tickRunCount_; }
+    void recordSlotRun() { ++slotRunCount_; }
+    std::uint32_t tickRunCount() const { return tickRunCount_; }
+    std::uint32_t slotRunCount() const { return slotRunCount_; }
+
     const std::map<std::uint16_t, OpcodeStat> &opcodes() const { return opcodes_; }
     const std::vector<SpawnRecord> &spawns() const { return spawns_; }
     const std::vector<std::uint16_t> &preloadedResources() const { return preloadedResources_; }
@@ -70,6 +77,8 @@ namespace orphen::ported::script
     std::vector<std::uint16_t> preloadedResources_;
     std::vector<std::uint32_t> registeredScripts_;
     std::vector<std::string> entriesRun_;
+    std::uint32_t tickRunCount_ = 0;
+    std::uint32_t slotRunCount_ = 0;
 
     bool leadTeleported_ = false;
     float leadTeleportX_ = 0.0f;

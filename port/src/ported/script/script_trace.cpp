@@ -10,6 +10,8 @@ namespace orphen::ported::script
     preloadedResources_.clear();
     registeredScripts_.clear();
     entriesRun_.clear();
+    tickRunCount_ = 0;
+    slotRunCount_ = 0;
     leadTeleported_ = false;
     leadTeleportX_ = 0.0f;
     leadTeleportY_ = 0.0f;

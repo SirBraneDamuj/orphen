@@ -8,6 +8,8 @@
 
 #include "ported/script/scene_command_interpreter.h"
 
+#include "ported/entity/actor_frame_update.h"
+
 #include <cmath>
 
 namespace orphen::ported::script
@@ -25,6 +27,41 @@ namespace orphen::ported::script
 
     // FUN_0025eb48's group-3 branch spawns this type unconditionally.
     constexpr std::int32_t kGroup3TypeId = 0x3A;
+
+    // FUN_0025eb48's group-3 branch biases the record's param byte into the
+    // event-flag space: entity +0x198 = param + 0x400.
+    constexpr std::uint32_t kChestFlagBase = 0x400;
+
+    // FUN_00216690 (0x00216690): wrap an angle into [-pi, pi] by repeated
+    // addition, capped at 16 iterations so a wild input cannot spin forever.
+    // The constants are DAT_00352188 / DAT_0035218c / DAT_00352190 read out of
+    // the retail executable; note they are a slightly short pi, not M_PI, and
+    // that 2*pi is stored separately rather than derived, so this is not exactly
+    // fmod. Both placement paths apply it and the port previously did not --
+    // invisible to a cos/sin, but it matters to the opcodes that read +0x5C back.
+    constexpr float kPi00352188 = 3.141592025756836f;
+    constexpr float kTwoPi0035218c = 6.283184051513672f;
+    constexpr float kNegPi00352190 = -3.141592025756836f;
+
+    float FUN_00216690_wrapAngle(float radians)
+    {
+      for (int iteration = 0; iteration < 0x10; ++iteration)
+      {
+        if (radians > kPi00352188)
+        {
+          radians -= kTwoPi0035218c;
+        }
+        else if (radians >= kNegPi00352190)
+        {
+          return radians;
+        }
+        else
+        {
+          radians += kTwoPi0035218c;
+        }
+      }
+      return radians;
+    }
   } // namespace
 
   std::uint32_t SceneCommandInterpreter::haltUnimplemented(std::uint16_t opcode)
@@ -152,6 +189,7 @@ namespace orphen::ported::script
   }
 
   void SceneCommandInterpreter::placeFromRecord(std::size_t slot,
+                                                std::size_t recordIndex,
                                                 const orphen::ported::psm2::ObjectPlacementRecord &record,
                                                 SpawnRecord &spawnRecord)
   {
@@ -163,7 +201,12 @@ namespace orphen::ported::script
     entity.positionY28 = record.position.z;
     entity.groundHeight4c = record.position.z;
     entity.facingRadians5c =
-        static_cast<float>(record.angle) * kPlacementAngleStep + kPlacementAngleBias;
+        FUN_00216690_wrapAngle(static_cast<float>(record.angle) * kPlacementAngleStep + kPlacementAngleBias);
+
+    // Both spawn paths record which placement record built the entity:
+    // FUN_0025e7c0 at *(int *)(pw + 0x4c) and FUN_0025eb48 at the same offset,
+    // over an undefined2 * -- byte 0x98. Opcode 0x5A searches on it.
+    entity.placementRecordIndex98 = static_cast<std::int32_t>(recordIndex);
 
     if (environment_.terrainHeight)
     {
@@ -204,8 +247,9 @@ namespace orphen::ported::script
     }
 
     const auto &placements = environment_.map->DAT_003556e8_objectPlacements;
-    for (const auto &record : placements)
+    for (std::size_t recordIndex = 0; recordIndex < placements.size(); ++recordIndex)
     {
+      const auto &record = placements[recordIndex];
       const std::int8_t group = record.group;
       if (group != 0 && group != 4 && group != 5)
       {
@@ -239,8 +283,156 @@ namespace orphen::ported::script
         continue;
       }
       currentEntity_ = slot;
-      placeFromRecord(slot, record, spawnRecord);
+      placeFromRecord(slot, recordIndex, record, spawnRecord);
     }
+  }
+
+  // 0x61 (FUN_0025f4b8): mask expression, then a raw selector byte; returns
+  // whether any masked bit is set in one of two words.
+  //
+  // The three globals it reads are fields of pool slot 0, not standalone state:
+  // DAT_0058bebc is 0x58BEB0 + 0x0C, DAT_0058bf1c is +0x6C and DAT_0058bf20 is
+  // +0x70 -- all on the lead player. analyzed/ops/0x61_*.c describes them as
+  // cached controller state, which is a guess; the addresses say otherwise.
+  //
+  // Selector bit 7 picks +0x70 over +0x6C. Bits 0..6, if any are set, gate the
+  // whole test on +0x0C bit 0. +0x0C bit 0x100 disables it outright.
+  std::uint32_t SceneCommandInterpreter::FUN_0025f4b8_test_lead_flag_word()
+  {
+    const std::uint32_t mask = FUN_0025c258_evaluate();
+    const std::uint8_t selector = readU8();
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+
+    const auto &lead = environment_.entityPool->leadPlayer();
+    const std::uint32_t gate = lead.collisionFlags0c;
+    if ((gate & 0x100u) != 0)
+    {
+      return 0;
+    }
+    if ((selector & 0x7Fu) != 0 && (gate & 1u) == 0)
+    {
+      return 0;
+    }
+
+    const std::uint32_t word = (selector & 0x80u) != 0 ? lead.flagWord70 : lead.flagWord6c;
+    return (word & mask) != 0 ? 1u : 0u;
+  }
+
+  // 0x9D (FUN_00261cb8): install an object script into a slot. The operand is a
+  // raw dword offset from the script base, which the original turns into an
+  // absolute pointer; the port keeps it as a blob offset. Note the bound is
+  // 0x40, so 0x9D cannot reach the lead-bound slot -- that is 0xA8's job.
+  std::uint32_t SceneCommandInterpreter::FUN_00261cb8_install_slot()
+  {
+    const std::uint32_t slot = FUN_0025c258_evaluate();
+    const std::uint32_t offset = FUN_0025c1d0_readStreamU32();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (slot >= SceneScriptState::kLeadSlot)
+    {
+      // The original reports a fatal diagnostic and stops. A slot index this far
+      // out means the stream is not where we think it is.
+      return haltUnimplemented(currentOpcode_);
+    }
+    environment_.state->DAT_00355cf4_objectScriptSlots[slot] = offset;
+    return 0;
+  }
+
+  // 0x9E (FUN_00261d18): clear a slot. A negative selector means "the slot I am
+  // running in", which is how a one-shot object script retires itself. The bound
+  // here is 0x41, so unlike 0x9D this one can clear the lead slot.
+  std::uint32_t SceneCommandInterpreter::FUN_00261d18_clear_slot()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+
+    SceneScriptState &state = *environment_.state;
+    std::uint32_t slot = selector;
+    if (static_cast<std::int32_t>(selector) < 0)
+    {
+      if (state.DAT_00355cf8_currentSlot < 0)
+      {
+        return haltUnimplemented(currentOpcode_);
+      }
+      slot = static_cast<std::uint32_t>(state.DAT_00355cf8_currentSlot);
+    }
+    else if (selector > SceneScriptState::kLeadSlot)
+    {
+      return haltUnimplemented(currentOpcode_);
+    }
+
+    if (slot < SceneScriptState::kObjectScriptSlots)
+    {
+      state.DAT_00355cf4_objectScriptSlots[slot] = 0;
+    }
+    return 0;
+  }
+
+  // 0x9F (FUN_00261d88): is a slot occupied? The index is a raw stream byte, not
+  // an expression -- one of the few opcodes that mixes the two.
+  std::uint32_t SceneCommandInterpreter::FUN_00261d88_slot_occupied()
+  {
+    const std::uint8_t slot = readU8();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (slot > SceneScriptState::kLeadSlot)
+    {
+      return haltUnimplemented(currentOpcode_);
+    }
+    return environment_.state->DAT_00355cf4_objectScriptSlots[slot] != 0 ? 1u : 0u;
+  }
+
+  // 0xA0 (FUN_00261de0): the first free general slot, or -1 when all 62 are
+  // taken. Only searches 0x00..0x3D; the late slots and the lead slot are not
+  // allocatable.
+  std::uint32_t SceneCommandInterpreter::FUN_00261de0_find_free_slot()
+  {
+    const SceneScriptState &state = *environment_.state;
+    for (std::size_t slot = 0; slot < SceneScriptState::kGeneralSlotCount; ++slot)
+    {
+      if (state.DAT_00355cf4_objectScriptSlots[slot] == 0)
+      {
+        return static_cast<std::uint32_t>(slot);
+      }
+    }
+    return static_cast<std::uint32_t>(-1);
+  }
+
+  // 0xA8 (FUN_00262f38): install the lead-bound slot and put the lead player
+  // into the state that runs it.
+  std::uint32_t SceneCommandInterpreter::FUN_00262f38_install_lead_slot()
+  {
+    const std::uint32_t offset = FUN_0025c1d0_readStreamU32();
+    if (halted_)
+    {
+      return 0;
+    }
+    environment_.state->DAT_00355cf4_objectScriptSlots[SceneScriptState::kLeadSlot] = offset;
+    if (environment_.entityPool != nullptr)
+    {
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(
+          environment_.entityPool->leadPlayer(), 10, 1);
+    }
+    return 0;
+  }
+
+  // 0xAA (FUN_00263118): cancel lead motion and clear the lead-bound slot. The
+  // motion cancel is FUN_00252d88, which the port has not ported; clearing the
+  // slot is the part that matters here and the part that is observable.
+  std::uint32_t SceneCommandInterpreter::FUN_00263118_clear_lead_slot()
+  {
+    environment_.state->DAT_00355cf4_objectScriptSlots[SceneScriptState::kLeadSlot] = 0;
+    return 0;
   }
 
   // 0x96 (FUN_002618c0): three expressions packed into uGpffffb6fc as 0xRRGGBB.
@@ -424,6 +616,30 @@ namespace orphen::ported::script
     return target;
   }
 
+  // 0x76 (FUN_00260318): the read half of the object register family -- select
+  // an object, then return one of its registers. Ghidra types it void because
+  // the value comes back from a tail call into FUN_0025c548 in $v0.
+  std::uint32_t SceneCommandInterpreter::FUN_00260318_read_object_register()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t registerIndex = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+
+    std::size_t bank = SceneScriptState::kObjectRegisterBanks - 1;
+    if (selector != orphen::ported::entity::kCurrentEntityIndex)
+    {
+      resolveEntity(selector);
+    }
+    if (currentEntity_ < orphen::ported::entity::kEntitySlotCount)
+    {
+      bank = currentEntity_;
+    }
+    return environment_.state->objectRegister(bank, registerIndex);
+  }
+
   // 0xBC (FUN_00263e30): increment a byte counter, capped at 99, and return
   // whether it still had room. Event scripts use it as a one-shot gate.
   std::uint32_t SceneCommandInterpreter::FUN_00263e30_increment_event_counter()
@@ -512,10 +728,27 @@ namespace orphen::ported::script
     {
       return 0;
     }
-    if (wanted < orphen::ported::entity::kEntitySlotCount &&
-        environment_.entityPool->status(wanted) != orphen::ported::entity::SlotStatus::Free)
+
+    // FUN_0025f150 scans the script slot range [10, 256) -- it starts at
+    // &DAT_0058d120, which is the pool base plus 10 * 0x1D8, and runs 0xF6 slots
+    // -- for the first active entity whose +0x98 matches. The operand is a
+    // *placement record index*, not a pool slot: it is the value placeFromRecord
+    // stores. The port previously read it as a slot index, which happened to
+    // agree only because both count from the same place in simple scenes.
+    const auto &pool = *environment_.entityPool;
+    for (std::size_t slot = orphen::ported::entity::kFirstScriptSlot;
+         slot < orphen::ported::entity::kEntitySlotCount;
+         ++slot)
     {
-      currentEntity_ = wanted;
+      if (pool.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+      {
+        continue;
+      }
+      if (static_cast<std::uint32_t>(pool.slot(slot).placementRecordIndex98) != wanted)
+      {
+        continue;
+      }
+      currentEntity_ = slot;
       return 1;
     }
     return 0;
@@ -537,8 +770,9 @@ namespace orphen::ported::script
     }
 
     const auto &placements = environment_.map->DAT_003556e8_objectPlacements;
-    for (const auto &record : placements)
+    for (std::size_t recordIndex = 0; recordIndex < placements.size(); ++recordIndex)
     {
+      const auto &record = placements[recordIndex];
       if (static_cast<std::uint8_t>(record.group) != group)
       {
         continue;
@@ -584,7 +818,18 @@ namespace orphen::ported::script
         continue; // pool full; the original returns a null pointer here too
       }
       currentEntity_ = slot;
-      placeFromRecord(slot, record, spawnRecord);
+      placeFromRecord(slot, recordIndex, record, spawnRecord);
+
+      if (group == 3)
+      {
+        // The group-3 tail of FUN_0025eb48: the record's id byte and its param
+        // byte biased into the event-flag space. Type 0x3A reads the latter
+        // every frame to decide whether it is a closed or an opened chest.
+        auto &entity = environment_.entityPool->slot(slot);
+        entity.recordId130 = static_cast<std::int16_t>(record.id);
+        entity.eventFlagId198 =
+            static_cast<std::uint32_t>(static_cast<std::uint8_t>(record.param)) + kChestFlagBase;
+      }
     }
 
     return 0;
@@ -797,6 +1042,10 @@ namespace orphen::ported::script
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       return FUN_0025f150_select_by_record_index();
 
+    case 0x76:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00260318_read_object_register();
+
     case 0x77:
     case 0x78:
     case 0x79:
@@ -835,6 +1084,34 @@ namespace orphen::ported::script
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       FUN_00261910_set_vector_with_rgb();
       return 0;
+
+    case 0x61:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_0025f4b8_test_lead_flag_word();
+
+    case 0x9D:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00261cb8_install_slot();
+
+    case 0x9E:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00261d18_clear_slot();
+
+    case 0x9F:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00261d88_slot_occupied();
+
+    case 0xA0:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00261de0_find_free_slot();
+
+    case 0xA8:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00262f38_install_lead_slot();
+
+    case 0xAA:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00263118_clear_lead_slot();
 
     case 0xAB:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);

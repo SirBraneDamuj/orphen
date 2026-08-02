@@ -16,7 +16,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 
 ```
 0x32 return_zero  # orig LAB_0025d6f0 — jr ra; move v0, zero
-0x33 FUN_0025d6f8  # name: advance_ip_and_sync_frame
+0x33 start_inline_dialogue  # orig FUN_0025d6f8 — FUN_00237b38(ip + 4) then FUN_0025c220. Operand layout is [rel32 jump][inline text...]: the text starts at ip+4 and the dword at ip is the relative jump that skips it. Verified from the disassembly at 0x25d6f8 (lw a0,-0x42A0(gp); jal FUN_00237b38; addiu a0,a0,4 — a *byte* +4, not Ghidra's `DAT_00355cd0 + 4` element arithmetic). FUN_00237b38 is the dialogue/message-window driver that owns pcGpffffaec0; pairs with 0x35, which polls for the same stream finishing. Previously mislabelled "advance_ip_and_sync_frame"; it is not a frame sync and the VM has no yield — see analyzed/scene_script_frame_entry.c
 0x34 FUN_0025d728  # name: probe_system_busy
 0x35 query_dialogue_stream_complete  # orig FUN_0025d748 — calls FUN_00237c70 to check if dialogue finished (iGpffffbcf4==8 && pcGpffffaec0=='\0'); see analyzed/ops/0x35_query_dialogue_stream_complete.c
 0x36 script_read_flag_or_work_memory  # orig FUN_0025d768 — reads work array u32 (0x36) or flag bucket byte (0x38); see analyzed/script_read_flag_or_work_memory.c
@@ -62,7 +62,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x5E calculate_polar_component  # orig FUN_0025f380 — eval magnitude + angle, calc magnitude*cos(angle)*scale, submit result; see analyzed/ops/0x5E_0x5F_calculate_polar_component.c
 0x5F calculate_polar_component  # orig FUN_0025f380 — eval magnitude + angle, calc magnitude*sin(angle)*scale, submit result; same handler as 0x5E, branches on opcode; see analyzed/ops/0x5E_0x5F_calculate_polar_component.c
 0x60 calculate_3d_magnitude  # orig FUN_0025f428 — eval 3 exprs (x,y,z), normalize, calc sqrt(x²+y²+z²), scale, submit result; see analyzed/ops/0x60_calculate_3d_magnitude.c
-0x61 test_controller_button_state  # orig FUN_0025f4b8 — eval mask expr, read selector byte (bits 0-6=active-gate selector, bit 7=state-word selector), test DAT_0058bf1c/bf20, return bool; see analyzed/ops/0x61_test_controller_button_state.c
+0x61 test_lead_flag_word  # orig FUN_0025f4b8 — eval mask expr, read selector byte (bit 7 = which word; bits 0-6, if any set, gate on +0x0C bit 0), return (word & mask) != 0, or false when +0x0C has 0x100. **Correction:** the three globals are fields of pool slot 0, not standalone controller state — DAT_0058bebc is 0x58BEB0+0x0C, DAT_0058bf1c is +0x6C, DAT_0058bf20 is +0x70. analyzed/ops/0x61_test_controller_button_state.c reads them as cached controller words, which is a guess the addresses do not support; the file name and its button-mask speculation should be treated as unverified.
 0x62 find_entity_by_id_in_secondary_pool  # orig FUN_0025f548 — eval target_id, search secondary pool (DAT_0058d120, 245 entities), match entity[+0x95], return slot index (80-324) or 0; see analyzed/ops/0x62_find_entity_by_id_in_secondary_pool.c
 0x63 set_entity_tracking_and_position  # orig FUN_0025f5d8 — eval 2 selectors + mode + 3 pos coords, link tracker→target entities, set tracking mode (+0xA0/192/194), set position; see analyzed/ops/0x63_set_entity_tracking_and_position.c
 0x64 FUN_0025f700   # name: update_object_transform_from_bone (tentative)
@@ -83,7 +83,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x73 submit_wrapped_delta  # orig FUN_00260188 — delta = wrap((b/scale)-(a/scale)) * scale; submit; see analyzed/ops/0x73_submit_wrapped_delta.c
 0x74 calculate_entity_distance  # orig FUN_002601f8 — read 2 entity selectors, compute horizontal distance sqrt(dx²+dz²) via FUN_0023a4e8, scale by DAT_00352c04, submit; shared handler with 0x75; see analyzed/ops/0x75_calculate_entity_distance_or_angle.c
 0x75 calculate_entity_angle  # orig FUN_002601f8 — read 2 entity selectors, compute horizontal angle atan2(dz,dx) via FUN_0023a4b8, scale by DAT_00352c04, submit; shared handler with 0x74; see analyzed/ops/0x75_calculate_entity_distance_or_angle.c
-0x76 FUN_00260318  # name: select_object_and_read_register
+0x76 read_object_register  # orig FUN_00260318 — eval selector + register index, select the object via FUN_0025d6c0 (falling back to the current one), return the register through FUN_0025c548. Ghidra types it void because the value comes back from a tail call in $v0. The read half of the 0x77-0x7C family.
 0x77 FUN_00260360  # name: modify_register_rmw (AND/OR/XOR/ADD/SUB family via read+op+write)
 0x78 FUN_00260360  # name: modify_register_rmw
 0x79 FUN_00260360  # name: modify_register_rmw

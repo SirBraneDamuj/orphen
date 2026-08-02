@@ -18,9 +18,15 @@ namespace
     std::cout << "Usage: " << programName
               << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM]"
                  " [--load-only] [--scene-tree] [--frames <count>] [--spawn x,y,z]"
-                 " [--elf <SLUS_200.11>]\n"
-                 "  --elf  read static tables (entity descriptors) from the retail\n"
-                 "         executable. Defaults to SLUS_200.11 in the disc root.\n";
+                 " [--elf <SLUS_200.11>] [--scr-report] [--scr-tick] [--actor-report]\n"
+                 "  --elf           read static tables (entity descriptors, actor\n"
+                 "                  behavior vtables) from the retail executable.\n"
+                 "                  Defaults to SLUS_200.11 in the disc root.\n"
+                 "  --scr-report    print the scene script inventory after loading.\n"
+                 "  --scr-tick      run the scene script's per-frame entry and its\n"
+                 "                  object-script slots every frame. Off by default.\n"
+                 "  --actor-report  print which actor behavior each spawned entity\n"
+                 "                  dispatches to, and which of them are ported.\n";
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -62,6 +68,16 @@ namespace
         }
         config.discScene = orphen::harness::parseSceneName(argv[++argumentIndex]);
         config.hasDiscScene = true;
+        continue;
+      }
+      if (argument == "--scr-tick")
+      {
+        config.runScriptTick = true;
+        continue;
+      }
+      if (argument == "--actor-report")
+      {
+        config.printActorReport = true;
         continue;
       }
       if (argument == "--scr-report")
@@ -164,6 +180,7 @@ int main(int argc, char **argv)
     {
       orphen::port::PortRuntime runtime;
       runtime.initialize(config);
+      runtime.printExitReports();
       return 0;
     }
 
@@ -180,6 +197,7 @@ int main(int argc, char **argv)
           break;
         }
       }
+      runtime.printExitReports();
       return 0;
     }
 

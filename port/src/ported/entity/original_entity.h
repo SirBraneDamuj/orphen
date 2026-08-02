@@ -46,14 +46,42 @@ namespace orphen::ported::entity
     float height58 = 1.25f;                  // +0x58: collision height, descriptor +0x0C.
     float facingRadians5c = 0.0f;            // +0x5C: facing angle.
     std::uint16_t state60 = 0;               // +0x60: field/player movement state.
-    std::uint32_t flagWord6c = 0;            // +0x6C: flag word the 0x8B warp mask tests.
+    std::uint16_t fadeRamp62 = 0;            // +0x62: FUN_0023a568's fade ramp position.
+    std::uint32_t flagWord6c = 0;            // +0x6C: flag word the 0x8B warp mask tests, and opcode 0x61's primary word.
+    std::uint32_t flagWord70 = 0;            // +0x70: opcode 0x61's alternate word.
     std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
     std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
     float maxStepHeight80 = 0.75f;           // +0x80: maximum step-up height accepted by FUN_002262c0.
+
+    // +0x94: FUN_00266240's last argument, a spawn parameter whose meaning is
+    // per-type. Type 0x3A repurposes it as "this entity has ticked once".
+    std::uint8_t spawnParam94 = 0;
+    // +0x98: index of the map placement record this entity was built from.
+    // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.
+    std::int32_t placementRecordIndex98 = -1;
+
     std::uint16_t animationA0 = 1;           // +0xA0: animation id; see FUN_00256bb8.
     std::uint16_t previousSubstateA2 = 0xffff;
+    // +0xA4: state timer. FUN_00225bc8 resets it to 999 on an animation change,
+    // and FUN_0023a068 advances it by the frame tick while the entity is frozen
+    // so a timed state does not lose the frozen frames.
     std::uint16_t stateResetA4 = 999;
     std::uint16_t substateFrameA8 = 0;
+    std::uint16_t flagsAa = 0;               // +0xAA: bit 0x100 gates type 0x3A's effect.
+    // +0xBD: freeze / hit-stop countdown in frames, read by FUN_0023a068.
+    std::int8_t freezeTimerBd = 0;
+
+    std::int16_t recordId130 = -1;           // +0x130: the placement record's id byte.
+    std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
+    std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
+
+    // +0x198: for type 0x3A this is an event flag id (record param + 0x400), not
+    // a pointer -- see analyzed/actor_behaviors/type_0x3A_treasure_chest.c. Other
+    // types store an entity pointer here; the port only models the flag use.
+    std::uint32_t eventFlagId198 = 0;
+    std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
+    std::uint8_t effectActive19e = 0;        // +0x19E: that timer's enable.
+
     std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
     std::uint8_t motionFlags1bb = 0;
 

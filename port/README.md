@@ -32,11 +32,24 @@ stream pointer.
 `src/ported/script/scene_script.*` is `FUN_0025b390`'s header plus all five
 entrypoints as named functions. Words 0 and 1 run at load, which is what
 `FUN_0022a418` does -- it invokes `FUN_0025b6d0` and `FUN_0025b728` from
-different points in the bootstrap, with a lot of state setup between them. The
-per-frame entry (`FUN_0025b778`, word 2) and the two actor-state entries are
-written and reachable through `runEntry`, but nothing drives them yet. That is
-the extension point: turning them on pulls in frame sync (`0x33`), dialogue,
-waits, and the 65-slot object-script table.
+different points in the bootstrap, with a lot of state setup between them.
+
+The per-frame entry (`FUN_0025b778`, word 2) runs behind `--scr-tick`, off by
+default so the determinism baseline is unchanged. It runs header word 2, then
+every occupied slot of the 65-entry object-script table, then the lead-bound
+slot `0x40` with the entity selection on pool slot 0.
+
+**The object-script slots are not coroutines.** `FUN_0025bc68` always runs to a
+block end; nothing in the executable ever nulls `pbGpffffbd60` mid-stream, so
+there is no yield. A slot holds a *fixed* entry offset and is re-entered from the
+top every frame. Persistent state lives in the work array and the flag banks.
+That makes the per-frame path far cheaper than a resumable VM, and it is why
+`0x33` is not a frame sync -- it is inline dialogue, see
+`analyzed/scene_script_frame_entry.c`.
+
+Header words 3 and 4 are *not* per-frame and are not driven by the tick. Word 3
+is the player's interaction probe (`FUN_00252828`) and word 4 is entity teardown
+(`FUN_00265ec0`); both are reachable through `runEntry` when those paths land.
 
 **Unimplemented opcodes halt rather than fall through.** An opcode whose operands
 go unconsumed desyncs everything after it, so one honest stop beats a cascade of
@@ -80,11 +93,46 @@ the disc root is searched for `SLUS_200.11`, and without it objects fall back to
 a default box size and say so. Ids from `0x272` up ship with the map and cannot
 be resolved this way at all.
 
+### Actor behavior is not script
+
+Once an entity exists, what it does each frame comes from native code, not from
+the SCR. `FUN_00239ce0` walks pool slots 2..255 and calls a function selected by
+the entity's **type id** through four function-pointer tables in `SLUS_200.11`;
+each of those handlers then dispatches again on the entity's **state** (`+0x60`)
+through a per-type-family table. The lead player is slot 0 and is updated by
+`FUN_00251ed8` on its own path, so this loop never sees it.
+
+`src/ported/entity/actor_dispatch_table.*` reads the four tables out of the
+executable rather than transcribing 700-odd pointers, reproducing
+`FUN_00239ce0`'s unsigned range tests literally -- including the seam that sends
+type `0xFB` to the primary table's index `0xFA`. `actor_frame_update.*` is the
+loop, the freeze gate `FUN_0023a068`, and the fade path `FUN_0023a568`.
+
+**Behaviors with no port do nothing and are counted**, the same discipline the
+opcode VM uses. `--actor-report` lists every live entity with the handler address
+it resolves to and whether that handler is ported. That report, not guesswork,
+picks the next behavior to write.
+
+One behavior is implemented: type `0x3A`, `FUN_002d1ea8`, the treasure chest.
+It is the only handler in the game with no state table -- it switches on the
+animation id directly. Its `+0x198` is an **event flag id** (the placement
+record's param byte plus `0x400`), not a pointer; flag clear means closed, set
+means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
+
 ### State of play
 
-`s01_e024` runs both load-time entries to a clean block end with **zero**
-unimplemented opcodes and spawns 14 entities. Story maps get further than they
-used to but still stop; the report names the opcode and offset each time.
+`s01_e024` runs both load-time entries **and** its per-frame entry to a clean
+block end with **zero** unimplemented opcodes, and spawns 14 entities. The tick
+reaches `0x36`, `0x3D`, `0x61` and `0x76` that the load-time entries never touch;
+this scene installs no object-script slots. Story maps get further than they used
+to but still stop; the report names the opcode and offset each time.
+
+Of the 14 entities, 7 are chests with a ported behavior. The other 7 resolve to
+`FUN_0025ab68` (party members, a 12-state machine at `PTR_LAB_0031e1d0`),
+`FUN_002cd0a0` (an enemy, 20 states at `PTR_FUN_00326660`) and `FUN_002cfe08`
+(map-streamed props). None of those is ported, so nothing in the scene moves yet.
+Non-player physics -- gravity, ground snapping, collision for slots 1..255 -- is
+also still absent, so a behavior that requests movement would not be integrated.
 
 ## Camera
 
@@ -232,7 +280,15 @@ The scene tree currently groups MCB bundle records by category and prints record
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only --scr-report
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only --actor-report
+port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
 ```
+
+`--scr-tick` runs the per-frame script entry and the object-script slots.
+`--actor-report` lists every live entity, the behavior address its type resolves
+to, and whether that behavior is ported; with `--frames` it also reports tick
+counts per type. Both reports resolve straight from the pool, so `--load-only`
+gives a useful answer before a single frame has run.
 
 `--frames` runs the runtime update loop without opening a window. The old `--script-frames` spelling is still accepted as a compatibility alias, but it no longer executes script frames.
 
@@ -296,5 +352,13 @@ The current lead player is drawn in magenta, and its current ground triangle is 
    and `0x149` are the next ones the story maps hit.
 6. Render PSC3 models in place of the placeholder boxes, and resolve the
    map-streamed descriptors (ids from `0x272`) so those objects get real sizes.
-7. Drive the per-frame script entry and the object-script slots behind a flag,
-   once frame sync and waits are modelled.
+7. Port `FUN_0025ab68` + `PTR_LAB_0031e1d0` (party members, 12 states) or
+   `FUN_002cd0a0` + `PTR_FUN_00326660` (the type `0x62` enemy, 20 states). These
+   are what `--actor-report` names on `s01_e024`, and they are what would make
+   anything in the scene move.
+8. Port the shared non-player physics step so slots 1..255 get gravity, ground
+   snapping and collision. Nothing a behavior does to an entity's movement
+   request is integrated today.
+9. Drive header word 3 from a player interaction probe (`FUN_00252828`), which is
+   what actually opens a chest and is the only thing that moves a type `0x3A`
+   past animation 4.

@@ -5,6 +5,9 @@
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
+#include "ported/entity/actor_dispatch_table.h"
+#include "ported/entity/actor_frame_update.h"
+#include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/resource/elf_data_reader.h"
@@ -29,6 +32,10 @@ namespace orphen::port
     bool loadOnly = false;
     bool printSceneTree = false;
     bool printScriptReport = false;
+    bool printActorReport = false;
+    // Drive the scene script's per-frame entry and its object-script slots.
+    // Off by default so the existing determinism baseline is unchanged.
+    bool runScriptTick = false;
     std::uint32_t headlessFrameCount = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
     // Retail executable, read for static tables such as the entity descriptors.
@@ -47,6 +54,10 @@ namespace orphen::port
     bool update(const InputSnapshot &input, std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     void render(int framebufferWidth, int framebufferHeight) const;
 
+    // Reports that are only meaningful after frames have run. Called once at
+    // shutdown; a no-op unless the matching flag was passed.
+    void printExitReports() const;
+
   private:
     Ps2Memory memory_;
     orphen::harness::MapViewer mapViewer_;
@@ -63,13 +74,24 @@ namespace orphen::port
     float previousStickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
     orphen::ported::entity::EntityDescriptorTable descriptorTable_;
+    orphen::ported::entity::ActorDispatchTable actorDispatchTable_;
+    orphen::ported::entity::ActorTrace actorTrace_;
+    bool runScriptTick_ = false;
+    bool printActorReport_ = false;
+    bool printScriptReport_ = false;
+    // Set once, the first time a per-frame script run stops on an unimplemented
+    // opcode, so a halting tick says so instead of failing silently every frame.
+    mutable bool reportedTickHalt_ = false;
 
     void loadExecutable(const PortRuntimeConfig &config);
     void runSceneScript();
     void publishSceneObjectViews();
     void applySceneMarkerSpawn();
     void printScriptReport() const;
+    void printActorReport() const;
+    void reportTickHalt(const char *what) const;
     orphen::ported::script::ScriptEnvironment scriptEnvironment();
+    orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();

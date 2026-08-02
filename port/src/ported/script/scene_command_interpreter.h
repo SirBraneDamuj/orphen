@@ -105,6 +105,35 @@ namespace orphen::ported::script
     // Resource ids the script asked about through opcodes 0x3D..0x40. The port
     // has no resource manager, so these are recorded and answered "not loaded".
     std::vector<std::uint32_t> resourceQueries;
+
+    // DAT_00355cf4: the object-script slot table, 65 dwords cleared by
+    // FUN_0025b390. The original stores absolute pointers; the port stores blob
+    // offsets, with 0 meaning empty -- the header occupies offsets 0..0x2B, so
+    // no entry point can legitimately be at 0.
+    //
+    // Partitioned as: 0x00..0x3D run by FUN_0025b778, 0x3E..0x3F run later in
+    // the frame by FUN_0025b918, and 0x40 the lead-bound slot opcode 0xA8
+    // installs. See analyzed/scene_script_frame_entry.c.
+    static constexpr std::size_t kObjectScriptSlots = 65;
+    static constexpr std::size_t kGeneralSlotCount = 0x3E;
+    static constexpr std::size_t kFirstLateSlot = 0x3E;
+    static constexpr std::size_t kLeadSlot = 0x40;
+    std::uint32_t DAT_00355cf4_objectScriptSlots[kObjectScriptSlots]{};
+
+    // DAT_00355cf8 / iGpffffbd88: the slot currently executing, or -1 outside
+    // the slot loop. Opcode 0x9E reads it to retire the slot it is running in.
+    std::int32_t DAT_00355cf8_currentSlot = -1;
+
+    // FUN_00266368: one bit of the flag bank, which the actor tick also reads.
+    bool FUN_00266368_eventFlag(std::uint32_t flagId) const
+    {
+      const std::size_t bucket = static_cast<std::size_t>(static_cast<std::int32_t>(flagId) >> 3);
+      if (bucket > 0x8FF || bucket >= kFlagBucketCount)
+      {
+        return false;
+      }
+      return (DAT_00342b70_flags[bucket] & (1u << (flagId & 7u))) != 0;
+    }
   };
 
   // Everything a handler is allowed to touch. Terrain and lead movement arrive
@@ -140,6 +169,10 @@ namespace orphen::ported::script
     // FUN_0025bc68. Runs from an offset into the blob until the outermost block
     // ends. Returns false when the entry offset is outside the blob.
     bool FUN_0025bc68_run(std::uint32_t entryOffset);
+
+    // FUN_0025b778 points both entity selection globals at pool slot 0 before
+    // running the lead-bound slot, so that slot's opcodes act on the player.
+    void selectEntity(std::size_t slot) { currentEntity_ = slot; }
 
     // True when execution stopped because the stream ran off the end of the blob
     // rather than at a block end. Always a decode desync.
@@ -180,6 +213,7 @@ namespace orphen::ported::script
     // Shared by 0x4F and 0x51: place a spawned entity from a map placement
     // record and record it in the trace.
     void placeFromRecord(std::size_t slot,
+                         std::size_t recordIndex,
                          const orphen::ported::psm2::ObjectPlacementRecord &record,
                          SpawnRecord &spawnRecord);
 
@@ -214,6 +248,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025d768_read_work_or_flag(); // 0x36, 0x38
     std::uint32_t FUN_0025d818_write_work_or_flag(); // 0x37, 0x39
     std::uint32_t FUN_0025e560_resource_flag();      // 0x3D..0x40
+    std::uint32_t FUN_00260318_read_object_register();    // 0x76
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
     std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
     void FUN_00263d10_set_global_color();                // 0xB9, 0xBA
@@ -227,6 +262,15 @@ namespace orphen::ported::script
     void FUN_0025eeb0_set_entity_position();     // 0x54, 0x55
     void FUN_00263148_teleport_lead();           // 0xAB
     std::uint32_t FUN_0025f120_get_slot_index(); // 0x59
+    std::uint32_t FUN_0025f4b8_test_lead_flag_word(); // 0x61
+
+    // The object-script slot table. See analyzed/scene_script_frame_entry.c.
+    std::uint32_t FUN_00261cb8_install_slot();   // 0x9D
+    std::uint32_t FUN_00261d18_clear_slot();     // 0x9E
+    std::uint32_t FUN_00261d88_slot_occupied();  // 0x9F
+    std::uint32_t FUN_00261de0_find_free_slot(); // 0xA0
+    std::uint32_t FUN_00262f38_install_lead_slot(); // 0xA8
+    std::uint32_t FUN_00263118_clear_lead_slot();   // 0xAA
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
     void alignStreamTo4();
