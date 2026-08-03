@@ -464,6 +464,21 @@ namespace orphen::port
               << " of " << orphen::ported::script::kObjectScriptSlotCount
               << (runScriptTick_ ? " (ticked)" : " (not ticked; pass --scr-tick)") << '\n';
 
+    if (!scriptTrace_.terrainTriggers().empty())
+    {
+      std::cout << "terrain triggers (opcode 0x61, the floor panels):\n";
+      for (const auto &entry : scriptTrace_.terrainTriggers())
+      {
+        std::cout << "  @0x" << std::hex << entry.first
+                  << " mask=0x" << entry.second.mask
+                  << " word=+0x" << ((entry.second.selector & 0x80u) != 0 ? 0x70 : 0x6C)
+                  << " (selector 0x" << static_cast<unsigned>(entry.second.selector) << ")"
+                  << " lastSeen=0x" << entry.second.observedWord << std::dec
+                  << " tests=" << entry.second.tests
+                  << " passes=" << entry.second.passes << '\n';
+      }
+    }
+
     if (!scriptTrace_.objectRegisters().empty())
     {
       std::cout << "object registers touched (opcodes 0x76..0x7C reach entity fields):\n";

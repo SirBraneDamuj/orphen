@@ -66,6 +66,28 @@ namespace orphen::ported::script
       std::uint32_t unmodelledHits = 0;
       std::uint32_t noEntityHits = 0; // no object was selected at all
     };
+    // Opcode 0x61 (FUN_0025f4b8) is the terrain trigger: it tests the lead
+    // player's +0x6C or +0x70 -- the words copied off whatever surface the
+    // player last settled on -- against a mask. A floor panel is not an entity
+    // and not a volume; it is terrain carrying a flag that the scene's per-frame
+    // entry watches for. Recording each call site with its mask is the only way
+    // to find out which flag a scene's panels actually use, because the branch
+    // stays untaken until someone stands on one.
+    struct TerrainTriggerStat
+    {
+      std::uint32_t mask = 0;
+      std::uint8_t selector = 0;
+      std::uint32_t tests = 0;
+      std::uint32_t passes = 0;
+      std::uint32_t observedWord = 0; // last value the test saw
+    };
+    void recordTerrainTrigger(std::uint32_t offset,
+                              std::uint32_t mask,
+                              std::uint8_t selector,
+                              std::uint32_t word,
+                              bool passed);
+    const std::map<std::uint32_t, TerrainTriggerStat> &terrainTriggers() const { return terrainTriggers_; }
+
     void recordObjectRegisterAccess(std::uint32_t index, bool write);
     void recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity);
     const std::map<std::uint32_t, ObjectRegisterStat> &objectRegisters() const { return objectRegisters_; }
@@ -99,6 +121,7 @@ namespace orphen::ported::script
     std::vector<std::uint32_t> registeredScripts_;
     std::vector<std::string> entriesRun_;
     std::map<std::uint32_t, ObjectRegisterStat> objectRegisters_;
+    std::map<std::uint32_t, TerrainTriggerStat> terrainTriggers_;
     std::uint32_t tickRunCount_ = 0;
     std::uint32_t slotRunCount_ = 0;
 

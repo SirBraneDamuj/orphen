@@ -275,6 +275,7 @@ namespace orphen::ported::script
   // whole test on +0x0C bit 0. +0x0C bit 0x100 disables it outright.
   std::uint32_t SceneCommandInterpreter::FUN_0025f4b8_test_lead_flag_word()
   {
+    const std::uint32_t callOffset = streamOffset_;
     const std::uint32_t mask = FUN_0025c258_evaluate();
     const std::uint8_t selector = readU8();
     if (halted_ || environment_.entityPool == nullptr)
@@ -284,17 +285,19 @@ namespace orphen::ported::script
 
     const auto &lead = environment_.entityPool->leadPlayer();
     const std::uint32_t gate = lead.collisionFlags0c;
-    if ((gate & 0x100u) != 0)
+    const std::uint32_t word = (selector & 0x80u) != 0 ? lead.flagWord70 : lead.flagWord6c;
+
+    bool passed = false;
+    if ((gate & 0x100u) == 0 && ((selector & 0x7Fu) == 0 || (gate & 1u) != 0))
     {
-      return 0;
-    }
-    if ((selector & 0x7Fu) != 0 && (gate & 1u) == 0)
-    {
-      return 0;
+      passed = (word & mask) != 0;
     }
 
-    const std::uint32_t word = (selector & 0x80u) != 0 ? lead.flagWord70 : lead.flagWord6c;
-    return (word & mask) != 0 ? 1u : 0u;
+    // Every call site is recorded with its mask, because a panel's flag cannot
+    // be learned any other way: the branch stays untaken until the player is
+    // standing on the surface that carries it.
+    trace_.recordTerrainTrigger(callOffset, mask, selector, word, passed);
+    return passed ? 1u : 0u;
   }
 
   // 0x9D (FUN_00261cb8): install an object script into a slot. The operand is a

@@ -436,7 +436,14 @@ namespace orphen::ported::player
       return std::nullopt;
     }
 
-    highestSample->terrainFlags = commonTerrainFlags;
+    // The footprint AND is only an input to the require test above. It used to
+    // be written back over the sample's own flags, which conflated two separate
+    // things: "every corner agrees on this" and "this is the surface we settled
+    // on". FUN_002262c0 copies the *settled* record's words into the entity, so
+    // overwriting them here left +0x70 reading 0 whenever the footprint spanned
+    // two differently flagged triangles -- which is most of the time, and which
+    // made every terrain trigger unreachable.
+    highestSample->commonFootprintFlags = commonTerrainFlags;
     return highestSample;
   }
 
@@ -525,6 +532,23 @@ namespace orphen::ported::player
           entity().groundHeight4c = destinationGround->height;
         }
       }
+    }
+
+    // FUN_002262c0 at 0x00226884 and 0x0022692c: settling on a surface copies
+    // that surface's first two words into the entity, at +0x6C and +0x70. They
+    // are the only way a *surface* reaches the script -- opcode 0x61
+    // (FUN_0025f4b8) tests one of them against a mask, picking +0x70 when the
+    // selector's 0x80 bit is set and +0x6C otherwise. That is how a floor panel
+    // triggers: there is no trigger entity and no volume, just terrain the
+    // player is standing on carrying a flag the scene's per-frame entry watches
+    // for. s01_e024's tick makes exactly two such tests.
+    //
+    // The port had never written either word, so both tests were permanently
+    // false and every panel in every scene was dead.
+    if (destinationGround.has_value())
+    {
+      entity().flagWord6c = destinationGround->leadingWord;
+      entity().flagWord70 = destinationGround->terrainFlags;
     }
 
     entity().previousGroundHeight50 = entity().groundHeight4c;

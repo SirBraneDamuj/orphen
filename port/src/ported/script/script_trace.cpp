@@ -11,6 +11,7 @@ namespace orphen::ported::script
     registeredScripts_.clear();
     entriesRun_.clear();
     objectRegisters_.clear();
+    terrainTriggers_.clear();
     tickRunCount_ = 0;
     slotRunCount_ = 0;
     leadTeleported_ = false;
@@ -56,6 +57,23 @@ namespace orphen::ported::script
                             return text;
                           }() +
                           (empty ? " (empty)" : ""));
+  }
+
+  void ScriptTrace::recordTerrainTrigger(std::uint32_t offset,
+                                         std::uint32_t mask,
+                                         std::uint8_t selector,
+                                         std::uint32_t word,
+                                         bool passed)
+  {
+    auto &stat = terrainTriggers_[offset];
+    stat.mask = mask;
+    stat.selector = selector;
+    stat.observedWord = word;
+    ++stat.tests;
+    if (passed)
+    {
+      ++stat.passes;
+    }
   }
 
   void ScriptTrace::recordObjectRegisterAccess(std::uint32_t index, bool write)

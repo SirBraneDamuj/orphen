@@ -31,6 +31,10 @@ namespace orphen::ported::player
     std::uint32_t leadingWord = 0;
     std::uint32_t terrainFlags = 0;
     bool sampledByOriginalTerrain = false;
+    // The AND of all four footprint corners' terrain flags. Only the require
+    // test (entity +0x78) reads it; it is deliberately not the same thing as
+    // terrainFlags, which is the settled surface's own word.
+    std::uint32_t commonFootprintFlags = 0;
   };
 
   // FUN_00227390's workspace +0x2C and +0x30: the actor's feet and the top of
