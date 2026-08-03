@@ -129,17 +129,63 @@ means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
 ### State of play
 
 `s01_e024` runs both load-time entries **and** its per-frame entry to a clean
-block end with **zero** unimplemented opcodes, and spawns 14 entities. The tick
-reaches `0x36`, `0x3D`, `0x61` and `0x76` that the load-time entries never touch;
-this scene installs no object-script slots. Story maps get further than they used
-to but still stop; the report names the opcode and offset each time.
+block end with **zero** unimplemented opcodes, and spawns 14 entities.
 
-Of the 14 entities, 7 are chests with a ported behavior. The other 7 resolve to
-`FUN_0025ab68` (party members, a 12-state machine at `PTR_LAB_0031e1d0`),
-`FUN_002cd0a0` (an enemy, 20 states at `PTR_FUN_00326660`) and `FUN_002cfe08`
-(map-streamed props). None of those is ported, so nothing in the scene moves yet.
-Non-player physics -- gravity, ground snapping, collision for slots 1..255 -- is
-also still absent, so a behavior that requests movement would not be integrated.
+**Object registers are entity fields.** Opcodes `0x76`..`0x7C` look like a
+register file but `FUN_0025c8f8` and `FUN_0025c548` are a switch whose cases
+write straight through the selected entity. Register 13 is the facing angle at
+`+0x5C`, and this scene's init writes it once per party member -- so the room's
+five characters face their authored directions rather than all facing zero.
+Register 0 is the type id, which the per-frame entry reads every frame.
+
+**Floor panels are terrain, not entities.** `FUN_002262c0` copies the settled
+surface's first two words into `+0x6C`/`+0x70`, and opcode `0x61` tests one of
+them against a mask. This scene makes two such tests, masks `0x1` and `0x2`, and
+the map has exactly two up-facing floor quads carrying those values:
+
+| primitive | terrain | position | branch |
+|---|---|---|---|
+| #250 | `0x1` | (-4.75, -14.00) | park the player (`0x6D`), fade out (`0x85`/`0x86`) |
+| #292 | `0x2` | (-6.00, -11.25) | boot the party for battle (`0xE1`) |
+
+Neither is a save point. The fade branch now runs to completion and stops at
+`0x8E`, an audio opcode; the battle branch completes with nothing unimplemented.
+
+**The confirm button works.** `FUN_00252cc0` / `FUN_00252a18` / `FUN_00252828`
+are ported and hooked into `FUN_00256bb8`'s grounded branch on Cross. The branch
+`FUN_00252828` takes comes from the descriptor flag at `+0x02`, read out of the
+executable: `0x4004` on party members sends them to scene script header word 3,
+`0x0100` on the chest takes the native path.
+
+- **Chests** work end to end. The cutscene (player states `0xC` -> `0xD` -> `0xE`)
+  is deliberately not ported; instead the chest's event flag is set, which is what
+  the cutscene exists to do, and the already-ported `FUN_002d1ea8` animates
+  4 (closed) -> 5 (opening) from the next frame.
+- **Party members** run header word 3 and halt honestly. `0x70` (the angle from
+  an object to the player -- how a character turns to face you) is ported; `0x33`,
+  inline dialogue, is where it stops, and that is the right place: its operands
+  are a variable-length text stream, so a stub would desync everything after it.
+  The party swap itself is not implemented.
+
+**Actor behavior dispatches twice.** `FUN_0025ab68` and `FUN_002cd0a0` are shells
+that index a per-type state table with `+0x60`; those tables are read out of the
+executable too. `--actor-report` now shows the second dispatch, because a type can
+be dispatched and still do nothing when the *state* it is in has no port:
+
+```
+type=0x3  state=0 -> 0x25abb8 ticks=120  implemented   (jr ra; nop -- a real no-op)
+type=0x62 state=0 -> 0x2cd210 ticks=1    implemented   (init; hands to state 3)
+type=0x62 state=3 -> 0x2cd3a0 ticks=119  UNIMPLEMENTED (hover and chase)
+```
+
+So one unimplemented behavior type is left (`0x272`, the streamed prop) and one
+unimplemented state. **Non-player physics is still absent**, which is why the
+enemy's chase state is not ported yet: it writes movement into `+0x30`/`+0x34`
+and a hover height into `+0x38`, and none of that is integrated for slots
+1..255, so porting it would look like nothing happened.
+
+`--press-confirm <frame>` fires Cross from `--frames`, so the interaction path is
+checkable without a window. `--frames` remains exactly deterministic.
 
 ## Camera
 
