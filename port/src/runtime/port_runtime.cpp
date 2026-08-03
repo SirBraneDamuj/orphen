@@ -2,6 +2,7 @@
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/script/object_registers.h"
+#include "ported/player/original_interaction.h"
 
 #include <cmath>
 #include <iomanip>
@@ -798,6 +799,73 @@ namespace orphen::port
     std::cout << "=== end actor report ===\n\n";
   }
 
+  // The outcome half of the confirm button. FUN_00252828 decides *what* an
+  // interaction is; this applies it, because the two outcomes live in systems
+  // the player controller has no business reaching -- one is an event flag, the
+  // other is a scene script entry.
+  bool PortRuntime::runInteractionProbe()
+  {
+    const auto result = orphen::ported::player::FUN_00252cc0_probe_for_interaction(
+        entityPool_,
+        0,
+        [this](std::uint32_t flagId) { return sceneScript_.state().FUN_00266368_eventFlag(flagId); });
+
+    switch (result.kind)
+    {
+    case orphen::ported::player::InteractionKind::Chest:
+    {
+      // PLACEHOLDER OUTCOME, and deliberately so.
+      //
+      // The original enters player state 0xC (FUN_00254d58), which starts a
+      // three-state camera sequence: 0xC arms the fade and hands to 0xD
+      // (FUN_00254db0), which snaps the player to a fixed offset in front of
+      // the chest, installs a look-at camera through FUN_00217d70, and hands to
+      // 0xE. None of that is ported.
+      //
+      // What is ported is the thing the sequence exists to do: set the chest's
+      // event flag. FUN_002d1ea8 only ever *observes* that flag, so setting it
+      // here drives the real, already-ported behavior -- the chest animates
+      // 4 (closed) -> 5 (opening) -> 6 (open) on its own from the next frame.
+      sceneScript_.state().FUN_002663a0_setEventFlag(result.chestFlagId);
+      std::cout << "[interact] chest slot=" << result.targetSlot
+                << " flag=0x" << std::hex << result.chestFlagId << std::dec
+                << " opened (cutscene states 0xC-0xE not ported)\n";
+      return true;
+    }
+
+    case orphen::ported::player::InteractionKind::ScriptedEntity:
+    {
+      // Party members (types 0x03..0x07) come here. The original points
+      // psGpffffb79c at the entity and runs the scene script's header word 3;
+      // the port selects the same entity and runs the same entry, and if that
+      // entry reaches an opcode with no implementation the existing report
+      // names it rather than pretending the interaction worked.
+      //
+      // The actual party swap -- rebinding pool slot 0, the camera and the
+      // controller to another entity -- is not implemented.
+      std::cout << "[interact] scripted entity slot=" << result.targetSlot
+                << " type=0x" << std::hex << result.targetType << std::dec
+                << " -> scene script header word 3\n";
+      sceneScript_.runEntryForEntity(orphen::ported::script::SceneScriptEntry::ActorStatePrimary,
+                                     scriptEnvironment(),
+                                     scriptTrace_,
+                                     result.targetSlot);
+      reportTickHalt("interaction (header word 3)");
+      return true;
+    }
+
+    case orphen::ported::player::InteractionKind::StreamedProp:
+      std::cout << "[interact] streamed prop slot=" << result.targetSlot
+                << " type=0x" << std::hex << result.targetType << std::dec
+                << " (branch not ported)\n";
+      return true;
+
+    case orphen::ported::player::InteractionKind::None:
+    default:
+      return false;
+    }
+  }
+
   void PortRuntime::reset()
   {
     memory_.clear();
@@ -846,12 +914,19 @@ namespace orphen::port
 
       // Raw pad 0x0020 is Circle. Held, it gates the debug mid-air jump.
       constexpr std::uint16_t kRawPadCircle = 0x0020;
+      // Raw pad 0x0040 is Cross, the confirm button. The original tests the
+      // same bit in the *mapped* pressed word (uGpffffb68a = DAT_003555fa);
+      // Cross maps through to the same position, and the port has no mapping
+      // table, so the raw bit stands in.
+      constexpr std::uint16_t kRawPadCross = 0x0040;
       leadPlayer_.update(frameTicks,
                          movementRequest,
                          input.stickMagnitude,
                          input.jumpRequested,
                          (input.rawHeldPad & kRawPadCircle) != 0,
-                         loadedMap);
+                         (input.rawPressedPad & kRawPadCross) != 0,
+                         loadedMap,
+                         [this] { return runInteractionProbe(); });
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 

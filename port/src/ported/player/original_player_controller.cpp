@@ -109,7 +109,8 @@ namespace orphen::ported::player
   void OriginalPlayerController::update(std::uint32_t frameTicks,
                                         const OriginalPlayerFrameInput &input,
                                         const OriginalTerrainSampler &terrainSampler,
-                                        const OriginalMovementBlocker &movementBlocker)
+                                        const OriginalMovementBlocker &movementBlocker,
+                                        const OriginalInteractionProbe &interactionProbe)
   {
     // FUN_002000c0 clamps DAT_003555bc to [0x20, 0x80] before anything reads it.
     const std::uint32_t clampedFrameTicks =
@@ -124,7 +125,7 @@ namespace orphen::ported::player
     }
     else
     {
-      FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input);
+      FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
     }
 
     FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler, movementBlocker);
@@ -168,7 +169,8 @@ namespace orphen::ported::player
   }
 
   void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
-                                                                          const OriginalPlayerFrameInput &input)
+                                                                          const OriginalPlayerFrameInput &input,
+                                                                          const OriginalInteractionProbe &interactionProbe)
   {
     const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
 
@@ -196,8 +198,16 @@ namespace orphen::ported::player
       return;
     }
 
-    // Attack and interact (mapped 0x20 / 0x10) dispatch on weapon class in the
-    // original and are not ported; they fall through to locomotion here.
+    // 3. Interact. `uGpffffb68a & 0x40` is Cross, the confirm button, and a hit
+    //    returns before locomotion runs -- which is why the character does not
+    //    take a step on the frame a chest opens.
+    if (input.interactPressed && interactionProbe && interactionProbe())
+    {
+      return;
+    }
+
+    // Attack (mapped 0x20) dispatches on weapon class in the original and is
+    // not ported; it falls through to locomotion here.
 
     // 3. Locomotion or idle.
     entity().state60 = 0;

@@ -72,6 +72,8 @@ target_sources(orphen_port
     src/ported/entity/actor_frame_update.h
     src/ported/entity/actor_trace.cpp
     src/ported/entity/actor_trace.h
+    src/ported/player/original_interaction.cpp
+    src/ported/player/original_interaction.h
     src/ported/script/object_registers.cpp
     src/ported/script/object_registers.h
     src/ported/script/scene_command_interpreter.cpp

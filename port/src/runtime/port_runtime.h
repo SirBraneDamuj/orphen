@@ -46,6 +46,8 @@ namespace orphen::port
     // Off by default so the existing determinism baseline is unchanged.
     bool runScriptTick = false;
     std::uint32_t headlessFrameCount = 0;
+    // 1-based frame on which --frames should press Cross, or 0 for never.
+    std::uint32_t pressConfirmFrame = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
     // Retail executable, read for static tables such as the entity descriptors.
     // Optional: when empty, SLUS_200.11 is looked for in the disc root, and when
@@ -105,6 +107,7 @@ namespace orphen::port
     void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
     void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
     void reportTickHalt(const char *what) const;
+    bool runInteractionProbe();
     orphen::ported::script::ScriptEnvironment scriptEnvironment(
         std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);

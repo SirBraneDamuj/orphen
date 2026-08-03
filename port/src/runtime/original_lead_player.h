@@ -25,7 +25,9 @@ namespace orphen::port
                 float stickMagnitude,
                 bool jumpRequested,
                 bool debugMidairJumpHeld,
-                const orphen::ported::psm2::Psm2RuntimeState *map);
+                bool interactPressed,
+                const orphen::ported::psm2::Psm2RuntimeState *map,
+                const orphen::ported::player::OriginalInteractionProbe &interactionProbe = {});
 
     const PlayerViewState &viewState() const { return viewState_; }
     const orphen::ported::player::OriginalPlayerSnapshot &originalState() const { return originalState_; }

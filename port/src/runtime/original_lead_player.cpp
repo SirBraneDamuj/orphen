@@ -157,7 +157,9 @@ namespace orphen::port
                                   float stickMagnitude,
                                   bool jumpRequested,
                                   bool debugMidairJumpHeld,
-                                  const orphen::ported::psm2::Psm2RuntimeState *map)
+                                  bool interactPressed,
+                                  const orphen::ported::psm2::Psm2RuntimeState *map,
+                                  const orphen::ported::player::OriginalInteractionProbe &interactionProbe)
   {
     if (map == nullptr)
     {
@@ -167,8 +169,13 @@ namespace orphen::port
     }
 
     const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
-    const orphen::ported::player::OriginalPlayerFrameInput input{
-        movementRequest, jumpAction, jumpAction, stickMagnitude, debugMidairJumpHeld};
+    orphen::ported::player::OriginalPlayerFrameInput input{};
+    input.cameraRelativeMove = movementRequest;
+    input.mappedHeldActions = jumpAction;
+    input.mappedPressedActions = jumpAction;
+    input.interactPressed = interactPressed;
+    input.stickMagnitude = stickMagnitude;
+    input.debugMidairJumpHeld = debugMidairJumpHeld;
     const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
     {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));
@@ -196,7 +203,7 @@ namespace orphen::port
                                          radius)
           .has_value();
     };
-    controller_.update(frameTicks, input, terrainSampler, movementBlocker);
+    controller_.update(frameTicks, input, terrainSampler, movementBlocker, interactionProbe);
     refreshViewState(*map);
   }
 

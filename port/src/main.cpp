@@ -162,6 +162,15 @@ namespace
         config.printSceneTree = true;
         continue;
       }
+      if (argument == "--press-confirm")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a frame number");
+        }
+        config.pressConfirmFrame = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
+        continue;
+      }
       if (argument == "--frames" || argument == "--script-frames")
       {
         if (argumentIndex + 1 >= argc)
@@ -229,6 +238,14 @@ int main(int argc, char **argv)
       orphen::port::InputSnapshot input;
       for (std::uint32_t frameIndex = 0; frameIndex < config.headlessFrameCount; ++frameIndex)
       {
+        // --press-confirm fires Cross on one frame, edge-triggered the same way
+        // the window path does, so the interaction probe can be exercised
+        // without a pad or a window.
+        constexpr std::uint16_t kRawPadCross = 0x0040;
+        const bool pressThisFrame = config.pressConfirmFrame != 0 &&
+                                    frameIndex + 1 == config.pressConfirmFrame;
+        input.rawPressedPad = pressThisFrame ? kRawPadCross : 0;
+        input.rawHeldPad = input.rawPressedPad;
         if (!runtime.update(input))
         {
           break;

@@ -202,6 +202,18 @@ namespace orphen::ported::script
       DAT_00342b70_flags[bucket] &= static_cast<std::uint8_t>(~(1u << (flagId & 7u)));
     }
 
+    // FUN_002663f0: set one bit of the flag bank. Opening a chest is exactly
+    // this -- FUN_002d1ea8 only observes the bit.
+    void FUN_002663a0_setEventFlag(std::uint32_t flagId)
+    {
+      const std::size_t bucket = static_cast<std::size_t>(static_cast<std::int32_t>(flagId) >> 3);
+      if (bucket > 0x8FF || bucket >= kFlagBucketCount)
+      {
+        return;
+      }
+      DAT_00342b70_flags[bucket] |= static_cast<std::uint8_t>(1u << (flagId & 7u));
+    }
+
     // FUN_00266368: one bit of the flag bank, which the actor tick also reads.
     bool FUN_00266368_eventFlag(std::uint32_t flagId) const
     {
@@ -349,6 +361,7 @@ namespace orphen::ported::script
     // operand widths -- 0x6D takes one signed byte, 0xE1 takes none -- so
     // neither is a guess about how much stream to consume.
     std::uint32_t FUN_0025fd10_set_player_lock();   // 0x6D
+    std::uint32_t FUN_00260038_angle_to_lead();     // 0x70
     std::uint32_t FUN_00260c20_dispatch_rgb_event(); // 0x85, 0x87
     std::uint32_t FUN_00260ca0_advance_fade();       // 0x86
     std::uint32_t FUN_00265000_boot_party_for_battle(); // 0xE1

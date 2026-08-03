@@ -53,6 +53,9 @@ namespace orphen::ported::entity
     float facingRadians5c = 0.0f;            // +0x5C: facing angle.
     std::uint16_t state60 = 0;               // +0x60: field/player movement state.
     std::uint16_t fadeRamp62 = 0;            // +0x62: FUN_0023a568's fade ramp position.
+    // +0x68: the entity this one is currently holding as an interaction
+    // target, as a pool slot rather than the original's pointer. -1 when none.
+    std::int32_t interactTarget68 = -1;
     std::uint32_t flagWord6c = 0;            // +0x6C: flag word the 0x8B warp mask tests, and opcode 0x61's primary word.
     std::uint32_t flagWord70 = 0;            // +0x70: opcode 0x61's alternate word.
     std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
@@ -82,6 +85,10 @@ namespace orphen::ported::entity
     std::int8_t freezeTimerBd = 0;
 
     std::int16_t recordId130 = -1;           // +0x130: the placement record's id byte.
+    // +0x192: the interaction candidate gate FUN_00252a18 tests, signed and
+    // required negative. FUN_00229c40 seeds it to 0xFFFF for every entity it
+    // builds, so an entity is interactable until something takes it out.
+    std::int16_t interactGate192 = -1;
     std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
     std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
 
@@ -89,6 +96,12 @@ namespace orphen::ported::entity
     // a pointer -- see analyzed/actor_behaviors/type_0x3A_treasure_chest.c. Other
     // types store an entity pointer here; the port only models the flag use.
     std::uint32_t eventFlagId198 = 0;
+    // +0x198 doubles as the player's interaction target: FUN_00252828 writes
+    // the candidate there. Kept apart from eventFlagId198 because the port
+    // stores a slot index, not a pointer, and the two uses never overlap -- the
+    // chest is never the one interacting.
+    std::int32_t interactTarget198 = -1;
+    std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     std::uint8_t effectActive19e = 0;        // +0x19E: that timer's enable.
 

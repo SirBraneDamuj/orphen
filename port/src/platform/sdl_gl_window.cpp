@@ -197,7 +197,10 @@ namespace orphen::port
     // B stands in for Circle on the keyboard so the debug mid-air jump
     // (hold Circle, press jump) is reachable without a pad.
     bool circleHeld = keys[SDL_SCANCODE_B] != 0;
-    bool crossHeld = false;
+    // Return stands in for Cross, the confirm button, so the interaction probe
+    // is reachable without a pad. On a pad it is the south face button (A on an
+    // Xbox layout), which is what the PS2 game uses.
+    bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
     // A gamepad, when present, overrides the keyboard for movement and camera.

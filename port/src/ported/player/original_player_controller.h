@@ -58,6 +58,12 @@ namespace orphen::ported::player
                                                                                     float referenceY,
                                                                                     const OriginalTerrainQuery &query)>;
 
+  // FUN_00252cc0. Returns true when the probe consumed the button press, which
+  // makes FUN_00256bb8 return before locomotion -- so you cannot walk and
+  // interact on the same frame. Supplied as a callback because the probe needs
+  // the whole entity pool and the controller only owns slot 0.
+  using OriginalInteractionProbe = std::function<bool()>;
+
   using OriginalMovementBlocker = std::function<bool(float originalStartX,
                                                      float originalStartZ,
                                                      float originalEndX,
@@ -71,6 +77,11 @@ namespace orphen::ported::player
     orphen::ported::psm2::Vec3 cameraRelativeMove{};
     std::uint32_t mappedHeldActions = 0;
     std::uint32_t mappedPressedActions = 0;
+
+    // uGpffffb68a is DAT_003555fa, the newly-pressed mapped button word
+    // (gp 0x00359F70 - 0x4976). FUN_00256bb8 tests its 0x40 bit -- Cross, the
+    // confirm button -- before running the interaction probe.
+    bool interactPressed = false;
 
     // fGpffffb678. FUN_00256bb8 walks at or below 100.0 and runs above it;
     // FUN_00253488 scales air control by it directly. Full deflection is 128.
@@ -108,7 +119,8 @@ namespace orphen::ported::player
     void update(std::uint32_t frameTicks,
                 const OriginalPlayerFrameInput &input,
                 const OriginalTerrainSampler &terrainSampler,
-                const OriginalMovementBlocker &movementBlocker = {});
+                const OriginalMovementBlocker &movementBlocker = {},
+                const OriginalInteractionProbe &interactionProbe = {});
 
     OriginalPlayerSnapshot snapshot() const;
 
@@ -132,7 +144,9 @@ namespace orphen::ported::player
 
     void FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate);
     void FUN_00252d88_return_to_idle_state();
-    void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
+                                                  const OriginalPlayerFrameInput &input,
+                                                  const OriginalInteractionProbe &interactionProbe);
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00253468_finish_landing();
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);

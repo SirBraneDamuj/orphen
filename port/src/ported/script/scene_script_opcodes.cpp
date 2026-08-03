@@ -662,6 +662,34 @@ namespace orphen::ported::script
     return environment_.state->objectRegister(bank, registerIndex);
   }
 
+  // 0x70 (FUN_00260038): the angle from an object to the lead player, in script
+  // units. One expression operand selects the object; FUN_0023a480 is
+  // atan2(leadZ - objectZ, leadX - objectX) and the result is scaled by
+  // fGpffff8c84 (100000.0) and truncated, the same scale everything else on this
+  // path uses.
+  //
+  // Header word 3 -- the interaction hook -- reaches this immediately, which is
+  // how a party member turns to face you when you talk to it.
+  std::uint32_t SceneCommandInterpreter::FUN_00260038_angle_to_lead()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+
+    const auto *object = resolveEntity(selector);
+    if (object == nullptr)
+    {
+      return 0;
+    }
+
+    const auto &lead = environment_.entityPool->leadPlayer();
+    const float angle = std::atan2(lead.positionZ24 - object->positionZ24,
+                                   lead.positionX20 - object->positionX20);
+    return static_cast<std::uint32_t>(static_cast<std::int32_t>(angle * kScriptCoordinateScale));
+  }
+
   // 0x6D (FUN_0025fd10): take away or give back player control. One signed byte
   // operand. This is the outcome s01_e024's mask-0x1 floor panel reaches, at
   // script offset 0x495 -- the panel takes control away, and whatever the panel
@@ -1226,6 +1254,10 @@ namespace orphen::ported::script
     case 0x6D:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       return FUN_0025fd10_set_player_lock();
+
+    case 0x70:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00260038_angle_to_lead();
 
     case 0x85:
     case 0x87:

@@ -68,6 +68,14 @@ namespace orphen::ported::script
 
     bool runEntry(SceneScriptEntry entry, const ScriptEnvironment &environment, ScriptTrace &trace);
 
+    // Header word 3 is the interaction hook, and FUN_00252828 sets
+    // psGpffffb79c to the probed entity before running it -- so unlike every
+    // other entry, this one needs an entity pre-selected.
+    bool runEntryForEntity(SceneScriptEntry entry,
+                           const ScriptEnvironment &environment,
+                           ScriptTrace &trace,
+                           std::size_t selectedEntity);
+
     // FUN_0025b778: the per-frame path. Runs header word 2, then every occupied
     // general slot 0x00..0x3D in order, then the lead-bound slot 0x40 with the
     // entity selection pointed at pool slot 0.

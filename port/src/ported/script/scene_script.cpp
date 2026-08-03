@@ -127,6 +127,28 @@ namespace orphen::ported::script
     return completed;
   }
 
+  bool SceneScript::runEntryForEntity(SceneScriptEntry entry,
+                                      const ScriptEnvironment &environment,
+                                      ScriptTrace &trace,
+                                      std::size_t selectedEntity)
+  {
+    lastRunOverran_ = false;
+    lastRunHaltedOnUnimplemented_ = false;
+    lastHaltOpcode_ = 0;
+    lastHaltOffset_ = 0;
+
+    if (!loaded())
+    {
+      return false;
+    }
+
+    const std::uint32_t offset = entryOffset(entry);
+    const bool completed = runAtOffset(offset, environment, trace, selectedEntity);
+    const bool empty = offset < blob_.size() && blob_[offset] == 0x04;
+    trace.noteEntryRun(sceneScriptEntryName(entry), offset, empty);
+    return completed;
+  }
+
   bool SceneScript::FUN_0025b778_run_tick(const ScriptEnvironment &environment, ScriptTrace &trace)
   {
     lastRunOverran_ = false;
