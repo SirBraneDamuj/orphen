@@ -12,6 +12,9 @@ namespace orphen::ported::script
     entriesRun_.clear();
     objectRegisters_.clear();
     terrainTriggers_.clear();
+    fadesArmed_.clear();
+    playerLocks_.clear();
+    battleBootCount_ = 0;
     tickRunCount_ = 0;
     slotRunCount_ = 0;
     leadTeleported_ = false;
@@ -74,6 +77,24 @@ namespace orphen::ported::script
     {
       ++stat.passes;
     }
+  }
+
+  void ScriptTrace::recordFadeArmed(std::uint32_t bank, std::uint32_t rate, std::uint32_t packedRgb)
+  {
+    for (auto &event : fadesArmed_)
+    {
+      if (event.bank == bank && event.rate == rate && event.packedRgb == packedRgb)
+      {
+        ++event.hits;
+        return;
+      }
+    }
+    fadesArmed_.push_back({bank, rate, packedRgb, 1});
+  }
+
+  void ScriptTrace::recordPlayerLock(std::int8_t mode)
+  {
+    ++playerLocks_[static_cast<std::int32_t>(mode)];
   }
 
   void ScriptTrace::recordObjectRegisterAccess(std::uint32_t index, bool write)

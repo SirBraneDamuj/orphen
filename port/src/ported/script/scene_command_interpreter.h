@@ -2,6 +2,7 @@
 
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/original_frame_timing.h"
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/script/script_trace.h"
 
@@ -124,6 +125,83 @@ namespace orphen::ported::script
     // the slot loop. Opcode 0x9E reads it to retire the slot it is running in.
     std::int32_t DAT_00355cf8_currentSlot = -1;
 
+    // DAT_00354d2c: the battle-start state opcode 0xE1 raises to 0x10. The port
+    // has no battle system; this is recorded so the report can say the scene
+    // asked for one.
+    std::uint32_t DAT_00354d2c_battleState = 0;
+
+    // The fullscreen fade, DAT_00571dc0 (buffer 0) and DAT_00571dd0 (buffer 1).
+    // FUN_0025d1c0 arms one and FUN_0025d238 steps it; opcodes 0x85/0x87 and
+    // 0x86 are the script's handles on them, and the chest-opening player state
+    // 0xC drives the same pair. Both banks have the same shape:
+    //
+    //   +0x0  level, 0..0x1FE0
+    //   +0x2  rate per tick   <- FUN_0025d1c0's second argument
+    //   +0x4  packed colour   <- its third
+    //   +0x8  "finished" flag, the value FUN_0025d238 returns
+    //   +0xA  hold time after the level tops out, seeded to 0xA0
+    //
+    // Buffer 0 arms at 0x1FE0 (already full) and buffer 1 at 0 (fades up).
+    struct FullscreenFade
+    {
+      std::uint16_t level = 0;
+      std::uint16_t rate = 0;
+      std::uint32_t colour = 0;
+      std::uint16_t finished = 0;
+      std::int16_t hold = 0;
+    };
+    static constexpr std::size_t kFadeBankCount = 2;
+    FullscreenFade DAT_00571dc0_fades[kFadeBankCount]{};
+
+    // FUN_0025d1c0. The GS submit it ends with (FUN_0025d0e0) has no port.
+    void FUN_0025d1c0_arm_fade(std::uint32_t bank, std::uint16_t rate, std::uint32_t colour)
+    {
+      FullscreenFade &fade = DAT_00571dc0_fades[bank == 0 ? 0 : 1];
+      fade.level = bank == 0 ? 0x1FE0 : 0;
+      fade.hold = 0xA0;
+      fade.rate = rate;
+      fade.colour = colour;
+      fade.finished = 0;
+    }
+
+    // FUN_0025d238: step buffer 1 and report whether it has finished holding.
+    // Returns the flag the original returns, so a caller can wait on it.
+    std::uint16_t FUN_0025d238_step_fade(std::uint32_t frameTicks)
+    {
+      FullscreenFade &fade = DAT_00571dc0_fades[1];
+      fade.finished = 0;
+      if (static_cast<std::int16_t>(fade.level) < 0x1FE0)
+      {
+        const std::int32_t stepped =
+            static_cast<std::int32_t>(fade.level) + static_cast<std::int32_t>(fade.rate) * static_cast<std::int32_t>(frameTicks);
+        fade.level = static_cast<std::uint16_t>(stepped);
+        if (static_cast<std::int16_t>(fade.level) > 0x1FE0)
+        {
+          fade.level = 0x1FE0;
+        }
+      }
+      else if (fade.hold < 1)
+      {
+        fade.finished = 1;
+      }
+      else
+      {
+        fade.hold = static_cast<std::int16_t>(fade.hold - static_cast<std::int16_t>(frameTicks));
+      }
+      return fade.finished;
+    }
+
+    // FUN_002663a0: clear one bit of the flag bank.
+    void FUN_002663a0_clearEventFlag(std::uint32_t flagId)
+    {
+      const std::size_t bucket = static_cast<std::size_t>(static_cast<std::int32_t>(flagId) >> 3);
+      if (bucket > 0x8FF || bucket >= kFlagBucketCount)
+      {
+        return;
+      }
+      DAT_00342b70_flags[bucket] &= static_cast<std::uint8_t>(~(1u << (flagId & 7u)));
+    }
+
     // FUN_00266368: one bit of the flag bank, which the actor tick also reads.
     bool FUN_00266368_eventFlag(std::uint32_t flagId) const
     {
@@ -154,6 +232,9 @@ namespace orphen::ported::script
 
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
+
+    // DAT_003555bc, the per-frame tick count. The fade steps by it.
+    std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks;
   };
 
   class SceneCommandInterpreter
@@ -263,6 +344,14 @@ namespace orphen::ported::script
     void FUN_00263148_teleport_lead();           // 0xAB
     std::uint32_t FUN_0025f120_get_slot_index(); // 0x59
     std::uint32_t FUN_0025f4b8_test_lead_flag_word(); // 0x61
+
+    // The two outcomes s01_e024's floor panels reach. Both have unambiguous
+    // operand widths -- 0x6D takes one signed byte, 0xE1 takes none -- so
+    // neither is a guess about how much stream to consume.
+    std::uint32_t FUN_0025fd10_set_player_lock();   // 0x6D
+    std::uint32_t FUN_00260c20_dispatch_rgb_event(); // 0x85, 0x87
+    std::uint32_t FUN_00260ca0_advance_fade();       // 0x86
+    std::uint32_t FUN_00265000_boot_party_for_battle(); // 0xE1
 
     // The object-script slot table. See analyzed/scene_script_frame_entry.c.
     std::uint32_t FUN_00261cb8_install_slot();   // 0x9D

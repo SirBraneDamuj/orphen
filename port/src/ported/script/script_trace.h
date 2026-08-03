@@ -88,6 +88,28 @@ namespace orphen::ported::script
                               bool passed);
     const std::map<std::uint32_t, TerrainTriggerStat> &terrainTriggers() const { return terrainTriggers_; }
 
+    // Outcomes a floor panel reached. Recorded because the port can only carry
+    // them part way: 0x6D's lock does not hold without the lead's state-10
+    // handler, and 0xE1 has no battle system to hand off to.
+    //
+    // Opcode 0x85 / 0x87 arming the fullscreen fade. Its second operand is the
+    // per-tick rate, not an event id -- FUN_0025d1c0 stores it at the bank's
+    // +0x2, which FUN_0025d238 then multiplies by the frame tick.
+    struct FadeArmed
+    {
+      std::uint32_t bank = 0;
+      std::uint32_t rate = 0;
+      std::uint32_t packedRgb = 0;
+      std::uint32_t hits = 0;
+    };
+    void recordFadeArmed(std::uint32_t bank, std::uint32_t rate, std::uint32_t packedRgb);
+    const std::vector<FadeArmed> &fadesArmed() const { return fadesArmed_; }
+
+    void recordPlayerLock(std::int8_t mode);
+    void recordBattleBoot() { ++battleBootCount_; }
+    const std::map<std::int32_t, std::uint32_t> &playerLocks() const { return playerLocks_; }
+    std::uint32_t battleBootCount() const { return battleBootCount_; }
+
     void recordObjectRegisterAccess(std::uint32_t index, bool write);
     void recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity);
     const std::map<std::uint32_t, ObjectRegisterStat> &objectRegisters() const { return objectRegisters_; }
@@ -122,6 +144,9 @@ namespace orphen::ported::script
     std::vector<std::string> entriesRun_;
     std::map<std::uint32_t, ObjectRegisterStat> objectRegisters_;
     std::map<std::uint32_t, TerrainTriggerStat> terrainTriggers_;
+    std::vector<FadeArmed> fadesArmed_;
+    std::map<std::int32_t, std::uint32_t> playerLocks_;
+    std::uint32_t battleBootCount_ = 0;
     std::uint32_t tickRunCount_ = 0;
     std::uint32_t slotRunCount_ = 0;
 

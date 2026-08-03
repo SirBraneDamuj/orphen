@@ -200,9 +200,10 @@ namespace orphen::port
     return environment;
   }
 
-  orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment()
+  orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment(std::uint32_t frameTicks)
   {
     orphen::ported::script::ScriptEnvironment environment;
+    environment.frameTicks = frameTicks;
     environment.entityPool = &entityPool_;
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
@@ -476,6 +477,30 @@ namespace orphen::port
                   << " lastSeen=0x" << entry.second.observedWord << std::dec
                   << " tests=" << entry.second.tests
                   << " passes=" << entry.second.passes << '\n';
+      }
+    }
+
+    if (!scriptTrace_.playerLocks().empty() || scriptTrace_.battleBootCount() != 0 ||
+        !scriptTrace_.fadesArmed().empty())
+    {
+      std::cout << "panel outcomes reached:\n";
+      for (const auto &event : scriptTrace_.fadesArmed())
+      {
+        std::cout << "  0x85/0x87 fullscreen fade armed: bank=" << event.bank
+                  << " rate=" << event.rate
+                  << " rgb=0x" << std::hex << event.packedRgb << std::dec
+                  << " hits=" << event.hits << "  (0x86 steps it; no GS submit)\n";
+      }
+      for (const auto &entry : scriptTrace_.playerLocks())
+      {
+        std::cout << "  0x6D player lock mode=" << entry.first << " hits=" << entry.second
+                  << (entry.first < 1 ? "  (state 10 written; the lead's state-10 handler is not ported, so it does not hold)" : "  (release)")
+                  << '\n';
+      }
+      if (scriptTrace_.battleBootCount() != 0)
+      {
+        std::cout << "  0xE1 battle boot hits=" << scriptTrace_.battleBootCount()
+                  << "  (flag 0x8EE cleared, battle state 0x10 raised; no battle system to hand off to)\n";
       }
     }
 
@@ -815,7 +840,7 @@ namespace orphen::port
       // FUN_00216aa0, comes last.
       if (runScriptTick_ && sceneScript_.loaded())
       {
-        sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(), scriptTrace_);
+        sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("tick");
       }
 
@@ -832,7 +857,7 @@ namespace orphen::port
 
       if (runScriptTick_ && sceneScript_.loaded())
       {
-        sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(), scriptTrace_);
+        sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("late slots");
       }
 

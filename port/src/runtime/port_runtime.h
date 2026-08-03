@@ -105,7 +105,8 @@ namespace orphen::port
     void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
     void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
     void reportTickHalt(const char *what) const;
-    orphen::ported::script::ScriptEnvironment scriptEnvironment();
+    orphen::ported::script::ScriptEnvironment scriptEnvironment(
+        std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();

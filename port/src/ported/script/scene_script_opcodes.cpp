@@ -662,6 +662,118 @@ namespace orphen::ported::script
     return environment_.state->objectRegister(bank, registerIndex);
   }
 
+  // 0x6D (FUN_0025fd10): take away or give back player control. One signed byte
+  // operand. This is the outcome s01_e024's mask-0x1 floor panel reaches, at
+  // script offset 0x495 -- the panel takes control away, and whatever the panel
+  // is for then runs with the player parked.
+  //
+  //   <= 0  lead into state 10 / animation 1 (the locked pose), plus, for
+  //         operands below -2, a battle-party handoff this port has no model
+  //         for, and for -1 / -2, a countdown seed at uGpffffbd8c.
+  //   == 1  release: FUN_00252d88 puts the lead back to idle.
+  //
+  // The port drives the state write and the release. What it cannot yet do is
+  // *hold* the lock: the lead's state table entry 10 (0x00254cf0) is not ported,
+  // so OriginalPlayerController's update falls into the grounded state and
+  // resets +0x60 to 0 on the very next frame. So the write lands and is
+  // immediately undone. That is a missing state handler, not a missing opcode,
+  // and it is reported as such rather than papered over.
+  std::uint32_t SceneCommandInterpreter::FUN_0025fd10_set_player_lock()
+  {
+    const auto mode = static_cast<std::int8_t>(readU8());
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+
+    auto &lead = environment_.entityPool->leadPlayer();
+    if (mode < 1)
+    {
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 10, 1);
+    }
+    else if (mode == 1)
+    {
+      // FUN_00252d88: back to the idle state and animation.
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 0, 1);
+    }
+    trace_.recordPlayerLock(mode);
+    return 0;
+  }
+
+  // 0xE1 (FUN_00265000): start a battle. No operands at all. This is what
+  // s01_e024's mask-0x2 floor panel reaches, at script offset 0x4ce -- so that
+  // panel is a battle trigger, not a map change.
+  //
+  // Clears event flag 0x8EE, raises the battle-start state, puts the lead into
+  // state 10 / animation 1, and walks the seven party slots at DAT_00343692
+  // respawning every member whose type is 0x37 into state 1 / animation 0 with
+  // the battle idle pose at +0x62. The port has no party-slot table and no
+  // battle system, so the flag, the state global and the lead's state are done
+  // for real and the party walk is recorded as absent.
+  std::uint32_t SceneCommandInterpreter::FUN_00265000_boot_party_for_battle()
+  {
+    if (halted_ || environment_.state == nullptr)
+    {
+      return 0;
+    }
+
+    environment_.state->FUN_002663a0_clearEventFlag(0x8EE);
+    environment_.state->DAT_00354d2c_battleState = 0x10;
+    if (environment_.entityPool != nullptr)
+    {
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(
+          environment_.entityPool->leadPlayer(), 10, 1);
+    }
+    trace_.recordBattleBoot();
+    return 0;
+  }
+
+  // 0x85 / 0x87 (FUN_00260c20): raise a dialogue/message event. Two expression
+  // operands -- an event id and a three-bit colour selector -- which the handler
+  // expands to a packed RGB, each channel 0x00 or 0xFF, before calling
+  // FUN_0025d1c0(buffer, eventId, rgb). 0x85 uses buffer 1, 0x87 buffer 0.
+  //
+  // This is the second half of s01_e024's mask-0x1 floor panel: 0x6D parks the
+  // player, then this raises the message. FUN_0025d1c0 is the same primitive the
+  // chest-opening player state 0xC calls, so it is the engine's general "put
+  // something on screen and wait" entry.
+  //
+  // The port has no dialogue system, so the request is recorded with its
+  // operands and execution continues. Both operands are consumed exactly as the
+  // original consumes them, which is what makes continuing safe.
+  std::uint32_t SceneCommandInterpreter::FUN_00260c20_dispatch_rgb_event()
+  {
+    const std::uint32_t fadeRate = FUN_0025c258_evaluate();
+    const std::uint32_t colourSelector = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+
+    const std::uint32_t red = (colourSelector & 1u) != 0 ? 0xFFu : 0u;
+    const std::uint32_t green = (colourSelector & 2u) != 0 ? 0xFFu : 0u;
+    const std::uint32_t blue = (colourSelector & 4u) != 0 ? 0xFFu : 0u;
+    const std::uint32_t packedRgb = (green << 16) | (blue << 8) | red;
+
+    const std::uint32_t bank = currentOpcode_ == 0x85 ? 1u : 0u;
+    environment_.state->FUN_0025d1c0_arm_fade(bank, static_cast<std::uint16_t>(fadeRate), packedRgb);
+    trace_.recordFadeArmed(bank, fadeRate, packedRgb);
+    return 0;
+  }
+
+  // 0x86 (FUN_00260ca0): step the fullscreen fade and return whether it has
+  // finished. A tail call into FUN_0025d238 with no operands. The scene's
+  // transition branch spins on this until it reports done, so a port that
+  // stubbed it would loop forever on the panel.
+  std::uint32_t SceneCommandInterpreter::FUN_00260ca0_advance_fade()
+  {
+    if (halted_ || environment_.state == nullptr)
+    {
+      return 0;
+    }
+    return environment_.state->FUN_0025d238_step_fade(environment_.frameTicks);
+  }
+
   // 0xBC (FUN_00263e30): increment a byte counter, capped at 99, and return
   // whether it still had room. Event scripts use it as a one-shot gate.
   std::uint32_t SceneCommandInterpreter::FUN_00263e30_increment_event_counter()
@@ -1110,6 +1222,23 @@ namespace orphen::ported::script
     case 0x61:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
       return FUN_0025f4b8_test_lead_flag_word();
+
+    case 0x6D:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_0025fd10_set_player_lock();
+
+    case 0x85:
+    case 0x87:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00260c20_dispatch_rgb_event();
+
+    case 0x86:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00260ca0_advance_fade();
+
+    case 0xE1:
+      trace_.recordOpcode(opcode, streamOffset_ - 1, true);
+      return FUN_00265000_boot_party_for_battle();
 
     case 0x9D:
       trace_.recordOpcode(opcode, streamOffset_ - 1, true);
