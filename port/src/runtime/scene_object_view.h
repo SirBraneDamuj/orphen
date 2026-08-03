@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ported/model/psc3_model.h"
+#include "ported/model/psc3_skeleton.h"
 #include "ported/psm2/psm2_runtime.h"
 
 #include <cstdint>
@@ -35,6 +36,15 @@ namespace orphen::port
     int textureSlot = -1;
     // Entity +0xAC, the pose column every bone's track is indexed by.
     std::uint16_t poseColumn = 0;
+    // One world matrix per submesh, already through FUN_0020d188's filter.
+    //
+    // This is built during the simulation step rather than at draw time, which
+    // it has to be: the filter carries state from frame to frame, so building
+    // it from render() would advance the animation once per drawn frame instead
+    // of once per simulation frame, and not at all when running headless. The
+    // original builds it in FUN_0020c5a8, inside the frame function, for the
+    // same reason. Empty when the entity has no model.
+    std::vector<orphen::ported::model::Matrix4> bonePalette;
     // The rest of what FUN_0020cdc0 builds the root matrix from: +0x14C scales
     // x and y, +0x150 scales z, and +0x154 / +0x158 are pitch and roll on top
     // of the facing in +0x5C. All of them are 1/1/0/0 for every entity in

@@ -346,7 +346,7 @@ namespace orphen::port
 
     applySceneMarkerSpawn();
     advanceEntityAnimations(orphen::ported::kNominalFrameTicks);
-    publishSceneObjectViews();
+    publishSceneObjectViews(orphen::ported::kNominalFrameTicks);
 
     std::cout << "[scr] script " << decoded.size() << " bytes, init 0x" << std::hex
               << sceneScript_.entryOffset(orphen::ported::script::SceneScriptEntry::Init)
@@ -451,15 +451,15 @@ namespace orphen::port
     }
   }
 
-  // Resolves an entity's model and the pose column it should be drawn at.
+  // Resolves an entity's model and builds its bone palette for this frame.
   //
-  // The column is entity +0xAC in the original, which FUN_00225c90 walks along
-  // the animation's timeline. That walk is not ported yet, so the column comes
-  // straight from the first timeline entry of whichever animation the entity's
-  // behavior has selected -- a correct static pose per animation rather than a
-  // correct moving one.
+  // The column is entity +0xAC, which FUN_00225c90 walks along the animation's
+  // timeline; the palette is FUN_0020c810's bone walk with FUN_0020d188's
+  // filter, whose state lives in DAT_003ffe00_poseFilters_ and is why this
+  // belongs to the simulation step rather than the draw.
   void PortRuntime::attachModel(SceneObjectView &view,
-                                const orphen::ported::entity::OriginalEntity &entity)
+                                const orphen::ported::entity::OriginalEntity &entity,
+                                std::uint32_t frameTicks)
   {
     const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
     if (binding == nullptr || binding->model == nullptr)
@@ -469,6 +469,22 @@ namespace orphen::port
     view.model = binding->model;
     view.textureSlot = binding->textureSlot;
     view.poseColumn = entity.poseColumnAc;
+
+    orphen::ported::model::PoseFilterInputs inputs;
+    // FUN_0020d378 line 51 takes the blend ratio straight off entity +0x13C.
+    inputs.blendRatio1c8 = entity.animationBlend13c;
+    inputs.smoothRate1cc = orphen::ported::model::FUN_0020c810_smoothing_rate(
+        *binding->model, binding->model->blob, entity.animationA0);
+    inputs.frameTicks = frameTicks;
+    // FUN_0020c810 line 122: entity +0x08 bit 0x200 turns the smoothing off.
+    inputs.skipSmoothing1fe = (entity.halfword08 & 0x0200) != 0;
+
+    view.bonePalette = orphen::ported::model::FUN_0020d618_build_palette(
+        *binding->model, binding->model->blob, entity.poseColumnAc,
+        orphen::ported::model::FUN_0020cdc0_entity_root(
+            {view.position.x, view.position.y, view.position.z}, view.facingRadians,
+            view.rotationX154, view.rotationY158, view.scale, view.scaleZ150),
+        DAT_003ffe00_poseFilters_[view.slot], inputs);
   }
 
   // FUN_00225c90 for every entity that has a model, run before the views are
@@ -495,7 +511,7 @@ namespace orphen::port
         });
   }
 
-  void PortRuntime::publishSceneObjectViews()
+  void PortRuntime::publishSceneObjectViews(std::uint32_t frameTicks)
   {
     SceneObjectViewList views;
 
@@ -520,7 +536,7 @@ namespace orphen::port
       view.rotationX154 = lead.rotationX154;
       view.rotationY158 = lead.rotationY158;
       view.drawDebugBox = false;
-      attachModel(view, lead);
+      attachModel(view, lead, frameTicks);
       views.push_back(view);
     }
 
@@ -541,7 +557,7 @@ namespace orphen::port
           view.scaleZ150 = entity.scaleZ150;
           view.rotationX154 = entity.rotationX154;
           view.rotationY158 = entity.rotationY158;
-          attachModel(view, entity);
+          attachModel(view, entity, frameTicks);
           views.push_back(view);
         });
     mapViewer_.setSceneObjectViews(std::move(views));
@@ -1343,7 +1359,7 @@ namespace orphen::port
       // Behaviors can move and turn entities, so the render views are rebuilt
       // every frame now rather than only at load.
       advanceEntityAnimations(frameTicks);
-      publishSceneObjectViews();
+      publishSceneObjectViews(frameTicks);
 
       const auto &leadState = leadPlayer_.viewState();
       orphen::ported::camera::FieldCameraInput cameraInput;
@@ -1429,6 +1445,10 @@ namespace orphen::port
     }
 
     entityPool_.reset();
+    for (auto &filter : DAT_003ffe00_poseFilters_)
+    {
+      filter.reset();
+    }
     mapViewer_.setSceneObjectViews({});
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
     leadPlayer_.resetToMap(*loadedMap, spawnOverride_);

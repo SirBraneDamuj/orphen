@@ -75,7 +75,179 @@ namespace orphen::ported::model
     {
       return boneIndex < model.submeshes.size() ? model.submeshes[boneIndex].sectionAOffset : 0;
     }
+
+    // ctx+0x174 .. ctx+0x18C, which is the order FUN_0020d188's field index and
+    // FUN_0020cf28's argument list both use.
+    std::array<float, kPoseFieldCount> poseToFields(const BonePose &pose)
+    {
+      return {pose.translation.x, pose.translation.y, pose.translation.z, pose.scale,
+              pose.rotationRadians.x, pose.rotationRadians.y, pose.rotationRadians.z};
+    }
+
+    BonePose fieldsToPose(const std::array<float, kPoseFieldCount> &fields)
+    {
+      BonePose pose;
+      pose.translation = Vec3{fields[0], fields[1], fields[2]};
+      pose.scale = fields[3];
+      pose.rotationRadians = Vec3{fields[4], fields[5], fields[6]};
+      pose.posed = true;
+      return pose;
+    }
+
+    // FUN_0020d618 lines 31-37. A bone whose sample is the 999.0 marker does not
+    // pop to its parent: the fields are reset to an identity transform and the
+    // filter walks the bone back to it. Composing that identity and multiplying
+    // by the parent is the same matrix the original's copy-the-parent fast path
+    // produces, so only the transition differs, and only for the better.
+    constexpr std::array<float, kPoseFieldCount> kIdentityFields{
+        0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+
+    // FUN_0020d618 line 40-42: fields 4, 5 and 6 take the angle path.
+    constexpr bool fieldIsAngle(std::size_t field) { return field >= 4; }
   } // namespace
+
+  void EntityPoseFilter::reset()
+  {
+    for (auto &bone : bones)
+    {
+      bone = BoneFilterState{};
+    }
+  }
+
+  float FUN_00216690_wrap_angle(float angle)
+  {
+    for (int iteration = 0; iteration < 16; ++iteration)
+    {
+      if (angle > kDAT_00352188_pi)
+      {
+        angle -= kDAT_0035218c_twoPi;
+      }
+      else if (angle >= -kDAT_00352188_pi)
+      {
+        return angle;
+      }
+      else
+      {
+        angle += kDAT_0035218c_twoPi;
+      }
+    }
+    return angle;
+  }
+
+  float FUN_0020d188_filter_field(BoneFilterState &state,
+                                  std::size_t field,
+                                  float sampled,
+                                  bool isAngle,
+                                  const PoseFilterInputs &inputs)
+  {
+    if (!state.seeded)
+    {
+      state.target[field] = sampled;
+      state.smoothed[field] = sampled;
+      return sampled;
+    }
+
+    float target = state.target[field];
+    const float previousOutput = state.smoothed[field];
+
+    // Stage 1: blend the freshly sampled key into the stored target. Both 1.0
+    // and 0.0 snap -- the original tests them separately but neither branch
+    // touches the sampled value, so it is stored as-is. A ratio of 0 freezing
+    // the pose forever is presumably what that guards against.
+    if (target != sampled)
+    {
+      const float ratio = inputs.blendRatio1c8;
+      if (ratio == 1.0f || ratio == 0.0f)
+      {
+        target = sampled;
+      }
+      else
+      {
+        if (!isAngle)
+        {
+          target = target + (sampled - target) * ratio;
+        }
+        else
+        {
+          target = target + FUN_002166e8_angle_delta(target, sampled) * ratio;
+          // A single unrolled wrap, not FUN_00216690's loop: the step cannot
+          // leave (-3pi, 3pi) so one correction is always enough.
+          if (target > kDAT_00352188_pi)
+          {
+            target -= kDAT_0035218c_twoPi;
+          }
+          else if (target < -kDAT_00352188_pi)
+          {
+            target += kDAT_0035218c_twoPi;
+          }
+        }
+      }
+    }
+    state.target[field] = target;
+
+    // Stage 2: chase the target. Entities flagged +0x1FE skip it entirely and
+    // take the target as the output; a short frame (DAT_003555bc at or below
+    // 0x10) runs no iterations and holds the previous output instead. Those are
+    // different outcomes and the original distinguishes them.
+    float output = target;
+    if (!inputs.skipSmoothing1fe)
+    {
+      if (inputs.frameTicks < 0x11u)
+      {
+        output = previousOutput;
+      }
+      else
+      {
+        float current = previousOutput;
+        for (std::uint32_t step = 0x10; step < inputs.frameTicks; step += 0x20)
+        {
+          if (!isAngle)
+          {
+            current = current + (target - current) * inputs.smoothRate1cc;
+          }
+          else
+          {
+            current = current + FUN_002166e8_angle_delta(current, target) * inputs.smoothRate1cc;
+            if (current > kDAT_00352188_pi)
+            {
+              current -= kDAT_0035218c_twoPi;
+            }
+            else if (current < -kDAT_00352188_pi)
+            {
+              current += kDAT_0035218c_twoPi;
+            }
+          }
+        }
+        output = current;
+      }
+    }
+
+    state.smoothed[field] = output;
+    return output;
+  }
+
+  float FUN_0020c810_smoothing_rate(const Psc3Model &model,
+                                    std::span<const std::uint8_t> blob,
+                                    std::uint16_t animationId)
+  {
+    const std::size_t table = model.animationTableOffset;
+    if (table == 0)
+    {
+      return 1.0f;
+    }
+    const std::size_t record = table + static_cast<std::size_t>(animationId) * 8;
+    if (!fits(blob, record, 8))
+    {
+      return 1.0f;
+    }
+    const float ticks = static_cast<float>(blob[record + 4]);
+    if (ticks <= 10.0f)
+    {
+      return 1.0f;
+    }
+    const float rate = 10.0f / ticks;
+    return rate > 1.0f ? 1.0f : rate;
+  }
 
   Matrix4 identityMatrix()
   {
@@ -241,6 +413,60 @@ namespace orphen::ported::model
         continue;
       }
       palette[bone] = multiply(FUN_0020cf28_compose_local(pose), parentMatrix);
+    }
+    return palette;
+  }
+
+  std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
+                                                  std::span<const std::uint8_t> blob,
+                                                  std::uint16_t poseColumn,
+                                                  const Matrix4 &root,
+                                                  EntityPoseFilter &filter,
+                                                  const PoseFilterInputs &inputs)
+  {
+    std::vector<Matrix4> palette(model.submeshes.size(), root);
+    for (const std::uint8_t bone : model.boneOrder)
+    {
+      if (bone >= palette.size())
+      {
+        continue;
+      }
+      const int parent = model.submeshes[bone].parentIndex;
+      const Matrix4 &parentMatrix =
+          (parent >= 0 && static_cast<std::size_t>(parent) < palette.size())
+              ? palette[static_cast<std::size_t>(parent)]
+              : root;
+
+      // Past the bank's 42 blocks there is nowhere to keep the state, which is
+      // also true of the original -- it would be writing into the next slot.
+      // Falling back to the unfiltered compose at least draws the right pose.
+      if (bone >= kMaxFilteredBones)
+      {
+        const BonePose pose = FUN_0020d378_sample_bone(model, blob, bone, poseColumn);
+        palette[bone] = pose.posed ? multiply(FUN_0020cf28_compose_local(pose), parentMatrix)
+                                   : parentMatrix;
+        continue;
+      }
+
+      BoneFilterState &state = filter.bones[bone];
+      const BonePose sampled = FUN_0020d378_sample_bone(model, blob, bone, poseColumn);
+      const std::array<float, kPoseFieldCount> fields =
+          sampled.posed ? poseToFields(sampled) : kIdentityFields;
+
+      // FUN_0020d618 lines 39-45 calls the filter in this order, scale first.
+      // Order matters only in that it is the original's; the fields do not
+      // interact.
+      std::array<float, kPoseFieldCount> filtered{};
+      for (const std::size_t field : {std::size_t{3}, std::size_t{4}, std::size_t{5},
+                                      std::size_t{6}, std::size_t{0}, std::size_t{1},
+                                      std::size_t{2}})
+      {
+        filtered[field] =
+            FUN_0020d188_filter_field(state, field, fields[field], fieldIsAngle(field), inputs);
+      }
+      state.seeded = true;
+
+      palette[bone] = multiply(FUN_0020cf28_compose_local(fieldsToPose(filtered)), parentMatrix);
     }
     return palette;
   }

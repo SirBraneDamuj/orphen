@@ -498,9 +498,14 @@ namespace orphen::harness
         return;
       }
 
-      const std::vector<orphen::ported::model::Matrix4> palette =
-          orphen::ported::model::FUN_0020d618_build_palette(model, model.blob, object.poseColumn,
-                                                            entityRootMatrix(object));
+      // Built during the simulation step, in PortRuntime::attachModel, because
+      // FUN_0020d188's filter is stateful across frames. Anything published
+      // without one is a model the pose walk could not reach.
+      const std::vector<orphen::ported::model::Matrix4> &palette = object.bonePalette;
+      if (palette.empty())
+      {
+        return;
+      }
 
       const unsigned int texture =
           (object.textureSlot >= 0 &&

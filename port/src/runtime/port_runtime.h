@@ -18,10 +18,12 @@
 #include "ported/render/original_map_visibility.h"
 #include "ported/render/original_view_projection.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <vector>
 
 namespace orphen::port
 {
@@ -98,6 +100,15 @@ namespace orphen::port
     orphen::ported::entity::ActorDispatchTable actorDispatchTable_;
     orphen::ported::entity::ActorTrace actorTrace_;
     EntityModelStore modelStore_;
+    // FUN_0020c5a8 lines 74-75: 0x003FFE00 + slot * 0xA80, one block per pool
+    // slot. FUN_0020d188's two filters read and write it across frames, so it
+    // is runtime state and not something the pose sampler can derive.
+    //
+    // Heap, not an array member: the original's bank is 688 KB of BSS, and
+    // PortRuntime is a stack local in main().
+    std::vector<orphen::ported::model::EntityPoseFilter> DAT_003ffe00_poseFilters_ =
+        std::vector<orphen::ported::model::EntityPoseFilter>(
+            orphen::ported::entity::kEntitySlotCount);
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
@@ -118,9 +129,11 @@ namespace orphen::port
 
     void loadExecutable(const PortRuntimeConfig &config);
     void runSceneScript();
-    void publishSceneObjectViews();
+    void publishSceneObjectViews(std::uint32_t frameTicks);
     void advanceEntityAnimations(std::uint32_t frameTicks);
-    void attachModel(SceneObjectView &view, const orphen::ported::entity::OriginalEntity &entity);
+    void attachModel(SceneObjectView &view,
+                     const orphen::ported::entity::OriginalEntity &entity,
+                     std::uint32_t frameTicks);
     void applySceneMarkerSpawn();
     void printScriptReport() const;
     void printActorReport() const;

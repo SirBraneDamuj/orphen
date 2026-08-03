@@ -33,13 +33,13 @@
 //   local = Scale * RotZ(-rz) * RotX(-rx) * RotY(-ry) * Translate(t)
 //   world = local * parentWorld
 //
-// Not modelled here: FUN_0020d188, and the scripted bone override table at
-// DAT_004a7e00 that FUN_0020d378 checks first.
+// Not modelled here: the scripted bone override table at DAT_004a7e00 that
+// FUN_0020d378 checks first.
 //
-// FUN_0020d188 is the missing half of the animation and it is worth writing
-// down, because it also explains why the EE dump's bone matrices never
-// reconciled with a straight compose of the sampled keys. It is *two* filters
-// per field, both stateful per entity, per bone, per field:
+// FUN_0020d188 is the other half of the animation, and it explains why the EE
+// dump's bone matrices never reconciled with a straight compose of the sampled
+// keys -- the drawn pose is filtered, not raw. It is *two* filters per field,
+// both stateful per entity, per bone, per field:
 //
 //   stage 1, keyframe blend
 //     target = stored_target + (sampled - stored_target) * entity+0x13C
@@ -57,17 +57,25 @@
 // 0..3 interpolate linearly. That per-field mode flag is what identified the
 // rotations in the first place.
 //
-// **The state lives in the second matrix palette.** FUN_0020d378 sets
-// ctx+0x164 = ctx+0x154 + bone*0x40, and ctx+0x154 is the bank at 0x003FFE00 --
-// each bone's 0x40 block holds seven smoothed values at +0x00 and seven targets
-// at +0x20. That bank reads as scratch when you expect a matrix palette in it,
-// which is exactly how it looked when this port first went hunting through the
-// dump for one.
+// **The state lives beside the matrix palette**, and FUN_0020c5a8 lines 74-75
+// give both banks at once:
 //
-// Porting it needs somewhere to keep 14 floats per bone per entity across
-// frames, which nothing in the port has yet -- the pose path is currently a
-// pure function of (model, column). Until then keyframes snap rather than
-// interpolate: the timing is right, the motion between poses is not.
+//   ctx+0x154 = 0x003FFE00 + slot * 0xA80   filter state
+//   ctx+0x158 = 0x00357E00 + slot * 0xA80   the matrix palette
+//
+// so both are indexed by pool slot, 256 slots each, packed end to end
+// (0x357E00 + 256*0xA80 == 0x3FFE00, and 0x3FFE00 + 256*0xA80 == 0x4A7E00,
+// where the scripted override table begins). 0xA80 / 0x40 = 42 bones, and
+// FUN_0020d378's ctx+0x164 = ctx+0x154 + bone*0x40 splits each bone's block
+// into seven smoothed values at +0x00 and seven targets at +0x20.
+//
+// **The previous pose column, entity +0xAE, is not part of this.** An earlier
+// reading had the sampler blending between +0xAE and +0xAC; FUN_0020d378
+// line 63 indexes the track by +0xAC alone, and the stored target is what
+// stands in for where the pose came from. +0x13C is not elapsed/total either --
+// FUN_00225c90 line 132 makes it frameTicks/remaining, so the blend rate rises
+// as the keyframe's deadline approaches and reaches exactly 1.0 on the last
+// frame. It is a reach-the-target-by-the-deadline filter, not a lerp.
 
 #include "ported/model/psc3_model.h"
 
@@ -153,13 +161,95 @@ namespace orphen::ported::model
                                    float scaleXY14c,
                                    float scaleZ150);
 
+  // DAT_00352188 / DAT_0035218c, read out of s01_e24.bin. The game's pi is
+  // 3.141592025756836, a hair short of the real one, and every wrap in the pose
+  // path uses this pair rather than a computed constant.
+  inline constexpr float kDAT_00352188_pi = 3.141592025756836f;
+  inline constexpr float kDAT_0035218c_twoPi = 6.283184051513672f;
+  // DAT_0035205c / DAT_00352064 / DAT_00352068: three copies of 999.0, the
+  // "this bone has no transform" marker.
+  inline constexpr float kDAT_00352068_unposed = 999.0f;
+
+  // FUN_00216690: fold an angle back into [-pi, pi], at most 16 times. The
+  // decompiler types both this and FUN_002166e8 as void; the value comes back
+  // in $f0 and every caller uses it as a float.
+  float FUN_00216690_wrap_angle(float angle);
+
+  // FUN_002166e8: the signed difference from `from` to `to`, wrapped.
+  inline float FUN_002166e8_angle_delta(float from, float to)
+  {
+    return FUN_00216690_wrap_angle(to - from);
+  }
+
+  // 0xA80 / 0x40. A model with more bones than this cannot be posed by the
+  // original at all -- it would run into the next slot's block.
+  inline constexpr std::size_t kMaxFilteredBones = 42;
+  inline constexpr std::size_t kPoseFieldCount = 7;
+
+  // One bone's 0x40 block. Field order is the ctx+0x174 order, which is what
+  // FUN_0020d188's field index means: 0..2 translation, 3 scale, 4..6 rotation.
+  struct BoneFilterState
+  {
+    std::array<float, kPoseFieldCount> smoothed{}; // +0x00
+    std::array<float, kPoseFieldCount> target{};   // +0x20
+    // Not in the original. Its bank is 688 KB of BSS that no map load clears,
+    // so a freshly drawn entity filters out of whatever the previous occupant
+    // of its slot left behind -- stale, but never far from a plausible pose.
+    // Starting from zeroes instead would collapse a model to a point and grow
+    // it back over the first keyframe, so the port snaps the first sample.
+    bool seeded = false;
+  };
+
+  // One entity's 0xA80 block, the port's stand-in for 0x003FFE00 + slot*0xA80.
+  struct EntityPoseFilter
+  {
+    std::array<BoneFilterState, kMaxFilteredBones> bones{};
+    void reset();
+  };
+
+  // What FUN_0020c810 and FUN_0020d378 hand the filter, gathered up because the
+  // port has no render context struct to hang them off.
+  struct PoseFilterInputs
+  {
+    float blendRatio1c8 = 1.0f;  // entity +0x13C, via FUN_0020d378
+    float smoothRate1cc = 1.0f;  // FUN_0020c810 lines 129-139
+    std::uint32_t frameTicks = 0x20; // DAT_003555bc
+    bool skipSmoothing1fe = false;   // entity +0x08 bit 0x200, or bit 0x10
+  };
+
+  // FUN_0020d188 for one field. Reads and writes `state`.
+  float FUN_0020d188_filter_field(BoneFilterState &state,
+                                  std::size_t field,
+                                  float sampled,
+                                  bool isAngle,
+                                  const PoseFilterInputs &inputs);
+
+  // FUN_0020c810 lines 129-139: byte +4 of the animation's 8-byte record is a
+  // smoothing time constant in ticks. At or below 10 there is no smoothing;
+  // above it the per-frame rate is 10/b, clamped to 1.0.
+  float FUN_0020c810_smoothing_rate(const Psc3Model &model,
+                                    std::span<const std::uint8_t> blob,
+                                    std::uint16_t animationId);
+
   // FUN_0020c810's bone walk plus FUN_0020d618's recursion: one world matrix per
   // submesh, in the model's own bone order. Bones the traversal never reaches
   // keep `root`.
+  //
+  // The filtered overload is the real path. The one without a filter composes
+  // the sampled keys directly, which is what the model report wants -- it asks
+  // what a column looks like, not what an entity that has been standing there
+  // for six frames looks like.
   std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
                                                   std::span<const std::uint8_t> blob,
                                                   std::uint16_t poseColumn,
                                                   const Matrix4 &root);
+
+  std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
+                                                  std::span<const std::uint8_t> blob,
+                                                  std::uint16_t poseColumn,
+                                                  const Matrix4 &root,
+                                                  EntityPoseFilter &filter,
+                                                  const PoseFilterInputs &inputs);
 
   // How many pose columns a bone's track has, bounded by the blob. Used to keep
   // a column index in range while the timeline walk is not ported.
