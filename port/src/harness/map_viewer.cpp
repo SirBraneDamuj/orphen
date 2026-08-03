@@ -1,6 +1,7 @@
 #include "harness/map_viewer.h"
 
 #include "ported/model/psc3_skeleton.h"
+#include "ported/render/original_entity_draw.h"
 
 #include <string>
 
@@ -814,15 +815,34 @@ namespace orphen::harness
     }
 
     // Back to front over the depth buckets the visibility pass produced.
+    // Both lists are ordered far to near by bucket, so this walks them
+    // together the way the original walks its one shared bucket table: an
+    // entity is drawn at its depth among the map's primitives, not after them.
     void drawMap(const orphen::ported::psm2::Psm2RuntimeState &map,
                  const std::vector<unsigned int> &textureIds,
                  const std::vector<orphen::ported::render::MapDrawItem> &drawList,
-                 bool cullingEnabled)
+                 bool cullingEnabled,
+                 const orphen::port::SceneObjectViewList &objects,
+                 const std::vector<orphen::ported::render::EntityDrawItem> &entityDrawList,
+                 const std::vector<unsigned int> &slotTextures)
     {
+      std::size_t entityCursor = 0;
+      const auto drawEntitiesUpTo = [&](int bucket) {
+        while (entityCursor < entityDrawList.size() &&
+               entityDrawList[entityCursor].depthBucket <= bucket)
+        {
+          drawObjectModel(objects[entityDrawList[entityCursor].viewIndex], slotTextures);
+          ++entityCursor;
+        }
+      };
+
       for (const auto &item : drawList)
       {
+        drawEntitiesUpTo(item.depthBucket);
         drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade), cullingEnabled);
       }
+      // Anything nearer than the last map primitive, plus the blended bucket.
+      drawEntitiesUpTo(orphen::ported::render::entityDraw::kBlendedBucket);
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
@@ -1275,6 +1295,16 @@ namespace orphen::harness
 
     applyFogState(useOriginalCamera);
 
+    // Sorted here rather than on the simulation step, because unlike the map's
+    // fade byte nothing about it is per-frame state -- it is a pure function of
+    // the camera and the entity positions, and it must not run headless.
+    std::vector<orphen::ported::render::EntityDrawItem> entityDrawList;
+    if (renderCamera_.has_value() && !sceneObjectViews_.empty())
+    {
+      entityDrawList = orphen::ported::render::FUN_0020eec0_buildEntityDrawList(sceneObjectViews_,
+                                                                                *renderCamera_);
+    }
+
     if (!useOriginalCamera)
     {
       drawGrid(renderCameraDistance);
@@ -1283,11 +1313,15 @@ namespace orphen::harness
     {
       if (useOriginalCamera)
       {
-        drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_);
+        drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_,
+                sceneObjectViews_, entityDrawList, slotTextureIds_);
       }
       else
       {
+        // The free viewer has no depth-sorted list to merge into, so models go
+        // out unsorted after the map and lean on the depth buffer.
         drawMapUnsorted(*map_, uploadedTextureIds_);
+        drawObjectModels(sceneObjectViews_, slotTextureIds_);
       }
     }
     glDisable(GL_FOG);
@@ -1299,7 +1333,6 @@ namespace orphen::harness
     if (!sceneObjectViews_.empty())
     {
       glEnable(GL_DEPTH_TEST);
-      drawObjectModels(sceneObjectViews_, slotTextureIds_);
       drawSceneObjects(sceneObjectViews_);
     }
 
