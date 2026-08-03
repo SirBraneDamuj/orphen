@@ -62,6 +62,10 @@ namespace orphen::ported::entity
     // +0x94: FUN_00266240's last argument, a spawn parameter whose meaning is
     // per-type. Type 0x3A repurposes it as "this entity has ticked once".
     std::uint8_t spawnParam94 = 0;
+    // +0x95: the byte next to it, object register 0x11. s01_e024's init writes it
+    // once per party member. FUN_0025c8f8 writes it unsigned and FUN_0025c548
+    // reads it back *signed*, which is the pair's only asymmetry.
+    std::uint8_t byte95 = 0;
     // +0x98: index of the map placement record this entity was built from.
     // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.
     std::int32_t placementRecordIndex98 = -1;

@@ -9,6 +9,7 @@
 #include "ported/script/scene_command_interpreter.h"
 
 #include "ported/entity/actor_frame_update.h"
+#include "ported/script/object_registers.h"
 
 #include <cmath>
 
@@ -32,36 +33,11 @@ namespace orphen::ported::script
     // event-flag space: entity +0x198 = param + 0x400.
     constexpr std::uint32_t kChestFlagBase = 0x400;
 
-    // FUN_00216690 (0x00216690): wrap an angle into [-pi, pi] by repeated
-    // addition, capped at 16 iterations so a wild input cannot spin forever.
-    // The constants are DAT_00352188 / DAT_0035218c / DAT_00352190 read out of
-    // the retail executable; note they are a slightly short pi, not M_PI, and
-    // that 2*pi is stored separately rather than derived, so this is not exactly
-    // fmod. Both placement paths apply it and the port previously did not --
-    // invisible to a cos/sin, but it matters to the opcodes that read +0x5C back.
-    constexpr float kPi00352188 = 3.141592025756836f;
-    constexpr float kTwoPi0035218c = 6.283184051513672f;
-    constexpr float kNegPi00352190 = -3.141592025756836f;
-
-    float FUN_00216690_wrapAngle(float radians)
-    {
-      for (int iteration = 0; iteration < 0x10; ++iteration)
-      {
-        if (radians > kPi00352188)
-        {
-          radians -= kTwoPi0035218c;
-        }
-        else if (radians >= kNegPi00352190)
-        {
-          return radians;
-        }
-        else
-        {
-          radians += kTwoPi0035218c;
-        }
-      }
-      return radians;
-    }
+    // FUN_00216690 now lives in object_registers.* because the register writes
+    // need it too. Both placement paths apply it and the port previously did not
+    // -- invisible to a cos/sin, but it matters to the opcodes that read +0x5C
+    // back.
+    using orphen::ported::script::FUN_00216690_wrapAngle;
   } // namespace
 
   std::uint32_t SceneCommandInterpreter::haltUnimplemented(std::uint16_t opcode)
@@ -590,8 +566,8 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // FUN_0025d6c0 selects the object the register bank belongs to. Index 0x100
-    // keeps whatever was already current.
+    // FUN_0025d6c0 selects the object the register writes go through. Index
+    // 0x100 keeps whatever was already current.
     std::size_t bank = SceneScriptState::kObjectRegisterBanks - 1;
     if (selector != orphen::ported::entity::kCurrentEntityIndex)
     {
@@ -602,18 +578,45 @@ namespace orphen::ported::script
       bank = currentEntity_;
     }
 
-    std::uint32_t &target = environment_.state->objectRegister(bank, registerIndex);
+    // The read-modify-write opcodes need the current value first, and every one
+    // of them reads through FUN_0025c548 -- the same field, not a shadow copy.
+    auto *entity = currentEntity_ < orphen::ported::entity::kEntitySlotCount && environment_.entityPool != nullptr
+                       ? &environment_.entityPool->slot(currentEntity_)
+                       : nullptr;
+
+    std::uint32_t current = 0;
+    const bool modelled = entity != nullptr &&
+                          FUN_0025c548_read_object_register(*entity, registerIndex, current);
+    if (!modelled)
+    {
+      current = environment_.state->objectRegister(bank, registerIndex);
+    }
+
+    std::uint32_t result = current;
     switch (currentOpcode_)
     {
-    case 0x77: target = operand; break;
-    case 0x78: target = target & operand; break;
-    case 0x79: target = target | operand; break;
-    case 0x7A: target = target ^ operand; break;
-    case 0x7B: target = static_cast<std::uint32_t>(static_cast<std::int32_t>(target) + static_cast<std::int32_t>(operand)); break;
-    case 0x7C: target = static_cast<std::uint32_t>(static_cast<std::int32_t>(target) - static_cast<std::int32_t>(operand)); break;
+    case 0x77: result = operand; break;
+    case 0x78: result = current & operand; break;
+    case 0x79: result = current | operand; break;
+    case 0x7A: result = current ^ operand; break;
+    case 0x7B: result = static_cast<std::uint32_t>(static_cast<std::int32_t>(current) + static_cast<std::int32_t>(operand)); break;
+    case 0x7C: result = static_cast<std::uint32_t>(static_cast<std::int32_t>(current) - static_cast<std::int32_t>(operand)); break;
     default: return 0;
     }
-    return target;
+
+    // Write to the entity field when the port models it, and to the side array
+    // otherwise. The unmodelled case is counted rather than dropped quietly, so
+    // --scr-report names the field a scene actually wanted.
+    trace_.recordObjectRegisterAccess(registerIndex, true);
+    if (entity == nullptr || !FUN_0025c8f8_write_object_register(*entity, registerIndex, result))
+    {
+      environment_.state->objectRegister(bank, registerIndex) = result;
+      if (objectRegisterFieldName(registerIndex) != nullptr)
+      {
+        trace_.recordUnmodelledObjectRegister(registerIndex, entity == nullptr);
+      }
+    }
+    return result;
   }
 
   // 0x76 (FUN_00260318): the read half of the object register family -- select
@@ -636,6 +639,22 @@ namespace orphen::ported::script
     if (currentEntity_ < orphen::ported::entity::kEntitySlotCount)
     {
       bank = currentEntity_;
+    }
+
+    trace_.recordObjectRegisterAccess(registerIndex, false);
+    if (currentEntity_ < orphen::ported::entity::kEntitySlotCount && environment_.entityPool != nullptr)
+    {
+      std::uint32_t value = 0;
+      if (FUN_0025c548_read_object_register(environment_.entityPool->slot(currentEntity_), registerIndex, value))
+      {
+        return value;
+      }
+    }
+    // An index with no case at all reads 0 in the original too, so only a real
+    // gap -- a named field the port has not modelled -- counts against us.
+    if (objectRegisterFieldName(registerIndex) != nullptr)
+    {
+      trace_.recordUnmodelledObjectRegister(registerIndex, currentEntity_ >= orphen::ported::entity::kEntitySlotCount);
     }
     return environment_.state->objectRegister(bank, registerIndex);
   }

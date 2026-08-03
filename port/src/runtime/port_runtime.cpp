@@ -1,6 +1,7 @@
 #include "runtime/port_runtime.h"
 
 #include "runtime/psm2_ground_query.h"
+#include "ported/script/object_registers.h"
 
 #include <cmath>
 #include <iomanip>
@@ -462,6 +463,28 @@ namespace orphen::port
     std::cout << "object script slots occupied: " << sceneScript_.occupiedObjectScriptSlots()
               << " of " << orphen::ported::script::kObjectScriptSlotCount
               << (runScriptTick_ ? " (ticked)" : " (not ticked; pass --scr-tick)") << '\n';
+
+    if (!scriptTrace_.objectRegisters().empty())
+    {
+      std::cout << "object registers touched (opcodes 0x76..0x7C reach entity fields):\n";
+      for (const auto &entry : scriptTrace_.objectRegisters())
+      {
+        const char *name = orphen::ported::script::objectRegisterFieldName(entry.first);
+        std::cout << "  reg 0x" << std::hex << entry.first << std::dec << " -> "
+                  << (name ? name : "no case in the original (reads 0)")
+                  << "  reads=" << entry.second.reads << " writes=" << entry.second.writes;
+        if (entry.second.unmodelledHits != 0)
+        {
+          std::cout << "  UNMODELLED=" << entry.second.unmodelledHits;
+          if (entry.second.noEntityHits != 0)
+          {
+            std::cout << " (" << entry.second.noEntityHits << " with no object selected)";
+          }
+        }
+        std::cout << '\n';
+      }
+      std::cout << "unmodelled object register writes: " << scriptTrace_.unmodelledObjectRegisterHits() << '\n';
+    }
     std::cout << "=== end scene script report ===\n\n";
   }
 
@@ -692,6 +715,10 @@ namespace orphen::port
 
           std::cout << "  slot=" << slot
                     << " type=0x" << std::hex << entity.typeId00 << std::dec
+                    << " state=" << entity.state60
+                    << " anim=" << entity.animationA0
+                    << " facing=" << std::fixed << std::setprecision(3) << entity.facingRadians5c
+                    << std::defaultfloat
                     << " " << actorHandlerSourceName(handler.source);
           if (handler.address != 0)
           {

@@ -50,6 +50,27 @@ namespace orphen::ported::script
 
     void noteEntryRun(const std::string &name, std::uint32_t offset, bool empty);
 
+    // Opcodes 0x76..0x7C address entity fields through FUN_0025c548 /
+    // FUN_0025c8f8. An index the port has no field for still has to go
+    // somewhere, and the side array it lands in is read by nothing -- so those
+    // are counted here and named in the report rather than dropped quietly.
+    //
+    // "No case in the original" is a third, entirely different thing: indices
+    // such as 0x12, 0x24, 0x25, 0x27 and 0x31 fall into both functions' default,
+    // which writes nothing and reads zero. The port answering zero for those is
+    // exactly right, so they must not be reported as a gap.
+    struct ObjectRegisterStat
+    {
+      std::uint32_t reads = 0;
+      std::uint32_t writes = 0;
+      std::uint32_t unmodelledHits = 0;
+      std::uint32_t noEntityHits = 0; // no object was selected at all
+    };
+    void recordObjectRegisterAccess(std::uint32_t index, bool write);
+    void recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity);
+    const std::map<std::uint32_t, ObjectRegisterStat> &objectRegisters() const { return objectRegisters_; }
+    std::uint32_t unmodelledObjectRegisterHits() const;
+
     // The per-frame entry runs every frame, so it is counted rather than listed;
     // 600 identical lines in entriesRun_ would bury everything else.
     void recordTickRun() { ++tickRunCount_; }
@@ -77,6 +98,7 @@ namespace orphen::ported::script
     std::vector<std::uint16_t> preloadedResources_;
     std::vector<std::uint32_t> registeredScripts_;
     std::vector<std::string> entriesRun_;
+    std::map<std::uint32_t, ObjectRegisterStat> objectRegisters_;
     std::uint32_t tickRunCount_ = 0;
     std::uint32_t slotRunCount_ = 0;
 

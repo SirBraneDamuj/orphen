@@ -10,6 +10,7 @@ namespace orphen::ported::script
     preloadedResources_.clear();
     registeredScripts_.clear();
     entriesRun_.clear();
+    objectRegisters_.clear();
     tickRunCount_ = 0;
     slotRunCount_ = 0;
     leadTeleported_ = false;
@@ -55,6 +56,39 @@ namespace orphen::ported::script
                             return text;
                           }() +
                           (empty ? " (empty)" : ""));
+  }
+
+  void ScriptTrace::recordObjectRegisterAccess(std::uint32_t index, bool write)
+  {
+    auto &stat = objectRegisters_[index];
+    if (write)
+    {
+      ++stat.writes;
+    }
+    else
+    {
+      ++stat.reads;
+    }
+  }
+
+  void ScriptTrace::recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity)
+  {
+    auto &stat = objectRegisters_[index];
+    ++stat.unmodelledHits;
+    if (noEntity)
+    {
+      ++stat.noEntityHits;
+    }
+  }
+
+  std::uint32_t ScriptTrace::unmodelledObjectRegisterHits() const
+  {
+    std::uint32_t count = 0;
+    for (const auto &entry : objectRegisters_)
+    {
+      count += entry.second.unmodelledHits;
+    }
+    return count;
   }
 
   std::uint32_t ScriptTrace::unimplementedOpcodeCount() const
