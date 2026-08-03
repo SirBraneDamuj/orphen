@@ -4,6 +4,7 @@
 #include "ported/script/script_trace.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -23,6 +24,10 @@ namespace orphen::ported::script
   // The table itself lives in SceneScriptState, next to the rest of the
   // script-visible globals.
   constexpr std::size_t kObjectScriptSlotCount = 65;
+
+  // FUN_0025b600's divisor. Deliberately not kScriptCoordinateScale: the scene
+  // defaults block is scaled by 1000, the coordinate opcodes by 100000.
+  inline constexpr float kSceneDefaultScale = 1000.0f;
 
   // Passed to runAtOffset when no entity should be pre-selected.
   constexpr std::size_t kNoSelectedEntity = static_cast<std::size_t>(-1);
@@ -56,6 +61,13 @@ namespace orphen::ported::script
     // of halfwords. Read for the report; the port already gets its textures from
     // the MCB bundle.
     const std::vector<std::uint16_t> &texturePageIds() const { return texturePageIds_; }
+
+    // FUN_0025b600's per-scene defaults, parsed at load. The spawn is the one
+    // the game uses when you arrive without an explicit warp target -- which is
+    // what loading a map from the debug menu does. Empty when the scene carries
+    // no such block.
+    const std::optional<orphen::ported::psm2::Vec3> &sceneSpawn() const { return sceneSpawn_; }
+    const std::optional<float> &sceneDrawDistance() const { return sceneDrawDistance_; }
 
     // FUN_0025b6d0: clears the 0x4E lookup counter and runs header word 0.
     // FUN_0025b728: runs header word 1.
@@ -120,6 +132,9 @@ namespace orphen::ported::script
     std::vector<std::uint8_t> blob_;
     std::uint32_t headerWords_[kSceneScriptHeaderWordCount]{};
     std::vector<std::uint16_t> texturePageIds_;
+    std::optional<orphen::ported::psm2::Vec3> sceneSpawn_;
+    std::optional<float> sceneDrawDistance_;
+    void FUN_0025b600_read_scene_defaults();
     SceneScriptState state_;
 
     // Shared by runEntry and the slot loops.

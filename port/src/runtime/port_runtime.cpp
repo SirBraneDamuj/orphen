@@ -107,6 +107,7 @@ namespace orphen::port
     if (config.drawDistanceOverride.has_value())
     {
       mapViewer_.setDrawDistance(*config.drawDistanceOverride);
+      drawDistanceOverridden_ = true;
     }
     printScriptReport_ = config.printScriptReport;
     loadExecutable(config);
@@ -280,6 +281,16 @@ namespace orphen::port
     const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
 
     sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
+
+    // The same block that carries the spawn carries DAT_0032538c, the scene's
+    // draw distance. FUN_0022a360 seeds it to 32.0 and this overrides it per
+    // scene; --draw-distance still wins.
+    if (const auto &scriptDrawDistance = sceneScript_.sceneDrawDistance();
+        scriptDrawDistance.has_value() && !drawDistanceOverridden_)
+    {
+      mapViewer_.setDrawDistance(*scriptDrawDistance);
+    }
+
     applySceneMarkerSpawn();
     publishSceneObjectViews();
 
@@ -353,6 +364,20 @@ namespace orphen::port
     const auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap == nullptr)
     {
+      return;
+    }
+
+    // The scene's own spawn, out of the SCR header block FUN_0025b600 reads.
+    // This is what the game itself uses when you arrive without a warp target,
+    // so it beats every guess below it.
+    if (const auto &scriptSpawn = sceneScript_.sceneSpawn(); scriptSpawn.has_value())
+    {
+      leadPlayer_.resetToMap(*loadedMap, *scriptSpawn);
+      fieldCamera_.FUN_00216930_install_normal_field_defaults();
+      fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+      mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
+      mapViewer_.setFollowCameraPose(fieldCamera_.pose());
+      spawnSourceLabel_ = "scene script (FUN_0025b600)";
       return;
     }
 

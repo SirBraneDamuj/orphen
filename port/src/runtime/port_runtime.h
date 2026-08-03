@@ -90,6 +90,7 @@ namespace orphen::port
     orphen::ported::entity::ActorDispatchTable actorDispatchTable_;
     orphen::ported::entity::ActorTrace actorTrace_;
     bool runScriptTick_ = false;
+    bool drawDistanceOverridden_ = false;
     bool printActorReport_ = false;
     bool printScriptReport_ = false;
     bool printRenderReport_ = false;

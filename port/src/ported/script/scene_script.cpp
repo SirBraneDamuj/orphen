@@ -64,7 +64,58 @@ namespace orphen::ported::script
       }
     }
 
+    FUN_0025b600_read_scene_defaults();
     return true;
+  }
+
+  // FUN_0025b600 (0x0025b600), called from FUN_0022a418 with the 0x325368
+  // per-scene defaults struct.
+  //
+  // This is where a scene's **spawn point** comes from, and the port had no idea
+  // it existed. The block sits immediately after header word 6's texture page
+  // list: skip one halfword, copy sixteen halfwords, align to 4, then read four
+  // ints scaled by **1000.0** -- not the 100000.0 the coordinate opcodes use.
+  //
+  //   [0] [1] [2]  ->  struct +0x4C/+0x50/+0x54 == 0x3253B4, the *backup* spawn
+  //   [3]          ->  struct +0x24 == DAT_0032538c, the scene's draw distance
+  //
+  // FUN_0022a418 then copies the backup into DAT_00325340 when DAT_003551ec has
+  // bit 0x2000, and applies it to pool slot 0 when it has bit 1. FUN_002000c0
+  // sets 0x2001 at boot, so arriving without an explicit warp -- which is what
+  // the debug menu's map-select does -- lands on the script's own spawn. A warp
+  // from another map overrides it through FUN_0022b2c0.
+  //
+  // Verified against an EE dump of s01_e024: the block reads
+  // (-3250, -12750, 0, 32000) and the player is at (-3.25, -12.75, 0) with the
+  // draw distance at 32.0.
+  void SceneScript::FUN_0025b600_read_scene_defaults()
+  {
+    sceneSpawn_.reset();
+    sceneDrawDistance_.reset();
+
+    const std::uint32_t texturePageOffset = headerWords_[6];
+    if (texturePageOffset == 0 || texturePageOffset >= blob_.size())
+    {
+      return;
+    }
+
+    // The copy loop runs 16 times from word6 + 2, so the ints start after it.
+    std::size_t offset = texturePageOffset + 2 + 16 * 2;
+    // `puVar3 + (4 - (addr & 3)) / 2` over a halfword pointer. Note this always
+    // advances -- an already-aligned address moves on by a whole 4 bytes.
+    offset += static_cast<std::size_t>((4 - (offset & 3)) / 2) * 2;
+    if (offset + 16 > blob_.size())
+    {
+      return;
+    }
+
+    const auto readI32 = [this](std::size_t at) {
+      return static_cast<std::int32_t>(readU32(blob_, at));
+    };
+    sceneSpawn_ = orphen::ported::psm2::Vec3{static_cast<float>(readI32(offset)) / kSceneDefaultScale,
+                                             static_cast<float>(readI32(offset + 4)) / kSceneDefaultScale,
+                                             static_cast<float>(readI32(offset + 8)) / kSceneDefaultScale};
+    sceneDrawDistance_ = static_cast<float>(readI32(offset + 12)) / kSceneDefaultScale;
   }
 
   std::uint32_t SceneScript::headerWord(std::size_t index) const

@@ -368,21 +368,36 @@ Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1
 port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
 ```
 
-A scene has no spawn point of its own: `FUN_0022a418` copies the position staged
-in `DAT_00325340` into entity pool slot 0, and that was written by the *previous*
-map's warp (`FUN_0022b2c0`, reached from script opcodes `0x8B`/`0x8C`). Booting
-cold into a scene has nothing to read. See `analyzed/map_bootstrap_sequence.c`.
+**A scene does carry its own spawn point**, and it is in the SCR. `FUN_0025b600`,
+called from `FUN_0022a418` with the per-scene defaults struct at `0x325368`,
+reads a block sitting immediately after header word 6's texture page list: skip
+one halfword, copy sixteen halfwords, align to 4, then four ints scaled by
+**1000.0** -- not the 100000.0 the coordinate opcodes use.
 
-So the port picks, in order: `--spawn x,y,z`; a script teleport (`0xAB`); the
-first group 2 placement record; otherwise the walkable triangle nearest the map's
-horizontal centre. The console says which was used.
+```
+s01_e024 blob 0x614:  -3250, -12750, 0, 32000
+              /1000 = -3.25, -12.75, 0.0, 32.0
+```
 
-Group 2 records standing in for the player start is an **inference**, not
-something read out of the original. The evidence is that `s01_e024`'s init
-registers `(id 1, type 0x55)` and then runs `0x51` with group 2, and
-`FUN_0025eb48` explicitly declines to spawn type `0x55`, whose descriptor is 0.1
-by 0.1 -- so those records are authored positions that deliberately produce no
-entity, sitting in the middle of the scene's content.
+The first three are the spawn, landing at struct `+0x4C` (`0x3253B4`); the fourth
+is `DAT_0032538c`, the scene's **draw distance**, which `FUN_0022a360` seeds to
+32.0 and this overrides per scene. Both are wired up now.
+
+`FUN_0022a418` copies that backup into `DAT_00325340` when `DAT_003551ec` has bit
+`0x2000`, and applies it to pool slot 0 when it has bit `1`. `FUN_002000c0` sets
+`0x2001` at boot, so arriving *without* an explicit warp target -- which is what
+loading a map from the debug menu does -- lands on the script's own spawn. A warp
+from another map overrides it through `FUN_0022b2c0` (opcodes `0x8B`/`0x8C`).
+
+Confirmed against an EE memory dump of `s01_e024`: `DAT_00325340` and its backup
+both read (-3.25, -12.75) and pool slot 0 is there.
+
+So the port picks, in order: `--spawn x,y,z`; a script teleport (`0xAB`); **the
+scene script's own spawn**; the first group 2 placement record; otherwise the
+walkable triangle nearest the map's horizontal centre. The console says which was
+used. The group 2 fallback was previously the default and gave (-5.5, -12) on
+`s01_e024` -- 2.3 units from the real spawn -- so it is a guess, kept only for
+scenes with no defaults block.
 
 To validate the loader without opening a window:
 
