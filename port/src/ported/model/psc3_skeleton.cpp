@@ -168,21 +168,49 @@ namespace orphen::ported::model
     return pose;
   }
 
-  Matrix4 FUN_0020cf28_compose_local(const BonePose &pose)
+  Matrix4 FUN_0020cf28_compose(const Vec3 &translation,
+                               float scaleXY,
+                               float scaleZ,
+                               const Vec3 &rotationRadians,
+                               ComposeOrder order)
   {
+    // FUN_0020bb38(param_1, param_1, param_2): x and y take the first scale,
+    // z the second. Every rotation is applied negated.
     Matrix4 result = identityMatrix();
-    result[0] = pose.scale;
-    result[5] = pose.scale;
-    result[10] = pose.scale;
+    result[0] = scaleXY;
+    result[5] = scaleXY;
+    result[10] = scaleZ;
 
-    result = multiply(result, rotationZ(-pose.rotationRadians.z));
-    result = multiply(result, rotationX(-pose.rotationRadians.x));
-    result = multiply(result, rotationY(-pose.rotationRadians.y));
+    if (order == ComposeOrder::ZXY)
+    {
+      result = multiply(result, rotationZ(-rotationRadians.z));
+      result = multiply(result, rotationX(-rotationRadians.x));
+      result = multiply(result, rotationY(-rotationRadians.y));
+    }
+    else
+    {
+      result = multiply(result, rotationX(-rotationRadians.x));
+      result = multiply(result, rotationY(-rotationRadians.y));
+      result = multiply(result, rotationZ(-rotationRadians.z));
+    }
 
-    result[12] = pose.translation.x;
-    result[13] = pose.translation.y;
-    result[14] = pose.translation.z;
+    result[12] = translation.x;
+    result[13] = translation.y;
+    result[14] = translation.z;
     return result;
+  }
+
+  Matrix4 FUN_0020cdc0_entity_root(const Vec3 &position,
+                                   float facingRadians,
+                                   float rotationX154,
+                                   float rotationY158,
+                                   float scaleXY14c,
+                                   float scaleZ150)
+  {
+    return FUN_0020cf28_compose(position, scaleXY14c, scaleZ150,
+                                Vec3{rotationX154, rotationY158,
+                                     facingRadians + kfGpffff80c8_modelFacingBias},
+                                ComposeOrder::XYZ);
   }
 
   std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,

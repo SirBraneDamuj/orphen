@@ -83,8 +83,44 @@ namespace orphen::ported::model
                                     std::size_t boneIndex,
                                     std::uint16_t poseColumn);
 
-  // FUN_0020cf28's param_10 == 0 branch.
-  Matrix4 FUN_0020cf28_compose_local(const BonePose &pose);
+  // FUN_0020cf28 has two rotation orders, selected by its param_10. The bone
+  // path (FUN_0020d618) passes 0; the entity root (FUN_0020cdc0) passes 1.
+  enum class ComposeOrder
+  {
+    ZXY, // param_10 == 0
+    XYZ, // param_10 == 1
+  };
+
+  Matrix4 FUN_0020cf28_compose(const Vec3 &translation,
+                               float scaleXY,
+                               float scaleZ,
+                               const Vec3 &rotationRadians,
+                               ComposeOrder order);
+
+  inline Matrix4 FUN_0020cf28_compose_local(const BonePose &pose)
+  {
+    return FUN_0020cf28_compose(pose.translation, pose.scale, pose.scale, pose.rotationRadians,
+                                ComposeOrder::ZXY);
+  }
+
+  // fGpffff80c8, at 0x00352038. FUN_0020cdc0 adds it to entity +0x5C before
+  // building the root matrix, so a model stands a quarter turn off its facing
+  // angle -- entity facing is measured from +X, the mesh is authored along +Y.
+  //
+  // This was a guessed constant until the gp base was pinned down: fGpffff80fc
+  // is 0x0035206c, not the 0x00352060 that holds an identical copy of the same
+  // 10430.380859, and being 12 bytes out put fGpffff80c8 on an unrelated 0.9.
+  inline constexpr float kfGpffff80c8_modelFacingBias = 1.570796013f;
+
+  // FUN_0020cdc0's first branch: the entity's own world matrix. The other two
+  // branches handle an entity attached to a parent bone (+0x192 / +0x194) and
+  // are not ported.
+  Matrix4 FUN_0020cdc0_entity_root(const Vec3 &position,
+                                   float facingRadians,
+                                   float rotationX154,
+                                   float rotationY158,
+                                   float scaleXY14c,
+                                   float scaleZ150);
 
   // FUN_0020c810's bone walk plus FUN_0020d618's recursion: one world matrix per
   // submesh, in the model's own bone order. Bones the traversal never reaches

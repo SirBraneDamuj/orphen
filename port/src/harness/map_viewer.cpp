@@ -474,18 +474,9 @@ namespace orphen::harness
     // vertical axis, and scale +0x14C.
     orphen::ported::model::Matrix4 entityRootMatrix(const orphen::port::SceneObjectView &object)
     {
-      const float c = std::cos(object.facingRadians);
-      const float s = std::sin(object.facingRadians);
-      const float k = object.scale != 0.0f ? object.scale : 1.0f;
-      // World space is Z-up, so facing turns about Z.
-      orphen::ported::model::Matrix4 m = orphen::ported::model::identityMatrix();
-      m[0] = c * k;  m[1] = s * k;
-      m[4] = -s * k; m[5] = c * k;
-      m[10] = k;
-      m[12] = object.position.x;
-      m[13] = -object.position.z;
-      m[14] = object.position.y;
-      return m;
+      return orphen::ported::model::FUN_0020cdc0_entity_root(
+          {object.position.x, object.position.y, object.position.z}, object.facingRadians,
+          object.rotationX154, object.rotationY158, object.scale, object.scaleZ150);
     }
 
     // Draws one model's primitives. Vertices are transformed on the CPU by their
@@ -578,9 +569,17 @@ namespace orphen::harness
           if (subdraw != nullptr)
           {
             const std::uint16_t packed = subdraw->packedUv[corner];
-            // (U << 8) | V, 8-bit texel coordinates over a 256x256 page.
-            glTexCoord2f(static_cast<float>(packed >> 8) / 256.0f,
-                         static_cast<float>(packed & 0xFF) / 256.0f);
+            // (V << 8) | U -- low byte is U, high byte is V, 8-bit texel
+            // coordinates over a 256x256 page, no V flip.
+            //
+            // The decompiled code cannot settle the byte order: FUN_002129b8
+            // copies the halfword into the VIF packet verbatim and the split
+            // happens in the VU1 microprogram, which is not in the
+            // decompilation. This order is the one
+            // tools/resource_extract/v2/psc3_gltf.py uses, which was arrived at
+            // by looking at textured exports rather than by reading code.
+            glTexCoord2f(static_cast<float>(packed & 0xFF) / 256.0f,
+                         static_cast<float>((packed >> 8) & 0xFF) / 256.0f);
           }
           const std::size_t colourEntry = primitive.colourIndex + corner;
           if (colourEntry * 3 + 2 < model.colours.size())

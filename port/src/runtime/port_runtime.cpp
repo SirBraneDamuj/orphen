@@ -487,6 +487,9 @@ namespace orphen::port
           view.groundHeight = entity.groundHeight4c;
           view.descriptorResolved = entity.modelIndex >= 0;
           view.scale = entity.scale14c;
+          view.scaleZ150 = entity.scaleZ150;
+          view.rotationX154 = entity.rotationX154;
+          view.rotationY158 = entity.rotationY158;
           attachModel(view, entity);
           views.push_back(view);
         });
@@ -803,8 +806,15 @@ namespace orphen::port
         const auto &model = *binding->model;
         const std::uint16_t column = orphen::ported::model::firstPoseColumnForAnimation(
             model, model.blob, entity.animationA0);
-        const auto palette = orphen::ported::model::FUN_0020d618_build_palette(
-            model, model.blob, column, orphen::ported::model::identityMatrix());
+        // Same root matrix the renderer builds, so the printed bounds are in
+        // world space and can be checked against the entity's own position.
+        // This is what caught the models being drawn a basis change away from
+        // where they belong.
+        const auto root = orphen::ported::model::FUN_0020cdc0_entity_root(
+            {entity.positionX20, entity.positionZ24, entity.positionY28}, entity.facingRadians5c,
+            entity.rotationX154, entity.rotationY158, entity.scale14c, entity.scaleZ150);
+        const auto palette =
+            orphen::ported::model::FUN_0020d618_build_palette(model, model.blob, column, root);
         orphen::ported::psm2::Bounds3 posed;
         for (const auto &vertex : model.vertices)
         {
@@ -818,6 +828,11 @@ namespace orphen::port
                   << std::fixed << std::setprecision(2)
                   << "  posed=" << (posed.max.x - posed.min.x) << "x"
                   << (posed.max.y - posed.min.y) << "x" << (posed.max.z - posed.min.z)
+                  << "  at=(" << (posed.min.x + posed.max.x) * 0.5f << ","
+                  << (posed.min.y + posed.max.y) * 0.5f << "," << posed.min.z << ".."
+                  << posed.max.z << ")"
+                  << "  entity=(" << entity.positionX20 << "," << entity.positionZ24 << ","
+                  << entity.positionY28 << ")"
                   << "  descriptor=" << entity.radius54 << "r/" << entity.height58 << "h"
                   << std::defaultfloat;
       }

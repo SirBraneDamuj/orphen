@@ -130,6 +130,13 @@ namespace orphen::ported::entity
     // height by FUN_00229ef0. 1.0 for a normally spawned actor; the type 0x62
     // leader gives its clones its own scale times 0.7.
     float scale14c = 1.0f;
+    // +0x150/+0x154/+0x158: the rest of what FUN_0020cdc0 feeds FUN_0020cf28 to
+    // build the entity's root matrix -- z scale, then pitch and roll layered on
+    // top of the facing in +0x5C. FUN_00229c40 sets +0x14C and +0x150 to 1.0
+    // and leaves the two angles at the slot clear's zero.
+    float scaleZ150 = 1.0f;
+    float rotationX154 = 0.0f;
+    float rotationY158 = 0.0f;
 
     std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
     std::uint8_t motionFlags1bb = 0;

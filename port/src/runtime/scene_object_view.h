@@ -35,8 +35,14 @@ namespace orphen::port
     int textureSlot = -1;
     // Entity +0xAC, the pose column every bone's track is indexed by.
     std::uint16_t poseColumn = 0;
-    // Entity +0x14C.
-    float scale = 1.0f;
+    // The rest of what FUN_0020cdc0 builds the root matrix from: +0x14C scales
+    // x and y, +0x150 scales z, and +0x154 / +0x158 are pitch and roll on top
+    // of the facing in +0x5C. All of them are 1/1/0/0 for every entity in
+    // s01_e024, but the root matrix is theirs, not the facing's alone.
+    float scale = 1.0f;      // +0x14C
+    float scaleZ150 = 1.0f;  // +0x150
+    float rotationX154 = 0.0f;
+    float rotationY158 = 0.0f;
   };
 
   using SceneObjectViewList = std::vector<SceneObjectView>;
