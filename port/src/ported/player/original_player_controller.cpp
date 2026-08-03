@@ -77,6 +77,12 @@ namespace orphen::ported::player
                                          const OriginalTerrainSampler &terrainSampler)
   {
     entity() = orphen::ported::entity::OriginalEntity{};
+    // The lead player is type id 1. Confirmed from an EE dump, where pool slot 0
+    // reads type 0x001, and consistent with the radius/height defaults below
+    // coming from type 1's descriptor. It had been left at 0, which reads as
+    // "empty slot" to anything that inspects the pool -- type 0x62's chase state
+    // refuses a target whose type is 0, so the enemies ignored the player.
+    entity().typeId00 = 1;
     entity().positionX20 = spawn.x;
     entity().positionZ24 = spawn.y;
     entity().positionY28 = spawn.z;
@@ -557,7 +563,21 @@ namespace orphen::ported::player
     // false and every panel in every scene was dead.
     if (destinationGround.has_value())
     {
-      entity().flagWord6c = destinationGround->leadingWord;
+      // Both fields take the *whole* 32-bit terrain word, pinned by the EE dump:
+      // the enemies hovering over the 0x30010000 floor read 0x30010000 in both
+      // +0x6C and +0x70, and the player standing on a 0 floor reads 0 in both.
+      //
+      // Two earlier guesses were wrong and the dump killed each. +0x6C is not
+      // the record's leading word (the player reads 0 where that word is 0xa00),
+      // and the pair is not the high and low halves of the terrain word (type
+      // 0x62's required mask is 0x00010000, which only overlaps 0x30010000 when
+      // the whole word is kept).
+      //
+      // FUN_002262c0 fills them from two different workspace slots, so they can
+      // presumably differ -- probably the surface under each of two sample
+      // points. On uniform floor they agree, and the port has nothing that would
+      // tell the two apart yet.
+      entity().flagWord6c = destinationGround->terrainFlags;
       entity().flagWord70 = destinationGround->terrainFlags;
     }
 

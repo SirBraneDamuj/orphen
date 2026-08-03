@@ -2,11 +2,13 @@
 
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_trace.h"
+#include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_entity.h"
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace orphen::ported::entity
 {
@@ -32,6 +34,30 @@ namespace orphen::ported::entity
     // bank lives in the script state, so it arrives as a callback rather than as
     // a dependency on the script namespace.
     std::function<bool(std::uint32_t flagId)> eventFlag;
+
+    // Needed by behaviors that spawn: FUN_002cd210's clone loop allocates
+    // through FUN_00265e28, which initialises from the type descriptor.
+    const EntityDescriptorTable *descriptors = nullptr;
+
+    // FUN_00216868: the engine RNG. Behaviors use it for repath timing and
+    // attack rolls, so it is supplied rather than reached for -- a port that
+    // called rand() directly would lose determinism.
+    std::function<std::uint32_t()> random;
+
+    // The floor under a world point. The shared non-player movement step uses
+    // it both to keep an actor above the ground and to publish the terrain word
+    // into +0x6C/+0x70, which is what a chase target is judged on.
+    struct TerrainSurface
+    {
+      float height = 0.0f;
+      std::uint32_t terrainFlags = 0;
+    };
+    std::function<std::optional<TerrainSurface>(float x, float y)> terrainSurface;
+
+    // iGpffffb650, the slot FUN_00239ce0 is currently ticking. Behaviors deeper
+    // in the tree read it; the clone loop needs it to point a clone back at its
+    // leader.
+    std::size_t currentSlot = 0;
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
@@ -64,6 +90,27 @@ namespace orphen::ported::entity
   // the loop and by the report; kFUN_00239e78_noOp counts as implemented,
   // because it really is a no-op and listing it as missing would drown the
   // report in noise.
+  // Type 0x62's tuning, read out of SLUS_200.11 rather than guessed. The clone
+  // scale is confirmed by the EE dump: the leader's descriptor radius is 0.180
+  // and its clones measure 0.126, which is exactly 0.7 of it.
+  inline constexpr float kDAT_0035450c_enemyGravity = 0.00025f;
+  inline constexpr float kDAT_00354510_cloneScale = 0.7f;
+  inline constexpr float kDAT_00354514_turnRate = 0.00545415f;
+  inline constexpr float kDAT_00354518_attackConeMin = -0.785398f; // -45 degrees
+  inline constexpr float kDAT_0035451c_attackConeMax = 0.785398f;
+  inline constexpr float kDAT_00354520_attackRangeMin = 0.6f;
+  inline constexpr float kDAT_00354524_moveSpeed = 0.00125f;
+  inline constexpr float kDAT_00354528_hoverHigh = 0.005f;
+  inline constexpr float kDAT_0035452c_hoverDown = 0.004f;
+  inline constexpr float kDAT_00354530_hoverLow = -0.005f;
+  inline constexpr float kDAT_00354534_hoverUp = 0.004f;
+  // DAT_003525f0 / DAT_003525f4: FUN_0023a320's dead zone, half a degree.
+  inline constexpr float kAngleDeadZone = 0.00872664f;
+
+  // Integrates +0x30/+0x34/+0x38 into position for a non-player actor. See the
+  // definition: this is deliberately not the full FUN_002262c0.
+  void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment);
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress);
 
   // A readable name for a handler address, for the report. Returns nullptr for

@@ -95,9 +95,11 @@ namespace orphen::ported::entity
     std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
     std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
 
-    // +0x198: for type 0x3A this is an event flag id (record param + 0x400), not
-    // a pointer -- see analyzed/actor_behaviors/type_0x3A_treasure_chest.c. Other
-    // types store an entity pointer here; the port only models the flag use.
+    // +0x198: one field, meaning per type. Type 0x3A reads it as an event flag
+    // id (the placement record's param + 0x400) -- see
+    // analyzed/actor_behaviors/type_0x3A_treasure_chest.c -- and type 0x62 reads
+    // it as the number of companion clones to spawn. Object register 0x38 writes
+    // it, which is how s01_e024's script tells its enemy to bring five friends.
     std::uint32_t eventFlagId198 = 0;
     // +0x198 doubles as the player's interaction target: FUN_00252828 writes
     // the candidate there. Kept apart from eventFlagId198 because the port
@@ -122,6 +124,10 @@ namespace orphen::ported::entity
     std::int16_t alertState1c4 = 0;          // +0x1C4: 1 forces state 2, 2 selects the alternate target.
     std::uint16_t repathTimer1c6 = 0;        // +0x1C6: FUN_002cdb28's re-roll period.
     std::uint8_t enemyFlags1c8 = 0;          // +0x1C8: 0 halves state 3's repath period.
+    // +0x14C: the entity's size scale, applied to the descriptor's radius and
+    // height by FUN_00229ef0. 1.0 for a normally spawned actor; the type 0x62
+    // leader gives its clones its own scale times 0.7.
+    float scale14c = 1.0f;
 
     std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
     std::uint8_t motionFlags1bb = 0;

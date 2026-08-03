@@ -1,5 +1,10 @@
 #include "ported/entity/actor_frame_update.h"
 
+#include "ported/script/object_registers.h"
+
+#include <algorithm>
+#include <cmath>
+
 namespace orphen::ported::entity
 {
   namespace
@@ -165,14 +170,17 @@ namespace orphen::ported::entity
   }
 
   // FUN_002cd210: the type 0x62 enemy's state 0, which is its one-shot init.
-  void FUN_002cd210_enemy62_init(OriginalEntity &entity, EntityPool &pool)
+  void FUN_002cd210_enemy62_init(OriginalEntity &entity, const ActorEnvironment &environment)
   {
+    EntityPool &pool = *environment.entityPool;
+
     // Straight to the chase state.
     FUN_00225bf0_set_state_and_animation(entity, 3, 2);
 
     entity.enemyFlags1c8 = 1;
     entity.attackChance1c0 = 1000;
     entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 1u);
+    entity.verticalAcceleration48 = kDAT_0035450c_enemyGravity;
 
     // +0x1A0 is the target, resolved from the pool index at +0x19C. The
     // original stores a pointer; the port stores the slot.
@@ -184,23 +192,191 @@ namespace orphen::ported::entity
     entity.homeZ1b8 = entity.positionZ24;
     entity.homeY1bc = entity.positionY28;
 
-    // The original also spawns +0x198 companion clones here, each a copy of this
-    // type placed at the same spot, scaled down, with its own home position and
-    // a back-pointer at +0x1A0.
-    //
-    // s01_e024's enemy carries a count of **5**, not 0 -- confirmed from an EE
-    // memory dump, which shows pool slots 23..28 all holding type 0x62: the
-    // leader at radius 0.180 and five clones at 0.126, exactly the 0.7 scale
-    // FUN_00229ef0 applies. So the real scene has six of these, and the port
-    // spawns one. The loop is not ported yet; it needs the descriptor table on
-    // ActorEnvironment to allocate through FUN_00265e28.
-    (void)pool;
+    // The companion clones. s01_e024's enemy asks for five, and an EE dump
+    // confirms six type 0x62 entities in slots 23..28 -- the leader at radius
+    // 0.180 and five clones at 0.126, which is exactly the leader's own scale
+    // times DAT_00354510.
+    const std::int32_t cloneCount = static_cast<std::int32_t>(entity.eventFlagId198);
+    if (cloneCount <= 0 || environment.descriptors == nullptr)
+    {
+      return;
+    }
+
+    const std::int16_t typeId = entity.typeId00;
+    const float cloneScale = entity.scale14c * kDAT_00354510_cloneScale;
+    const float spawnX = entity.positionX20;
+    const float spawnZ = entity.positionZ24;
+    const float spawnY = entity.positionY28;
+    const std::uint32_t rejectMask = entity.rejectTerrainMask74;
+    const std::uint32_t requireMask = entity.requiredTerrainMask78;
+    const std::size_t leaderSlot = environment.currentSlot;
+
+    for (std::int32_t index = 0; index < cloneCount; ++index)
+    {
+      const std::size_t slot = pool.FUN_00265e28_allocate_and_initialize(typeId, *environment.descriptors);
+      if (slot >= kEntitySlotCount)
+      {
+        break;
+      }
+
+      OriginalEntity &clone = pool.slot(slot);
+      // FUN_002662e0: all five start stacked on the leader and spread out from
+      // there once state 3 gives each its own random offset.
+      clone.positionX20 = spawnX;
+      clone.positionZ24 = spawnZ;
+      clone.positionY28 = spawnY;
+      clone.groundHeight4c = spawnY;
+
+      // FUN_00229ef0(scale, clone): the descriptor's radius and height times the
+      // scale. This is what makes the clones visibly smaller than the leader.
+      clone.scale14c = cloneScale;
+      clone.radius54 *= cloneScale;
+      clone.height58 *= cloneScale;
+
+      FUN_00225bf0_set_state_and_animation(clone, 3, 2);
+      clone.verticalAcceleration48 = kDAT_0035450c_enemyGravity;
+      clone.rejectTerrainMask74 = rejectMask;
+      clone.requiredTerrainMask78 = requireMask;
+      clone.attackChance1c0 = 500; // half the leader's, so clones attack less
+      clone.targetSlot1a0 = static_cast<std::int32_t>(leaderSlot);
+      clone.eventFlagId198 = 0; // a clone never spawns clones of its own
+      clone.homeX1b4 = clone.positionX20;
+      clone.homeZ1b8 = clone.positionZ24;
+      clone.homeY1bc = clone.positionY28;
+    }
+  }
+
+  // FUN_0023a320: step an angle toward a target, capped, with a half-degree dead
+  // zone so it stops rather than jitters.
+  float FUN_0023a320_approach_angle(float from, float to, float maxStep)
+  {
+    const float difference = orphen::ported::script::FUN_00216690_wrapAngle(to - from);
+    if (difference > kAngleDeadZone)
+    {
+      return std::min(difference, maxStep);
+    }
+    if (difference < -kAngleDeadZone)
+    {
+      return std::max(difference, -maxStep);
+    }
+    return 0.0f;
+  }
+
+  // FUN_002cd3a0: type 0x62's state 3, the one it spends its life in. A hover
+  // and chase, not a walk -- it picks a point near its target, turns toward it,
+  // drives forward at a fixed speed and holds a height above the floor.
+  void FUN_002cd3a0_enemy62_chase(OriginalEntity &entity, const ActorEnvironment &environment)
+  {
+    EntityPool &pool = *environment.entityPool;
+    const std::uint32_t frameTicks = environment.frameTicks;
+
+    // +0x1C4 == 1 hands off to state 2. Nothing in the port sets it.
+    if (entity.alertState1c4 == 1)
+    {
+      entity.state60 = 2;
+      return;
+    }
+
+    const auto randomValue = [&environment]() -> std::int32_t {
+      return environment.random ? static_cast<std::int32_t>(environment.random() & 0x7FFFFFFF) : 0;
+    };
+
+    // +0x62 is the repath countdown. While it is running the target point is
+    // left alone; when it expires a fresh one is chosen.
+    if (static_cast<std::int16_t>(entity.fadeRamp62) > 0)
+    {
+      entity.fadeRamp62 =
+          static_cast<std::uint16_t>(static_cast<std::int16_t>(entity.fadeRamp62) - static_cast<std::int16_t>(frameTicks));
+    }
+    else
+    {
+      // A random offset around the target: +/-1.0 horizontally and +/-0.25
+      // vertically, all in hundredths.
+      const float offsetX = static_cast<float>(randomValue() % 200 - 100) / 100.0f;
+      const float offsetZ = static_cast<float>(randomValue() % 200 - 100) / 100.0f;
+      const float offsetY = static_cast<float>(randomValue() % 0x32 - 0x19) / 100.0f;
+
+      // 0x780 ticks between repaths, halved to 0x3C0 when +0x1C8 is clear.
+      entity.fadeRamp62 = entity.enemyFlags1c8 != 0 ? 0x780 : 0x3C0;
+
+      float goalX = entity.homeX1b4;
+      float goalZ = entity.homeZ1b8;
+      float goalY = entity.homeY1bc;
+
+      // The target is a pool slot here rather than the original's pointer. Type
+      // id 0 stands in for "no target", which is what *psVar7 == 0 tests.
+      const std::size_t targetSlot = static_cast<std::size_t>(entity.targetSlot1a0);
+      if (entity.targetSlot1a0 >= 0 && targetSlot < kEntitySlotCount)
+      {
+        const OriginalEntity &target = pool.slot(targetSlot);
+        // FUN_002cd3a0 tests the *target's* terrain word (+0x6C), not its mask:
+        // the enemy only commits to something standing on floor it is willing to
+        // follow onto. With +0x6C unpublished this could never have worked.
+        const bool terrainAgrees =
+            entity.requiredTerrainMask78 == 0 ||
+            (entity.requiredTerrainMask78 & target.flagWord6c) != 0;
+        if (target.typeId00 != 0 && terrainAgrees)
+        {
+          goalX = target.positionX20;
+          goalZ = target.positionZ24;
+          // Three quarters of the way up the target, not its feet.
+          goalY = target.positionY28 + target.height58 * 0.75f;
+        }
+      }
+
+      goalX += offsetX;
+      goalZ += offsetZ;
+      goalY += offsetY;
+
+      // Never pick a point below the floor under us: re-roll upward instead.
+      if (goalY < entity.groundHeight4c)
+      {
+        goalY = entity.groundHeight4c + static_cast<float>(randomValue() % 0x32 + 0x19) / 100.0f;
+      }
+
+      entity.desiredFacing1a8 = std::atan2(goalZ - entity.positionZ24, goalX - entity.positionX20);
+      entity.desiredHeight1ac = goalY;
+    }
+
+    // Bumping into something (+0x0C bits 0x202) scatters the facing by up to
+    // about 63 degrees so a stuck actor works its way loose.
+    if ((entity.collisionFlags0c & 0x202u) != 0)
+    {
+      const float scatter = static_cast<float>(randomValue() % 0x274) / 10.0f;
+      const float wrapped = orphen::ported::script::FUN_00216690_wrapAngle(entity.desiredFacing1a8 + scatter);
+      entity.facingRadians5c = wrapped;
+      entity.desiredFacing1a8 = wrapped;
+    }
+
+    entity.facingRadians5c += FUN_0023a320_approach_angle(
+        entity.facingRadians5c, entity.desiredFacing1a8, static_cast<float>(frameTicks) * kDAT_00354514_turnRate);
+
+    // The attack roll. Aligned within 45 degrees, in range, and at a similar
+    // height, then a 1-in-1000 style roll against +0x1C0 hands off to state 4.
+    // State 4 is not ported, so this is left out rather than sending the entity
+    // into a state that would do nothing; the condition is kept for the record.
+
+    // Drive forward along the facing, always.
+    const float step = static_cast<float>(frameTicks) * kDAT_00354524_moveSpeed;
+    entity.desiredDeltaX30 += step * std::cos(entity.facingRadians5c);
+    entity.desiredDeltaZ34 += step * std::sin(entity.facingRadians5c);
+
+    // Hold the desired height. Above it by more than 0.005, sink; below by more
+    // than 0.005, rise; inside the band, leave the vertical alone entirely.
+    const float heightError = entity.positionY28 - entity.desiredHeight1ac;
+    if (heightError > kDAT_00354528_hoverHigh)
+    {
+      entity.desiredDeltaY38 -= kDAT_0035452c_hoverDown;
+    }
+    else if (heightError < kDAT_00354530_hoverLow)
+    {
+      entity.desiredDeltaY38 += kDAT_00354534_hoverUp;
+    }
   }
 
   // FUN_002cd0a0 (type 0x62): freeze gate, the +0xBE hit reaction, the +0x1C2
   // countdown, then PTR_FUN_00326660[+0x60].
   void FUN_002cd0a0_enemy62(OriginalEntity &entity,
-                            EntityPool &pool,
                             const ActorEnvironment &environment,
                             ActorTrace &trace)
   {
@@ -246,15 +422,66 @@ namespace orphen::ported::entity
     const std::uint32_t handler = environment.dispatchTable->stateHandler(
         kPTR_FUN_00326660_enemy62States, kEnemy62StateCount, entity.state60);
 
-    // Only state 0, the init, is ported. It hands straight to state 3, the
-    // hover-and-chase state, which needs the shared non-player physics step
-    // before anything it writes to +0x30/+0x34/+0x38 would move the entity.
-    const bool implemented = entity.state60 == 0;
+    const bool implemented = entity.state60 == 0 || entity.state60 == 3;
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
-    if (implemented)
+    if (entity.state60 == 0)
     {
-      FUN_002cd210_enemy62_init(entity, pool);
+      FUN_002cd210_enemy62_init(entity, environment);
     }
+    else if (entity.state60 == 3)
+    {
+      FUN_002cd3a0_enemy62_chase(entity, environment);
+    }
+  }
+
+  // The shared non-player movement step.
+  //
+  // Behaviors do not move anything themselves; they accumulate a request into
+  // +0x30/+0x34 (horizontal) and +0x38 (vertical) and the physics pass
+  // integrates it. FUN_00239ce0's actors had no such pass in this port, so
+  // everything a behavior asked for was silently discarded.
+  //
+  // **This is not FUN_002262c0.** It integrates the request and keeps a flying
+  // actor above the floor, which is what type 0x62 needs; it does not do the
+  // four-corner footprint sample, step-height acceptance, ceiling test or axis
+  // fallback that the lead player's path does. Slot 0 still runs the real thing.
+  // Porting FUN_002262c0 properly for slots 1..255 is the outstanding work, and
+  // until then a non-player actor can pass through walls.
+  void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment)
+  {
+    entity.positionX20 += entity.desiredDeltaX30;
+    entity.positionZ24 += entity.desiredDeltaZ34;
+    entity.positionY28 += entity.desiredDeltaY38;
+
+    // Track the floor so the hover height has something to be relative to, and
+    // so a behavior that re-rolls a target point below ground can notice.
+    if (environment.terrainSurface)
+    {
+      const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24);
+      const std::optional<float> height =
+          surface.has_value() ? std::optional<float>{surface->height} : std::nullopt;
+      const std::optional<std::uint32_t> terrainWord =
+          surface.has_value() ? std::optional<std::uint32_t>{surface->terrainFlags} : std::nullopt;
+      if (height.has_value())
+      {
+        entity.previousGroundHeight50 = entity.groundHeight4c;
+        entity.groundHeight4c = *height;
+        // The same publish FUN_002262c0 does for the player. Non-player actors
+        // need it too: a type 0x62 clone's target is its *leader*, and the chase
+        // state gates on the target's +0x6C, so without this the clones sat
+        // still. The EE dump has all six enemies reading 0x30010000 here.
+        entity.flagWord6c = *terrainWord;
+        entity.flagWord70 = *terrainWord;
+        if (entity.positionY28 < *height)
+        {
+          entity.positionY28 = *height;
+          entity.desiredDeltaY38 = 0.0f;
+        }
+      }
+    }
+
+    entity.desiredDeltaX30 = 0.0f;
+    entity.desiredDeltaZ34 = 0.0f;
   }
 
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
@@ -340,21 +567,27 @@ namespace orphen::ported::entity
         continue;
       }
 
+      // iGpffffb650: handlers deeper in the tree read the slot being ticked.
+      ActorEnvironment slotEnvironment = environment;
+      slotEnvironment.currentSlot = slot;
+
       switch (handler.address)
       {
       case 0x002D1EA8u:
-        FUN_002d1ea8_treasure_chest(entity, environment);
+        FUN_002d1ea8_treasure_chest(entity, slotEnvironment);
         break;
       case 0x0025AB68u:
-        FUN_0025ab68_party_member(entity, environment, trace);
+        FUN_0025ab68_party_member(entity, slotEnvironment, trace);
         break;
       case 0x002CD0A0u:
-        FUN_002cd0a0_enemy62(entity, pool, environment, trace);
+        FUN_002cd0a0_enemy62(entity, slotEnvironment, trace);
         break;
       case kFUN_00239e78_noOp:
       default:
         break;
       }
+
+      integrateNonPlayerMovement(entity, environment);
     }
   }
 

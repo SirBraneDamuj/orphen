@@ -96,6 +96,8 @@ namespace orphen::port
     orphen::ported::entity::ActorTrace actorTrace_;
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
+    // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
+    std::uint32_t actorRandomState_ = 0x12345678u;
     // Rising-edge state for the live trigger log, so stepping on a panel says
     // so once rather than 60 times a second.
     std::map<std::uint32_t, bool> triggerWasPassing_;

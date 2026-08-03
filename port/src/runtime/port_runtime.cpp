@@ -199,6 +199,30 @@ namespace orphen::port
     // actor tick borrows it rather than owning a second copy.
     environment.eventFlag = [this](std::uint32_t flagId)
     { return sceneScript_.state().FUN_00266368_eventFlag(flagId); };
+    environment.descriptors = &descriptorTable_;
+
+    // FUN_00216868. A plain LCG rather than the original's generator, which has
+    // not been analysed; what matters here is that it is seeded once and stepped
+    // deterministically, so --frames stays reproducible.
+    environment.random = [this]() -> std::uint32_t
+    {
+      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
+      return (actorRandomState_ >> 16) & 0x7FFFu;
+    };
+
+    if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
+    {
+      environment.terrainSurface =
+          [loadedMap](float x, float y) -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
+      {
+        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, 0.0f);
+        if (!hit.has_value())
+        {
+          return std::nullopt;
+        }
+        return orphen::ported::entity::ActorEnvironment::TerrainSurface{hit->height, hit->terrainFlags};
+      };
+    }
     return environment;
   }
 
@@ -797,7 +821,9 @@ namespace orphen::port
                     << " type=0x" << std::hex << entity.typeId00 << std::dec
                     << " state=" << entity.state60
                     << " anim=" << entity.animationA0
-                    << " facing=" << std::fixed << std::setprecision(3) << entity.facingRadians5c
+                    << " pos=(" << std::fixed << std::setprecision(2)
+                    << entity.positionX20 << "," << entity.positionZ24 << "," << entity.positionY28 << ")"
+                    << " facing=" << std::setprecision(3) << entity.facingRadians5c
                     << std::defaultfloat
                     << " " << actorHandlerSourceName(handler.source);
           if (handler.address != 0)
