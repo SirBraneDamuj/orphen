@@ -449,39 +449,52 @@ namespace orphen::ported::entity
   // until then a non-player actor can pass through walls.
   void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment)
   {
+    // +0x38 is *this frame's* vertical delta, not a velocity -- the player's path
+    // zeroes it at the top of the update and again after applying it. Treating
+    // it as a velocity is what sent these enemies into orbit: the hover nudge
+    // accumulated every frame instead of being spent.
+    //
+    // **Gravity is deliberately not integrated here.** The EE dump shows all six
+    // type 0x62 entities with +0x44 (vertical velocity) at exactly 0.000000
+    // while +0x48 holds 0.00025, so FUN_002262c0 is not feeding gravity into
+    // them at all -- their only vertical motion is the behavior's own
+    // DAT_0035452c / DAT_00354534 nudge, which is why they sit just inside the
+    // dead band below their target height. Adding gravity here pins them to the
+    // floor, which the dump says is wrong.
+    //
+    // Which flag in FUN_002262c0 gates that is not identified yet. It matters
+    // the moment a ground-walking non-player actor is ported; it does not matter
+    // for a flyer, and inventing a gate would be worse than naming the gap.
     entity.positionX20 += entity.desiredDeltaX30;
     entity.positionZ24 += entity.desiredDeltaZ34;
     entity.positionY28 += entity.desiredDeltaY38;
 
-    // Track the floor so the hover height has something to be relative to, and
-    // so a behavior that re-rolls a target point below ground can notice.
     if (environment.terrainSurface)
     {
       const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24);
-      const std::optional<float> height =
-          surface.has_value() ? std::optional<float>{surface->height} : std::nullopt;
-      const std::optional<std::uint32_t> terrainWord =
-          surface.has_value() ? std::optional<std::uint32_t>{surface->terrainFlags} : std::nullopt;
-      if (height.has_value())
+      if (surface.has_value())
       {
         entity.previousGroundHeight50 = entity.groundHeight4c;
-        entity.groundHeight4c = *height;
+        entity.groundHeight4c = surface->height;
         // The same publish FUN_002262c0 does for the player. Non-player actors
         // need it too: a type 0x62 clone's target is its *leader*, and the chase
         // state gates on the target's +0x6C, so without this the clones sat
         // still. The EE dump has all six enemies reading 0x30010000 here.
-        entity.flagWord6c = *terrainWord;
-        entity.flagWord70 = *terrainWord;
-        if (entity.positionY28 < *height)
+        entity.flagWord6c = surface->terrainFlags;
+        entity.flagWord70 = surface->terrainFlags;
+
+        // The floor is still a floor even for a flyer.
+        if (entity.positionY28 < surface->height)
         {
-          entity.positionY28 = *height;
-          entity.desiredDeltaY38 = 0.0f;
+          entity.positionY28 = surface->height;
+          entity.verticalVelocity44 = 0.0f;
         }
       }
     }
 
     entity.desiredDeltaX30 = 0.0f;
     entity.desiredDeltaZ34 = 0.0f;
+    entity.desiredDeltaY38 = 0.0f;
   }
 
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
@@ -570,6 +583,13 @@ namespace orphen::ported::entity
       // iGpffffb650: handlers deeper in the tree read the slot being ticked.
       ActorEnvironment slotEnvironment = environment;
       slotEnvironment.currentSlot = slot;
+
+      // FUN_00251ed8 clears these before running the player's state, and the
+      // behaviors accumulate into them the same way. They are per-frame
+      // requests, so they start at zero every frame.
+      entity.desiredDeltaX30 = 0.0f;
+      entity.desiredDeltaZ34 = 0.0f;
+      entity.desiredDeltaY38 = 0.0f;
 
       switch (handler.address)
       {
