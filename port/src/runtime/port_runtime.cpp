@@ -327,8 +327,22 @@ namespace orphen::port
   // too small to be an object. So group 2 records are authored positions that
   // deliberately produce no entity.
   //
-  // Standing them in for the spawn point is an inference, not something read out
-  // of the original, and the console says which was used. --spawn still wins.
+  // Standing them in for the spawn point is an inference, and on s01_e024 it is
+  // now a *disproven* one. An EE memory dump taken right after loading the map
+  // from the debug menu has DAT_00325340 = (-3.25, -12.75) and pool slot 0 at
+  // that position; the group 2 record is at (-5.5, -12). So this picks the wrong
+  // spot by about 2.3 units.
+  //
+  // The real value is not derivable from anything the scene ships. It is not in
+  // SLUS_200.11, and it is not in the SCR as a script coordinate pair (checked
+  // for the 100000-scaled ints). FUN_0022b2c0 -- the only writer of
+  // DAT_00325340 -- is called from opcodes 0x8B/0x8C alone, so the position is
+  // authored by whatever *sends you here*: the previous map's warp, or the debug
+  // menu's own map-select. A cold boot into a scene genuinely has nothing to
+  // read, which is what FUN_0022a418 assumes.
+  //
+  // So this stays as the fallback, but it is a guess and the console says so.
+  // Use --spawn for anything that needs to match the game.
   void PortRuntime::applySceneMarkerSpawn()
   {
     if (spawnOverride_.has_value() || scriptTrace_.leadTeleported())
@@ -353,7 +367,7 @@ namespace orphen::port
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
       mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
       mapViewer_.setFollowCameraPose(fieldCamera_.pose());
-      spawnSourceLabel_ = "scene marker";
+      spawnSourceLabel_ = "group 2 placement record (a guess; see --spawn)";
       return;
     }
   }
@@ -500,8 +514,8 @@ namespace orphen::port
       }
       if (scriptTrace_.battleBootCount() != 0)
       {
-        std::cout << "  0xE1 battle boot hits=" << scriptTrace_.battleBootCount()
-                  << "  (flag 0x8EE cleared, battle state 0x10 raised; no battle system to hand off to)\n";
+        std::cout << "  0xE1 save/menu mode hits=" << scriptTrace_.battleBootCount()
+                  << "  (flag 0x8EE cleared, mode 0x10 raised; no menu to hand off to)\n";
       }
     }
 

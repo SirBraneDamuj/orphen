@@ -185,9 +185,15 @@ namespace orphen::ported::entity
     entity.homeY1bc = entity.positionY28;
 
     // The original also spawns +0x198 companion clones here, each a copy of this
-    // type placed at the same spot with its own home position and a back-pointer
-    // at +0x1A0. s01_e024's single enemy carries a count of 0, so that loop does
-    // not run; it is not ported.
+    // type placed at the same spot, scaled down, with its own home position and
+    // a back-pointer at +0x1A0.
+    //
+    // s01_e024's enemy carries a count of **5**, not 0 -- confirmed from an EE
+    // memory dump, which shows pool slots 23..28 all holding type 0x62: the
+    // leader at radius 0.180 and five clones at 0.126, exactly the 0.7 scale
+    // FUN_00229ef0 applies. So the real scene has six of these, and the port
+    // spawns one. The loop is not ported yet; it needs the descriptor table on
+    // ActorEnvironment to allocate through FUN_00265e28.
     (void)pool;
   }
 

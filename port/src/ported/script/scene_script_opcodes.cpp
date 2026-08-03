@@ -728,16 +728,20 @@ namespace orphen::ported::script
     return 0;
   }
 
-  // 0xE1 (FUN_00265000): start a battle. No operands at all. This is what
-  // s01_e024's mask-0x2 floor panel reaches, at script offset 0x4ce -- so that
-  // panel is a battle trigger, not a map change.
+  // 0xE1 (FUN_00265000): raise the save/menu mode. No operands at all. This is
+  // what s01_e024's mask-0x2 floor panel reaches, at script offset 0x4ce.
   //
-  // Clears event flag 0x8EE, raises the battle-start state, puts the lead into
-  // state 10 / animation 1, and walks the seven party slots at DAT_00343692
-  // respawning every member whose type is 0x37 into state 1 / animation 0 with
-  // the battle idle pose at +0x62. The port has no party-slot table and no
-  // battle system, so the flag, the state global and the lead's state are done
-  // for real and the party walk is recorded as absent.
+  // The opcode table calls this "boot_party_for_battle", and that name is wrong.
+  // Confirmed against the game: the mask-0x2 quad at (-6.00, -11.25) is the
+  // *save point* -- standing on it brings up the save dialog. DAT_00354d2c is a
+  // mode selector (0 on a freshly loaded map, per the EE dump) that this raises
+  // to 0x10, and FUN_002686a0 is the handoff into that mode.
+  //
+  // Clears event flag 0x8EE, raises the mode, puts the lead into state 10 /
+  // animation 1, and walks the seven party slots at DAT_00343692 restaging every
+  // member whose type is 0x37. The port has no party-slot table and no menu, so
+  // the flag, the mode global and the lead's state are done for real and the
+  // party walk is recorded as absent.
   std::uint32_t SceneCommandInterpreter::FUN_00265000_boot_party_for_battle()
   {
     if (halted_ || environment_.state == nullptr)
