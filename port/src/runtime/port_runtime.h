@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 
 namespace orphen::port
@@ -43,8 +44,12 @@ namespace orphen::port
     std::optional<orphen::ported::psm2::Vec3> probeCentre;
     float probeRadius = 2.0f;
     // Drive the scene script's per-frame entry and its object-script slots.
-    // Off by default so the existing determinism baseline is unchanged.
-    bool runScriptTick = false;
+    // **On by default.** It used to be off to protect the determinism baseline,
+    // but the per-frame entry is what evaluates the terrain triggers, so with it
+    // off the floor panels are inert and the scene looks broken in a way that
+    // has nothing to do with the panels. --no-scr-tick restores the old
+    // behaviour; runs are deterministic either way.
+    bool runScriptTick = true;
     std::uint32_t headlessFrameCount = 0;
     // 1-based frame on which --frames should press Cross, or 0 for never.
     std::uint32_t pressConfirmFrame = 0;
@@ -91,6 +96,13 @@ namespace orphen::port
     orphen::ported::entity::ActorTrace actorTrace_;
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
+    // Rising-edge state for the live trigger log, so stepping on a panel says
+    // so once rather than 60 times a second.
+    std::map<std::uint32_t, bool> triggerWasPassing_;
+    std::uint32_t reportedFadeArms_ = 0;
+    std::uint32_t reportedPlayerLocks_ = 0;
+    std::uint32_t reportedBattleBoots_ = 0;
+    void reportPanelActivity();
     bool printActorReport_ = false;
     bool printScriptReport_ = false;
     bool printRenderReport_ = false;

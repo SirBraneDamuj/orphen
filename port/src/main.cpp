@@ -70,6 +70,12 @@ namespace
         config.hasDiscScene = true;
         continue;
       }
+      if (argument == "--no-scr-tick")
+      {
+        config.runScriptTick = false;
+        continue;
+      }
+
       if (argument == "--scr-tick")
       {
         config.runScriptTick = true;

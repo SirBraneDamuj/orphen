@@ -919,6 +919,51 @@ namespace orphen::port
     }
   }
 
+  // The panels are the one thing in this scene that fires from where you stand
+  // rather than from a button, so a windowed session has no way to tell whether
+  // one triggered. Reported on the rising edge: once when you step on, again
+  // only if you step off and back on.
+  void PortRuntime::reportPanelActivity()
+  {
+    for (const auto &entry : scriptTrace_.terrainTriggers())
+    {
+      const bool passing = entry.second.passes != 0 && entry.second.observedWord != 0 &&
+                           (entry.second.observedWord & entry.second.mask) != 0;
+      bool &wasPassing = triggerWasPassing_[entry.first];
+      if (passing && !wasPassing)
+      {
+        std::cout << "[trigger] terrain flag 0x" << std::hex << entry.second.mask
+                  << " matched (script @0x" << entry.first << std::dec << ")\n";
+      }
+      wasPassing = passing;
+    }
+
+    if (scriptTrace_.fadesArmed().size() > reportedFadeArms_)
+    {
+      reportedFadeArms_ = static_cast<std::uint32_t>(scriptTrace_.fadesArmed().size());
+      const auto &fade = scriptTrace_.fadesArmed().back();
+      std::cout << "[panel] scene transition: fullscreen fade armed, rate=" << fade.rate
+                << " rgb=0x" << std::hex << fade.packedRgb << std::dec
+                << " (no GS submit, so nothing is drawn)\n";
+    }
+    if (scriptTrace_.battleBootCount() != 0 && reportedBattleBoots_ == 0)
+    {
+      reportedBattleBoots_ = 1;
+      std::cout << "[panel] save point: mode 0x10 raised (no menu to hand off to)\n";
+    }
+    std::uint32_t locks = 0;
+    for (const auto &entry : scriptTrace_.playerLocks())
+    {
+      locks += entry.second;
+    }
+    if (locks != 0 && reportedPlayerLocks_ == 0)
+    {
+      reportedPlayerLocks_ = 1;
+      std::cout << "[panel] player control taken (0x6D); the lead's state-10 handler"
+                   " is not ported, so it does not hold\n";
+    }
+  }
+
   void PortRuntime::reset()
   {
     memory_.clear();
@@ -987,6 +1032,7 @@ namespace orphen::port
       {
         sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("late slots");
+        reportPanelActivity();
       }
 
       // Behaviors can move and turn entities, so the render views are rebuilt
