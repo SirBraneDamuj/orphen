@@ -33,10 +33,41 @@
 //   local = Scale * RotZ(-rz) * RotX(-rx) * RotY(-ry) * Translate(t)
 //   world = local * parentWorld
 //
-// Not modelled here: FUN_0020d188's temporal smoothing, which filters each field
-// toward its target over several frames rather than snapping, and the scripted
-// bone override table at DAT_004a7e00 that FUN_0020d378 checks first. Both are
-// per-frame concerns; this samples one column and composes it.
+// Not modelled here: FUN_0020d188, and the scripted bone override table at
+// DAT_004a7e00 that FUN_0020d378 checks first.
+//
+// FUN_0020d188 is the missing half of the animation and it is worth writing
+// down, because it also explains why the EE dump's bone matrices never
+// reconciled with a straight compose of the sampled keys. It is *two* filters
+// per field, both stateful per entity, per bone, per field:
+//
+//   stage 1, keyframe blend
+//     target = stored_target + (sampled - stored_target) * entity+0x13C
+//     ...skipped entirely when +0x13C is 1.0, which snaps
+//     store target back
+//
+//   stage 2, temporal smoothing
+//     out = stored_out + (target - stored_out) * ctx+0x1CC
+//     iterated once per 0x20 of DAT_003555bc, starting at 0x10, and skipped
+//     when DAT_003555bc <= 0x10
+//     store out back
+//
+// Fields 4, 5 and 6 (the rotations) take the angle path in both stages, going
+// through FUN_002166e8 for the signed difference and wrapping at +-pi; fields
+// 0..3 interpolate linearly. That per-field mode flag is what identified the
+// rotations in the first place.
+//
+// **The state lives in the second matrix palette.** FUN_0020d378 sets
+// ctx+0x164 = ctx+0x154 + bone*0x40, and ctx+0x154 is the bank at 0x003FFE00 --
+// each bone's 0x40 block holds seven smoothed values at +0x00 and seven targets
+// at +0x20. That bank reads as scratch when you expect a matrix palette in it,
+// which is exactly how it looked when this port first went hunting through the
+// dump for one.
+//
+// Porting it needs somewhere to keep 14 floats per bone per entity across
+// frames, which nothing in the port has yet -- the pose path is currently a
+// pure function of (model, column). Until then keyframes snap rather than
+// interpolate: the timing is right, the motion between poses is not.
 
 #include "ported/model/psc3_model.h"
 
