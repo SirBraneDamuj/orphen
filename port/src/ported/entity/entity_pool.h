@@ -84,6 +84,21 @@ namespace orphen::ported::entity
       }
     }
 
+    // The same walk for passes that update the entity rather than read it --
+    // the per-frame animation advance, which the original runs inside its own
+    // pool walk.
+    template <typename Visitor>
+    void forEachScriptSpawnedMutable(Visitor &&visitor)
+    {
+      for (std::size_t index = kFirstScriptSlot; index < kEntitySlotCount; ++index)
+      {
+        if (status_[index] != SlotStatus::Free)
+        {
+          visitor(index, slots_[index]);
+        }
+      }
+    }
+
     std::size_t scriptSpawnedCount() const;
 
   private:

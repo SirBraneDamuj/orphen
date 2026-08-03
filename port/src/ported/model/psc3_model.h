@@ -168,6 +168,10 @@ namespace orphen::ported::model
     // Kept as offsets: the skeleton and animation slices are consumed by R3/R4
     // against the same blob, and copying them here would just duplicate it.
     std::uint32_t animationTableOffset = 0; // header +0x0C
+    // Header +0x06. FUN_00225c90 line 27 bounds-checks the entity's animation
+    // id against it, so it is the animation count, not the reserved field the
+    // docs called it.
+    std::uint16_t animationCount = 0;
     std::uint32_t keyframePoolOffset = 0;   // header +0x2C
 
     Bounds3 bounds;

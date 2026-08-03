@@ -87,6 +87,7 @@ namespace orphen::ported::model
     const std::uint32_t normalOffset = u32At(bytes, 0x28);
 
     model.animationTableOffset = u32At(bytes, 0x0C);
+    model.animationCount = u16At(bytes, 0x06);
     model.keyframePoolOffset = u32At(bytes, 0x2C);
 
     if (submeshCount == 0 || submeshOffset == 0 || vertexOffset == 0 || primitiveOffset == 0)

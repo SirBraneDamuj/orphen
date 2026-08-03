@@ -82,6 +82,15 @@ namespace orphen::ported::entity
     // so a timed state does not lose the frozen frames.
     std::uint16_t stateResetA4 = 999;
     std::uint16_t substateFrameA8 = 0;
+    // +0xA6/+0xA8/+0xAA/+0xAC/+0xAE and +0x13C: FUN_00225c90's animation
+    // cursor. +0xA8 steps by 2 per six-byte timeline entry, +0xAC is the pose
+    // column every bone track is indexed by, +0xAE the column it came from,
+    // and +0x13C the blend between them.
+    std::uint16_t keyframeTicksA6 = 0;
+    std::uint16_t timelineCursorA8 = 0;
+    std::uint16_t poseColumnAc = 0;
+    std::uint16_t previousPoseColumnAe = 0;
+    float animationBlend13c = 1.0f;
     std::uint16_t flagsAa = 0;               // +0xAA: bit 0x100 gates type 0x3A's effect.
     // +0xBD: freeze / hit-stop countdown in frames, read by FUN_0023a068.
     std::int8_t freezeTimerBd = 0;

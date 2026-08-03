@@ -3,6 +3,7 @@
 #include "runtime/psm2_ground_query.h"
 #include "ported/model/psc3_model.h"
 #include "ported/model/psc3_skeleton.h"
+#include "ported/model/entity_animation.h"
 #include "ported/script/object_registers.h"
 #include "ported/player/original_interaction.h"
 
@@ -344,6 +345,7 @@ namespace orphen::port
     }
 
     applySceneMarkerSpawn();
+    advanceEntityAnimations(orphen::ported::kNominalFrameTicks);
     publishSceneObjectViews();
 
     std::cout << "[scr] script " << decoded.size() << " bytes, init 0x" << std::hex
@@ -466,8 +468,31 @@ namespace orphen::port
     }
     view.model = binding->model;
     view.textureSlot = binding->textureSlot;
-    view.poseColumn = orphen::ported::model::firstPoseColumnForAnimation(
-        *binding->model, binding->model->blob, entity.animationA0);
+    view.poseColumn = entity.poseColumnAc;
+  }
+
+  // FUN_00225c90 for every entity that has a model, run before the views are
+  // published so the pose column the renderer reads is this frame's.
+  void PortRuntime::advanceEntityAnimations(std::uint32_t frameTicks)
+  {
+    const auto step = [&](orphen::ported::entity::OriginalEntity &entity) {
+      const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return;
+      }
+      orphen::ported::model::FUN_00225c90_advance_animation(entity, *binding->model, frameTicks);
+    };
+
+    step(entityPool_.leadPlayer());
+    entityPool_.forEachScriptSpawnedMutable(
+        [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity) {
+          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            return;
+          }
+          step(entity);
+        });
   }
 
   void PortRuntime::publishSceneObjectViews()
@@ -1317,6 +1342,7 @@ namespace orphen::port
 
       // Behaviors can move and turn entities, so the render views are rebuilt
       // every frame now rather than only at load.
+      advanceEntityAnimations(frameTicks);
       publishSceneObjectViews();
 
       const auto &leadState = leadPlayer_.viewState();

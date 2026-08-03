@@ -119,6 +119,7 @@ namespace orphen::port
     void loadExecutable(const PortRuntimeConfig &config);
     void runSceneScript();
     void publishSceneObjectViews();
+    void advanceEntityAnimations(std::uint32_t frameTicks);
     void attachModel(SceneObjectView &view, const orphen::ported::entity::OriginalEntity &entity);
     void applySceneMarkerSpawn();
     void printScriptReport() const;
