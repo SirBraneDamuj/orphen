@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace orphen::ported::entity
 {
@@ -71,6 +72,33 @@ namespace orphen::ported::entity
     std::uint32_t modelRecordAddress = 0; // resolved 0x2C record, 0 when unknown
   };
 
+  // The 0x2C-byte model record the descriptor's +0x00 indexes. This is what
+  // src/FUN_00229c40.c reads to bind a model to a spawning entity, and what
+  // src/FUN_00266118.c and src/FUN_00221fd8.c read to load it.
+  //
+  // Fields +0x14 onward are runtime pointers into the decoded arena, zero in the
+  // executable, so the port does not model them: it keeps its own loaded-model
+  // store instead. Everything below is the static half.
+  struct EntityModelRecord
+  {
+    std::uint32_t recordAddress = 0;
+    std::uint16_t meshId0x00 = 0; // grp_XXXX resource id
+    std::uint16_t texId0x02 = 0;  // tex_XXXX resource id
+    std::uint8_t flags0x04 = 0;
+    std::uint8_t loadState0x05 = 0;   // 'd' (100) on disc, 1 once loaded
+    std::uint8_t textureBind0x06 = 0; // 'd' (100) means "bind statically to slot +0x07"
+    std::uint8_t staticSlot0x07 = 0;
+
+    // FUN_00266118 line 15: bit 3 sends the lookup to the second texture bank.
+    bool usesAltTextureBank() const { return (flags0x04 & 0x08) != 0; }
+    // FUN_00221d20 stores the id negated for these, which is why slot 18 in the
+    // EE dump reads -303 while holding tex 0x012F.
+    bool storesNegatedTextureId() const { return (flags0x04 & 0x40) != 0; }
+    // FUN_00221fd8's second pass binds these to their own slot rather than
+    // going through the cache at all.
+    bool bindsTextureStatically() const { return textureBind0x06 == 100; }
+  };
+
   class EntityDescriptorTable
   {
   public:
@@ -86,6 +114,17 @@ namespace orphen::ported::entity
     // The 0x38 indirection (which reads a halfword out of a context object) is
     // not reproduced; that id is rejected outright, matching FUN_00229be8.
     std::optional<EntityDescriptor> FUN_00229980_resolve(std::uint32_t typeId) const;
+
+    // Reads the 0x2C record a resolved descriptor points at. Separate from the
+    // resolve above because the descriptor alone is enough for collision sizes,
+    // and only the render path needs the model.
+    std::optional<EntityModelRecord> readModelRecord(std::uint32_t recordAddress) const;
+
+    // FUN_00221fd8's second pass: every record in the static tables whose +0x06
+    // is 'd' binds its own texture to its own slot at boot, outside the cache.
+    // Returned so the port can reproduce that pass without walking the tables
+    // itself. The tertiary table lives in BSS and is not readable here.
+    std::vector<EntityModelRecord> FUN_00221fd8_staticTextureBinds() const;
 
     // Classifies an id without needing the ELF, so the report can distinguish
     // "no executable loaded" from "this id was never static".

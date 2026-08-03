@@ -10,6 +10,7 @@
 #include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "runtime/entity_model_store.h"
 #include "ported/resource/elf_data_reader.h"
 #include "ported/script/scene_script.h"
 #include "runtime/ps2_memory.h"
@@ -96,6 +97,7 @@ namespace orphen::port
     orphen::ported::entity::EntityDescriptorTable descriptorTable_;
     orphen::ported::entity::ActorDispatchTable actorDispatchTable_;
     orphen::ported::entity::ActorTrace actorTrace_;
+    EntityModelStore modelStore_;
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
@@ -122,6 +124,7 @@ namespace orphen::port
     void printActorReport() const;
     void printRenderReport() const;
     void printModelReport() const;
+    void printEntityModelBindings() const;
     void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
     void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
     void reportTickHalt(const char *what) const;

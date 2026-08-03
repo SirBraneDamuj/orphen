@@ -91,6 +91,10 @@ target_sources(orphen_port
     src/ported/psm2/psm2_material_expansion.h
     src/ported/model/psc3_model.cpp
     src/ported/model/psc3_model.h
+    src/ported/resource/texture_slot_cache.cpp
+    src/ported/resource/texture_slot_cache.h
+    src/runtime/entity_model_store.cpp
+    src/runtime/entity_model_store.h
     src/ported/render/original_view_projection.cpp
     src/ported/render/original_view_projection.h
     src/ported/render/original_map_visibility.cpp

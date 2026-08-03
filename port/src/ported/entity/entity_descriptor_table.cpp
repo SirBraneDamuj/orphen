@@ -107,4 +107,62 @@ namespace orphen::ported::entity
     return descriptor;
   }
 
+  std::optional<EntityModelRecord> EntityDescriptorTable::readModelRecord(std::uint32_t recordAddress) const
+  {
+    if (!available() || recordAddress == 0)
+    {
+      return std::nullopt;
+    }
+    if (elf_->bytesAt(recordAddress, kModelRecordStride).empty())
+    {
+      return std::nullopt;
+    }
+
+    EntityModelRecord record;
+    record.recordAddress = recordAddress;
+    record.meshId0x00 = elf_->readU16(recordAddress + 0x00);
+    record.texId0x02 = elf_->readU16(recordAddress + 0x02);
+    record.flags0x04 = elf_->readU8(recordAddress + 0x04);
+    record.loadState0x05 = elf_->readU8(recordAddress + 0x05);
+    record.textureBind0x06 = elf_->readU8(recordAddress + 0x06);
+    record.staticSlot0x07 = elf_->readU8(recordAddress + 0x07);
+    return record;
+  }
+
+  std::vector<EntityModelRecord> EntityDescriptorTable::FUN_00221fd8_staticTextureBinds() const
+  {
+    std::vector<EntityModelRecord> binds;
+    if (!available())
+    {
+      return binds;
+    }
+
+    // The original bounds the primary walk with iGpffffb270 and the secondary
+    // walk with "next record's mesh id is zero". Both tables terminate on a
+    // zero mesh id at exactly the record counts the offline extractor found
+    // (95 and 114), so the terminator alone is enough and the port does not
+    // have to resolve a gp-relative count.
+    constexpr std::size_t kRecordCap = 256;
+    for (const std::uint32_t base : {kDAT_0031ee48_primaryModels, kDAT_003214f8_secondaryModels})
+    {
+      for (std::size_t index = 0; index < kRecordCap; ++index)
+      {
+        const std::optional<EntityModelRecord> record =
+            readModelRecord(base + static_cast<std::uint32_t>(index) * kModelRecordStride);
+        if (!record.has_value() || record->meshId0x00 == 0)
+        {
+          break;
+        }
+        if (record->bindsTextureStatically() && record->texId0x02 != 0)
+        {
+          binds.push_back(*record);
+        }
+      }
+    }
+
+    // PTR_DAT_003228c0's table lives in BSS, so its static binds are not
+    // reachable from the executable. None of s01_e024's entities use it.
+    return binds;
+  }
+
 } // namespace orphen::ported::entity

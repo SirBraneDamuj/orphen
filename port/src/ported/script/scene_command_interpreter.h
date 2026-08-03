@@ -245,6 +245,15 @@ namespace orphen::ported::script
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
 
+    // FUN_002661a8: resolve a type id to its model record and make sure the
+    // model and its texture are resident. Opcode 0x4D's per-id call.
+    //
+    // The order matters and is checkable: this is what fills the texture slot
+    // cache, and s01_e024's preload list reproduces the EE dump's slot table
+    // exactly -- 0x55 to the alt bank at 24, then 0x62, 0x64, 0x1, 0x3, 0x4,
+    // 0x7, 0x5, 0x6 filling 11 through 17 behind the lead player's slot 10.
+    std::function<void(std::uint16_t typeId)> FUN_002661a8_preload_model;
+
     // DAT_003555bc, the per-frame tick count. The fade steps by it.
     std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks;
   };

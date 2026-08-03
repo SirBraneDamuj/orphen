@@ -128,10 +128,10 @@ namespace orphen::ported::script
     FUN_0025c220_relativeJump(); // the default target sits past the pairs
   }
 
-  // 0x4D (FUN_0025e628): count byte, then that many raw dwords, each a resource
-  // id handed to FUN_002661f8 -> FUN_002661a8 to load a model. The port has no
-  // models, so it records the list; negative ids are skipped by the original's
-  // walker and are skipped here too.
+  // 0x4D (FUN_0025e628): count byte, then that many raw dwords, each an entity
+  // type id handed to FUN_002661f8 -> FUN_002661a8, which resolves the type's
+  // model record and loads its model and texture. Negative ids are skipped by
+  // the original's walker and are skipped here too.
   void SceneCommandInterpreter::FUN_0025e628_process_resource_ids()
   {
     const std::uint8_t count = readU8();
@@ -142,6 +142,10 @@ namespace orphen::ported::script
       if (narrowed > 0)
       {
         trace_.recordPreloadedResource(static_cast<std::uint16_t>(narrowed));
+        if (environment_.FUN_002661a8_preload_model)
+        {
+          environment_.FUN_002661a8_preload_model(static_cast<std::uint16_t>(narrowed));
+        }
       }
     }
   }

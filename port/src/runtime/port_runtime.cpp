@@ -124,6 +124,23 @@ namespace orphen::port
 
     if (mapViewer_.loadedMap() != nullptr)
     {
+      // Models bind before the script runs, so the spawn path can report a
+      // missing model at the moment it spawns the entity that wanted it.
+      modelStore_.initialize(mapViewer_.loadedSceneResources(), config.discRoot, &descriptorTable_);
+      modelStore_.FUN_00221fd8_bind_boot_textures();
+      // FUN_0022a418 lines 190-197 bind the lead player's model before the
+      // scene script runs, straight through FUN_00221d20 with the default bank
+      // rather than through FUN_00266118. It reads the party leader from
+      // DAT_0058beb0 and *forces it to 1 when it is zero*, which is what
+      // happens here: the pool's lead slot has not been given its type yet at
+      // this point in the load, so without that default the preload list would
+      // claim slot 10 and every scene texture would land one slot early.
+      constexpr std::uint32_t kDAT_0058beb0_defaultLeader = 1;
+      const std::uint32_t leader = entityPool_.leadPlayer().typeId00 != 0
+                                       ? entityPool_.leadPlayer().typeId00
+                                       : kDAT_0058beb0_defaultLeader;
+      modelStore_.bindingForTypeId(leader);
+
       resetLeadPlayerForLoadedMap();
       runSceneScript();
       if (config.printScriptReport)
@@ -267,6 +284,11 @@ namespace orphen::port
       }
       leadPlayer_.resetToMap(*map, orphen::ported::psm2::Vec3{x, y, z});
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+    };
+
+    environment.FUN_002661a8_preload_model = [this](std::uint16_t typeId)
+    {
+      modelStore_.bindingForTypeId(typeId);
     };
 
     return environment;
@@ -705,6 +727,83 @@ namespace orphen::port
                 << "," << model.bounds.max.z << ")\n";
     }
     std::cout << "[models] parsed=" << parsed << " failed=" << failed << '\n';
+
+    printEntityModelBindings();
+  }
+
+  // The entity half: which model and texture each live entity resolved to, and
+  // the resulting texture slot table.
+  //
+  // The slot table is the strongest check in the port, because it is a table
+  // nobody here designed: FUN_00221d20 fills DAT_00315a98 in bundle order and
+  // FUN_00210280 fills DAT_003429a8, and both are readable in the EE dump. If
+  // the port's bank ranges, free-slot rule or static-bind handling are wrong,
+  // the numbers move.
+  void PortRuntime::printEntityModelBindings() const
+  {
+    EntityModelStore &store = const_cast<EntityModelStore &>(modelStore_);
+
+    std::cout << "[models] entity bindings"
+              << (store.bootBundleLoaded() ? "" : "  (no s00_e000 boot bundle)") << '\n';
+
+    const auto describe = [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
+      const EntityModelBinding *binding = store.bindingForTypeId(entity.typeId00);
+      std::cout << "  slot=" << std::setw(3) << slot
+                << " type=0x" << std::hex << entity.typeId00 << std::dec;
+      if (binding == nullptr)
+      {
+        std::cout << "  no model record (streamed or unresolved descriptor)\n";
+        return;
+      }
+      std::cout << "  grp_" << std::hex << std::setw(4) << std::setfill('0') << binding->meshId
+                << " tex_" << std::setw(4) << binding->textureId << std::dec << std::setfill(' ');
+      if (binding->textureSlot == orphen::ported::resource::kNoTextureSlot)
+      {
+        std::cout << " slot=--";
+      }
+      else
+      {
+        std::cout << " slot=" << std::setw(2) << binding->textureSlot;
+      }
+      if (binding->model == nullptr)
+      {
+        std::cout << "  NO MODEL: " << binding->diagnostic;
+      }
+      else
+      {
+        std::cout << "  submeshes=" << binding->model->submeshes.size()
+                  << " verts=" << binding->model->vertices.size();
+      }
+      std::cout << '\n';
+    };
+
+    describe(0, entityPool_.leadPlayer());
+    entityPool_.forEachScriptSpawned(
+        [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
+          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            return;
+          }
+          describe(slot, entity);
+        });
+
+    std::cout << "[models] texture slots (DAT_00315a98 cache key / DAT_003429a8 resident)\n";
+    for (std::size_t slot = 0; slot < orphen::ported::resource::kTextureSlotCount; ++slot)
+    {
+      const auto &state = store.textureSlots().slot(slot);
+      if (!state.occupied() && state.DAT_00315a98_cacheKey == 0)
+      {
+        continue;
+      }
+      std::cout << "  slot " << std::setw(2) << slot
+                << "  key=" << std::setw(6) << state.DAT_00315a98_cacheKey
+                << "  resident=0x" << std::hex << std::setw(4) << std::setfill('0')
+                << state.DAT_003429a8_residentId << std::dec << std::setfill(' ')
+                << (state.texture.rgbaPixels.empty() ? "  (no pixels)" : "") << '\n';
+    }
+    std::cout << "[models] loaded=" << store.loadedModelCount()
+              << " slotsOccupied=" << store.textureSlots().occupiedSlots()
+              << " texturesMissing=" << store.textureSlots().missingTextures() << '\n';
   }
 
   // Dumps every primitive whose bounds come within `radius` of a world point,
