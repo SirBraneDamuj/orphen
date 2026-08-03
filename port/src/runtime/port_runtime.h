@@ -37,6 +37,8 @@ namespace orphen::port
     bool printScriptReport = false;
     bool printActorReport = false;
     bool printRenderReport = false;
+    // --model-report: parse every grp record in the bundle and print its counts.
+    bool printModelReport = false;
     // DAT_00355628 override, for experimenting before the script opcode that
     // normally sets it (FUN_00263cb8) is wired up.
     std::optional<float> drawDistanceOverride;
@@ -119,6 +121,7 @@ namespace orphen::port
     void printScriptReport() const;
     void printActorReport() const;
     void printRenderReport() const;
+    void printModelReport() const;
     void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
     void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
     void reportTickHalt(const char *what) const;

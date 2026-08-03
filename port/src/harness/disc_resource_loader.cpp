@@ -23,8 +23,6 @@ namespace orphen::harness
   namespace
   {
 
-    constexpr std::uint16_t kMapCategory = 2;
-    constexpr std::uint16_t kTextureCategory = 3;
     constexpr std::array<std::uint8_t, 4> kPsm2Magic{'P', 'S', 'M', '2'};
     constexpr std::array<std::uint8_t, 4> kBmpaMagic{'B', 'M', 'P', 'A'};
 

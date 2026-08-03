@@ -96,9 +96,16 @@ namespace orphen::ported::entity
     std::memcpy(&word0x10AsFloat, &descriptor->word0x10, sizeof(word0x10AsFloat));
     entity.maxStepHeight80 = word0x10AsFloat;
 
-    // FUN_00229c40 also sets +0xA0 through a separate path; a freshly built
-    // entity stands.
-    entity.animationA0 = 1;
+    // FUN_00229c40 clears the whole 0x1D8-byte slot and then never writes
+    // +0xA0, so a freshly spawned entity is on animation 0 and stays there
+    // until a behavior calls FUN_00225bc8. It does set +0xA2 and +0xAE to
+    // 0xFFFF, which is what makes the first real selection count as a change.
+    //
+    // The port used to default this to 1. The EE dump settles it: the five
+    // party members and the streamed prop, none of which have selected an
+    // animation, all read +0xA0 == 0.
+    entity.animationA0 = 0;
+    entity.previousSubstateA2 = 0xFFFF;
   }
 
   std::size_t EntityPool::FUN_00265e28_allocate_and_initialize(std::int32_t typeId,

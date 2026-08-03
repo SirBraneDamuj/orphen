@@ -73,7 +73,9 @@ namespace orphen::ported::entity
     // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.
     std::int32_t placementRecordIndex98 = -1;
 
-    std::uint16_t animationA0 = 1;           // +0xA0: animation id; see FUN_00256bb8.
+    // +0xA0: animation id, an index into the table at +0x9C. FUN_00229c40
+    // leaves it at the slot clear's zero; only FUN_00225bc8 ever selects one.
+    std::uint16_t animationA0 = 0;
     std::uint16_t previousSubstateA2 = 0xffff;
     // +0xA4: state timer. FUN_00225bc8 resets it to 999 on an animation change,
     // and FUN_0023a068 advances it by the frame tick while the entity is frozen

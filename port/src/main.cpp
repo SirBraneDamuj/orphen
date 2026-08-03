@@ -23,10 +23,12 @@ namespace
                  "                  behavior vtables) from the retail executable.\n"
                  "                  Defaults to SLUS_200.11 in the disc root.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
-                 "  --scr-tick      run the scene script's per-frame entry and its\n"
-                 "                  object-script slots every frame. Off by default.\n"
+                 "  --no-scr-tick   stop running the scene script's per-frame entry\n"
+                 "                  and its object-script slots. On by default.\n"
                  "  --actor-report  print which actor behavior each spawned entity\n"
-                 "                  dispatches to, and which of them are ported.\n";
+                 "                  dispatches to, and which of them are ported.\n"
+                 "  --model-report  parse every grp record in the scene bundle and\n"
+                 "                  print its geometry counts.\n";
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -112,6 +114,11 @@ namespace
       if (argument == "--render-report")
       {
         config.printRenderReport = true;
+        continue;
+      }
+      if (argument == "--model-report")
+      {
+        config.printModelReport = true;
         continue;
       }
       if (argument == "--draw-distance")

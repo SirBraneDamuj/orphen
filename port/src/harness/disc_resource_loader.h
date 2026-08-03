@@ -13,6 +13,13 @@ namespace orphen::harness
 
   class SceneResourceProvider;
 
+  // Record categories inside an MCB bundle. Promoted out of the .cpp because
+  // the model path needs to ask for grp records by category too.
+  inline constexpr std::uint16_t kGrpCategory = 0;     // PSC3 character/prop models
+  inline constexpr std::uint16_t kScrCategory = 1;     // scene bytecode
+  inline constexpr std::uint16_t kMapCategory = 2;     // PSM2 map geometry
+  inline constexpr std::uint16_t kTextureCategory = 3; // BMPA texture pages
+
   struct McbSceneSelection
   {
     std::uint16_t section = 0;

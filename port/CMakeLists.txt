@@ -89,6 +89,8 @@ target_sources(orphen_port
     src/ported/psm2/psm2_geometry_builder.h
     src/ported/psm2/psm2_material_expansion.cpp
     src/ported/psm2/psm2_material_expansion.h
+    src/ported/model/psc3_model.cpp
+    src/ported/model/psc3_model.h
     src/ported/render/original_view_projection.cpp
     src/ported/render/original_view_projection.h
     src/ported/render/original_map_visibility.cpp

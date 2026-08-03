@@ -32,35 +32,92 @@ Where relevant, strings.json/globals.json addresses are referenced; raw decompil
 8. Call FUN_00212058 to build the render/engine command buffer into the arena; update request +0x28 to point to it.
 9. Align arena to 16; overflow check against 0x18499FF; write total size consumed to request +0x20.
 
-### PSC3 header fields (partial, from consumer code)
+### PSC3 header fields
+
+Revised 2026-08-02 after reading `FUN_00212058`, `FUN_002129b8` and
+`FUN_0020c810` line by line, and validating the result against the nine models
+in `s01_e024` plus the chest model `grp_0172`. The earlier version of this
+section had three fields wrong or missing; those are called out inline. The
+port's parser is `port/src/ported/model/psc3_model.{h,cpp}`.
 
 - +0x00: Magic ‘PSC3’ (0x33435350)
-- +0x04: u16 submesh_count
+- +0x04: u16 submesh_count. **This is also the bone count** — `FUN_0020eec0`
+  uploads exactly one 64-byte matrix per submesh to VU1.
 - +0x06: u16 reserved
 - +0x08: u32 offs_submesh_list
-  - N entries x 0x14 bytes; entry[+6] (u16) participates in computing max stream counts in FUN_00212058.
+  - N entries x 0x14 bytes.
+    - +0x00 / +0x02: u16 vertex stream window
+    - +0x04 / +0x06: u16 primitive range. `FUN_00212058` loops to `max(+0x06)`
+      across all submeshes; there is no stored primitive count.
+    - +0x08: u16 byte length of this submesh's slab
+    - +0x0A: u16. Its low byte holds the parent bone index for every non-root
+      bone, but the game never reads it and root bones carry junk there. Build
+      the hierarchy from the child lists instead (see +0x10).
+    - +0x0C: u16 byte offset, from the model base, of this bone's **child bone
+      list**. Zero means a leaf. `FUN_0020d618` recurses over it.
+    - +0x10: u32 byte offset into the section at +0x10's region
+- +0x0C: **u32 offs_anim_table** — missing from the earlier revision. This is
+  what `FUN_00229c40` stores into entity `+0x9C`; entity `+0xA0` indexes it.
+- +0x10: **u32 offs_root_bone_list** — missing from the earlier revision. Not a
+  single list but a region of bone-index byte lists, each terminated by a byte
+  with bit 7 set (`FUN_0020c810` tests `< 0x80`). The list at this offset holds
+  the roots; each bone's own child list is found through its submesh +0x0C.
+  Walking roots → children reaches every bone in all ten models checked, with
+  none left over.
 - +0x14: u32 offs_vertex_record_table
-  - Per-vertex records, stride 10 bytes. Layout (inferred from FUN_002129b8):
+  - Per-vertex records, stride 10 bytes:
     - +0: x (s16) / 2048.0
     - +2: y (s16) / 2048.0
     - +4: z (s16) / 2048.0
-    - +6: u16 index into float4 table at +0x28 (normal/tangent/weights)
-    - +8: u16 TBD (likely UV or secondary attribute; not yet consumed in traced code)
-- +0x18: u32 offs_vertex_byte_table
-  - One byte per vertex (indexed by vertex id) used to build a per-vertex scalar (byte\*4 + 0x20) in FUN_002129b8; semantics TBD (alpha? weight?).
-- +0x1C: u32 offs_draw_desc_table
-  - Entries x 0x18 bytes; renderer iterates these per submesh.
-  - Offsets within entry used by renderer:
-    - +0x04 / +0x06: u16s whose equality toggles a state (3 vs 4 in code).
-    - +0x08: u16 flags — bits 0x20, 0x100, 0x200, 0x400, 0x800 influence state and command stream.
-    - +0x0E..+0x16: 4 x i16 “stream indices”; each -1 if unused. Renderer picks the last non -1.
+    - +6: u16 index into the float4 table at +0x28 (the vertex normal, used when
+      the primitive's flag 0x8 is set)
+    - +8: u16. Read by nothing in the traced code and zero in every vertex of
+      every `s01_e024` model.
+  - Positions are **bone-local**, so a model's raw bounds are much smaller than
+    the character it draws; they only mean anything after the pose is applied.
+- +0x18: u32 offs_vertex_bone_table
+  - One byte per vertex. `FUN_002129b8` line 56 writes `byte * 4 + 0x20` into
+    the w component of the vertex stream: that is a VU1 *address* — palette base
+    0x20, four quadwords per 4x4 matrix — so the byte is the vertex's **bone
+    index**. Skinning is therefore one rigid bone per vertex with no weights.
+    The earlier revision listed this as "semantics TBD (alpha? weight?)".
+    Checked against `grp_0091`: 81 bytes in the range 2..14 for 81 vertices with
+    16 submeshes, then padding.
+- +0x1C: u32 offs_primitive_table
+  - Entries x 0x18 bytes:
+    - +0x00..+0x06: 4 x u16 vertex indices. **v2 == v3 means a triangle**,
+      otherwise a quad (`FUN_00212058` line 108).
+    - +0x08: u16 flags — 0x20 skip, 0x8 per-vertex normal *and* colour, 0x100
+      suppresses the +0x0C byte, 0x200 selects the untextured colour path,
+      0x400 clears the blend bit, 0x800 affects the texture mode.
+    - +0x0A: u16 base index into the colour table; corner *i* reads entry
+      `+0x0A + i`.
+    - +0x0C: u8 fog/detail byte, only applied on the last active pass.
+    - +0x0D: u8 alpha.
+    - +0x0E..+0x14: 4 x i16 subdraw indices, one per pass. -1 means unused.
+      A **negative value other than -1 is not a subdraw index**: `FUN_002129b8`
+      masks off bit 15 and uses the rest as a colour index, drawing the pass
+      untextured.
+    - +0x16: u16 flat normal index, used when flag 0x8 is clear.
 - +0x20: u32 offs_color_table
-  - Color entries packed as 3 bytes per vertex (accessed via helpers FUN_00212cf0 / FUN_00212d28 inside FUN_002129b8). Combined with state bits to form draw color words.
-- +0x24: u32 offs_resource_table
-  - Entries of 10 bytes; renderer indexes this by the chosen stream index to fetch a u16 field used as a compact format/flag descriptor.
-  - The top bits (0xC000) and low 7 bits participate in deriving counts and flags.
-- +0x28: u32 offs_float4_table
-  - Array of float4 (16 bytes each). FUN_002129b8 indexes with the u16 at vertex record +6; xyz used, w currently ignored (set to 0.0 when copying).
+  - Three bytes per entry, indexed as described under primitive +0x0A. Read
+    through `FUN_00212cf0` (untextured path) or `FUN_00212d28` (textured path).
+- +0x24: u32 offs_subdraw_table — the earlier revision called this a "resource
+  table". Stride 10:
+  - +0x00..+0x06: 4 x u16, one per corner, each packing `(U << 8) | V` as 8-bit
+    texel coordinates over a 256x256 page.
+  - +0x08: u16 texture flags, split by `FUN_00212058` as
+    bits 15..14 blend mode, 13..11 texture bank (+7 when non-zero),
+    10..7 texture slot (0xF = none), 6..0 alpha (0x7F meaning 0x80).
+    `tools/resource_extract/v2/psc3_full.py` reads bits 14..8 as a single
+    "atlas slot"; that grouping does not match the code.
+- +0x28: u32 offs_normal_table
+  - Array of float4 (16 bytes each). `FUN_002129b8` copies xyz and forces w to 0.
+- +0x2C: **u32 offs_keyframe_pool** — missing from the earlier revision. The s16
+  quaternion and translation keys `FUN_0020d378` samples. Quantisation:
+  `quat.xyz = s16 / 2048`, `quat.w = s16 / 4096`, `translation = s16 /
+  DAT_00352060`. That divisor reads **10430.380859** in both available EE dumps,
+  so it is a constant; `psc3_full.py` guesses 2048 for it and is wrong.
 - +0x40: u32 offs_subheader (optional)
   - If present and request bit0 set, FUN_00221e70 constructs four initialized tables appended into the arena. The size calculator is `((count-1)*10 + 3 aligned to 4) + 0x10`, where `count` is the 16-bit value at the subheader base.
 - dword[7] (offset +0x1C in the header dwords array): reserved size used to advance the arena in the compressed path (the copy/relocation covers the difference `DAT_00355720 - reservedSize`).
@@ -122,10 +179,22 @@ To mirror in-game behavior for an offline parser:
 5. Use +0x24 to fetch 10-byte resource records; the u16 at +8 packs flags/format (top two bits, low 7 bits observed in code).
 6. Extended subheader at +0x40 is optional; if present, you can emulate FUN_00221e70 to build and attach the four initialized tables for parity with runtime.
 
-Open items (TBD through further code reading):
+Resolved since the original revision (see the header section above):
 
-- Meaning of vertex record field at +8 (potential UV / secondary index).
-- Detailed palette / CLUT logic for color table (+0x20) beyond per-vertex triple.
-- Full index/face reconstruction workflow (draw call batching, primitive type) — current plan uses sequential triangles for offline visualization.
-- Definitive meanings for the 10-byte resource record fields; presently only the 16-bit at +8 is clearly used.
-- Exact geometry/indices location and format — likely referenced in other renderer code paths or via VIF unpack routines.
+- Geometry, indices and primitive type — the primitive table at +0x1C carries
+  four vertex indices per entry with `v2 == v3` marking a triangle. No sequential
+  guessing is needed.
+- UVs — per-corner, in the subdraw table at +0x24.
+- The vertex byte table at +0x18 — per-vertex bone index.
+- The keyframe pool, animation table and bone hierarchy — +0x2C, +0x0C, +0x10.
+
+Still open:
+
+- Meaning of vertex record field at +8. Zero in every model checked.
+- The low byte of the subdraw texture flags (bits 6..0) is read as an alpha
+  value by `FUN_00212058`, but how the 4-bit slot and 3-bit bank at 10..7 and
+  13..11 index the runtime texture-slot cache (`DAT_00315a98`) is not confirmed.
+- `FUN_002103d0`, the GS BITBLT packet builder that uploads a decoded texture to
+  VRAM. Not needed by the GL port, which binds a texture object per slot.
+- Section A, the region each submesh's +0x10 points into. Not touched by the
+  rasteriser.

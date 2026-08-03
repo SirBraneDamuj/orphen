@@ -1,6 +1,7 @@
 #include "runtime/port_runtime.h"
 
 #include "runtime/psm2_ground_query.h"
+#include "ported/model/psc3_model.h"
 #include "ported/script/object_registers.h"
 #include "ported/player/original_interaction.h"
 
@@ -132,6 +133,10 @@ namespace orphen::port
       if (config.printSceneTree)
       {
         mapViewer_.printLoadedSceneTree(std::cout);
+      }
+      if (config.printModelReport)
+      {
+        printModelReport();
       }
       const auto &stats = mapViewer_.loadedMap()->stats;
       std::cout << "[psm2] loaded " << mapViewer_.loadedSourceDescription()
@@ -638,6 +643,68 @@ namespace orphen::port
     {
       printRenderReport();
     }
+  }
+
+  // Parses every grp record in the loaded bundle and prints what came out.
+  //
+  // This exists because the counts are externally checkable: the offline
+  // extractor writes them into the second line of each
+  // out/target_all/<scene>/grp_*.obj, so an agreeing report means the port and
+  // a tool written from a different reading of the format independently landed
+  // on the same numbers.
+  void PortRuntime::printModelReport() const
+  {
+    const auto *resources = mapViewer_.loadedSceneResources();
+    if (resources == nullptr)
+    {
+      std::cout << "[models] no scene bundle loaded\n";
+      return;
+    }
+
+    std::cout << "[models] grp records in " << mapViewer_.loadedSourceDescription() << '\n';
+    std::size_t parsed = 0;
+    std::size_t failed = 0;
+    for (const auto &record : resources->records())
+    {
+      if (record.category != orphen::harness::kGrpCategory)
+      {
+        continue;
+      }
+
+      const std::vector<std::uint8_t> decoded = resources->decodeRecord(record);
+      if (!orphen::ported::model::hasPsc3Magic(decoded))
+      {
+        std::cout << "  grp_" << std::hex << std::setw(4) << std::setfill('0') << record.resourceId
+                  << std::dec << std::setfill(' ') << "  not PSC3, skipped\n";
+        continue;
+      }
+
+      const orphen::ported::model::Psc3Model model = orphen::ported::model::loadPsc3Model(decoded);
+      std::cout << "  grp_" << std::hex << std::setw(4) << std::setfill('0') << record.resourceId
+                << std::dec << std::setfill(' ');
+      if (!model.valid)
+      {
+        ++failed;
+        std::cout << "  PARSE FAILED: " << model.diagnostic << '\n';
+        continue;
+      }
+
+      ++parsed;
+      std::cout << "  submeshes=" << model.submeshes.size()
+                << " verts=" << model.vertices.size()
+                << " prims=" << model.primitives.size()
+                << " (skip " << model.skippedPrimitives << ")"
+                << " subdraws=" << model.subdraws.size()
+                << " normals=" << model.normals.size()
+                << " passes=" << model.texturedPasses << "/" << model.untexturedPasses
+                << " roots=" << model.rootBones.size()
+                << " boned=" << model.boneOrder.size()
+                << " orphans=" << model.unreachableBones
+                << " bounds=(" << model.bounds.min.x << "," << model.bounds.min.y << ","
+                << model.bounds.min.z << ")..(" << model.bounds.max.x << "," << model.bounds.max.y
+                << "," << model.bounds.max.z << ")\n";
+    }
+    std::cout << "[models] parsed=" << parsed << " failed=" << failed << '\n';
   }
 
   // Dumps every primitive whose bounds come within `radius` of a world point,
