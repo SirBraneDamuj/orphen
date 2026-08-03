@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <utility>
 
 namespace orphen::ported::entity
 {
@@ -35,6 +36,23 @@ namespace orphen::ported::entity
                         const ActorHandler &handler,
                         bool implemented);
 
+    // The second dispatch: which per-type state handler the entity's +0x60
+    // resolved to, and whether the port implements it. A type can be dispatched
+    // and still do nothing because the *state* it is in has no port, and that
+    // distinction is invisible without this.
+    struct ActorStateStat
+    {
+      std::uint32_t handlerAddress = 0;
+      std::uint32_t tickCount = 0;
+      bool implemented = false;
+    };
+    void recordStateDispatch(std::int16_t typeId,
+                             std::uint16_t state,
+                             std::uint32_t handlerAddress,
+                             bool implemented);
+    const std::map<std::pair<std::int16_t, std::uint16_t>, ActorStateStat> &states() const { return states_; }
+    std::uint32_t unimplementedStateCount() const;
+
     // Entities skipped before the type dispatch, by which guard stopped them.
     void recordHidden() { ++hiddenCount_; }
     void recordSuspended() { ++suspendedCount_; }
@@ -63,6 +81,7 @@ namespace orphen::ported::entity
 
     std::map<std::int16_t, ActorTypeStat> types_;
     std::map<std::int16_t, SlotBits> seenSlots_;
+    std::map<std::pair<std::int16_t, std::uint16_t>, ActorStateStat> states_;
     std::uint32_t hiddenCount_ = 0;
     std::uint32_t suspendedCount_ = 0;
     std::uint32_t fadingCount_ = 0;

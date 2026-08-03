@@ -790,6 +790,20 @@ namespace orphen::port
                   << " firstSlot=" << entry.second.firstSlot
                   << (entry.second.implemented ? "  implemented" : "  UNIMPLEMENTED") << '\n';
       }
+      if (!actorTrace_.states().empty())
+      {
+        std::cout << "state handlers reached (the second dispatch, on entity +0x60):\n";
+        for (const auto &entry : actorTrace_.states())
+        {
+          std::cout << "  type=0x" << std::hex << entry.first.first << std::dec
+                    << " state=" << entry.first.second
+                    << " -> 0x" << std::hex << entry.second.handlerAddress << std::dec
+                    << " ticks=" << entry.second.tickCount
+                    << (entry.second.implemented ? "  implemented" : "  UNIMPLEMENTED") << '\n';
+        }
+        std::cout << "unimplemented state handlers: " << actorTrace_.unimplementedStateCount() << '\n';
+      }
+
       std::cout << "skipped: hidden=" << actorTrace_.hiddenCount()
                 << " suspended=" << actorTrace_.suspendedCount()
                 << " fading=" << actorTrace_.fadingCount() << '\n';

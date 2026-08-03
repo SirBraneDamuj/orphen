@@ -84,7 +84,10 @@ namespace orphen::ported::entity
     // +0xBD: freeze / hit-stop countdown in frames, read by FUN_0023a068.
     std::int8_t freezeTimerBd = 0;
 
+    // +0xBE: damage taken since the last tick, drained by FUN_002cd0a0.
+    std::uint16_t pendingDamageBe = 0;
     std::int16_t recordId130 = -1;           // +0x130: the placement record's id byte.
+    std::uint16_t staggerTimer12a = 0;       // +0x12A: hit points the +0xBE drain eats into.
     // +0x192: the interaction candidate gate FUN_00252a18 tests, signed and
     // required negative. FUN_00229c40 seeds it to 0xFFFF for every entity it
     // builds, so an entity is interactable until something takes it out.
@@ -104,6 +107,21 @@ namespace orphen::ported::entity
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     std::uint8_t effectActive19e = 0;        // +0x19E: that timer's enable.
+
+    // Type 0x62's own block, all written by FUN_002cd210 and read by its states.
+    std::int32_t targetIndex19c = 0;         // +0x19C: pool index of the chase target.
+    std::int32_t targetSlot1a0 = -1;         // +0x1A0: that target, resolved.
+    std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
+    float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
+    float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.
+    float homeX1b4 = 0.0f;                   // +0x1B4: spawn position, three floats.
+    float homeZ1b8 = 0.0f;
+    float homeY1bc = 0.0f;
+    std::int16_t attackChance1c0 = 0;        // +0x1C0: attack roll threshold out of 1000.
+    std::uint16_t hitFlash1c2 = 0;           // +0x1C2: hit tint countdown.
+    std::int16_t alertState1c4 = 0;          // +0x1C4: 1 forces state 2, 2 selects the alternate target.
+    std::uint16_t repathTimer1c6 = 0;        // +0x1C6: FUN_002cdb28's re-roll period.
+    std::uint8_t enemyFlags1c8 = 0;          // +0x1C8: 0 halves state 3's repath period.
 
     std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
     std::uint8_t motionFlags1bb = 0;

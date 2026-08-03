@@ -7,6 +7,7 @@ namespace orphen::ported::entity
   {
     types_.clear();
     seenSlots_.clear();
+    states_.clear();
     hiddenCount_ = 0;
     suspendedCount_ = 0;
     fadingCount_ = 0;
@@ -78,6 +79,30 @@ namespace orphen::ported::entity
     {
       (void)typeId;
       count += stat.entityCount;
+    }
+    return count;
+  }
+
+  void ActorTrace::recordStateDispatch(std::int16_t typeId,
+                                       std::uint16_t state,
+                                       std::uint32_t handlerAddress,
+                                       bool implemented)
+  {
+    auto &stat = states_[{typeId, state}];
+    stat.handlerAddress = handlerAddress;
+    stat.implemented = implemented;
+    ++stat.tickCount;
+  }
+
+  std::uint32_t ActorTrace::unimplementedStateCount() const
+  {
+    std::uint32_t count = 0;
+    for (const auto &entry : states_)
+    {
+      if (!entry.second.implemented)
+      {
+        ++count;
+      }
     }
     return count;
   }

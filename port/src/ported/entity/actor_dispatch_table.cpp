@@ -96,4 +96,15 @@ namespace orphen::ported::entity
     return handler;
   }
 
+  std::uint32_t ActorDispatchTable::stateHandler(std::uint32_t tableAddress,
+                                                std::size_t stateCount,
+                                                std::uint16_t state) const
+  {
+    if (!available() || state >= stateCount)
+    {
+      return 0;
+    }
+    return elf_->readU32(tableAddress + static_cast<std::uint32_t>(state) * 4u, 0u);
+  }
+
 } // namespace orphen::ported::entity

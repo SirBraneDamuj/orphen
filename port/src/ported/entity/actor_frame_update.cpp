@@ -142,12 +142,123 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_0025ab68 (party members, types 0x03..0x07): freeze gate, then
+  // PTR_LAB_0031e1d0[+0x60].
+  //
+  // Entities spawn in state 0, and state 0 -- like state 6 -- is 0x0025ABB8,
+  // which is `jr ra; nop` in the executable. So an idle party member genuinely
+  // does nothing every frame, and the room's characters keep the facing the
+  // scene's init gave them through object register 13. That is the whole of
+  // their visible behavior until something moves them out of state 0.
+  void FUN_0025ab68_party_member(OriginalEntity &entity,
+                                 const ActorEnvironment &environment,
+                                 ActorTrace &trace)
+  {
+    if (FUN_0023a068_freeze_gate(entity, environment.frameTicks))
+    {
+      return;
+    }
+
+    const std::uint32_t handler = environment.dispatchTable->stateHandler(
+        kPTR_LAB_0031e1d0_partyStates, kPartyStateCount, entity.state60);
+    trace.recordStateDispatch(entity.typeId00, entity.state60, handler, handler == kLAB_0025abb8_noOp);
+  }
+
+  // FUN_002cd210: the type 0x62 enemy's state 0, which is its one-shot init.
+  void FUN_002cd210_enemy62_init(OriginalEntity &entity, EntityPool &pool)
+  {
+    // Straight to the chase state.
+    FUN_00225bf0_set_state_and_animation(entity, 3, 2);
+
+    entity.enemyFlags1c8 = 1;
+    entity.attackChance1c0 = 1000;
+    entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 1u);
+
+    // +0x1A0 is the target, resolved from the pool index at +0x19C. The
+    // original stores a pointer; the port stores the slot.
+    entity.targetSlot1a0 = entity.targetIndex19c;
+
+    // FUN_00267da0(+0x1B4, +0x20, 0xC): the home position, three floats copied
+    // out of the live position. State 3 falls back to it when it has no target.
+    entity.homeX1b4 = entity.positionX20;
+    entity.homeZ1b8 = entity.positionZ24;
+    entity.homeY1bc = entity.positionY28;
+
+    // The original also spawns +0x198 companion clones here, each a copy of this
+    // type placed at the same spot with its own home position and a back-pointer
+    // at +0x1A0. s01_e024's single enemy carries a count of 0, so that loop does
+    // not run; it is not ported.
+    (void)pool;
+  }
+
+  // FUN_002cd0a0 (type 0x62): freeze gate, the +0xBE hit reaction, the +0x1C2
+  // countdown, then PTR_FUN_00326660[+0x60].
+  void FUN_002cd0a0_enemy62(OriginalEntity &entity,
+                            EntityPool &pool,
+                            const ActorEnvironment &environment,
+                            ActorTrace &trace)
+  {
+    if (FUN_0023a068_freeze_gate(entity, environment.frameTicks))
+    {
+      return;
+    }
+
+    // +0xBE is damage taken since the last tick. Draining it to zero forces
+    // state 6 and seeds the stagger. The port has no damage source, so this
+    // never fires -- but it is the wrapper's first act, so it is kept.
+    if (entity.pendingDamageBe != 0)
+    {
+      const std::int32_t remaining =
+          static_cast<std::int32_t>(entity.staggerTimer12a) - static_cast<std::int32_t>(entity.pendingDamageBe);
+      entity.staggerTimer12a = static_cast<std::uint16_t>(remaining);
+      if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1)
+      {
+        entity.staggerTimer12a = 0;
+        FUN_00225bf0_set_state_and_animation(entity, 6, 4);
+        entity.halfword04 = static_cast<std::uint16_t>((entity.halfword04 & 0xFFF7u) | 0x10u);
+        entity.collisionFlags0c &= ~1u;
+        entity.fadeLevel134 = 0x7C;
+      }
+      entity.fadeColor138 = 0xC0;
+      entity.hitFlash1c2 = 0x1E0;
+      entity.pendingDamageBe = 0;
+    }
+
+    // +0x1C2 counts the hit flash down, clearing the tint when it expires.
+    if (entity.hitFlash1c2 != 0)
+    {
+      const std::int32_t remaining =
+          static_cast<std::int32_t>(entity.hitFlash1c2) - static_cast<std::int32_t>(environment.frameTicks);
+      entity.hitFlash1c2 = static_cast<std::uint16_t>(remaining);
+      if (static_cast<std::int16_t>(entity.hitFlash1c2) < 1)
+      {
+        entity.hitFlash1c2 = 0;
+        entity.fadeColor138 = 0;
+      }
+    }
+
+    const std::uint32_t handler = environment.dispatchTable->stateHandler(
+        kPTR_FUN_00326660_enemy62States, kEnemy62StateCount, entity.state60);
+
+    // Only state 0, the init, is ported. It hands straight to state 3, the
+    // hover-and-chase state, which needs the shared non-player physics step
+    // before anything it writes to +0x30/+0x34/+0x38 would move the entity.
+    const bool implemented = entity.state60 == 0;
+    trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
+    if (implemented)
+    {
+      FUN_002cd210_enemy62_init(entity, pool);
+    }
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
     {
     case kFUN_00239e78_noOp:
     case 0x002D1EA8u: // FUN_002d1ea8, type 0x3A
+    case 0x0025AB68u: // FUN_0025ab68, party members
+    case 0x002CD0A0u: // FUN_002cd0a0, the type 0x62 enemy
       return true;
     default:
       return false;
@@ -227,6 +338,12 @@ namespace orphen::ported::entity
       {
       case 0x002D1EA8u:
         FUN_002d1ea8_treasure_chest(entity, environment);
+        break;
+      case 0x0025AB68u:
+        FUN_0025ab68_party_member(entity, environment, trace);
+        break;
+      case 0x002CD0A0u:
+        FUN_002cd0a0_enemy62(entity, pool, environment, trace);
         break;
       case kFUN_00239e78_noOp:
       default:

@@ -2,6 +2,7 @@
 
 #include "ported/resource/elf_data_reader.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace orphen::ported::entity
@@ -58,6 +59,25 @@ namespace orphen::ported::entity
     std::uint32_t slotAddress = 0;
   };
 
+  // The *second* dispatch. Most type handlers are a thin shell: open the freeze
+  // gate, then index a per-type-family table with the entity's state at +0x60.
+  // These tables are static data in the executable too, so they are read rather
+  // than transcribed. Contents confirmed by reading SLUS_200.11:
+  //
+  //   PTR_LAB_0031e1d0  12 entries, FUN_0025ab68, party members (types 3..7).
+  //                     States 0 and 6 both point at 0x0025ABB8, which is a bare
+  //                     `jr ra; nop` -- a real no-op, not a stub. State 5 is a
+  //                     null pointer and is never entered.
+  //   PTR_FUN_00326660  20 entries, FUN_002cd0a0, the type 0x62 enemy.
+  //                     State 7 is null.
+  constexpr std::uint32_t kPTR_LAB_0031e1d0_partyStates = 0x0031E1D0;
+  constexpr std::size_t kPartyStateCount = 12;
+  constexpr std::uint32_t kPTR_FUN_00326660_enemy62States = 0x00326660;
+  constexpr std::size_t kEnemy62StateCount = 20;
+
+  // 0x0025ABB8: `jr ra; nop`, verified in the executable.
+  constexpr std::uint32_t kLAB_0025abb8_noOp = 0x0025ABB8;
+
   class ActorDispatchTable
   {
   public:
@@ -73,6 +93,11 @@ namespace orphen::ported::entity
     // Classifies an id without needing the ELF, so the report can distinguish
     // "no executable loaded" from "this type never had a handler".
     static ActorHandlerSource sourceForTypeId(std::int16_t typeId);
+
+    // One entry of a state table. Returns 0 when there is no executable or the
+    // state is out of range; a null entry in the table reads back as 0 too, and
+    // in both tables that means the state is never entered.
+    std::uint32_t stateHandler(std::uint32_t tableAddress, std::size_t stateCount, std::uint16_t state) const;
 
   private:
     const orphen::ported::resource::ElfDataReader *elf_ = nullptr;
