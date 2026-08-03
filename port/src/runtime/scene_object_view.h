@@ -43,6 +43,11 @@ namespace orphen::port
     float scaleZ150 = 1.0f;  // +0x150
     float rotationX154 = 0.0f;
     float rotationY158 = 0.0f;
+
+    // False for the lead player, which draws its own magenta box and ground
+    // triangle through drawLeadPlayer. It is in this list only so its model
+    // gets drawn with everything else.
+    bool drawDebugBox = true;
   };
 
   using SceneObjectViewList = std::vector<SceneObjectView>;

@@ -473,6 +473,32 @@ namespace orphen::port
   void PortRuntime::publishSceneObjectViews()
   {
     SceneObjectViewList views;
+
+    // Slot 0 is not script-spawned, so forEachScriptSpawned never reaches it and
+    // the lead player had no model for the same reason it has no entry in the
+    // actor report. FUN_0020c5a8 walks all 256 slots; this list is what stands
+    // in for that walk, so the lead player belongs in it.
+    {
+      const auto &lead = entityPool_.leadPlayer();
+      SceneObjectView view;
+      view.slot = 0;
+      view.typeId = lead.typeId00;
+      view.modelIndex = lead.modelIndex;
+      view.position = {lead.positionX20, lead.positionZ24, lead.positionY28};
+      view.facingRadians = lead.facingRadians5c;
+      view.radius = lead.radius54;
+      view.height = lead.height58;
+      view.groundHeight = lead.groundHeight4c;
+      view.descriptorResolved = lead.modelIndex >= 0;
+      view.scale = lead.scale14c;
+      view.scaleZ150 = lead.scaleZ150;
+      view.rotationX154 = lead.rotationX154;
+      view.rotationY158 = lead.rotationY158;
+      view.drawDebugBox = false;
+      attachModel(view, lead);
+      views.push_back(view);
+    }
+
     entityPool_.forEachScriptSpawned(
         [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
         {

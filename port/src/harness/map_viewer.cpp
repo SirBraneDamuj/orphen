@@ -633,6 +633,10 @@ namespace orphen::harness
 
       for (const auto &object : objects)
       {
+        if (!object.drawDebugBox)
+        {
+          continue;
+        }
         const auto foot = toViewerSpace(object.position);
         const float halfWidth = object.descriptorResolved ? std::max(object.radius, 0.05f) : 0.25f;
         const float height = object.descriptorResolved ? std::max(object.height, 0.1f) : 0.6f;
