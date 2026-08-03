@@ -91,6 +91,8 @@ target_sources(orphen_port
     src/ported/psm2/psm2_material_expansion.h
     src/ported/model/psc3_model.cpp
     src/ported/model/psc3_model.h
+    src/ported/model/psc3_skeleton.cpp
+    src/ported/model/psc3_skeleton.h
     src/ported/resource/texture_slot_cache.cpp
     src/ported/resource/texture_slot_cache.h
     src/runtime/entity_model_store.cpp

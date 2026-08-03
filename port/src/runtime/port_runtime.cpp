@@ -2,6 +2,7 @@
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/model/psc3_model.h"
+#include "ported/model/psc3_skeleton.h"
 #include "ported/script/object_registers.h"
 #include "ported/player/original_interaction.h"
 
@@ -448,11 +449,32 @@ namespace orphen::port
     }
   }
 
+  // Resolves an entity's model and the pose column it should be drawn at.
+  //
+  // The column is entity +0xAC in the original, which FUN_00225c90 walks along
+  // the animation's timeline. That walk is not ported yet, so the column comes
+  // straight from the first timeline entry of whichever animation the entity's
+  // behavior has selected -- a correct static pose per animation rather than a
+  // correct moving one.
+  void PortRuntime::attachModel(SceneObjectView &view,
+                                const orphen::ported::entity::OriginalEntity &entity)
+  {
+    const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
+    if (binding == nullptr || binding->model == nullptr)
+    {
+      return;
+    }
+    view.model = binding->model;
+    view.textureSlot = binding->textureSlot;
+    view.poseColumn = orphen::ported::model::firstPoseColumnForAnimation(
+        *binding->model, binding->model->blob, entity.animationA0);
+  }
+
   void PortRuntime::publishSceneObjectViews()
   {
     SceneObjectViewList views;
     entityPool_.forEachScriptSpawned(
-        [&views](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
+        [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
         {
           SceneObjectView view;
           view.slot = slot;
@@ -464,9 +486,12 @@ namespace orphen::port
           view.height = entity.height58;
           view.groundHeight = entity.groundHeight4c;
           view.descriptorResolved = entity.modelIndex >= 0;
+          view.scale = entity.scale14c;
+          attachModel(view, entity);
           views.push_back(view);
         });
     mapViewer_.setSceneObjectViews(std::move(views));
+    mapViewer_.setTextureSlotCache(&modelStore_.textureSlots());
   }
 
   void PortRuntime::printScriptReport() const
@@ -771,8 +796,30 @@ namespace orphen::port
       }
       else
       {
-        std::cout << "  submeshes=" << binding->model->submeshes.size()
-                  << " verts=" << binding->model->vertices.size();
+        // Posed extents, with the root left at identity. The raw parse bounds
+        // are meaningless -- PSC3 vertex positions are bone-local -- so this is
+        // the first number that can be sanity-checked, and the descriptor's
+        // collision size is printed beside it to check against.
+        const auto &model = *binding->model;
+        const std::uint16_t column = orphen::ported::model::firstPoseColumnForAnimation(
+            model, model.blob, entity.animationA0);
+        const auto palette = orphen::ported::model::FUN_0020d618_build_palette(
+            model, model.blob, column, orphen::ported::model::identityMatrix());
+        orphen::ported::psm2::Bounds3 posed;
+        for (const auto &vertex : model.vertices)
+        {
+          const std::size_t bone = vertex.boneIndex < palette.size() ? vertex.boneIndex : 0u;
+          orphen::ported::psm2::includePoint(
+              posed, orphen::ported::model::transformPoint(vertex.position, palette[bone]));
+        }
+        std::cout << "  submeshes=" << model.submeshes.size()
+                  << " verts=" << model.vertices.size()
+                  << " anim=" << entity.animationA0 << " col=" << column
+                  << std::fixed << std::setprecision(2)
+                  << "  posed=" << (posed.max.x - posed.min.x) << "x"
+                  << (posed.max.y - posed.min.y) << "x" << (posed.max.z - posed.min.z)
+                  << "  descriptor=" << entity.radius54 << "r/" << entity.height58 << "h"
+                  << std::defaultfloat;
       }
       std::cout << '\n';
     };

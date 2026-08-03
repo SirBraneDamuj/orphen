@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ported/model/psc3_model.h"
 #include "ported/psm2/psm2_runtime.h"
 
 #include <cstdint>
@@ -12,9 +13,9 @@ namespace orphen::port
   // each time the scene reloads, the same way PlayerViewState is built from the
   // lead player.
   //
-  // There are no models yet: these draw as labelled boxes sized from the type
-  // descriptor's collision radius and height, or a default size when the
-  // descriptor could not be resolved.
+  // Each draws as its PSC3 model when one resolved, and always as a labelled
+  // debug box sized from the type descriptor's collision radius and height --
+  // the box is deliberately kept, not a fallback.
   struct SceneObjectView
   {
     std::size_t slot = 0;
@@ -26,6 +27,16 @@ namespace orphen::port
     float height = 0.0f;
     float groundHeight = 0.0f;
     bool descriptorResolved = false;
+
+    // Null when the type has no static descriptor (the map-streamed ids from
+    // 0x272) or the grp record is not in any open bundle.
+    const orphen::ported::model::Psc3Model *model = nullptr;
+    // Slot in the texture cache, or kNoTextureSlot.
+    int textureSlot = -1;
+    // Entity +0xAC, the pose column every bone's track is indexed by.
+    std::uint16_t poseColumn = 0;
+    // Entity +0x14C.
+    float scale = 1.0f;
   };
 
   using SceneObjectViewList = std::vector<SceneObjectView>;

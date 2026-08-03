@@ -325,6 +325,7 @@ namespace orphen::ported::model
     model.unreachableBones =
         static_cast<std::size_t>(std::count(visited.begin(), visited.end(), false));
 
+    model.blob.assign(bytes.begin(), bytes.end());
     model.valid = true;
     return model;
   }

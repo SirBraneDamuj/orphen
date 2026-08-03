@@ -1,6 +1,7 @@
 #pragma once
 
 #include "harness/disc_resource_loader.h"
+#include "ported/resource/texture_slot_cache.h"
 #include "harness/scene_resource_provider.h"
 #include "harness/debug_text.h"
 #include "runtime/input_state.h"
@@ -31,6 +32,9 @@ namespace orphen::harness
     bool cycleDiscScene(int direction);
     void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
     void setSceneObjectViews(orphen::port::SceneObjectViewList objects);
+    // The entity texture slots, owned by the model store. Uploaded lazily on
+    // the same schedule as the map's pages so headless runs never touch GL.
+    void setTextureSlotCache(const orphen::ported::resource::TextureSlotCache *slots);
     void setFollowCameraPose(const orphen::ported::camera::CameraPose &pose);
 
     // The ported render pipeline's output for this frame. PortRuntime owns
@@ -76,6 +80,9 @@ namespace orphen::harness
     orphen::port::SceneObjectViewList sceneObjectViews_;
     mutable std::vector<unsigned int> uploadedTextureIds_;
     mutable bool textureUploadDirty_ = false;
+    const orphen::ported::resource::TextureSlotCache *textureSlots_ = nullptr;
+    mutable std::vector<unsigned int> slotTextureIds_;
+    mutable bool slotTextureUploadDirty_ = true;
     orphen::ported::psm2::Vec3 cameraTarget_{};
     float cameraDistance_ = 12.0f;
     float cameraYawDegrees_ = 35.0f;
@@ -96,6 +103,7 @@ namespace orphen::harness
     void setTexturePages(std::vector<LoadedDiscTexturePage> texturePages);
     void releaseUploadedTextures() const;
     void ensureTexturesUploaded() const;
+    void ensureSlotTexturesUploaded() const;
     void applyFogState(bool enabled) const;
   };
 

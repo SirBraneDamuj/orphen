@@ -1,5 +1,7 @@
 #include "harness/map_viewer.h"
 
+#include "ported/model/psc3_skeleton.h"
+
 #include <string>
 
 #include "harness/scene_resource_tree.h"
@@ -466,6 +468,164 @@ namespace orphen::harness
     // ids from 0x272 up ship with the map, not the executable -- is drawn in a
     // duller shade at a default size and labelled so, rather than pretending to
     // a size nobody knows.
+    // The entity's root world matrix, standing in for FUN_0020cdc0 (which has
+    // not been analysed). Built from the fields the debug box already proves
+    // correct: position +0x20/+0x24/+0x28, facing +0x5C about the world's
+    // vertical axis, and scale +0x14C.
+    orphen::ported::model::Matrix4 entityRootMatrix(const orphen::port::SceneObjectView &object)
+    {
+      const float c = std::cos(object.facingRadians);
+      const float s = std::sin(object.facingRadians);
+      const float k = object.scale != 0.0f ? object.scale : 1.0f;
+      // World space is Z-up, so facing turns about Z.
+      orphen::ported::model::Matrix4 m = orphen::ported::model::identityMatrix();
+      m[0] = c * k;  m[1] = s * k;
+      m[4] = -s * k; m[5] = c * k;
+      m[10] = k;
+      m[12] = object.position.x;
+      m[13] = -object.position.z;
+      m[14] = object.position.y;
+      return m;
+    }
+
+    // Draws one model's primitives. Vertices are transformed on the CPU by their
+    // own bone's matrix -- one rigid bone per vertex, which is what the vertex
+    // bone table at PSC3 header +0x18 selects and what FUN_0020eec0's palette
+    // upload implies -- then emitted in viewer space, so the camera fold in
+    // glCameraFor keeps working unchanged.
+    //
+    // This is the rasterising half of FUN_00212058 / FUN_002129b8. The GIF
+    // command buffer those build is not reproduced; the primitive walk, the
+    // triangle-vs-quad test, the per-corner UVs and the colour lookup are.
+    void drawObjectModel(const orphen::port::SceneObjectView &object,
+                         const std::vector<unsigned int> &slotTextures)
+    {
+      const auto &model = *object.model;
+      if (model.submeshes.empty() || model.primitives.empty())
+      {
+        return;
+      }
+
+      const std::vector<orphen::ported::model::Matrix4> palette =
+          orphen::ported::model::FUN_0020d618_build_palette(model, model.blob, object.poseColumn,
+                                                            entityRootMatrix(object));
+
+      const unsigned int texture =
+          (object.textureSlot >= 0 &&
+           static_cast<std::size_t>(object.textureSlot) < slotTextures.size())
+              ? slotTextures[static_cast<std::size_t>(object.textureSlot)]
+              : 0u;
+      if (texture != 0)
+      {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, texture);
+      }
+      else
+      {
+        glDisable(GL_TEXTURE_2D);
+      }
+
+      const auto posed = [&](std::uint16_t vertexIndex) {
+        const auto &vertex = model.vertices[vertexIndex];
+        const std::size_t bone = vertex.boneIndex < palette.size() ? vertex.boneIndex : 0u;
+        const auto world = orphen::ported::model::transformPoint(vertex.position, palette[bone]);
+        // Model and world share the Z-up convention; the viewer is Y-up.
+        return orphen::ported::psm2::Vec3{world.x, world.z, -world.y};
+      };
+
+      glBegin(GL_TRIANGLES);
+      for (const auto &primitive : model.primitives)
+      {
+        if (primitive.skipped())
+        {
+          continue;
+        }
+        const std::size_t corners = primitive.cornerCount();
+        bool inRange = true;
+        for (std::size_t corner = 0; corner < corners; ++corner)
+        {
+          inRange = inRange && primitive.vertexIndices[corner] < model.vertices.size();
+        }
+        if (!inRange)
+        {
+          continue;
+        }
+
+        // FUN_00212058 draws one pass per active subdraw index. Only the last
+        // non-negative one is taken here: the extra passes are blend layers the
+        // port has no state for yet, and drawing them all would double-shade.
+        int chosen = -1;
+        for (std::size_t pass = 0; pass < 4; ++pass)
+        {
+          if (primitive.subdrawIndices[pass] >= 0)
+          {
+            chosen = primitive.subdrawIndices[pass];
+          }
+        }
+
+        const orphen::ported::model::Psc3Subdraw *subdraw =
+            (chosen >= 0 && static_cast<std::size_t>(chosen) < model.subdraws.size())
+                ? &model.subdraws[static_cast<std::size_t>(chosen)]
+                : nullptr;
+
+        std::array<orphen::ported::psm2::Vec3, 4> points{};
+        for (std::size_t corner = 0; corner < corners; ++corner)
+        {
+          points[corner] = posed(primitive.vertexIndices[corner]);
+        }
+
+        const auto emit = [&](std::size_t corner) {
+          if (subdraw != nullptr)
+          {
+            const std::uint16_t packed = subdraw->packedUv[corner];
+            // (U << 8) | V, 8-bit texel coordinates over a 256x256 page.
+            glTexCoord2f(static_cast<float>(packed >> 8) / 256.0f,
+                         static_cast<float>(packed & 0xFF) / 256.0f);
+          }
+          const std::size_t colourEntry = primitive.colourIndex + corner;
+          if (colourEntry * 3 + 2 < model.colours.size())
+          {
+            // The game's colour bytes run to 0x80 for full brightness, the same
+            // convention the map path divides by 128 for.
+            glColor3f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f),
+                      std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f),
+                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f));
+          }
+          else
+          {
+            glColor3f(1.0f, 1.0f, 1.0f);
+          }
+          glVertex3f(points[corner].x, points[corner].y, points[corner].z);
+        };
+
+        emit(0);
+        emit(1);
+        emit(2);
+        if (corners == 4)
+        {
+          emit(0);
+          emit(2);
+          emit(3);
+        }
+      }
+      glEnd();
+
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    void drawObjectModels(const orphen::port::SceneObjectViewList &objects,
+                          const std::vector<unsigned int> &slotTextures)
+    {
+      for (const auto &object : objects)
+      {
+        if (object.model != nullptr)
+        {
+          drawObjectModel(object, slotTextures);
+        }
+      }
+    }
+
     void drawSceneObjects(const orphen::port::SceneObjectViewList &objects)
     {
       glDisable(GL_TEXTURE_2D);
@@ -899,6 +1059,62 @@ namespace orphen::harness
     textureUploadDirty_ = true;
   }
 
+  void MapViewer::setTextureSlotCache(const orphen::ported::resource::TextureSlotCache *slots)
+  {
+    if (textureSlots_ == slots)
+    {
+      return;
+    }
+    textureSlots_ = slots;
+    slotTextureUploadDirty_ = true;
+  }
+
+  // One GL texture per occupied cache slot. This is where the port stops
+  // following FUN_00210368 / FUN_002103d0, which move the decoded pixels into GS
+  // VRAM through a BITBLT packet: a texture object is the GL equivalent and the
+  // slot index stays the same currency the subdraw records use.
+  void MapViewer::ensureSlotTexturesUploaded() const
+  {
+    if (!slotTextureUploadDirty_)
+    {
+      return;
+    }
+    slotTextureUploadDirty_ = false;
+
+    if (!slotTextureIds_.empty())
+    {
+      glDeleteTextures(static_cast<GLsizei>(slotTextureIds_.size()), slotTextureIds_.data());
+      slotTextureIds_.clear();
+    }
+    if (textureSlots_ == nullptr)
+    {
+      return;
+    }
+
+    slotTextureIds_.assign(orphen::ported::resource::kTextureSlotCount, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    for (std::size_t slot = 0; slot < orphen::ported::resource::kTextureSlotCount; ++slot)
+    {
+      const auto &state = textureSlots_->slot(slot);
+      if (state.texture.rgbaPixels.empty())
+      {
+        continue;
+      }
+      GLuint textureId = 0;
+      glGenTextures(1, &textureId);
+      glBindTexture(GL_TEXTURE_2D, textureId);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, state.texture.width, state.texture.height, 0,
+                   GL_RGBA, GL_UNSIGNED_BYTE, state.texture.rgbaPixels.data());
+      slotTextureIds_[slot] = textureId;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+
   void MapViewer::ensureTexturesUploaded() const
   {
     if (!textureUploadDirty_)
@@ -1002,6 +1218,7 @@ namespace orphen::harness
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
     ensureTexturesUploaded();
+    ensureSlotTexturesUploaded();
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
 
@@ -1078,6 +1295,8 @@ namespace orphen::harness
     }
     if (!sceneObjectViews_.empty())
     {
+      glEnable(GL_DEPTH_TEST);
+      drawObjectModels(sceneObjectViews_, slotTextureIds_);
       drawSceneObjects(sceneObjectViews_);
     }
 

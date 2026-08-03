@@ -142,6 +142,12 @@ namespace orphen::ported::model
     bool valid = false;
     std::string diagnostic; // why it is not valid, when it is not
 
+    // The decoded resource, kept because the skeleton and animation sections are
+    // read by offset against it rather than copied out. Costs a couple of
+    // megabytes across a scene's models and saves threading a second span
+    // through every call.
+    std::vector<std::uint8_t> blob;
+
     std::vector<Psc3Submesh> submeshes;
     std::vector<Psc3Vertex> vertices;
     std::vector<Psc3Primitive> primitives;
