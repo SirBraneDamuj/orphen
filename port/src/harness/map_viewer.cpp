@@ -1254,14 +1254,15 @@ namespace orphen::harness
     textureUploadDirty_ = true;
   }
 
+  // Deliberately no "same pointer, nothing to do" shortcut. This is called
+  // every simulation step with the address of a cache that lives inside
+  // EntityModelStore, so the pointer is the same forever -- including across a
+  // scene reload, which resets the cache and refills every slot in place. The
+  // upload keys on the cache's generation instead; see
+  // ensureSlotTexturesUploaded.
   void MapViewer::setTextureSlotCache(const orphen::ported::resource::TextureSlotCache *slots)
   {
-    if (textureSlots_ == slots)
-    {
-      return;
-    }
     textureSlots_ = slots;
-    slotTextureUploadDirty_ = true;
   }
 
   // One GL texture per occupied cache slot. This is where the port stops
@@ -1270,11 +1271,13 @@ namespace orphen::harness
   // slot index stays the same currency the subdraw records use.
   void MapViewer::ensureSlotTexturesUploaded() const
   {
-    if (!slotTextureUploadDirty_)
+    const std::uint64_t cacheGeneration = textureSlots_ != nullptr ? textureSlots_->generation() : 0;
+    if (!slotTextureUploadDirty_ && cacheGeneration == uploadedSlotGeneration_)
     {
       return;
     }
     slotTextureUploadDirty_ = false;
+    uploadedSlotGeneration_ = cacheGeneration;
 
     if (!slotTextureIds_.empty())
     {

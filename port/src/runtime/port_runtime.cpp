@@ -378,6 +378,25 @@ namespace orphen::port
               << " 0x" << std::hex << mapViewer_.fogColour()
               << " light1=0x" << state.uGpffffb6fc_globalRgb
               << " light2=0x" << state.uGpffffb700_vectorRgb << std::dec << '\n';
+
+    // The cache half of the texture slot table, which s01_e24.bin pins to
+    // 0206 01bf 01bc 0204 0203 0200 0202 0201 in slots 10..17. Printed per
+    // scene load so a reload can be checked against the same oracle a cold
+    // start is.
+    const auto &slots = modelStore_.textureSlots();
+    std::cout << "[env] slots";
+    for (std::size_t slot = orphen::ported::resource::kDefaultBankStart;
+         slot < orphen::ported::resource::kDefaultBankStart +
+                    orphen::ported::resource::kDefaultBankCount;
+         ++slot)
+    {
+      if (slots.slot(slot).occupied())
+      {
+        std::cout << ' ' << slot << ':' << std::hex << std::setw(4) << std::setfill('0')
+                  << slots.slot(slot).DAT_003429a8_residentId << std::dec << std::setfill(' ');
+      }
+    }
+    std::cout << "  gen=" << slots.generation() << '\n';
   }
 
   void PortRuntime::runSceneScript()

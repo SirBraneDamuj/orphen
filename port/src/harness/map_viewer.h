@@ -97,6 +97,10 @@ namespace orphen::harness
     const orphen::ported::resource::TextureSlotCache *textureSlots_ = nullptr;
     mutable std::vector<unsigned int> slotTextureIds_;
     mutable bool slotTextureUploadDirty_ = true;
+    // Which generation of the slot cache slotTextureIds_ was built from. The
+    // cache is refilled in place on a scene reload, so its address cannot tell
+    // us the pixels changed.
+    mutable std::uint64_t uploadedSlotGeneration_ = 0;
     orphen::ported::psm2::Vec3 cameraTarget_{};
     float cameraDistance_ = 12.0f;
     float cameraYawDegrees_ = 35.0f;

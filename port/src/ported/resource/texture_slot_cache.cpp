@@ -9,6 +9,7 @@ namespace orphen::ported::resource
   {
     slots_ = {};
     missingTextures_ = 0;
+    ++generation_;
   }
 
   bool TextureSlotCache::FUN_00210280_load_into_slot(int slot, std::uint16_t textureId)
@@ -23,6 +24,7 @@ namespace orphen::ported::resource
     // resource is missing, so a second request does not keep retrying it.
     TextureSlotState &state = slots_[static_cast<std::size_t>(slot)];
     state.DAT_003429a8_residentId = textureId;
+    ++generation_;
 
     std::optional<BmpaTexture> decoded;
     if (loader_)

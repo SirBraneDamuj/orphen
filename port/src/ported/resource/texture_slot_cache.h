@@ -98,10 +98,18 @@ namespace orphen::ported::resource
     // missing one texture does not take the whole scene down.
     std::size_t missingTextures() const { return missingTextures_; }
 
+    // Bumped by reset and by every load. Consumers that mirror these pixels
+    // into their own objects -- a GL texture per slot, say -- have to key their
+    // cache on this rather than on the address of the cache, which never
+    // changes: the slots are refilled in place on a scene reload, so pointer
+    // identity says "unchanged" at exactly the moment everything changed.
+    std::uint64_t generation() const { return generation_; }
+
   private:
     std::array<TextureSlotState, kTextureSlotCount> slots_{};
     TextureLoader loader_;
     std::size_t missingTextures_ = 0;
+    std::uint64_t generation_ = 0;
   };
 
 } // namespace orphen::ported::resource
