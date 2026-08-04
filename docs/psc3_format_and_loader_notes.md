@@ -198,3 +198,44 @@ Still open:
   VRAM. Not needed by the GL port, which binds a texture object per slot.
 - Section A, the region each submesh's +0x10 points into. Not touched by the
   rasteriser.
+
+## Entity type 0x272 and the MAP.BIN model archive
+
+`s01_e024` pool slot 10 is a type `0x272` "map-streamed prop" — a second chest,
+larger and lit differently than the type `0x3A` ones. The port draws its debug
+box but no geometry. Two separate reasons, both established from `s01_e24.bin`.
+
+**Its model record is not ELF data.** Slot 11 (a normal chest) has
+`entity+0x160 = 0x0031F814`, inside the ELF's static descriptor table. Slot 10
+has `0x00F4668C` — heap. That address sits in a table of `0x2C`-byte records for
+consecutive mesh ids:
+
+```
+0x00F4668C  mesh=0x009F tex=0x012F flags=0x41 loaded=1 slot=18 psc3=0x011F09E0
+0x00F466B8  mesh=0x00A0 tex=0x012F flags=0x41 loaded=0
+0x00F466E4  mesh=0x00A1 tex=0x0287 flags=0x41 loaded=0
+0x00F46710  mesh=0x00A2 tex=0x0133 flags=0x41 loaded=0
+0x00F4673C  mesh=0x00A3 tex=0x0268 flags=0x41 loaded=0
+```
+
+Flags `0x41` is bit 0 (PSC3 path) plus bit 6 (texture id stored negated), and the
+assigned slot 18 is exactly where the dump's cache half holds `-303` — `0x012F`
+negated. That is an independent confirmation that the record is read correctly.
+Where the table itself is loaded from is **not** identified.
+
+**The model is in none of the bundles the port opens.** `grp_009F` is absent
+from all 190 populated MCB scene bundles and from the `s00_e000` boot bundle,
+whose ids in that range run `009a 009b 009c 009d 00a0 00a1 00a3` — genuinely
+sparse, missing `009e`, `009f` and `00a2`.
+
+**`MAP.BIN` is the likely home and the port never reads it.** It holds 500
+uncompressed `PSC3` models and 165 `PSM2` maps behind a count-plus-offset table,
+which fits "map-streamed prop". A model whose first `0x1C` header bytes are
+byte-identical to the loaded `grp_009F` sits at `0xcc2802`.
+
+**Unresolved:** past that header the on-disc bytes diverge from the memory copy
+(3582 of the first 4096 differ, beyond the expected relocation of `+0x1C..+0x2B`).
+So `0xcc2802` is *not* confirmed to be `grp_009F` — the `0x9F..0xA3` records are
+a family of same-topology props, and identical table offsets are exactly what
+siblings would share. Settling it means parsing `MAP.BIN`'s index rather than
+pattern-matching headers.
