@@ -565,15 +565,25 @@ namespace orphen::harness
           continue;
         }
 
-        // FUN_00212058 draws one pass per active subdraw index. Only the last
-        // non-negative one is taken here: the extra passes are blend layers the
-        // port has no state for yet, and drawing them all would double-shade.
+        // FUN_00212058 draws one pass per active subdraw index, in order, and
+        // the port draws only one of them because it has no per-pass blend
+        // state yet. **Take the first, not the last.** Pass 0 is the opaque
+        // base layer; later passes are translucent overlays, and taking the
+        // last one rendered the overlay's UVs opaquely with the base skipped
+        // entirely -- a polygon that is drawn, but samples a patch of the sheet
+        // it was never meant to, which reads on screen as a hole.
+        //
+        // grp_0006 prim 110 is the case that showed it up: passes [106, 107],
+        // where 106 is texFlags 0x0000 (blend mode 0) and 107 is 0x8019 (blend
+        // mode 2, alpha 25 of 127). 10 primitives in that model have a second
+        // pass, 18 in grp_0008 and 60 in grp_0009.
         int chosen = -1;
         for (std::size_t pass = 0; pass < 4; ++pass)
         {
           if (primitive.subdrawIndices[pass] >= 0)
           {
             chosen = primitive.subdrawIndices[pass];
+            break;
           }
         }
 
