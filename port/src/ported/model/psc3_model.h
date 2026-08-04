@@ -110,6 +110,11 @@ namespace orphen::ported::model
     bool triangle() const { return vertexIndices[2] == vertexIndices[3]; }
     std::size_t cornerCount() const { return triangle() ? 3u : 4u; }
     bool skipped() const { return (flags & kPrimitiveSkip) != 0; }
+    // FUN_002129b8 lines 133-141: with this bit clear only corner 0 reads the
+    // colour table, at colourIndex, and every later corner reuses that colour.
+    // With it set each corner reads colourIndex + corner. Reading per-corner
+    // regardless picks up colours belonging to neighbouring primitives.
+    bool perVertexColour() const { return (flags & kPrimitivePerVertex) != 0; }
   };
 
   // One submesh == one bone. FUN_0020eec0 uploads exactly submeshCount 64-byte

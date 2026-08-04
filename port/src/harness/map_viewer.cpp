@@ -614,7 +614,10 @@ namespace orphen::harness
             glTexCoord2f(static_cast<float>(packed & 0xFF) / 256.0f,
                          static_cast<float>((packed >> 8) & 0xFF) / 256.0f);
           }
-          const std::size_t colourEntry = primitive.colourIndex + corner;
+          // Flat-shaded primitives hold one colour at colourIndex; only the
+          // per-vertex ones have a colour per corner.
+          const std::size_t colourEntry =
+              primitive.perVertexColour() ? primitive.colourIndex + corner : primitive.colourIndex;
           if (colourEntry * 3 + 2 < model.colours.size())
           {
             // The game's colour bytes run to 0x80 for full brightness, the same
