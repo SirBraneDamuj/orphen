@@ -50,16 +50,23 @@ namespace orphen::harness
     // corners are not from being clipped by GL.
     constexpr float kFarPlaneMargin = 8.0f;
 
-    // FUN_0022a418:344-354. Fog starts a quarter of the way out and ends at
-    // the draw distance; the colour block at DAT_0035566C..0x00355680 is
-    // 0x505050.
-    constexpr float kFogStartFraction = 0.25f;
-    constexpr float kFogColourChannel = 0x50 / 255.0f;
-
-    // FUN_00211230:131 / FUN_0020a2c0:499 pick the PRIM word with the FGE bit
-    // set only when the fog start is nearer than this, so a map with a long
-    // draw distance renders unfogged.
-    constexpr float kFogEnableStartLimit = 5.0f;
+    // **There are two distance effects and they are not the same one.**
+    //
+    // The GS fog (PRIM's FGE bit) uses DAT_0035567c, which FUN_0022a418:344
+    // sets to drawDistance * 0.25, and FUN_0020a2c0:514 drops the FGE bit
+    // whenever that start is 5.0 or more. At the usual 32 unit draw distance
+    // the start is 8.0, so GS fog is off in most maps -- including s01_e024.
+    //
+    // What is actually visible in the distance is a second effect, done in the
+    // VU1 microprogram rather than by the GS. FUN_00209140:83-94 uploads
+    // (depthOffset, depthScale, drawDistance, drawDistance - 10) and the
+    // microcode attenuates vertex colours across that last band. It is
+    // unconditional, which is why the greying is there when FGE fog is not.
+    //
+    // GL has one fog unit, so it stands in for the VU1 fade -- the band and
+    // colour are the fade's, not the GS fog's.
+    constexpr float kFadeBandWidth = 10.0f;         // FUN_00209140:94
+    constexpr float kFogColourChannel = 0x50 / 255.0f; // DAT_00355674 / 78
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -1079,8 +1086,10 @@ namespace orphen::harness
   // linear fog is the nearest equivalent to what the GS does per vertex.
   void MapViewer::applyFogState(bool enabled) const
   {
-    const float fogStart = drawDistance_ * kFogStartFraction;
-    if (!enabled || fogStart >= kFogEnableStartLimit)
+    // The VU1 fade runs over the last kFadeBandWidth units and is not gated on
+    // anything, so the only reason to skip it is the free viewer.
+    const float fogStart = drawDistance_ - kFadeBandWidth;
+    if (!enabled || fogStart <= 0.0f)
     {
       glDisable(GL_FOG);
       return;

@@ -1097,7 +1097,7 @@ namespace orphen::port
     }
 
     std::cout << "[render] draw distance " << mapViewer_.drawDistance()
-              << " fog " << (mapViewer_.drawDistance() * 0.25f < 5.0f ? "on" : "off") << '\n'
+              << " fade band " << (mapViewer_.drawDistance() - 10.0f) << ".." << mapViewer_.drawDistance() << '\n'
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
               << " hidden=" << visibilityReport_.hiddenSkipped
