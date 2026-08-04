@@ -10,6 +10,8 @@
 #include "harness/scene_resource_tree.h"
 #include "ported/psm2/decoded_psm2_loader.h"
 
+#include "platform/gl_extensions.h"
+
 #include <SDL_opengl.h>
 
 #include <algorithm>
@@ -69,6 +71,51 @@ namespace orphen::harness
     // and DAT_00355680 is drawDistance, so 8..32 at the usual 32.
     constexpr float kFogStartFraction = 0.25f;
     constexpr float kFogColourChannel = 0x50 / 255.0f; // DAT_00355674 / 78
+
+    // GL's own fog ramps linearly in eye distance. The GS does not: the depth
+    // it interpolates is the perspective term FUN_0020bd58 builds,
+    // screenZ = DAT_003555a0 + DAT_003555a4 / z, so the fade is linear in 1/z
+    // and piles up close to the near edge of the band. Feeding GL a fog
+    // coordinate per vertex replaces its distance with that curve while leaving
+    // the blend where it belongs -- after texturing, so a fogged surface washes
+    // out rather than being tinted through its own texture.
+    //
+    // File scope because the draw path is four calls deep (drawMap ->
+    // drawPrimitive -> emitTexturedVertex -> emitVertex) and immediate-mode GL
+    // is already a single global state machine.
+    struct VertexFogState
+    {
+      bool active = false;
+      // Row of the modelview that yields eye-space depth, GL column-major.
+      float depthRow[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      float inverseNear = 0.0f;
+      float inverseSpan = 0.0f;
+    };
+
+    VertexFogState g_vertexFog;
+
+    // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
+    // edge, 1 at the far edge. applyFogState sets GL_FOG_START 0 and
+    // GL_FOG_END 1, so GL's linear ramp passes this straight through.
+    void emitFogCoord(float x, float y, float z)
+    {
+      if (!g_vertexFog.active)
+      {
+        return;
+      }
+      const float depth = g_vertexFog.depthRow[0] * x + g_vertexFog.depthRow[1] * y +
+                          g_vertexFog.depthRow[2] * z + g_vertexFog.depthRow[3];
+      // Behind the eye 1/z has the wrong sign, and the limit approaching the
+      // eye from in front is 0 anyway, so clamp that side to unfogged. A
+      // triangle straddling the near plane then interpolates from 0 rather
+      // than jumping to full fog at the camera.
+      float amount = 0.0f;
+      if (depth > 0.0f)
+      {
+        amount = (g_vertexFog.inverseNear - 1.0f / depth) * g_vertexFog.inverseSpan;
+      }
+      orphen::port::gl::fogCoord(std::clamp(amount, 0.0f, 1.0f));
+    }
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
     {
@@ -652,6 +699,7 @@ namespace orphen::harness
           {
             glColor3f(1.0f, 1.0f, 1.0f);
           }
+          emitFogCoord(points[corner].x, points[corner].y, points[corner].z);
           glVertex3f(points[corner].x, points[corner].y, points[corner].z);
         };
 
@@ -745,6 +793,7 @@ namespace orphen::harness
     {
       const auto &source = map.DAT_0035569c_sectionCRecords.at(vertexIndex).position;
       const auto viewerPosition = toViewerSpace(source);
+      emitFogCoord(viewerPosition.x, viewerPosition.y, viewerPosition.z);
       glVertex3f(viewerPosition.x, viewerPosition.y, viewerPosition.z);
     }
 
@@ -1083,13 +1132,16 @@ namespace orphen::harness
     drawDistance_ = drawDistance;
   }
 
-  // FUN_0022a418 derives the fog band from the draw distance, and the PRIM
-  // word only carries the fog-enable bit when the band starts close in. GL's
-  // linear fog is the nearest equivalent to what the GS does per vertex.
+  // FUN_0022a418 derives the fog band from the draw distance: DAT_0035567c is
+  // drawDistance * 0.25 and DAT_00355680 is drawDistance, so 8..32 at the
+  // usual 32. The falloff across it is linear in 1/z, not in distance -- see
+  // emitFogCoord, which supplies the curve per vertex when glFogCoordf is
+  // reachable and leaves GL to do the blend.
   void MapViewer::applyFogState(bool enabled) const
   {
     const float fogStart = drawDistance_ * kFogStartFraction;
-    if (!enabled || fogStart <= 0.0f)
+    g_vertexFog.active = false;
+    if (!enabled || fogStart <= 0.0f || fogStart >= drawDistance_)
     {
       glDisable(GL_FOG);
       return;
@@ -1098,8 +1150,47 @@ namespace orphen::harness
     const GLfloat fogColour[4] = {kFogColourChannel, kFogColourChannel, kFogColourChannel, 1.0f};
     glFogi(GL_FOG_MODE, GL_LINEAR);
     glFogfv(GL_FOG_COLOR, fogColour);
-    glFogf(GL_FOG_START, fogStart);
-    glFogf(GL_FOG_END, drawDistance_);
+
+    const bool haveFogCoord = orphen::port::gl::loadFogCoordExtension();
+
+    static bool reportedFogPath = false;
+    if (!reportedFogPath)
+    {
+      reportedFogPath = true;
+      std::cout << "[render] fog " << fogStart << ".." << drawDistance_
+                << (haveFogCoord ? " curve 1/z (glFogCoordf)"
+                                 : " curve linear (glFogCoordf unavailable)")
+                << '\n';
+    }
+
+    if (haveFogCoord)
+    {
+      // emitFogCoord hands over the finished 0..1 fade, so GL's ramp
+      // f = (end - c) / (end - start) reduces to f = 1 - c.
+      glFogi(static_cast<GLenum>(orphen::port::gl::kFogCoordinateSource),
+             static_cast<GLint>(orphen::port::gl::kFogCoordinate));
+      glFogf(GL_FOG_START, 0.0f);
+      glFogf(GL_FOG_END, 1.0f);
+
+      // Eye-space depth is row 2 of the modelview, which render() has already
+      // snapshotted for the click probe. Column-major, so the row's four terms
+      // are elements 2, 6, 10 and 14.
+      g_vertexFog.depthRow[0] = probeModelView_[2];
+      g_vertexFog.depthRow[1] = probeModelView_[6];
+      g_vertexFog.depthRow[2] = probeModelView_[10];
+      g_vertexFog.depthRow[3] = probeModelView_[14];
+      g_vertexFog.inverseNear = 1.0f / fogStart;
+      g_vertexFog.inverseSpan = 1.0f / (1.0f / fogStart - 1.0f / drawDistance_);
+      g_vertexFog.active = true;
+    }
+    else
+    {
+      // No 1.4 entry point: GL's linear-in-distance ramp over the same band.
+      // Thinner than the hardware's near the camera, but the band is right.
+      glFogf(GL_FOG_START, fogStart);
+      glFogf(GL_FOG_END, drawDistance_);
+    }
+
     glEnable(GL_FOG);
   }
 

@@ -47,6 +47,8 @@ target_sources(orphen_port
     src/harness/scene_resource_provider.h
     src/harness/scene_resource_tree.cpp
     src/harness/scene_resource_tree.h
+        src/platform/gl_extensions.cpp
+        src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp
         src/platform/sdl_gl_window.h
     src/ported/resource/mcb_table_loader.cpp
