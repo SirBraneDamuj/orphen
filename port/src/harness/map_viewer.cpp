@@ -70,7 +70,15 @@ namespace orphen::harness
     // FUN_0022a418:344 and :347 set the band: DAT_0035567c is drawDistance*0.25
     // and DAT_00355680 is drawDistance, so 8..32 at the usual 32.
     constexpr float kFogStartFraction = 0.25f;
-    constexpr float kFogColourChannel = 0x50 / 255.0f; // DAT_00355674 / 78
+    // DAT_00355674, the fog colour, and DAT_00355678 beside it. FUN_0022a418:346
+    // and :348 set both to 0x505050, and s01_e24.bin holds exactly that. It is
+    // per scene, not a constant -- eeMemory.bin is a different scene and has
+    // both at 0x000000 with a 5..8 band -- so this belongs in the ported scene
+    // environment setup eventually. Hardcoded to the s01_e024 value until then.
+    //
+    // 0..255, not the 0..0x80 the vertex colours use: FUN_0026f108 sets this
+    // same pair to 0xfed261, and 0xfe does not fit the halved convention.
+    constexpr float kFogColourChannel = 0x50 / 255.0f;
 
     // GL's own fog ramps linearly in eye distance. The GS does not: the depth
     // it interpolates is the perspective term FUN_0020bd58 builds,
@@ -1429,8 +1437,26 @@ namespace orphen::harness
         viewHeight = framebufferHeight;
         viewWidth = static_cast<int>(static_cast<float>(framebufferHeight) * aspect + 0.5f);
       }
-      glViewport((framebufferWidth - viewWidth) / 2, (framebufferHeight - viewHeight) / 2,
-                 viewWidth, viewHeight);
+      const int viewX = (framebufferWidth - viewWidth) / 2;
+      const int viewY = (framebufferHeight - viewHeight) / 2;
+      glViewport(viewX, viewY, viewWidth, viewHeight);
+
+      // Clear the 3D area to the fog colour rather than to the window's
+      // near-black. There is no separate backdrop global -- the decompilation
+      // has no GS BGCOLOR write at all -- but the value is still determined:
+      // fog saturates to DAT_00355674 at DAT_00355680, which is the draw
+      // distance, and nothing is drawn past it. A backdrop of any other colour
+      // would show as a seam at the horizon. Leaving it near-black is also
+      // what made the fog look thin, since distant geometry was fading toward
+      // grey against a black void instead of blending into it.
+      //
+      // Scissored so the letterbox bars stay the window's own colour; they are
+      // outside the game's 4:3 image and were never part of the frame.
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(viewX, viewY, viewWidth, viewHeight);
+      glClearColor(kFogColourChannel, kFogColourChannel, kFogColourChannel, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+      glDisable(GL_SCISSOR_TEST);
     }
 
     float renderCameraDistance = cameraDistance_;
