@@ -1018,6 +1018,35 @@ namespace orphen::port
       return;
     }
 
+    // The camera state, in the same terms the EE dump stores it, so the two can
+    // be read side by side. s01_e24.bin at spawn holds:
+    //   DAT_0058c0a8 eye    (-6.1011, -12.7500, 0.8751)
+    //   DAT_0058be90 lookAt (-3.2500, -12.7500, 0.8000)
+    //   fGpffffb6d4 yaw 0.000000   fGpffffb6d8 pitch -0.165120
+    //   fGpffffad28 distance 3.000000    slot 0 at (-3.2500, -12.7500, 0.0000)
+    {
+      const auto &pose = fieldCamera_.pose();
+      const auto &lead = entityPool_.leadPlayer();
+      std::cout << "[camera] eye=(" << pose.eye.x << ", " << pose.eye.y << ", " << pose.eye.z
+                << ") lookAt=(" << pose.target.x << ", " << pose.target.y << ", " << pose.target.z
+                << ")\n";
+      std::cout << "[camera] yaw=" << fieldCamera_.yawRadians()
+                << " pitch=" << fieldCamera_.pitchRadians()
+                << " distance=" << fieldCamera_.followDistance() << '\n';
+      std::cout << "[camera] lookAt.z - player.z = " << (pose.target.z - lead.positionY28)
+                << "   eye.z - player.z = " << (pose.eye.z - lead.positionY28) << '\n';
+      // What the view matrix actually aims at: FUN_0020bec8 lifts the eye by
+      // fGpffff808c before pitching, so this is the height the screen centre
+      // lands on at the player's horizontal distance. The dump's is 0.8000.
+      const float dx = pose.target.x - pose.eye.x;
+      const float dy = pose.target.y - pose.eye.y;
+      const float horizontal = std::sqrt(dx * dx + dy * dy);
+      const float viewEyeZ = pose.eye.z + orphen::ported::render::constants::kEyeHeightOffset;
+      std::cout << "[camera] screen centre lands at z = "
+                << (viewEyeZ + horizontal * std::tan(fieldCamera_.pitchRadians()))
+                << " (player z " << lead.positionY28 << ", dump 0.8000)\n";
+    }
+
     constexpr std::uint32_t kCeilingBit = 0x100;
     constexpr std::uint32_t kTwoSidedBit = 0x1;
     // A wall's normal is horizontal, so "not pointing up" is only a winding

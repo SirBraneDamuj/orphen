@@ -565,9 +565,18 @@ namespace orphen::ported::camera
     const float pitchGoal = std::atan2(dirZ, horizontal);
     fGpffffb6d8_pitch_ += shortestAngleDelta(fGpffffb6d8_pitch_, pitchGoal);
 
-    pose_.eye = {DAT_0058c0a8_eye_.x,
-                 DAT_0058c0a8_eye_.y,
-                 DAT_0058c0a8_eye_.z + fGpffff82e4_orientationEyeOffset};
+    // **Publish the raw eye.** fGpffff82e4 above and fGpffff808c in
+    // FUN_0020bec8 are both 0.4 but they are different constants at different
+    // addresses (0x00352254 and 0x00351FFC) doing different jobs: the first
+    // lifts the eye only to work out the look direction, the second lifts it
+    // when the view matrix is built. Both apply to the stored eye, which is why
+    // the dump keeps DAT_0058c0a8.z at 0.8751 rather than 1.2751.
+    //
+    // Baking the orientation offset into the published pose meant the view
+    // build added its own on top, putting the eye 0.4 too high and the screen
+    // centre at z 1.2 where the dump has 0.8 -- the extra headroom above the
+    // player.
+    pose_.eye = DAT_0058c0a8_eye_;
     pose_.target = DAT_0058be90_lookAt_;
     pose_.forward = {dirX, dirY, dirZ};
     pose_.yawRadians = fGpffffb6d4_yaw_;
