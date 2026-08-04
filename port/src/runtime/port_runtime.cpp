@@ -493,11 +493,13 @@ namespace orphen::port
       inputs.skipSmoothing1fe = (entity.halfword08 & 0x0200) != 0;
     }
 
-    view.bonePalette = orphen::ported::model::FUN_0020d618_build_palette(
-        *binding->model, binding->model->blob, entity.poseColumnAc,
+    const orphen::ported::model::Matrix4 root =
         orphen::ported::model::FUN_0020cdc0_entity_root(
             {view.position.x, view.position.y, view.position.z}, view.facingRadians,
-            view.rotationX154, view.rotationY158, view.scale, view.scaleZ150),
+            view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
+
+    view.bonePalette = orphen::ported::model::FUN_0020d618_build_palette(
+        *binding->model, binding->model->blob, entity.poseColumnAc, root,
         DAT_003ffe00_poseFilters_[view.slot], inputs,
         &DAT_004a7e00_boneOverrides_[view.slot]);
   }

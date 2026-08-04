@@ -148,6 +148,14 @@ namespace orphen::port
           glViewport(0, 0, width_, height_);
         }
         break;
+      case SDL_MOUSEBUTTONDOWN:
+        if (event.button.button == SDL_BUTTON_LEFT)
+        {
+          input.probeRequested = true;
+          input.probeX = event.button.x;
+          input.probeY = event.button.y;
+        }
+        break;
       case SDL_KEYDOWN:
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_r)
         {

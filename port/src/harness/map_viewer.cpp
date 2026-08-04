@@ -1,5 +1,7 @@
 #include "harness/map_viewer.h"
 
+#include "harness/entity_probe.h"
+
 #include "ported/model/psc3_skeleton.h"
 #include "ported/render/original_entity_draw.h"
 
@@ -507,6 +509,22 @@ namespace orphen::harness
         return;
       }
 
+      // **Models are drawn double-sided.** The backface culling set up for the
+      // map does not belong to this path and produces holes here: it was
+      // derived from FUN_0022c6e8's corner order and the map VU1 program at
+      // 0xE0, and neither says anything about FUN_00212058's PSC3 path, whose
+      // VU1 program is not in the decompilation. The GS has no culling hardware
+      // to fall back on.
+      //
+      // The assets settle it. Every party model ships with a handful of
+      // primitives whose winding opposes their own stored normal -- 4 in
+      // grp_0001, 12 in grp_0003, 3 in grp_0006, 16 in grp_000a, out of ~700
+      // testable each. Culling turns each one into a hole that is visible from
+      // the front and absent from behind, which is exactly how this was
+      // reported. An asset that ships that way was never being culled.
+      const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+      glDisable(GL_CULL_FACE);
+
       const unsigned int texture =
           (object.textureSlot >= 0 &&
            static_cast<std::size_t>(object.textureSlot) < slotTextures.size())
@@ -522,12 +540,11 @@ namespace orphen::harness
         glDisable(GL_TEXTURE_2D);
       }
 
+      // Shared with the click probe, deliberately: a probe that computed vertex
+      // positions its own way could agree with itself and still not describe
+      // what was drawn.
       const auto posed = [&](std::uint16_t vertexIndex) {
-        const auto &vertex = model.vertices[vertexIndex];
-        const std::size_t bone = vertex.boneIndex < palette.size() ? vertex.boneIndex : 0u;
-        const auto world = orphen::ported::model::transformPoint(vertex.position, palette[bone]);
-        // Model and world share the Z-up convention; the viewer is Y-up.
-        return orphen::ported::psm2::Vec3{world.x, world.z, -world.y};
+        return orphen::harness::posedViewerVertex(model, palette, vertexIndex);
       };
 
       glBegin(GL_TRIANGLES);
@@ -617,6 +634,10 @@ namespace orphen::harness
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
+      if (cullWasEnabled)
+      {
+        glEnable(GL_CULL_FACE);
+      }
     }
 
     void drawObjectModels(const orphen::port::SceneObjectViewList &objects,
@@ -1210,6 +1231,12 @@ namespace orphen::harness
       hudVisible_ = !hudVisible_;
     }
 
+    // Uses last frame's matrices, which is what the click was aimed at anyway.
+    if (input.probeRequested)
+    {
+      probeAt(input.probeX, input.probeY);
+    }
+
     constexpr float kPanSpeed = 0.75f;
     constexpr float kYawSpeed = 70.0f;
     constexpr float kPitchSpeed = 55.0f;
@@ -1275,6 +1302,12 @@ namespace orphen::harness
       setPerspective(framebufferWidth, framebufferHeight, 60.0f, cameraDistance_ * 8.0f);
       applyCamera(cameraTarget_, cameraDistance_, cameraYawDegrees_, cameraPitchDegrees_);
     }
+
+    // Snapshot what the frame is actually being drawn with, so probeAt can
+    // build its ray from the same matrices instead of a reconstruction.
+    glGetFloatv(GL_MODELVIEW_MATRIX, probeModelView_.data());
+    glGetFloatv(GL_PROJECTION_MATRIX, probeProjection_.data());
+    probeMatricesValid_ = true;
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -1366,6 +1399,26 @@ namespace orphen::harness
   const SceneResourceProvider *MapViewer::loadedSceneResources() const
   {
     return sceneResources_.has_value() ? &*sceneResources_ : nullptr;
+  }
+
+  void MapViewer::probeAt(int pixelX, int pixelY) const
+  {
+    if (!probeMatricesValid_)
+    {
+      std::cout << "[probe] no frame has been drawn yet\n";
+      return;
+    }
+    orphen::ported::psm2::Vec3 origin{};
+    orphen::ported::psm2::Vec3 direction{};
+    if (!orphen::harness::unprojectPixel(probeModelView_, probeProjection_,
+                                         lastFramebufferWidth_, lastFramebufferHeight_, pixelX,
+                                         pixelY, origin, direction))
+    {
+      std::cout << "[probe] could not unproject that pixel\n";
+      return;
+    }
+    const auto hits = orphen::harness::probeEntityRay(sceneObjectViews_, origin, direction);
+    orphen::harness::printProbeReport(std::cout, pixelX, pixelY, origin, direction, hits);
   }
 
 } // namespace orphen::harness

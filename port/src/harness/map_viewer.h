@@ -12,6 +12,7 @@
 #include "runtime/player_view_state.h"
 #include "runtime/scene_object_view.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -59,6 +60,8 @@ namespace orphen::harness
     void render(int framebufferWidth, int framebufferHeight) const;
     void setHudLines(std::vector<std::string> lines);
     void toggleHud() { hudVisible_ = !hudVisible_; }
+    // Left click: report every entity triangle under this pixel, drawn or not.
+    void probeAt(int pixelX, int pixelY) const;
 
     orphen::ported::psm2::Psm2RuntimeState *loadedMap();
     const orphen::ported::psm2::Psm2RuntimeState *loadedMap() const;
@@ -90,6 +93,11 @@ namespace orphen::harness
     orphen::ported::camera::CameraPose followCameraPose_;
     std::optional<orphen::ported::render::ViewProjection> renderCamera_;
     std::vector<orphen::ported::render::MapDrawItem> mapDrawList_;
+    // Captured each frame so a click can build its ray in exactly the space the
+    // frame was drawn in, rather than re-deriving the camera and hoping.
+    mutable std::array<float, 16> probeModelView_{};
+    mutable std::array<float, 16> probeProjection_{};
+    mutable bool probeMatricesValid_ = false;
     mutable int lastFramebufferWidth_ = 0;
     mutable int lastFramebufferHeight_ = 0;
     // DAT_00355628, seeded from DAT_0032538c's 32.0 default (FUN_0022a360).

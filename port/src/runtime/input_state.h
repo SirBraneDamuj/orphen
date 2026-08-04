@@ -18,6 +18,12 @@ namespace orphen::port
     bool previousMapRequested = false;
     bool nextMapRequested = false;
 
+    // Left click: fire a ray through this pixel and report every entity triangle
+    // along it, drawn or not. Window pixels, origin top-left.
+    bool probeRequested = false;
+    int probeX = 0;
+    int probeY = 0;
+
     // Free-viewer camera, used only when no player is active.
     float rotateX = 0.0f;
     float rotateY = 0.0f;
