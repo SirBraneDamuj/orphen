@@ -219,6 +219,7 @@ namespace orphen::port
     environment.entityPool = &entityPool_;
     environment.dispatchTable = &actorDispatchTable_;
     environment.frameTicks = frameTicks;
+    environment.boneOverrides = DAT_004a7e00_boneOverrides_;
     // FUN_00266368 reads the flag bank that lives in the script state, so the
     // actor tick borrows it rather than owning a second copy.
     environment.eventFlag = [this](std::uint32_t flagId)
@@ -458,7 +459,7 @@ namespace orphen::port
   // filter, whose state lives in DAT_003ffe00_poseFilters_ and is why this
   // belongs to the simulation step rather than the draw.
   void PortRuntime::attachModel(SceneObjectView &view,
-                                const orphen::ported::entity::OriginalEntity &entity,
+                                orphen::ported::entity::OriginalEntity &entity,
                                 std::uint32_t frameTicks)
   {
     const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
@@ -476,15 +477,29 @@ namespace orphen::port
     inputs.smoothRate1cc = orphen::ported::model::FUN_0020c810_smoothing_rate(
         *binding->model, binding->model->blob, entity.animationA0);
     inputs.frameTicks = frameTicks;
-    // FUN_0020c810 line 122: entity +0x08 bit 0x200 turns the smoothing off.
-    inputs.skipSmoothing1fe = (entity.halfword08 & 0x0200) != 0;
+
+    // FUN_0020c810 lines 120-128. Bit 0x10 of entity +0x08 means the entity was
+    // not drawn last frame, so there is no previous pose worth easing out of:
+    // both the smoothing and the override countdown snap, and the bit is
+    // consumed. Otherwise the smoothing is gated on bit 0x200 alone.
+    if ((entity.halfword08 & 0x0010) != 0)
+    {
+      inputs.skipSmoothing1fe = true;
+      inputs.wasCulled1fd = true;
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 & 0xFFEFu);
+    }
+    else
+    {
+      inputs.skipSmoothing1fe = (entity.halfword08 & 0x0200) != 0;
+    }
 
     view.bonePalette = orphen::ported::model::FUN_0020d618_build_palette(
         *binding->model, binding->model->blob, entity.poseColumnAc,
         orphen::ported::model::FUN_0020cdc0_entity_root(
             {view.position.x, view.position.y, view.position.z}, view.facingRadians,
             view.rotationX154, view.rotationY158, view.scale, view.scaleZ150),
-        DAT_003ffe00_poseFilters_[view.slot], inputs);
+        DAT_003ffe00_poseFilters_[view.slot], inputs,
+        &DAT_004a7e00_boneOverrides_[view.slot]);
   }
 
   // FUN_00225c90 for every entity that has a model, run before the views are
@@ -520,7 +535,7 @@ namespace orphen::port
     // actor report. FUN_0020c5a8 walks all 256 slots; this list is what stands
     // in for that walk, so the lead player belongs in it.
     {
-      const auto &lead = entityPool_.leadPlayer();
+      auto &lead = entityPool_.leadPlayer();
       SceneObjectView view;
       view.slot = 0;
       view.typeId = lead.typeId00;
@@ -540,8 +555,8 @@ namespace orphen::port
       views.push_back(view);
     }
 
-    entityPool_.forEachScriptSpawned(
-        [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
+    entityPool_.forEachScriptSpawnedMutable(
+        [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
           SceneObjectView view;
           view.slot = slot;
@@ -1448,6 +1463,10 @@ namespace orphen::port
     for (auto &filter : DAT_003ffe00_poseFilters_)
     {
       filter.reset();
+    }
+    for (auto &overrides : DAT_004a7e00_boneOverrides_)
+    {
+      overrides.reset();
     }
     mapViewer_.setSceneObjectViews({});
     leadPlayer_.bindEntity(entityPool_.leadPlayer());

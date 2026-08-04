@@ -109,6 +109,11 @@ namespace orphen::port
     std::vector<orphen::ported::model::EntityPoseFilter> DAT_003ffe00_poseFilters_ =
         std::vector<orphen::ported::model::EntityPoseFilter>(
             orphen::ported::entity::kEntitySlotCount);
+    // DAT_004a7e00 + slot * 0x540, the scripted bone override table. It starts
+    // exactly where the pose filter bank ends.
+    std::vector<orphen::ported::model::EntityBoneOverrides> DAT_004a7e00_boneOverrides_ =
+        std::vector<orphen::ported::model::EntityBoneOverrides>(
+            orphen::ported::entity::kEntitySlotCount);
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
@@ -132,7 +137,7 @@ namespace orphen::port
     void publishSceneObjectViews(std::uint32_t frameTicks);
     void advanceEntityAnimations(std::uint32_t frameTicks);
     void attachModel(SceneObjectView &view,
-                     const orphen::ported::entity::OriginalEntity &entity,
+                     orphen::ported::entity::OriginalEntity &entity,
                      std::uint32_t frameTicks);
     void applySceneMarkerSpawn();
     void printScriptReport() const;

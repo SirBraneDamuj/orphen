@@ -5,10 +5,12 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_entity.h"
+#include "ported/model/psc3_skeleton.h"
 
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 
 namespace orphen::ported::entity
 {
@@ -58,6 +60,11 @@ namespace orphen::ported::entity
     // in the tree read it; the clone loop needs it to point a clone back at its
     // leader.
     std::size_t currentSlot = 0;
+
+    // DAT_004a7e00, indexed by pool slot. Behaviors that drive bones directly
+    // rather than through the animation -- FUN_002cdb28 is the one this scene
+    // exercises -- write their override here. Empty when the runtime has none.
+    std::span<orphen::ported::model::EntityBoneOverrides> boneOverrides;
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;

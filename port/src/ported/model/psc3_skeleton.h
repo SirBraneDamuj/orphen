@@ -33,8 +33,10 @@
 //   local = Scale * RotZ(-rz) * RotX(-rx) * RotY(-ry) * Translate(t)
 //   world = local * parentWorld
 //
-// Not modelled here: the scripted bone override table at DAT_004a7e00 that
-// FUN_0020d378 checks first.
+// FUN_0020d378 checks the scripted bone override table at DAT_004a7e00 before
+// it looks at the keyframe track at all, so a bone can be driven directly by a
+// behavior or a script opcode instead of by its animation. That path is here
+// too; see EntityBoneOverrides below.
 //
 // FUN_0020d188 is the other half of the animation, and it explains why the EE
 // dump's bone matrices never reconciled with a straight compose of the sampled
@@ -207,6 +209,51 @@ namespace orphen::ported::model
     void reset();
   };
 
+  // The scripted bone override, DAT_004a7e00 + slot*0x540 + bone*0x20. Seven
+  // pose fields and a countdown at +0x1C, and 0x540/0x20 is the same 42 bones.
+  //
+  // FUN_0020d378 checks this *before* the keyframe track: a bone with an active
+  // override ignores its animation entirely. Six type 0x62 enemies in s01_e024
+  // drive four bones each through it every frame, so it is not a corner case.
+  struct BoneOverride
+  {
+    std::array<float, kPoseFieldCount> fields{};
+    std::int32_t remainingTicks1c = 0;
+  };
+
+  // entity +0x168 and the DAT_004a7e00 block for one slot, kept together
+  // because nothing in the port needs them apart. FUN_0020dc48's clear-all
+  // walks 0x168..0x191, which is where the 42 comes from a third time.
+  struct EntityBoneOverrides
+  {
+    // <0 hides the bone, 0 is normal, >0 takes the override.
+    std::array<std::int8_t, kMaxFilteredBones> mode168{};
+    std::array<BoneOverride, kMaxFilteredBones> overrides{};
+    void reset();
+  };
+
+  // FUN_0020d8c0. `pose` is in the *caller's* order -- rotation xyz, then
+  // translation xyz, then scale -- which is not the ctx+0x174 field order the
+  // table stores. The shuffle is the original's, not a convenience.
+  void FUN_0020d8c0_set_bone_override(EntityBoneOverrides &state,
+                                      std::size_t bone,
+                                      const std::array<float, kPoseFieldCount> &pose,
+                                      int durationFrames);
+
+  // FUN_0020d9c8 / FUN_0020dc38 / FUN_0020dc48. A negative bone clears all 42.
+  void FUN_0020d9c8_clear_bone_override(EntityBoneOverrides &state, std::size_t bone);
+  void FUN_0020dc38_hide_bone(EntityBoneOverrides &state, std::size_t bone);
+  void FUN_0020dc48_clear_bone(EntityBoneOverrides &state, int bone);
+
+  // FUN_0020d968: 1 when no override, 0 while one is still running, 2 once its
+  // countdown has expired.
+  int FUN_0020d968_bone_override_status(const EntityBoneOverrides &state, std::size_t bone);
+
+  // FUN_0020d9d8: read a bone's current smoothed pose back out, in the caller's
+  // order. The read-modify-write partner of FUN_0020d8c0.
+  std::array<float, kPoseFieldCount> FUN_0020d9d8_read_bone_pose(const EntityPoseFilter &filter,
+                                                                 std::size_t bone);
+
   // What FUN_0020c810 and FUN_0020d378 hand the filter, gathered up because the
   // port has no render context struct to hang them off.
   struct PoseFilterInputs
@@ -215,6 +262,10 @@ namespace orphen::ported::model
     float smoothRate1cc = 1.0f;  // FUN_0020c810 lines 129-139
     std::uint32_t frameTicks = 0x20; // DAT_003555bc
     bool skipSmoothing1fe = false;   // entity +0x08 bit 0x200, or bit 0x10
+    // ctx+0x1FD, set with +0x1FE when the entity was culled last frame. It only
+    // reaches the override path, where it forces the countdown to zero so a
+    // reappearing entity snaps instead of easing in from a stale pose.
+    bool wasCulled1fd = false;
   };
 
   // FUN_0020d188 for one field. Reads and writes `state`.
@@ -244,12 +295,19 @@ namespace orphen::ported::model
                                                   std::uint16_t poseColumn,
                                                   const Matrix4 &root);
 
+  //
+  // `overrides` may be null. When it is not, a bone whose +0x168 byte is
+  // positive takes its pose from the override table rather than the keyframe
+  // track, and one whose byte is negative gets the zero matrix FUN_0020eec0
+  // writes for a hidden submesh -- every vertex collapses to a point, so
+  // nothing rasterises.
   std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
                                                   std::span<const std::uint8_t> blob,
                                                   std::uint16_t poseColumn,
                                                   const Matrix4 &root,
                                                   EntityPoseFilter &filter,
-                                                  const PoseFilterInputs &inputs);
+                                                  const PoseFilterInputs &inputs,
+                                                  EntityBoneOverrides *overrides = nullptr);
 
   // How many pose columns a bone's track has, bounded by the blob. Used to keep
   // a column index in range while the timeline walk is not ported.

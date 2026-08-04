@@ -374,6 +374,61 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002cdb28: the type 0x62 wing flap, driven straight onto four bones
+  // through the scripted-override table rather than through the animation.
+  //
+  // DAT_00326650 is {3, 4, 5, 6} and DAT_00326640 is {0.85, 0.15, -0.85, -0.15}
+  // -- two mirror pairs, and grp_0091's bones 3/5 and 4/6 sit at x = -+0.0884
+  // and -+0.0562, so the pairing is left and right of the same two joints.
+  //
+  // The override zeroes translation and sets scale to 1, so these bones pivot on
+  // their parent's origin rather than their own. That is what the original does;
+  // the offsets it discards are under a tenth of a unit.
+  //
+  // fGpffffa5e4 is 2*pi, so +0x1B0 is in degrees and the rotation is a plain
+  // degrees-to-radians conversion. The duration passed to FUN_0020d8c0 is 0,
+  // which leaves the countdown negative and makes every frame's override snap --
+  // correct for something rewritten every frame.
+  void FUN_002cdb28_wing_flap(OriginalEntity &entity, const ActorEnvironment &environment)
+  {
+    // (anim - 4) > 2 unsigned: animations 4, 5 and 6 drive the bones themselves.
+    if (static_cast<std::uint16_t>(entity.animationA0 - 4) <= 2)
+    {
+      return;
+    }
+    if (environment.currentSlot >= environment.boneOverrides.size())
+    {
+      return;
+    }
+    orphen::ported::model::EntityBoneOverrides &overrides =
+        environment.boneOverrides[environment.currentSlot];
+
+    constexpr std::array<float, 4> kDAT_00326640_rollAngles{0.85f, 0.15f, -0.85f, -0.15f};
+    constexpr std::array<std::size_t, 4> kDAT_00326650_bones{3, 4, 5, 6};
+    constexpr float kfGpffffa5e4_twoPi = 6.283184051513672f;
+
+    for (std::size_t index = 0; index < kDAT_00326650_bones.size(); ++index)
+    {
+      // Caller order: rotation xyz, translation xyz, scale.
+      const std::array<float, orphen::ported::model::kPoseFieldCount> pose{
+          (entity.wingPhase1b0 * kfGpffffa5e4_twoPi) / 360.0f,
+          0.0f,
+          kDAT_00326640_rollAngles[index],
+          0.0f,
+          0.0f,
+          0.0f,
+          1.0f};
+      orphen::ported::model::FUN_0020d8c0_set_bone_override(
+          overrides, kDAT_00326650_bones[index], pose, 0);
+    }
+
+    entity.wingPhase1b0 += static_cast<float>(environment.frameTicks) * 25.0f * 0.03125f;
+    if (entity.wingPhase1b0 > 60.0f)
+    {
+      entity.wingPhase1b0 = -40.0f;
+    }
+  }
+
   // FUN_002cd0a0 (type 0x62): freeze gate, the +0xBE hit reaction, the +0x1C2
   // countdown, then PTR_FUN_00326660[+0x60].
   void FUN_002cd0a0_enemy62(OriginalEntity &entity,
@@ -431,6 +486,14 @@ namespace orphen::ported::entity
     else if (entity.state60 == 3)
     {
       FUN_002cd3a0_enemy62_chase(entity, environment);
+    }
+
+    // FUN_002cd0a0 lines 39-40: the flap runs after the state handler, gated on
+    // +0x08 bit 0 being clear and the state not being 6 (the death stagger).
+    // FUN_002cde50, the periodic re-roll the same branch drives, is not ported.
+    if ((entity.halfword08 & 1) == 0 && entity.state60 != 6)
+    {
+      FUN_002cdb28_wing_flap(entity, environment);
     }
   }
 

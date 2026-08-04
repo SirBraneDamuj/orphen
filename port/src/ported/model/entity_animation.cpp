@@ -199,7 +199,16 @@ namespace orphen::ported::model
 
     // The blend ratio the pose sampler reads. Narrower than 1.0 only while a
     // keyframe still has more ticks left than this frame consumes.
-    if (static_cast<int>(frameTicks) < countdown)
+    //
+    // FUN_00225c90 line 130 gates the whole thing on entity +0x08 bit 0x10 --
+    // the entity was not drawn last frame, so there is no previous pose to ease
+    // out of and the keyframe snaps. FUN_0020c810 sets that bit when it culls
+    // and consumes it on the next draw.
+    if ((entity.halfword08 & 0x0010) != 0)
+    {
+      entity.animationBlend13c = 1.0f;
+    }
+    else if (static_cast<int>(frameTicks) < countdown)
     {
       entity.animationBlend13c = static_cast<float>(frameTicks) / static_cast<float>(countdown);
     }

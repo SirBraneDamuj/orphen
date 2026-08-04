@@ -102,6 +102,10 @@ namespace orphen::ported::model
     constexpr std::array<float, kPoseFieldCount> kIdentityFields{
         0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
 
+    // The same transform in the caller's order: rotation, translation, scale.
+    constexpr std::array<float, kPoseFieldCount> kIdentityCallerPose{
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+
     // FUN_0020d618 line 40-42: fields 4, 5 and 6 take the angle path.
     constexpr bool fieldIsAngle(std::size_t field) { return field >= 4; }
   } // namespace
@@ -224,6 +228,85 @@ namespace orphen::ported::model
 
     state.smoothed[field] = output;
     return output;
+  }
+
+  void EntityBoneOverrides::reset()
+  {
+    mode168.fill(0);
+    for (auto &entry : overrides)
+    {
+      entry = BoneOverride{};
+    }
+  }
+
+  void FUN_0020d8c0_set_bone_override(EntityBoneOverrides &state,
+                                      std::size_t bone,
+                                      const std::array<float, kPoseFieldCount> &pose,
+                                      int durationFrames)
+  {
+    if (bone >= kMaxFilteredBones)
+    {
+      return;
+    }
+    state.mode168[bone] = 1;
+    BoneOverride &entry = state.overrides[bone];
+    // The caller passes rotation first; the table stores translation first.
+    entry.fields[0] = pose[3];
+    entry.fields[1] = pose[4];
+    entry.fields[2] = pose[5];
+    entry.fields[3] = pose[6];
+    entry.fields[4] = pose[0];
+    entry.fields[5] = pose[1];
+    entry.fields[6] = pose[2];
+    entry.remainingTicks1c = durationFrames << 5;
+  }
+
+  void FUN_0020d9c8_clear_bone_override(EntityBoneOverrides &state, std::size_t bone)
+  {
+    if (bone < kMaxFilteredBones)
+    {
+      state.mode168[bone] = 0;
+    }
+  }
+
+  void FUN_0020dc38_hide_bone(EntityBoneOverrides &state, std::size_t bone)
+  {
+    if (bone < kMaxFilteredBones)
+    {
+      state.mode168[bone] = -1; // 0xFF
+    }
+  }
+
+  void FUN_0020dc48_clear_bone(EntityBoneOverrides &state, int bone)
+  {
+    if (bone >= 0)
+    {
+      FUN_0020d9c8_clear_bone_override(state, static_cast<std::size_t>(bone));
+      return;
+    }
+    state.mode168.fill(0);
+  }
+
+  int FUN_0020d968_bone_override_status(const EntityBoneOverrides &state, std::size_t bone)
+  {
+    if (bone >= kMaxFilteredBones || state.mode168[bone] < 1)
+    {
+      return 1;
+    }
+    return state.overrides[bone].remainingTicks1c > 0 ? 0 : 2;
+  }
+
+  std::array<float, kPoseFieldCount> FUN_0020d9d8_read_bone_pose(const EntityPoseFilter &filter,
+                                                                 std::size_t bone)
+  {
+    if (bone >= kMaxFilteredBones)
+    {
+      return kIdentityCallerPose;
+    }
+    const auto &smoothed = filter.bones[bone].smoothed;
+    // Back into the caller's order, the inverse of FUN_0020d8c0's shuffle.
+    return {smoothed[4], smoothed[5], smoothed[6],
+            smoothed[0], smoothed[1], smoothed[2], smoothed[3]};
   }
 
   float FUN_0020c810_smoothing_rate(const Psc3Model &model,
@@ -422,7 +505,8 @@ namespace orphen::ported::model
                                                   std::uint16_t poseColumn,
                                                   const Matrix4 &root,
                                                   EntityPoseFilter &filter,
-                                                  const PoseFilterInputs &inputs)
+                                                  const PoseFilterInputs &inputs,
+                                                  EntityBoneOverrides *overrides)
   {
     std::vector<Matrix4> palette(model.submeshes.size(), root);
     for (const std::uint8_t bone : model.boneOrder)
@@ -448,10 +532,51 @@ namespace orphen::ported::model
         continue;
       }
 
+      const std::int8_t mode = overrides != nullptr ? overrides->mode168[bone] : 0;
+      if (mode < 0)
+      {
+        // FUN_0020eec0's hidden submesh: the zero matrix, which sends every
+        // vertex to the same point and leaves nothing with area to rasterise.
+        palette[bone] = Matrix4{};
+        continue;
+      }
+
       BoneFilterState &state = filter.bones[bone];
-      const BonePose sampled = FUN_0020d378_sample_bone(model, blob, bone, poseColumn);
-      const std::array<float, kPoseFieldCount> fields =
-          sampled.posed ? poseToFields(sampled) : kIdentityFields;
+      PoseFilterInputs boneInputs = inputs;
+      std::array<float, kPoseFieldCount> fields{};
+
+      if (mode > 0)
+      {
+        // FUN_0020d378's first branch. The override replaces the sampled key
+        // outright, and its own countdown replaces entity +0x13C: 32 ticks over
+        // whatever is left, so it converges on its deadline the same way a
+        // keyframe does. A duration of 0 leaves the countdown negative, which
+        // reads as a ratio of 1.0 -- an override rewritten every frame snaps,
+        // which is what a procedural drive wants.
+        BoneOverride &entry = overrides->overrides[bone];
+        fields = entry.fields;
+        std::int32_t remaining =
+            entry.remainingTicks1c - static_cast<std::int32_t>(inputs.frameTicks);
+        if (inputs.wasCulled1fd)
+        {
+          remaining = 0;
+        }
+        if (remaining < 1)
+        {
+          boneInputs.blendRatio1c8 = 1.0f;
+        }
+        else
+        {
+          const float ratio = 32.0f / static_cast<float>(remaining);
+          boneInputs.blendRatio1c8 = ratio > 1.0f ? 1.0f : ratio;
+        }
+        entry.remainingTicks1c = remaining;
+      }
+      else
+      {
+        const BonePose sampled = FUN_0020d378_sample_bone(model, blob, bone, poseColumn);
+        fields = sampled.posed ? poseToFields(sampled) : kIdentityFields;
+      }
 
       // FUN_0020d618 lines 39-45 calls the filter in this order, scale first.
       // Order matters only in that it is the original's; the fields do not
@@ -461,8 +586,8 @@ namespace orphen::ported::model
                                       std::size_t{6}, std::size_t{0}, std::size_t{1},
                                       std::size_t{2}})
       {
-        filtered[field] =
-            FUN_0020d188_filter_field(state, field, fields[field], fieldIsAngle(field), inputs);
+        filtered[field] = FUN_0020d188_filter_field(state, field, fields[field],
+                                                    fieldIsAngle(field), boneInputs);
       }
       state.seeded = true;
 

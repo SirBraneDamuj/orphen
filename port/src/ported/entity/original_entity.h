@@ -127,13 +127,16 @@ namespace orphen::ported::entity
     std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
     float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
     float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.
+    // +0x1B0: FUN_002cdb28's wing phase, in degrees. Ramps 25 per frame and
+    // wraps from 60 back to -40, so one flap is four frames.
+    float wingPhase1b0 = 0.0f;
     float homeX1b4 = 0.0f;                   // +0x1B4: spawn position, three floats.
     float homeZ1b8 = 0.0f;
     float homeY1bc = 0.0f;
     std::int16_t attackChance1c0 = 0;        // +0x1C0: attack roll threshold out of 1000.
     std::uint16_t hitFlash1c2 = 0;           // +0x1C2: hit tint countdown.
     std::int16_t alertState1c4 = 0;          // +0x1C4: 1 forces state 2, 2 selects the alternate target.
-    std::uint16_t repathTimer1c6 = 0;        // +0x1C6: FUN_002cdb28's re-roll period.
+    std::uint16_t repathTimer1c6 = 0;        // +0x1C6: FUN_002cd0a0's FUN_002cde50 period.
     std::uint8_t enemyFlags1c8 = 0;          // +0x1C8: 0 halves state 3's repath period.
     // +0x14C: the entity's size scale, applied to the descriptor's radius and
     // height by FUN_00229ef0. 1.0 for a normally spawned actor; the type 0x62
