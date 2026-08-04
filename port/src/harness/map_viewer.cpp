@@ -65,7 +65,9 @@ namespace orphen::harness
     //
     // GL has one fog unit, so it stands in for the VU1 fade -- the band and
     // colour are the fade's, not the GS fog's.
-    constexpr float kFadeBandWidth = 10.0f;         // FUN_00209140:94
+    // FUN_0022a418:344 and :347 set the band: DAT_0035567c is drawDistance*0.25
+    // and DAT_00355680 is drawDistance, so 8..32 at the usual 32.
+    constexpr float kFogStartFraction = 0.25f;
     constexpr float kFogColourChannel = 0x50 / 255.0f; // DAT_00355674 / 78
 
     std::vector<std::uint8_t> readBinaryFile(const std::filesystem::path &path)
@@ -1086,9 +1088,7 @@ namespace orphen::harness
   // linear fog is the nearest equivalent to what the GS does per vertex.
   void MapViewer::applyFogState(bool enabled) const
   {
-    // The VU1 fade runs over the last kFadeBandWidth units and is not gated on
-    // anything, so the only reason to skip it is the free viewer.
-    const float fogStart = drawDistance_ - kFadeBandWidth;
+    const float fogStart = drawDistance_ * kFogStartFraction;
     if (!enabled || fogStart <= 0.0f)
     {
       glDisable(GL_FOG);
