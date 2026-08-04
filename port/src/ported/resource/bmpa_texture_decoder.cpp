@@ -42,10 +42,21 @@ namespace orphen::ported::resource
         const std::size_t paletteOffset = kPaletteOffset + static_cast<std::size_t>(paletteIndex) * 4;
         const std::size_t pixelOffset = (y * BmpaTexture::kWidth + x) * 4;
 
+        // PS2 palette alpha runs 0..0x80, where 0x80 is fully opaque -- not
+        // 0..0xFF. Copying it verbatim into an 8-bit GL alpha drew every opaque
+        // texel at 128/255, so everything textured was half transparent.
+        //
+        // tools/resource_extract's PNGs confirm the scale: their alpha values
+        // are 0, 180, 192, 254 and 255, which is exactly min(255, raw * 2) of
+        // 0, 90, 96, 127 and 128.
+        const std::uint8_t rawAlpha = bmpaBytes[paletteOffset + 3];
+        const std::uint8_t alpha =
+            rawAlpha >= 0x80 ? 0xFF : static_cast<std::uint8_t>(rawAlpha * 2);
+
         texture.rgbaPixels[pixelOffset] = bmpaBytes[paletteOffset + 2];
         texture.rgbaPixels[pixelOffset + 1] = bmpaBytes[paletteOffset + 1];
         texture.rgbaPixels[pixelOffset + 2] = bmpaBytes[paletteOffset];
-        texture.rgbaPixels[pixelOffset + 3] = bmpaBytes[paletteOffset + 3];
+        texture.rgbaPixels[pixelOffset + 3] = alpha;
       }
     }
 

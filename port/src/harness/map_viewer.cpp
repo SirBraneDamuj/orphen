@@ -525,6 +525,19 @@ namespace orphen::harness
       const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
       glDisable(GL_CULL_FACE);
 
+      // **Discard fully transparent texels before the depth write.** Blending
+      // alone makes them invisible but they still occlude: a cutout texel wrote
+      // depth, so anything drawn behind it afterwards was rejected. That is why
+      // grp_0003's hair, which drapes over the thigh and has transparent
+      // regions, took the jeans behind it out along with itself.
+      //
+      // The GS does this with its own alpha test rather than by not writing
+      // depth, but the visible result is the same and GL_ALPHA_TEST is the
+      // fixed-function equivalent. Only exactly-zero alpha is discarded, so
+      // nothing that was visible before can disappear.
+      glEnable(GL_ALPHA_TEST);
+      glAlphaFunc(GL_GREATER, 0.0f);
+
       const unsigned int texture =
           (object.textureSlot >= 0 &&
            static_cast<std::size_t>(object.textureSlot) < slotTextures.size())
@@ -647,6 +660,7 @@ namespace orphen::harness
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
+      glDisable(GL_ALPHA_TEST);
       if (cullWasEnabled)
       {
         glEnable(GL_CULL_FACE);
