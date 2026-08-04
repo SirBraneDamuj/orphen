@@ -268,7 +268,9 @@ int main(int argc, char **argv)
       return 0;
     }
 
-    orphen::port::SdlGlWindow window({"Orphen Native Port Harness", 1280, 720});
+    // 4:3, the shape the game was displayed at. The 3D viewport letterboxes to
+    // that aspect anyway, so this just avoids shipping default bars.
+    orphen::port::SdlGlWindow window({"Orphen Native Port Harness", 960, 720});
     orphen::port::PortRuntime runtime;
 
     runtime.initialize(config);

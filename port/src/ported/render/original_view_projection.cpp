@@ -178,12 +178,15 @@ namespace orphen::ported::render
   {
     GlCamera camera;
 
-    const float width = static_cast<float>(std::max(framebufferWidth, 1));
-    const float height = static_cast<float>(std::max(framebufferHeight, 1));
-    const float windowAspect = width / height;
+    // Both half-angles come from the original's own projection. The framebuffer
+    // size no longer feeds into the frustum at all -- the caller letterboxes to
+    // constants::kDisplayAspect instead, so a wider window adds bars rather
+    // than revealing scene the game never showed.
+    (void)framebufferWidth;
+    (void)framebufferHeight;
 
     camera.verticalHalfTangent = viewProjection.verticalHalfTangent();
-    camera.horizontalHalfTangent = camera.verticalHalfTangent * windowAspect;
+    camera.horizontalHalfTangent = viewProjection.horizontalHalfTangent();
 
     // GL is column-vector and column-major, so this is the transpose of the
     // usual row layout. The view space coming in is y-down and +z forward,

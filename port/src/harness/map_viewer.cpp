@@ -1315,6 +1315,24 @@ namespace orphen::harness
     // paths applies the axis remap.
     const bool useOriginalCamera = leadPlayerView_.has_value() && renderCamera_.has_value();
 
+    // The original's projection is fixed, so the window has to adapt to it
+    // rather than the other way round: fit a 4:3 box inside the window and put
+    // bars in whatever is left. Restored to the full window before the HUD,
+    // which is screen-space and belongs to the harness rather than the game.
+    if (useOriginalCamera)
+    {
+      const float aspect = orphen::ported::render::constants::kDisplayAspect;
+      int viewWidth = framebufferWidth;
+      int viewHeight = static_cast<int>(static_cast<float>(framebufferWidth) / aspect + 0.5f);
+      if (viewHeight > framebufferHeight)
+      {
+        viewHeight = framebufferHeight;
+        viewWidth = static_cast<int>(static_cast<float>(framebufferHeight) * aspect + 0.5f);
+      }
+      glViewport((framebufferWidth - viewWidth) / 2, (framebufferHeight - viewHeight) / 2,
+                 viewWidth, viewHeight);
+    }
+
     float renderCameraDistance = cameraDistance_;
     if (useOriginalCamera)
     {
@@ -1415,6 +1433,8 @@ namespace orphen::harness
     }
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    glViewport(0, 0, framebufferWidth, framebufferHeight);
 
     if (hudVisible_)
     {

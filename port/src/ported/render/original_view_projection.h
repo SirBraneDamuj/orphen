@@ -88,6 +88,10 @@ namespace orphen::ported::render
     // visible half-extents about the 2048 px centre are 320 and 112.
     inline constexpr float kScreenHalfWidthPixels = 320.0f;
     inline constexpr float kScreenHalfHeightPixels = 112.0f;
+    // The GS output 640x224 per field and it was displayed on a 4:3 screen, so
+    // the pixels are not square and the display aspect is not 640/224. The 3D
+    // viewport is letterboxed to this rather than filling the window.
+    inline constexpr float kDisplayAspect = 4.0f / 3.0f;
   } // namespace constants
 
   // What FUN_0020bec8 reads out of the camera globals each frame.
@@ -132,12 +136,21 @@ namespace orphen::ported::render
 
   // Matrices ready for glLoadMatrixf (column-major, column-vector order).
   //
-  // The projection preserves the original's vertical half-angle exactly and
-  // widens horizontally to the window -- "Hor+". At 4:3 that reproduces the
-  // shipped framing; wider windows reveal more to the sides and never crop.
-  // This deliberately does not use the game's own widescreen path
-  // (cGpffffb66e, a fixed 0.77 horizontal squeeze), which is fixed at roughly
-  // 16:9 rather than following the window.
+  // **Both half-angles are the original's.** The projection is used exactly as
+  // FUN_0020bec8 builds it, with no window-derived widening: horizontal comes
+  // from projection.at(0,0) rather than from the vertical scaled by the window
+  // aspect. The frustum is 320*16/scale by 112*16/(0.45*scale), a ratio of
+  // exactly 9/7, and the caller is responsible for presenting it in a 4:3
+  // viewport -- the shape the GS output was displayed at.
+  //
+  // This replaces an earlier "Hor+" adaptation that kept the vertical angle and
+  // widened horizontally to fit the window. That showed more of the scene than
+  // the game ever did, which is a fine thing to offer later but not while the
+  // point is establishing what the original actually looked like.
+  //
+  // The game's own widescreen path (cGpffffb66e, a fixed 0.77 horizontal
+  // squeeze, selected by FieldCameraView::widescreen) is still unused; it is a
+  // 16:9 mode, not the shipped 4:3 framing.
   struct GlCamera
   {
     std::array<float, 16> projection{};
