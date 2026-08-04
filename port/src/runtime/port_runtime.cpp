@@ -23,6 +23,9 @@ namespace orphen::port
 
     constexpr std::uint32_t kHarnessFrameCounterAddress = 0x00001000;
     constexpr float kRadiansToDegrees = 57.2957795f;
+    // FUN_0022a360:22 seeds DAT_0032538c to 0x42000000. The scene block and
+    // opcode 0xB8 both override it; a scene carrying neither runs at this.
+    constexpr float kDAT_0032538c_defaultDrawDistance = 32.0f;
 
     std::string formatNumber(float value, int precision = 2)
     {
@@ -124,27 +127,11 @@ namespace orphen::port
       mapViewer_.loadDiscSceneMap(config.discRoot, config.discScene);
     }
 
+    discRoot_ = config.discRoot;
+
     if (mapViewer_.loadedMap() != nullptr)
     {
-      // Models bind before the script runs, so the spawn path can report a
-      // missing model at the moment it spawns the entity that wanted it.
-      modelStore_.initialize(mapViewer_.loadedSceneResources(), config.discRoot, &descriptorTable_);
-      modelStore_.FUN_00221fd8_bind_boot_textures();
-      // FUN_0022a418 lines 190-197 bind the lead player's model before the
-      // scene script runs, straight through FUN_00221d20 with the default bank
-      // rather than through FUN_00266118. It reads the party leader from
-      // DAT_0058beb0 and *forces it to 1 when it is zero*, which is what
-      // happens here: the pool's lead slot has not been given its type yet at
-      // this point in the load, so without that default the preload list would
-      // claim slot 10 and every scene texture would land one slot early.
-      constexpr std::uint32_t kDAT_0058beb0_defaultLeader = 1;
-      const std::uint32_t leader = entityPool_.leadPlayer().typeId00 != 0
-                                       ? entityPool_.leadPlayer().typeId00
-                                       : kDAT_0058beb0_defaultLeader;
-      modelStore_.bindingForTypeId(leader);
-
-      resetLeadPlayerForLoadedMap();
-      runSceneScript();
+      loadSceneForCurrentMap();
       if (config.printScriptReport)
       {
         printScriptReport();
@@ -350,10 +337,64 @@ namespace orphen::port
     mapViewer_.setFogBand(state.fGpffffb70c_fadeNear, state.fGpffffb710_fadeFar);
   }
 
+  // Everything a scene needs once its map is in place. Called from initialize
+  // and again whenever MapViewer reports a new map generation, so loading the
+  // first scene and cycling to another go through the same code -- the two
+  // paths having diverged is what left cycled maps rendering the first scene's
+  // fog, model bindings and entity set.
+  void PortRuntime::loadSceneForCurrentMap()
+  {
+    // Models bind before the script runs, so the spawn path can report a
+    // missing model at the moment it spawns the entity that wanted it.
+    modelStore_.initialize(mapViewer_.loadedSceneResources(), discRoot_, &descriptorTable_);
+    modelStore_.FUN_00221fd8_bind_boot_textures();
+    // FUN_0022a418 lines 190-197 bind the lead player's model before the
+    // scene script runs, straight through FUN_00221d20 with the default bank
+    // rather than through FUN_00266118. It reads the party leader from
+    // DAT_0058beb0 and *forces it to 1 when it is zero*, which is what
+    // happens here: the pool's lead slot has not been given its type yet at
+    // this point in the load, so without that default the preload list would
+    // claim slot 10 and every scene texture would land one slot early.
+    //
+    // On a reload the pool still holds the previous scene's leader, which is
+    // also what the original does -- DAT_0058beb0 is party state and survives
+    // the scene change.
+    constexpr std::uint32_t kDAT_0058beb0_defaultLeader = 1;
+    const std::uint32_t leader = entityPool_.leadPlayer().typeId00 != 0
+                                     ? entityPool_.leadPlayer().typeId00
+                                     : kDAT_0058beb0_defaultLeader;
+    modelStore_.bindingForTypeId(leader);
+
+    resetLeadPlayerForLoadedMap();
+    runSceneScript();
+  }
+
+  void PortRuntime::reportSceneEnvironment() const
+  {
+    const auto &state = sceneScript_.state();
+    std::cout << "[env] " << mapViewer_.loadedSourceDescription()
+              << " draw=" << mapViewer_.drawDistance()
+              << " fog=" << mapViewer_.fogNear() << ".." << mapViewer_.fogFar()
+              << " 0x" << std::hex << mapViewer_.fogColour()
+              << " light1=0x" << state.uGpffffb6fc_globalRgb
+              << " light2=0x" << state.uGpffffb700_vectorRgb << std::dec << '\n';
+  }
+
   void PortRuntime::runSceneScript()
   {
     scriptTrace_.reset();
     sceneScript_ = {};
+
+    // FUN_0022a360's per-load seed, applied before anything scene specific.
+    // Every early return below then leaves the renderer on these rather than on
+    // the previous scene's -- which is what cycling maps used to do, carrying
+    // one scene's fog onto every map after it.
+    if (!drawDistanceOverridden_)
+    {
+      mapViewer_.setDrawDistance(kDAT_0032538c_defaultDrawDistance);
+    }
+    seedSceneEnvironmentDefaults();
+    applySceneEnvironment();
 
     const auto *resources = mapViewer_.loadedSceneResources();
     if (resources == nullptr)
@@ -401,6 +442,7 @@ namespace orphen::port
     sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
 
     applySceneEnvironment();
+    reportSceneEnvironment();
 
     applySceneMarkerSpawn();
     advanceEntityAnimations(orphen::ported::kNominalFrameTicks);
@@ -1419,7 +1461,11 @@ namespace orphen::port
 
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {
-      resetLeadPlayerForLoadedMap();
+      // A cycled map is a scene load, not just a new mesh: its script owns the
+      // fog, the draw distance and the entity set, and its bundle owns the
+      // models. resetLeadPlayerForLoadedMap alone left all of that on the
+      // previous scene's values.
+      loadSceneForCurrentMap();
     }
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)

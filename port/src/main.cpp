@@ -28,7 +28,10 @@ namespace
                  "  --actor-report  print which actor behavior each spawned entity\n"
                  "                  dispatches to, and which of them are ported.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
-                 "                  print its geometry counts.\n";
+                 "                  print its geometry counts.\n"
+                 "  --cycle-map-every <frames>\n"
+                 "                  headless only: advance to the next scene every\n"
+                 "                  N frames, exercising the map-cycle reload.\n";
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -184,6 +187,15 @@ namespace
         config.pressConfirmFrame = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
         continue;
       }
+      if (argument == "--cycle-map-every")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a frame count");
+        }
+        config.cycleMapEveryFrames = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
+        continue;
+      }
       if (argument == "--frames" || argument == "--script-frames")
       {
         if (argumentIndex + 1 >= argc)
@@ -259,6 +271,12 @@ int main(int argc, char **argv)
                                     frameIndex + 1 == config.pressConfirmFrame;
         input.rawPressedPad = pressThisFrame ? kRawPadCross : 0;
         input.rawHeldPad = input.rawPressedPad;
+
+        // Edge-triggered the same way the window path delivers it, so the
+        // scene reload runs exactly once per request.
+        input.nextMapRequested = config.cycleMapEveryFrames != 0 &&
+                                 frameIndex != 0 &&
+                                 frameIndex % config.cycleMapEveryFrames == 0;
         if (!runtime.update(input))
         {
           break;

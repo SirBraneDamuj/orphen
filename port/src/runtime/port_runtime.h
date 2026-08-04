@@ -58,6 +58,9 @@ namespace orphen::port
     std::uint32_t headlessFrameCount = 0;
     // 1-based frame on which --frames should press Cross, or 0 for never.
     std::uint32_t pressConfirmFrame = 0;
+    // Fires the next-map request every N headless frames, so the map-cycle
+    // scene reload can be exercised without a window.
+    std::uint32_t cycleMapEveryFrames = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
     // Retail executable, read for static tables such as the entity descriptors.
     // Optional: when empty, SLUS_200.11 is looked for in the disc root, and when
@@ -93,6 +96,9 @@ namespace orphen::port
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride_;
+    // Kept so a map cycle can rebind the model store against the new scene's
+    // bundle the same way initialize does.
+    std::filesystem::path discRoot_;
     const char *spawnSourceLabel_ = "map centre";
     float previousStickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
@@ -133,11 +139,15 @@ namespace orphen::port
     mutable bool reportedTickHalt_ = false;
 
     void loadExecutable(const PortRuntimeConfig &config);
+    // The whole per-scene load: model bindings, player reset, scene script.
+    // Shared by initialize and the map-cycle path so they cannot drift.
+    void loadSceneForCurrentMap();
     void runSceneScript();
     // FUN_0022a418's environment defaults, then the values the script left
     // behind. Called either side of the init/start entries.
     void seedSceneEnvironmentDefaults();
     void applySceneEnvironment();
+    void reportSceneEnvironment() const;
     void publishSceneObjectViews(std::uint32_t frameTicks);
     void advanceEntityAnimations(std::uint32_t frameTicks);
     void attachModel(SceneObjectView &view,
