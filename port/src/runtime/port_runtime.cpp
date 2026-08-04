@@ -318,6 +318,9 @@ namespace orphen::port
     auto &state = sceneScript_.state();
     const float drawDistance = mapViewer_.drawDistance();
 
+    // Seeded from the scene block that FUN_0022a418:185 has already applied, so
+    // that a script 0xB8 overwrites a live value rather than a zero.
+    state.DAT_0032538c_cameraDistance = drawDistance;
     state.uGpffffb6fc_globalRgb = 0x606060;
     state.uGpffffb700_vectorRgb = 0xFFFFFF;
     state.uGpffffb704_color1 = 0x505050;
@@ -333,6 +336,16 @@ namespace orphen::port
   void PortRuntime::applySceneEnvironment()
   {
     const auto &state = sceneScript_.state();
+
+    // 0xB8 writes DAT_0032538c and fGpffffb6b8 = DAT_00355628 together, and
+    // DAT_00355628 is what the visibility pass culls against -- so a script
+    // that sets it mid-load moves the draw distance, not a camera parameter.
+    // --draw-distance still wins over both the scene block and the script.
+    if (!drawDistanceOverridden_ && state.DAT_0032538c_cameraDistance > 0.0f)
+    {
+      mapViewer_.setDrawDistance(state.DAT_0032538c_cameraDistance);
+    }
+
     mapViewer_.setFogColour(state.uGpffffb704_color1);
     mapViewer_.setFogBand(state.fGpffffb70c_fadeNear, state.fGpffffb710_fadeFar);
   }
