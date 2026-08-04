@@ -297,6 +297,46 @@ namespace orphen::port
     return environment;
   }
 
+  // FUN_0022a418:339-354, the scene environment block. Seeded into the
+  // interpreter's own state rather than held separately, because the original
+  // has exactly one set of globals here: FUN_0022a418 writes the defaults and
+  // the scene script's opcodes overwrite the same words. Keeping one copy is
+  // what makes "did the script set this?" a question we never have to ask.
+  //
+  //   0x35566c  light colour 1   0x606060 (FUN_0022a360 via DAT_00325390)
+  //   0x355670  light colour 2   0xffffff
+  //   0x355674  fog colour       0x505050
+  //   0x355678  fog colour 2     0x505050
+  //   0x35567c  fog near         drawDistance * 0.25
+  //   0x355680  fog far          drawDistance
+  //
+  // The script reaches them through 0x96 (light 1), 0x97/0x98 (light 2 and its
+  // direction), 0x99 (second direction), 0xB9/0xBA (fog colour) and 0xBB (fog
+  // band). All eight are already implemented in the interpreter.
+  void PortRuntime::seedSceneEnvironmentDefaults()
+  {
+    auto &state = sceneScript_.state();
+    const float drawDistance = mapViewer_.drawDistance();
+
+    state.uGpffffb6fc_globalRgb = 0x606060;
+    state.uGpffffb700_vectorRgb = 0xFFFFFF;
+    state.uGpffffb704_color1 = 0x505050;
+    state.uGpffffb708_color2 = 0x505050;
+    state.fGpffffb70c_fadeNear = drawDistance * 0.25f;
+    state.fGpffffb710_fadeFar = drawDistance;
+  }
+
+  // Push whatever survived the script into the renderer. Only the fog half has
+  // somewhere to go today -- the two light colours and their direction vectors
+  // feed FUN_0020f3e0's per-entity colour setup, which is not ported, so they
+  // stay in the interpreter state where --render-report can show them.
+  void PortRuntime::applySceneEnvironment()
+  {
+    const auto &state = sceneScript_.state();
+    mapViewer_.setFogColour(state.uGpffffb704_color1);
+    mapViewer_.setFogBand(state.fGpffffb70c_fadeNear, state.fGpffffb710_fadeFar);
+  }
+
   void PortRuntime::runSceneScript()
   {
     scriptTrace_.reset();
@@ -324,6 +364,17 @@ namespace orphen::port
       return;
     }
 
+    // FUN_0022a418:185 applies the scene block's draw distance before it seeds
+    // the environment and before either script entry runs, so the whole chain
+    // has to happen in that order: distance, then the defaults derived from it,
+    // then the script, which may override any of it.
+    if (const auto &scriptDrawDistance = sceneScript_.sceneDrawDistance();
+        scriptDrawDistance.has_value() && !drawDistanceOverridden_)
+    {
+      mapViewer_.setDrawDistance(*scriptDrawDistance);
+    }
+    seedSceneEnvironmentDefaults();
+
     // FUN_0022a418 runs header word 0 and word 1 at load, from different points
     // in the bootstrap. The per-frame entry and the actor-state entries exist
     // but are not driven yet.
@@ -336,14 +387,7 @@ namespace orphen::port
 
     sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
 
-    // The same block that carries the spawn carries DAT_0032538c, the scene's
-    // draw distance. FUN_0022a360 seeds it to 32.0 and this overrides it per
-    // scene; --draw-distance still wins.
-    if (const auto &scriptDrawDistance = sceneScript_.sceneDrawDistance();
-        scriptDrawDistance.has_value() && !drawDistanceOverridden_)
-    {
-      mapViewer_.setDrawDistance(*scriptDrawDistance);
-    }
+    applySceneEnvironment();
 
     applySceneMarkerSpawn();
     advanceEntityAnimations(orphen::ported::kNominalFrameTicks);
@@ -1096,8 +1140,19 @@ namespace orphen::port
       }
     }
 
+    // The scene environment block, so it can be diffed against an EE dump
+    // directly: s01_e24.bin has 0x35566c=0x708090, 0x355670=0x2050a0,
+    // 0x355674=0x505050, 0x35567c=8, 0x355680=32, 0x355628=32.
+    const auto &environment = sceneScript_.state();
     std::cout << "[render] draw distance " << mapViewer_.drawDistance()
-              << " fog band " << (mapViewer_.drawDistance() * 0.25f) << ".." << mapViewer_.drawDistance() << '\n'
+              << " fog band " << mapViewer_.fogNear() << ".." << mapViewer_.fogFar()
+              << " fog colour 0x" << std::hex << mapViewer_.fogColour() << std::dec << '\n'
+              << "[render] light1 0x" << std::hex << environment.uGpffffb6fc_globalRgb
+              << " light2 0x" << environment.uGpffffb700_vectorRgb << std::dec
+              << " dir1 " << environment.DAT_003439c8_vector[0]
+              << ',' << environment.DAT_003439c8_vector[1]
+              << ',' << environment.DAT_003439c8_vector[2]
+              << "  (unported: FUN_0020f3e0 per-entity lighting)\n"
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
               << " hidden=" << visibilityReport_.hiddenSkipped

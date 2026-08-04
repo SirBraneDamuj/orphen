@@ -46,6 +46,17 @@ namespace orphen::harness
     // DAT_00355628. Bounds the GL far plane and the fog band.
     void setDrawDistance(float drawDistance);
     float drawDistance() const { return drawDistance_; }
+
+    // The scene environment block. DAT_00355674 is the fog colour, packed
+    // 0xRRGGBB; DAT_0035567c and DAT_00355680 are the band it ramps across.
+    // FUN_0022a418 seeds all three at scene load and the scene script may
+    // overwrite them through opcodes 0xB9 and 0xBB -- so these are set per
+    // scene by PortRuntime rather than derived from the draw distance here.
+    void setFogColour(std::uint32_t packedRgb);
+    void setFogBand(float nearDistance, float farDistance);
+    std::uint32_t fogColour() const { return fogColourPacked_; }
+    float fogNear() const { return fogNear_; }
+    float fogFar() const { return fogFar_; }
     // Last framebuffer size seen by render(), so the next update() can widen
     // the cull frustum to whatever the window actually shows. Zero until the
     // first render, which is what headless --frames runs stay at.
@@ -102,6 +113,12 @@ namespace orphen::harness
     mutable int lastFramebufferHeight_ = 0;
     // DAT_00355628, seeded from DAT_0032538c's 32.0 default (FUN_0022a360).
     float drawDistance_ = 32.0f;
+    // FUN_0022a418's own defaults, for the case where no scene has been loaded
+    // and nothing has pushed the block through. 0x505050 over 8..32.
+    std::uint32_t fogColourPacked_ = 0x505050;
+    float fogColour_[3] = {0x50 / 255.0f, 0x50 / 255.0f, 0x50 / 255.0f};
+    float fogNear_ = 8.0f;
+    float fogFar_ = 32.0f;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;

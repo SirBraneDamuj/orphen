@@ -134,6 +134,10 @@ namespace orphen::port
 
     void loadExecutable(const PortRuntimeConfig &config);
     void runSceneScript();
+    // FUN_0022a418's environment defaults, then the values the script left
+    // behind. Called either side of the init/start entries.
+    void seedSceneEnvironmentDefaults();
+    void applySceneEnvironment();
     void publishSceneObjectViews(std::uint32_t frameTicks);
     void advanceEntityAnimations(std::uint32_t frameTicks);
     void attachModel(SceneObjectView &view,

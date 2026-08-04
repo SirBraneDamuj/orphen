@@ -67,18 +67,9 @@ namespace orphen::harness
     //
     // GL has one fog unit, so it stands in for the VU1 fade -- the band and
     // colour are the fade's, not the GS fog's.
-    // FUN_0022a418:344 and :347 set the band: DAT_0035567c is drawDistance*0.25
-    // and DAT_00355680 is drawDistance, so 8..32 at the usual 32.
-    constexpr float kFogStartFraction = 0.25f;
-    // DAT_00355674, the fog colour, and DAT_00355678 beside it. FUN_0022a418:346
-    // and :348 set both to 0x505050, and s01_e24.bin holds exactly that. It is
-    // per scene, not a constant -- eeMemory.bin is a different scene and has
-    // both at 0x000000 with a 5..8 band -- so this belongs in the ported scene
-    // environment setup eventually. Hardcoded to the s01_e024 value until then.
     //
-    // 0..255, not the 0..0x80 the vertex colours use: FUN_0026f108 sets this
-    // same pair to 0xfed261, and 0xfe does not fit the halved convention.
-    constexpr float kFogColourChannel = 0x50 / 255.0f;
+    // The band and colour themselves are per scene and arrive through
+    // setFogBand / setFogColour; see PortRuntime::applySceneEnvironment.
 
     // GL's own fog ramps linearly in eye distance. The GS does not: the depth
     // it interpolates is the perspective term FUN_0020bd58 builds,
@@ -1140,22 +1131,41 @@ namespace orphen::harness
     drawDistance_ = drawDistance;
   }
 
-  // FUN_0022a418 derives the fog band from the draw distance: DAT_0035567c is
-  // drawDistance * 0.25 and DAT_00355680 is drawDistance, so 8..32 at the
-  // usual 32. The falloff across it is linear in 1/z, not in distance -- see
+  // 0..255 per channel, not the 0..0x80 the vertex colours use: FUN_0026f108
+  // sets this same global to 0xfed261, and 0xfe does not fit the halved
+  // convention.
+  void MapViewer::setFogColour(std::uint32_t packedRgb)
+  {
+    fogColourPacked_ = packedRgb & 0xFFFFFFu;
+    fogColour_[0] = static_cast<float>((packedRgb >> 16) & 0xFF) / 255.0f;
+    fogColour_[1] = static_cast<float>((packedRgb >> 8) & 0xFF) / 255.0f;
+    fogColour_[2] = static_cast<float>(packedRgb & 0xFF) / 255.0f;
+  }
+
+  void MapViewer::setFogBand(float nearDistance, float farDistance)
+  {
+    fogNear_ = nearDistance;
+    fogFar_ = farDistance;
+  }
+
+  // The band is DAT_0035567c..DAT_00355680 and the colour DAT_00355674, all
+  // carried in from the scene environment block rather than derived here --
+  // FUN_0022a418 seeds them and the scene script overrides through 0xB9/0xBB.
+  // The falloff across the band is linear in 1/z, not in distance; see
   // emitFogCoord, which supplies the curve per vertex when glFogCoordf is
   // reachable and leaves GL to do the blend.
   void MapViewer::applyFogState(bool enabled) const
   {
-    const float fogStart = drawDistance_ * kFogStartFraction;
+    const float fogStart = fogNear_;
+    const float fogEnd = fogFar_;
     g_vertexFog.active = false;
-    if (!enabled || fogStart <= 0.0f || fogStart >= drawDistance_)
+    if (!enabled || fogStart <= 0.0f || fogStart >= fogEnd)
     {
       glDisable(GL_FOG);
       return;
     }
 
-    const GLfloat fogColour[4] = {kFogColourChannel, kFogColourChannel, kFogColourChannel, 1.0f};
+    const GLfloat fogColour[4] = {fogColour_[0], fogColour_[1], fogColour_[2], 1.0f};
     glFogi(GL_FOG_MODE, GL_LINEAR);
     glFogfv(GL_FOG_COLOR, fogColour);
 
@@ -1165,7 +1175,8 @@ namespace orphen::harness
     if (!reportedFogPath)
     {
       reportedFogPath = true;
-      std::cout << "[render] fog " << fogStart << ".." << drawDistance_
+      std::cout << "[render] fog " << fogStart << ".." << fogEnd
+                << " colour 0x" << std::hex << fogColourPacked_ << std::dec
                 << (haveFogCoord ? " curve 1/z (glFogCoordf)"
                                  : " curve linear (glFogCoordf unavailable)")
                 << '\n';
@@ -1188,7 +1199,7 @@ namespace orphen::harness
       g_vertexFog.depthRow[2] = probeModelView_[10];
       g_vertexFog.depthRow[3] = probeModelView_[14];
       g_vertexFog.inverseNear = 1.0f / fogStart;
-      g_vertexFog.inverseSpan = 1.0f / (1.0f / fogStart - 1.0f / drawDistance_);
+      g_vertexFog.inverseSpan = 1.0f / (1.0f / fogStart - 1.0f / fogEnd);
       g_vertexFog.active = true;
     }
     else
@@ -1196,7 +1207,7 @@ namespace orphen::harness
       // No 1.4 entry point: GL's linear-in-distance ramp over the same band.
       // Thinner than the hardware's near the camera, but the band is right.
       glFogf(GL_FOG_START, fogStart);
-      glFogf(GL_FOG_END, drawDistance_);
+      glFogf(GL_FOG_END, fogEnd);
     }
 
     glEnable(GL_FOG);
@@ -1454,7 +1465,7 @@ namespace orphen::harness
       // outside the game's 4:3 image and were never part of the frame.
       glEnable(GL_SCISSOR_TEST);
       glScissor(viewX, viewY, viewWidth, viewHeight);
-      glClearColor(kFogColourChannel, kFogColourChannel, kFogColourChannel, 1.0f);
+      glClearColor(fogColour_[0], fogColour_[1], fogColour_[2], 1.0f);
       glClear(GL_COLOR_BUFFER_BIT);
       glDisable(GL_SCISSOR_TEST);
     }
