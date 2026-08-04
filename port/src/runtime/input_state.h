@@ -15,6 +15,8 @@ namespace orphen::port
     bool resetRequested = false;
     bool toggleWireframeRequested = false;
     bool toggleHudRequested = false;
+    // In-world debug drawing: collision boxes, entity labels, origin axes.
+    bool toggleDebugOverlayRequested = false;
     bool previousMapRequested = false;
     bool nextMapRequested = false;
 

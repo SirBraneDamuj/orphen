@@ -169,6 +169,10 @@ namespace orphen::port
         {
           input.toggleHudRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_b)
+        {
+          input.toggleDebugOverlayRequested = true;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
         {
           input.previousMapRequested = true;

@@ -105,6 +105,10 @@ namespace orphen::harness
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;
+    // B: the in-world debug drawing -- magenta collision boxes, entity labels,
+    // the lead player's box and ground triangle, and the origin axes. Separate
+    // from the HUD, which is screen-space text.
+    bool debugOverlayVisible_ = true;
     bool wireframe_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);

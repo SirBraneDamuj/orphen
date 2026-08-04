@@ -1258,6 +1258,12 @@ namespace orphen::harness
       hudVisible_ = !hudVisible_;
     }
 
+    if (input.toggleDebugOverlayRequested)
+    {
+      debugOverlayVisible_ = !debugOverlayVisible_;
+      std::cout << "[debug overlay] " << (debugOverlayVisible_ ? "on" : "off") << '\n';
+    }
+
     // Uses last frame's matrices, which is what the click was aimed at anyway.
     if (input.probeRequested)
     {
@@ -1391,19 +1397,22 @@ namespace orphen::harness
     }
     glDisable(GL_FOG);
     glDisable(GL_CULL_FACE);
-    if (leadPlayerView_.has_value())
+    if (debugOverlayVisible_)
     {
-      drawLeadPlayer(*leadPlayerView_);
-    }
-    if (!sceneObjectViews_.empty())
-    {
-      glEnable(GL_DEPTH_TEST);
-      drawSceneObjects(sceneObjectViews_);
-    }
+      if (leadPlayerView_.has_value())
+      {
+        drawLeadPlayer(*leadPlayerView_);
+      }
+      if (!sceneObjectViews_.empty())
+      {
+        glEnable(GL_DEPTH_TEST);
+        drawSceneObjects(sceneObjectViews_);
+      }
 
-    glDisable(GL_DEPTH_TEST);
-    drawOriginAxisIndicator(renderCameraDistance);
-    glEnable(GL_DEPTH_TEST);
+      glDisable(GL_DEPTH_TEST);
+      drawOriginAxisIndicator(renderCameraDistance);
+      glEnable(GL_DEPTH_TEST);
+    }
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
