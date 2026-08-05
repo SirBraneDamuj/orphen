@@ -60,6 +60,9 @@ namespace orphen::harness
     // may overwrite it through opcodes 0x96 and 0x97.
     void setSceneLighting(const orphen::ported::render::SceneLighting &lighting);
     const orphen::ported::render::SceneLighting &sceneLighting() const { return sceneLighting_; }
+    // Rebuilds the specular half-vector, which moves with the camera and so has
+    // to be refreshed every frame rather than only when the scene changes.
+    void setGleamDirection(float yawRadians, float pitchRadians);
     std::uint32_t fogColour() const { return fogColourPacked_; }
     float fogNear() const { return fogNear_; }
     float fogFar() const { return fogFar_; }

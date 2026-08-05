@@ -358,6 +358,13 @@ namespace orphen::port
         -state.DAT_003439c8_vector[1],
         -state.DAT_003439c8_vector[2]};
     lighting.active = true;
+    // VU1 0x0206 reads the specular pass's colour straight from 0x2a3, the same
+    // quadword as light 0, so the sheen is always tinted by the scene's
+    // directional light. The direction is filled in per frame by
+    // setGleamDirection(), which needs the camera.
+    orphen::ported::render::SceneLighting::unpack(state.uGpffffb700_vectorRgb,
+                                                  lighting.gleamColour);
+    lighting.gleamActive = true;
     mapViewer_.setSceneLighting(lighting);
   }
 
@@ -1279,6 +1286,40 @@ namespace orphen::port
     // directly: s01_e24.bin has 0x35566c=0x708090, 0x355670=0x2050a0,
     // 0x355674=0x505050, 0x35567c=8, 0x355680=32, 0x355628=32.
     const auto &environment = sceneScript_.state();
+
+    // VU1 0x01d1 floors every light intensity at `~record[+0x2D] / 320`, and
+    // 0x01ba skips lighting outright on flag bit 13. Both are per primitive, so
+    // the useful thing to print is the spread rather than a single value.
+    const auto lightFloorSummary = [this]() {
+      const auto *map = mapViewer_.loadedMap();
+      if (map == nullptr || map->DAT_003556ac_dRecords80.empty())
+      {
+        return std::string("light floor: no map loaded");
+      }
+      float lowest = 1.0f;
+      float highest = 0.0f;
+      double total = 0.0;
+      std::size_t unlit = 0;
+      for (const auto &record : map->DAT_003556ac_dRecords80)
+      {
+        const float floorValue =
+            orphen::ported::render::SceneLighting::floorFromSourceByte(record.staticAlpha);
+        lowest = std::min(lowest, floorValue);
+        highest = std::max(highest, floorValue);
+        total += floorValue;
+        if ((record.primitiveFlags & 0x2000u) != 0)
+        {
+          ++unlit;
+        }
+      }
+      std::ostringstream out;
+      out << "light floor: " << lowest << ".." << highest << " mean "
+          << total / static_cast<double>(map->DAT_003556ac_dRecords80.size())
+          << " over " << map->DAT_003556ac_dRecords80.size() << " primitives; "
+          << unlit << " unlit";
+      return out.str();
+    };
+
     std::cout << "[render] draw distance " << mapViewer_.drawDistance()
               << " fog band " << mapViewer_.fogNear() << ".." << mapViewer_.fogFar()
               << " fog colour 0x" << std::hex << mapViewer_.fogColour() << std::dec << '\n'
@@ -1288,6 +1329,12 @@ namespace orphen::port
               << ',' << environment.DAT_003439c8_vector[1]
               << ',' << environment.DAT_003439c8_vector[2]
               << "  (ambient 0x2a7 / light0 0x2a3 / dir 0x2a0..2, VU1 0x1b2)\n"
+              << "[render] " << lightFloorSummary() << '\n'
+              << "[render] gleam half-vector "
+              << mapViewer_.sceneLighting().gleamDirection.x << ','
+              << mapViewer_.sceneLighting().gleamDirection.y << ','
+              << mapViewer_.sceneLighting().gleamDirection.z
+              << "  (VU1 mem[0x18], DAT_00314800)\n"
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
               << " hidden=" << visibilityReport_.hiddenSkipped
@@ -1664,6 +1711,9 @@ namespace orphen::port
     }
 
     mapViewer_.setRenderCamera(renderCamera_);
+    // VU1 mem[0x18]: the specular half-vector. It depends on where the camera
+    // is looking, so FUN_00200e38 rebuilds it every frame and so does this.
+    mapViewer_.setGleamDirection(cameraView.yawRadians, cameraView.pitchRadians);
     mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
         map, renderCamera_, visibilityInput, &visibilityReport_));
   }

@@ -35,15 +35,17 @@ at `+0x7C`.
 subroutines to call and in what order: it emits `call` tags (`0x50000000`) into
 a 4096-entry bucket table at `DAT_7000000C`.
 
-The actual transform, lighting and rasterisation live in VU1 microprograms,
-which are not in the decompilation. Known entry points:
+The actual transform, lighting and rasterisation live in VU microprograms, which
+are not in the decompilation but *are* in the save state --
+[vu1_microprogram.md](vu1_microprogram.md) covers VU1 completely. Entry points:
 
-| `vcallms` | Called from | What it appears to do |
+| Program | Called from | What it does |
 |---|---|---|
-| `0x20` | `FUN_00216510` | normalise a vector |
-| `0x60` | `FUN_0020bb58` | 4x4 matrix multiply |
-| `0xE0` | `FUN_00209140:205` | transform a primitive's corners, hand back per-vertex bytes and a view-space AABB |
-| `0x13B` / `0x14B` | `FUN_00211230:341/344` | the two map draw programs |
+| VU0 `0x20` | `FUN_00216510` | normalise a vector |
+| VU0 `0x60` | `FUN_0020bb58` | 4x4 matrix multiply |
+| VU0 `0xE0` (instruction `0x1c`) | `FUN_00209140:205` | transform a primitive's corners, accumulate a view-space AABB, and -- past `0x33` -- compute `RSQRT`-attenuated point lighting, packed to bytes for the `0x6E00C02E` stream |
+| VU1 `0x13B` / `0x14B` | `FUN_00211230:341/344` | the two map draw programs |
+| VU1 `0x12C` | `FUN_00212058:338` | the entity draw program; converges on the same vertex loop |
 
 ## The projection
 
@@ -504,25 +506,42 @@ rejecting only when both halves of a quad fail.
 observation behind `map_viewer.cpp:576` still holds: assets genuinely ship with
 primitives whose winding opposes their stored normal, and culling them all
 produced holes. What the microcode adds is that the test is **conditional** --
-`IBNE vi05, vi00` skips it entirely when `header[1].y` is non-zero, which is a
-per-draw two-sided flag the port does not read. So the promising change is to
-read that flag and cull only when it is clear, not to cull unconditionally.
-What the EE writes into `header[1].y` has not been traced yet, so this is a
-lead rather than a finding.
+`IBNE vi05, vi00` skips it entirely when `header[1].y` is non-zero. That is a
+per-draw two-sided flag: bit 0 of the primitive flags halfword (`plVar5[9]` for
+entities, `pfVar27[0x1C]` for the map). So the correct change is to cull only
+when the flag is clear, not to cull unconditionally.
 
-### Open
+### The draw header, and the rest of the microprogram
 
-- **The intensity floor.** `MAXz.xyzw vf16, vf16, vf15z` floors every intensity
-  at `itof(header[2].z) * 1/320`. The header is VIFcode `0x6e03c000` -- UNPACK
-  V4-8 unsigned, three quadwords -- so that is a 0..255 byte and the floor spans
-  0..0.797. `FUN_00212058:228` writes it as `~*(byte *)(iVar19 + 0xd)`, the
-  complement of a per-draw record byte; byte 13 gets the uncomplemented value
-  and lands in `vf15.y`. What the source byte means is the remaining unknown.
-  The port leaves the floor at zero, which is what a source byte of 255 gives.
-- **The second additive term.** When draw header `[1].w` is non-zero, VU1
-  `0x01da`..`0x01e0` adds `itof(extra) * colour * 1/128` from a second
-  per-vertex stream at `20(vi08)` before the saturation clamp. Unported.
-- **Lights 1..3.** The upload path only ever writes a direction into slot 0 and
-  zero into the other three colours, so the remaining capacity is unused in
-  every scene observed. The port implements all four anyway, since that is what
-  the hardware does.
+The full reference now lives in [vu1_microprogram.md](vu1_microprogram.md): the
+data-memory map, all nine entry points, the header byte by byte, the constant
+block, and the paths this document does not cover (environment mapping, the
+alternate alphas, the brightness-keyed second pass). What matters here:
+
+- **The light floor is the primitive's `+0x0D`, complemented.** `iVar19` at
+  `FUN_00212058:227-228` is the assignment on line 81 -- the PSC3 primitive
+  table, stride 0x18 -- and the values form a clean ladder of floors: 0.05, 0.1,
+  0.2, 0.4, 0.5, 0.6, and 0.797 for a source byte of zero. It is an authored
+  per-material shading-strength knob. s01_e024's map is almost uniformly 0.2.
+  An earlier pass here retracted this on a plausibility argument; the
+  control-flow trace settles it, and the port now implements it.
+- **Header byte 15 is an unlit flag** -- primitive flags bit 8 for entities,
+  `pfVar27[0x1C]` bit 13 for the map. VU1 `0x1ba` branches past the entire
+  lighting block. Also implemented.
+- **Skinning is per path, not per model.** Entities always rotate the normal by
+  the bone matrix (`qw1.z = 1`); map geometry never does (`qw1.z = 0`). Exactly
+  what the port implements, now confirmed rather than assumed.
+- **The second additive term is real and has two producers.** `qw1.w` is a
+  hardcoded 1 in both builders. Map draws fill `TOPS+0x2f` with a VU0-computed
+  dynamic point-light contribution (`_vcallms(0xe0)`, i.e. VU0 instruction 0x1c);
+  entity draws get `entity+0x1BC` broadcast there by micro-program `0x015`. The
+  entity side is zero in every scene examined; the map side is the remaining
+  real gap in the port's lighting.
+- **Lights 1..3 are per entity**, at `entity+0xB0` as three
+  `{float3 direction, u32 rgb}` records, installed by micro-program `0x015` and
+  cleared by `0x07b`. The port keeps all four slots and leaves 1..3 black,
+  because what writes `entity+0xB0` has not been identified.
+
+The two paths also disagree on position format: entities upload `0x6d008006`
+(V4-16 signed, the `s16 / 2048` the port already uses) and the map uploads
+`0x6c008006` (V4-32, plain floats).

@@ -46,6 +46,10 @@ namespace orphen::harness
     // from one side.
     constexpr std::uint32_t kRecord80TwoSidedBit = 0x1;
 
+    // FUN_00211230:201 hands bit 13 to the VU1 program as draw header byte 15,
+    // and VU1 0x01ba branches past the entire lighting block when it is set.
+    constexpr std::uint32_t kRecord80UnlitBit = 0x2000;
+
     // The original's frustum ends at DAT_00355628 and it fogs everything out
     // before that, so nothing needs to survive past it. The margin keeps
     // primitives whose centre is inside the draw distance but whose far
@@ -101,6 +105,26 @@ namespace orphen::harness
     // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
     // edge, 1 at the far edge. applyFogState sets GL_FOG_START 0 and
     // GL_FOG_END 1, so GL's linear ramp passes this straight through.
+    // 0 at the near edge of the band, 1 at the far edge. VU1 0x01e1 derives the
+    // entity's per-vertex alpha from the same curve with its own near/far pair
+    // (fGpffffb70c / fGpffffb710), which in s01_e024 is the same 8..32 the fog
+    // uses -- so `1 - fogAmountAt()` is that alpha, scaled to 0..1.
+    float fogAmountAt(float x, float y, float z)
+    {
+      if (!g_vertexFog.active)
+      {
+        return 0.0f;
+      }
+      const float depth = g_vertexFog.depthRow[0] * x + g_vertexFog.depthRow[1] * y +
+                          g_vertexFog.depthRow[2] * z + g_vertexFog.depthRow[3];
+      float amount = 0.0f;
+      if (depth > 0.0f)
+      {
+        amount = (g_vertexFog.inverseNear - 1.0f / depth) * g_vertexFog.inverseSpan;
+      }
+      return std::clamp(amount, 0.0f, 1.0f);
+    }
+
     void emitFogCoord(float x, float y, float z)
     {
       if (!g_vertexFog.active)
@@ -695,7 +719,11 @@ namespace orphen::harness
               primitive.perVertexColour() ? primitive.colourIndex + corner : primitive.colourIndex;
 
           float light[3] = {1.0f, 1.0f, 1.0f};
-          if (g_sceneLighting != nullptr && g_sceneLighting->active)
+          // Draw header byte 15, FUN_00212058:229: primitive flag bit 8 makes
+          // VU1 0x01ba branch straight past the whole lighting block.
+          const bool unlit =
+              (primitive.flags & orphen::ported::model::kPrimitiveUnlit) != 0;
+          if (g_sceneLighting != nullptr && g_sceneLighting->active && !unlit)
           {
             const std::uint16_t normalIndex =
                 primitive.perVertexColour()
@@ -705,9 +733,13 @@ namespace orphen::harness
             {
               const std::uint16_t bone =
                   model.vertices[primitive.vertexIndices[corner]].boneIndex;
+              // Header byte 14, FUN_00212058:228: the complement of the
+              // primitive's +0x0D, which VU1 scales by 1/320 into vf15.z.
               g_sceneLighting->modulator(
                   orphen::harness::posedWorldNormal(model, palette, bone,
                                                     model.normals[normalIndex]),
+                  orphen::ported::render::SceneLighting::floorFromSourceByte(
+                      primitive.alphaByte),
                   light);
             }
           }
@@ -740,6 +772,94 @@ namespace orphen::harness
         }
       }
       glEnd();
+
+      // The specular pass, VU1 0x0200. FUN_00212058 appends a second GIF packet
+      // -- untextured, gouraud, ABE on, additive, depth-tested but not
+      // depth-written -- to any primitive whose +0x0C is non-zero, drawn in the
+      // scene's light-0 colour. See SceneLighting's gleam block.
+      if (g_sceneLighting != nullptr && g_sceneLighting->gleamActive)
+      {
+        glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_ENABLE_BIT |
+                     GL_TEXTURE_BIT);
+        glDisable(GL_TEXTURE_2D);
+        glDisable(GL_ALPHA_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glDepthMask(GL_FALSE);
+
+        glBegin(GL_TRIANGLES);
+        for (const auto &primitive : model.primitives)
+        {
+          // FUN_00212058:84-89 zeroes the source byte when flag bit 8 is set, so
+          // an unlit primitive never carries the pass either.
+          if (primitive.skipped() || primitive.fogByte == 0 ||
+              (primitive.flags & orphen::ported::model::kPrimitiveUnlit) != 0)
+          {
+            continue;
+          }
+          const std::size_t corners = primitive.cornerCount();
+          bool inRange = true;
+          for (std::size_t corner = 0; corner < corners; ++corner)
+          {
+            inRange = inRange && primitive.vertexIndices[corner] < model.vertices.size();
+          }
+          if (!inRange)
+          {
+            continue;
+          }
+
+          std::array<orphen::ported::psm2::Vec3, 4> points{};
+          for (std::size_t corner = 0; corner < corners; ++corner)
+          {
+            points[corner] = posed(primitive.vertexIndices[corner]);
+          }
+
+          const auto emitGleam = [&](std::size_t corner) {
+            const std::uint16_t normalIndex =
+                primitive.perVertexColour()
+                    ? model.vertices[primitive.vertexIndices[corner]].normalIndex
+                    : primitive.flatNormalIndex;
+            float opacity = 0.0f;
+            if (normalIndex < model.normals.size())
+            {
+              const std::uint16_t bone =
+                  model.vertices[primitive.vertexIndices[corner]].boneIndex;
+              const orphen::ported::psm2::Vec3 normal = orphen::harness::posedWorldNormal(
+                  model, palette, bone, model.normals[normalIndex]);
+              const orphen::ported::psm2::Vec3 &half = g_sceneLighting->gleamDirection;
+              const float dotNH =
+                  normal.x * half.x + normal.y * half.y + normal.z * half.z;
+              // * vertexAlpha * 0.5 in GS units is * vertexAlpha / 256 once the
+              // 128-is-one convention is divided out, and vertexAlpha is
+              // 255 * (1 - fog).
+              opacity = orphen::ported::render::SceneLighting::gleamOpacity(
+                            dotNH, primitive.alphaByte, primitive.fogByte) *
+                        (1.0f - fogAmountAt(points[corner].x, points[corner].y,
+                                            points[corner].z)) *
+                        (255.0f / 256.0f);
+            }
+            glColor4f(std::min(1.0f, g_sceneLighting->gleamColour[0] / 128.0f),
+                      std::min(1.0f, g_sceneLighting->gleamColour[1] / 128.0f),
+                      std::min(1.0f, g_sceneLighting->gleamColour[2] / 128.0f),
+                      std::clamp(opacity, 0.0f, 1.0f));
+            glVertex3f(points[corner].x, points[corner].y, points[corner].z);
+          };
+
+          emitGleam(0);
+          emitGleam(1);
+          emitGleam(2);
+          if (corners == 4)
+          {
+            emitGleam(0);
+            emitGleam(2);
+            emitGleam(3);
+          }
+        }
+        glEnd();
+
+        glDepthMask(GL_TRUE);
+        glPopAttrib();
+      }
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
@@ -892,12 +1012,19 @@ namespace orphen::harness
       float blue = static_cast<float>((colour >> 16) & 0xff) / 128.0f;
 
       // VU1 0x01b2..0x01e0. The map path is unskinned -- the microprogram's
-      // per-vertex bone rotation is gated on a header flag the map packets
-      // leave clear -- so the face normal goes straight into the dot products.
-      if (g_sceneLighting != nullptr && g_sceneLighting->active)
+      // per-vertex bone rotation is gated on header byte 10, which
+      // FUN_00211230:191 writes as a constant zero -- so the face normal goes
+      // straight into the dot products. Byte 15 (flags bit 13) skips the whole
+      // block, byte 14 is the complement of +0x2D and becomes the MAXz floor.
+      const bool unlit = (record80.primitiveFlags & kRecord80UnlitBit) != 0;
+      if (g_sceneLighting != nullptr && g_sceneLighting->active && !unlit)
       {
         float light[3];
-        g_sceneLighting->modulator(record80.normal, light);
+        g_sceneLighting->modulator(
+            record80.normal,
+            orphen::ported::render::SceneLighting::floorFromSourceByte(
+                record80.staticAlpha),
+            light);
         red *= light[0];
         green *= light[1];
         blue *= light[2];
@@ -1168,6 +1295,39 @@ namespace orphen::harness
   void MapViewer::setDrawDistance(float drawDistance)
   {
     drawDistance_ = drawDistance;
+  }
+
+  void MapViewer::setGleamDirection(float yawRadians, float pitchRadians)
+  {
+    // FUN_00216aa0:436-449 builds DAT_0058bea0 as normalise(lookAtTarget - eye)
+    // and derives fGpffffb6d4 / fGpffffb6d8 from that same vector, so the
+    // angles reconstruct it -- checked against s01_e24.bin, which holds
+    // yaw 0, pitch -0.165120 and DAT_0058bea0 (0.986399, 0, -0.164370), and
+    // cos/sin of those angles reproduce it to six decimals. The pitch the EE
+    // feeds the camera matrix is eased toward the target angle while
+    // DAT_0058bea0 takes it raw, so the two differ slightly while the camera is
+    // still moving; for a specular highlight that is not worth modelling.
+    const float cosPitch = std::cos(pitchRadians);
+    const orphen::ported::psm2::Vec3 forward{std::cos(yawRadians) * cosPitch,
+                                             std::sin(yawRadians) * cosPitch,
+                                             std::sin(pitchRadians)};
+
+    // lightDirection[0] already holds -DAT_003439c8, so the microprogram's
+    // -(forward + DAT_003439c8) is lightDirection[0] - forward.
+    const auto &lightDirection = sceneLighting_.lightDirection[0];
+    orphen::ported::psm2::Vec3 half{lightDirection.x - forward.x,
+                                    lightDirection.y - forward.y,
+                                    lightDirection.z - forward.z};
+    const float lengthSquared =
+        half.x * half.x + half.y * half.y + half.z * half.z;
+    if (lengthSquared > 0.0f)
+    {
+      const float scale = 1.0f / std::sqrt(lengthSquared);
+      half.x *= scale;
+      half.y *= scale;
+      half.z *= scale;
+    }
+    sceneLighting_.gleamDirection = half;
   }
 
   // 0..255 per channel, not the 0..0x80 the vertex colours use: FUN_0026f108
