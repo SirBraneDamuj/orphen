@@ -37,6 +37,26 @@ namespace orphen::harness
     return orphen::ported::psm2::Vec3{world.x, world.z, -world.y};
   }
 
+  // The same bone transform applied to a normal, and left in the game's Z-up
+  // space rather than folded to viewer space: VU1 0x01c2..0x01c5 rotates the
+  // normal by the bone matrix and then dots it against the light directions,
+  // which FUN_00200e38 uploads in game space. Rotation only -- the translation
+  // column is skipped, matching the microprogram's 3x3 multiply.
+  inline orphen::ported::psm2::Vec3 posedWorldNormal(
+      const orphen::ported::model::Psc3Model &model,
+      const std::vector<orphen::ported::model::Matrix4> &palette,
+      std::uint16_t boneIndex,
+      const orphen::ported::psm2::Vec3 &normal)
+  {
+    (void)model;
+    const std::size_t bone = boneIndex < palette.size() ? boneIndex : 0u;
+    const auto &m = palette[bone];
+    return orphen::ported::psm2::Vec3{
+        normal.x * m[0] + normal.y * m[4] + normal.z * m[8],
+        normal.x * m[1] + normal.y * m[5] + normal.z * m[9],
+        normal.x * m[2] + normal.y * m[6] + normal.z * m[10]};
+  }
+
   // Why a primitive the ray hit was not rasterised. kDrawn means it was.
   enum class ProbeSkipReason
   {

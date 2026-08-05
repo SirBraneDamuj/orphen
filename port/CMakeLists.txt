@@ -113,6 +113,7 @@ target_sources(orphen_port
     src/ported/render/original_map_visibility.h
     src/ported/render/original_entity_draw.cpp
     src/ported/render/original_entity_draw.h
+    src/ported/render/scene_lighting.h
     src/ported/original_frame_timing.h
     src/ported/psm2/psm2_runtime.h
     src/ported/player/original_player_controller.cpp

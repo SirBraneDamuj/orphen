@@ -93,6 +93,11 @@ namespace orphen::harness
 
     VertexFogState g_vertexFog;
 
+    // Set for the duration of render(), the same way g_vertexFog is: the draw
+    // helpers are free functions and lambdas well below the MapViewer instance,
+    // and threading the block through every one of them buys nothing.
+    const orphen::ported::render::SceneLighting *g_sceneLighting = nullptr;
+
     // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
     // edge, 1 at the far edge. applyFogState sets GL_FOG_START 0 and
     // GL_FOG_END 1, so GL's linear ramp passes this straight through.
@@ -683,20 +688,42 @@ namespace orphen::harness
                          static_cast<float>((packed >> 8) & 0xFF) / 256.0f);
           }
           // Flat-shaded primitives hold one colour at colourIndex; only the
-          // per-vertex ones have a colour per corner.
+          // per-vertex ones have a colour per corner. Same for the normal:
+          // +0x06 per vertex under flag 0x8, +0x16 for the whole primitive
+          // otherwise.
           const std::size_t colourEntry =
               primitive.perVertexColour() ? primitive.colourIndex + corner : primitive.colourIndex;
+
+          float light[3] = {1.0f, 1.0f, 1.0f};
+          if (g_sceneLighting != nullptr && g_sceneLighting->active)
+          {
+            const std::uint16_t normalIndex =
+                primitive.perVertexColour()
+                    ? model.vertices[primitive.vertexIndices[corner]].normalIndex
+                    : primitive.flatNormalIndex;
+            if (normalIndex < model.normals.size())
+            {
+              const std::uint16_t bone =
+                  model.vertices[primitive.vertexIndices[corner]].boneIndex;
+              g_sceneLighting->modulator(
+                  orphen::harness::posedWorldNormal(model, palette, bone,
+                                                    model.normals[normalIndex]),
+                  light);
+            }
+          }
+
           if (colourEntry * 3 + 2 < model.colours.size())
           {
             // The game's colour bytes run to 0x80 for full brightness, the same
             // convention the map path divides by 128 for.
-            glColor3f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f),
-                      std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f),
-                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f));
+            glColor3f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]),
+                      std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f * light[1]),
+                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]));
           }
           else
           {
-            glColor3f(1.0f, 1.0f, 1.0f);
+            glColor3f(std::min(1.0f, light[0]), std::min(1.0f, light[1]),
+                      std::min(1.0f, light[2]));
           }
           emitFogCoord(points[corner].x, points[corner].y, points[corner].z);
           glVertex3f(points[corner].x, points[corner].y, points[corner].z);
@@ -863,6 +890,18 @@ namespace orphen::harness
       float red = static_cast<float>(colour & 0xff) / 128.0f;
       float green = static_cast<float>((colour >> 8) & 0xff) / 128.0f;
       float blue = static_cast<float>((colour >> 16) & 0xff) / 128.0f;
+
+      // VU1 0x01b2..0x01e0. The map path is unskinned -- the microprogram's
+      // per-vertex bone rotation is gated on a header flag the map packets
+      // leave clear -- so the face normal goes straight into the dot products.
+      if (g_sceneLighting != nullptr && g_sceneLighting->active)
+      {
+        float light[3];
+        g_sceneLighting->modulator(record80.normal, light);
+        red *= light[0];
+        green *= light[1];
+        blue *= light[2];
+      }
 
       if (modulateByFlatColour)
       {
@@ -1148,6 +1187,11 @@ namespace orphen::harness
     fogFar_ = farDistance;
   }
 
+  void MapViewer::setSceneLighting(const orphen::ported::render::SceneLighting &lighting)
+  {
+    sceneLighting_ = lighting;
+  }
+
   // The band is DAT_0035567c..DAT_00355680 and the colour DAT_00355674, all
   // carried in from the scene environment block rather than derived here --
   // FUN_0022a418 seeds them and the scene script overrides through 0xB9/0xBB.
@@ -1431,6 +1475,7 @@ namespace orphen::harness
     ensureSlotTexturesUploaded();
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
+    g_sceneLighting = &sceneLighting_;
 
     // The ported camera works in game space; the free viewer still works in
     // the viewer space this file has always used, so only one of the two

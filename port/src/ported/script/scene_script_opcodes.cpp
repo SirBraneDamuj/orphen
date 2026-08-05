@@ -440,6 +440,22 @@ namespace orphen::ported::script
     const std::uint32_t green = FUN_0025c258_evaluate();
     const std::uint32_t blue = FUN_0025c258_evaluate();
     environment_.state->uGpffffb700_vectorRgb = (red << 16) | (green << 8) | blue;
+
+    // FUN_00216510(0x3439c8): normalise in place through VU0 macro mode, and
+    // leave a zero vector alone rather than dividing by zero. This is not
+    // cosmetic -- VU1 dots the vector against unit normals expecting a unit
+    // length, and s01_e024's script writes (1, 0, -1), which the save state
+    // shows in VU memory as (0.7071, 0, -0.7071).
+    float *vector = environment_.state->DAT_003439c8_vector;
+    const float lengthSquared =
+        vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+    if (lengthSquared > 0.0f)
+    {
+      const float scale = 1.0f / std::sqrt(lengthSquared);
+      vector[0] *= scale;
+      vector[1] *= scale;
+      vector[2] *= scale;
+    }
   }
 
   // 0x36 / 0x38 (FUN_0025d768): read one word of the 128-entry work array, or

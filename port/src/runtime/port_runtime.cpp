@@ -319,10 +319,8 @@ namespace orphen::port
     state.fGpffffb710_fadeFar = drawDistance;
   }
 
-  // Push whatever survived the script into the renderer. Only the fog half has
-  // somewhere to go today -- the two light colours and their direction vectors
-  // feed FUN_0020f3e0's per-entity colour setup, which is not ported, so they
-  // stay in the interpreter state where --render-report can show them.
+  // Push whatever survived the script into the renderer: the fog band, and the
+  // light block that FUN_00200e38:121-167 uploads to VU1 memory 0x2a0..0x2a7.
   void PortRuntime::applySceneEnvironment()
   {
     const auto &state = sceneScript_.state();
@@ -338,6 +336,29 @@ namespace orphen::port
 
     mapViewer_.setFogColour(state.uGpffffb704_color1);
     mapViewer_.setFogBand(state.fGpffffb70c_fadeNear, state.fGpffffb710_fadeFar);
+
+    // FUN_00200e38:121-167 builds the two VIF unpacks that feed VU1's lighting:
+    //
+    //   0x6c0302a0  three quadwords, only .x set, from -DAT_003439c8/cc/d0
+    //   0x6e0542a3  five quadwords of bytes -- uGpffffb700 into light 0's
+    //               colour at 0x2a3, uGpffffb6fc into the ambient at 0x2a7,
+    //               and zero into 0x2a4..0x2a6
+    //
+    // Only slot 0 ever gets a direction on this path, so slots 1..3 sit at zero
+    // colour and contribute nothing regardless of their intensity.
+    orphen::ported::render::SceneLighting lighting;
+    orphen::ported::render::SceneLighting::unpack(state.uGpffffb6fc_globalRgb,
+                                                  lighting.ambient);
+    orphen::ported::render::SceneLighting::unpack(state.uGpffffb700_vectorRgb,
+                                                  lighting.lightColour[0]);
+    // The EE negates the vector on upload, so the microprogram's dot product is
+    // against -D and this holds the already-negated form.
+    lighting.lightDirection[0] = orphen::ported::psm2::Vec3{
+        -state.DAT_003439c8_vector[0],
+        -state.DAT_003439c8_vector[1],
+        -state.DAT_003439c8_vector[2]};
+    lighting.active = true;
+    mapViewer_.setSceneLighting(lighting);
   }
 
   // Everything a scene needs once its map is in place. Called from initialize
@@ -1266,7 +1287,7 @@ namespace orphen::port
               << " dir1 " << environment.DAT_003439c8_vector[0]
               << ',' << environment.DAT_003439c8_vector[1]
               << ',' << environment.DAT_003439c8_vector[2]
-              << "  (unported: FUN_0020f3e0 per-entity lighting)\n"
+              << "  (ambient 0x2a7 / light0 0x2a3 / dir 0x2a0..2, VU1 0x1b2)\n"
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
               << " hidden=" << visibilityReport_.hiddenSkipped

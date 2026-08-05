@@ -9,6 +9,7 @@
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/render/original_map_visibility.h"
 #include "ported/render/original_view_projection.h"
+#include "ported/render/scene_lighting.h"
 #include "runtime/player_view_state.h"
 #include "runtime/scene_object_view.h"
 
@@ -54,6 +55,11 @@ namespace orphen::harness
     // scene by PortRuntime rather than derived from the draw distance here.
     void setFogColour(std::uint32_t packedRgb);
     void setFogBand(float nearDistance, float farDistance);
+    // The VU1 per-vertex lighting block. Pushed per scene by PortRuntime for
+    // the same reason the fog is: FUN_0022a418 seeds it and the scene script
+    // may overwrite it through opcodes 0x96 and 0x97.
+    void setSceneLighting(const orphen::ported::render::SceneLighting &lighting);
+    const orphen::ported::render::SceneLighting &sceneLighting() const { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
     float fogNear() const { return fogNear_; }
     float fogFar() const { return fogFar_; }
@@ -134,6 +140,7 @@ namespace orphen::harness
     float fogColour_[3] = {0x50 / 255.0f, 0x50 / 255.0f, 0x50 / 255.0f};
     float fogNear_ = 8.0f;
     float fogFar_ = 32.0f;
+    orphen::ported::render::SceneLighting sceneLighting_;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;

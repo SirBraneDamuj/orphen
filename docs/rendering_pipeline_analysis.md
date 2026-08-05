@@ -281,3 +281,248 @@ and no non-ceiling primitive points down. `--render-report` prints that count.
 The GS has no backface culling hardware; the original culls in the VU1 program
 at `0xE0`. The winding is fully determined by the data above, so a host
 renderer can reproduce it.
+
+## Scene lighting: why the port renders untinted
+
+`s01_e024` reads distinctly blue-grey and dim in game; the port renders the same
+geometry at full "true" colour. The cause is that the scene's two light colours
+are parsed and then unused.
+
+```
+DAT_0035566c (light 1) = 0x708090   R=112 G=128 B=144   blue-grey
+DAT_00355670 (light 2) = 0x2050A0   R=32  G=80  B=160   strongly blue
+```
+
+`FUN_0022a360` defaults them to `0x606060` / `0xffffff` -- neutral ambient plus a
+white key -- so an unlit render looks exactly like a scene using the defaults,
+which is why nothing looks obviously broken.
+
+**The model, measured rather than assumed.** Sampling the PCSX2 save-state
+screenshot and normalising each surface to its green channel:
+
+```
+surface              R/G     B/G
+left wall           0.849   1.126
+distant arch        0.846   1.119
+right wall          0.699   1.181
+ceiling             0.762   1.261
+floor centre        0.597   1.316
+
+light 1 0x708090    0.875   1.125
+light 2 0x2050A0    0.400   2.000
+```
+
+Every surface falls between the two lights and slides from light 1 toward
+light 2 as it turns to face the key. Surfaces edge-on to the key sit almost
+exactly on light 1. So light 1 is the constant (ambient) term and light 2 the
+directional one, and the spread across surfaces is the `N.L` factor:
+
+```
+out = base * (light1 + clamp(dot(N, L)) * light2)
+```
+
+> Superseded by the microcode -- see "The combining function" below. The shape
+> is right and the identification of light 1 as ambient and light 2 as
+> directional holds, but the diffuse term is half-Lambert rather than a clamp,
+> and the channel-scale argument two paragraphs down conflates two separate
+> divisions. Kept because it is how the lights were first identified.
+
+**Channel scale is 0..255, not 0..128.** The left wall at RGB (57.4, 67.5, 76.0)
+divided by light 1 at /255 = (0.44, 0.50, 0.56) back-solves to a base texel of
+(130, 136, 136), a plausible neutral stone. At /128 the base would have to be
+(66, 68, 68), far too dark for that texture, and the frame would not be dim --
+a /128 light averages to a multiplier near 1.0.
+
+**Direction.** `FUN_00200e38:121-167` builds the VU packet: negated light
+directions from `DAT_003439c8` and `DAT_00343a08`, then each colour written as
+three separate bytes into the high lanes of a float slot (`+8/+9/+10` = R/G/B,
+`+11` = 0). `FUN_00216510` normalises the direction through `_vcallms(0x20)`.
+Script opcodes `0x96` (light 1), `0x97`/`0x98` (light 2 + direction) and `0x99`
+(second direction) set them, so a scene can change lighting partway through --
+`s03_e001` does exactly that, cool outdoors then warm indoors.
+
+**Confirmed against other scenes.** `s05_e021`-`e026` carry light 1 = `0x961414`
+and read visibly red in game; `s05_e016` has light 1 = `0x000000` with a warm
+`0xC88060` key and reads as warm-lit with black shadow.
+
+### The combining function, read out of the microprogram
+
+The measurements above got the shape right but could not settle the details.
+They are superseded by the microcode, disassembled from the PCSX2 save state's
+`vu1MicroMem.bin` with `scripts/vu_disasm.py`.
+
+**Locating the right program.** VU1 micro memory is 2048 instructions with nine
+E-bit program ends, at `000f 0079 0082 00b7 00e5 01fa 01fe 0226 0228`. The EE
+carries nine MSCAL VIFcodes -- `0x11 0x15 0x7b 0x84 0xb9 0x12c 0x13b 0x14b
+0x228` -- and each one lands two instructions after an end, which is what an
+E-bit plus its two trailing slots produces. That correspondence comes from two
+independent sources and is what confirms the disassembly is framed correctly.
+
+Entries `0x12c`, `0x13b` and `0x14b` share one body. `0x14b` is used by
+`FUN_0020a2c0` and `FUN_00211230` (map geometry) and `0x12c` by `FUN_00212058`
+(PSC3 entity geometry), so **map and entity lighting are the same code**.
+
+**The vertex loop, VU1 `0x01b2`..`0x01e0`:**
+
+```
+i_k  = max((dot(n, L_k) + 1) * 0.5, floor)          k = 0..3
+out  = min(colour/256 * (ambient + sum_k C_k * i_k), 255)
+```
+
+`n` is the vertex normal (`packed * 1/128`, optionally rotated by the bone
+matrix when the draw header flags the model as skinned). The `+1` is `ADDw` on
+`vf00w`, and the `0.5` is `vf01.y` -- so the diffuse term is **half-Lambert, not
+a clamped `N.L`**, which is the one thing the screenshot fit could not have
+distinguished. `vf01` is `LQ.xyzw vf01, 28(vi00)` at instruction `0x0000` and
+reads `(1/256, 0.5, 1/320, 0.01)`.
+
+**Where the constants live**, and what the save state has in them for `s01_e024`:
+
+```
+0x2a0..0x2a2  light directions, as matrix rows   (-0.7071, 0, 0.7071) in slot 0
+0x2a3         light 0 colour                     (32, 80, 160)   = 0x2050A0
+0x2a4..0x2a6  lights 1..3 colour                 zero
+0x2a7         ambient                            (112, 128, 144) = 0x708090
+0x0014        output saturation                  (255, 255, 255)
+0x001c        vf01                               (1/256, 0.5, 1/320, 0.01)
+```
+
+The colours match `DAT_0035566c` / `DAT_00355670` exactly, which is what ties
+the microprogram back to the scene block.
+
+**Byte-valued, not normalised.** `FUN_00200e38:121-167` uploads the colours with
+VIFcode `0x6e0542a3` -- UNPACK V4-8 **unsigned**, five quadwords -- and the VU's
+own init program at `0x0000`..`0x000f` converts them in place with `ITOF0`. So
+`0x708090` arrives as the floats `(112, 128, 144)`; there is no `/255` anywhere
+in the microprogram. The earlier "/255 not /128" measurement was reading the
+combined effect of the `/256` on the vertex colour and the GS's `/128` modulate.
+
+**Reproducing it in GL.** The VU's output is a GS vertex colour, which MODULATE
+applies as `texel * out / 128`. The port's draw paths already divide their
+vertex colours by 128, so what they multiply in is exactly
+`(ambient + sum_k C_k * i_k) / 256`. That is `SceneLighting::modulator` in
+`port/src/ported/render/scene_lighting.h`.
+
+**One caveat.** The GS allows the modulate factor to reach `255/128`, just under
+2x. Fixed-function GL clamps `glColor` to 1.0, so surfaces the game renders
+overbright flatten instead. `GL_COMBINE` with `GL_RGB_SCALE = 2` would restore
+it; the port does not do this yet.
+
+### The VU input streams, from the VIFcodes
+
+`FUN_00212058` writes one UNPACK per vertex attribute. Reading the CMD field
+(`0x60 | vn<<2 | vl`, plus bit 15 = TOPS-relative and bit 14 = unsigned) against
+the register each stream is read into by the microprogram pins every attribute's
+element count, width and signedness:
+
+```
+VIFcode      format          addr   read by                  attribute
+0x6e03c000   V4-8  unsigned  +0x00  ILWR/LQ vf15 (vi01)      draw header, 3 qw
+0x6d008006   V4-16 signed    +0x06  LQI vf21 (vi14++)        position
+0x6e00801a   V4-8  SIGNED    +0x1a  LQI vf16 (vi08++)        normal
+0x6e00c024   V4-8  unsigned  +0x24  LQI vf17 (vi04++)        colour
+0x6600c039   V2-8  unsigned  +0x39  LQI vf23 (vi05++)        2 bytes per vertex
+```
+
+Two of these settle open questions:
+
+- **The normal stream is V4-8 signed.** Combined with the microprogram's
+  `* 1/128`, that is `s8 / 128` -> `[-1, +0.992]`, a genuine unit normal, and
+  its `.w` lane is the bone index `MTIR` reads. The normal decode was not
+  previously grounded in a width.
+- **The colour stream is V4-8 unsigned**, so vertex colours really are 0..255
+  bytes, not the 0..128 the port's `/128` divisor might suggest. The 128 is the
+  GS's MODULATE convention, a separate thing that happens later.
+
+### Per-vertex alpha, and why the fog curve is right
+
+`0x0112`..`0x0129` is **alpha**, not fog -- it writes `vf17.w`, and `vf17` is the
+RGBA the loop stores through `SQI.xyzw vf17, (vi07++)`. Two modes, selected by
+the counter at `46(vi01)`:
+
+```
+0113  LQ vf25, -21(vi08)        the vertex position
+0115  SUB.xyz vf25, vf25, vf26  minus the reference point at qw 26
+0116  ELENG P, vf25             P = |vf25.xyz|
+0117  WAITP
+0118  MFP.w vf25, P
+0119  SUB.w vf25, vf26, vf25    (reference.w - distance)
+011a  MULi.w vf25, vf25, I      * 16
+011b  MAX.w  vf25, vf25, vf00   clamped to [0, 128]
+011c  MINIi.w vf25, vf25, I
+```
+
+so one mode is a **linear-in-distance** fade, and the other (`0x0121`..`0x0129`)
+dots the stored world normal against a vector at qw 27 and takes `ABS` -- a
+facing-based fade.
+
+Neither is the fog. **The fog is GS hardware**, set up on the EE at
+`FUN_00200e38:66-67`:
+
+```
+DAT_003147fc = (near * 255 * far) / (far - near)      the A coefficient
+DAT_003147f0 = (far * 0 - near * 255) / (far - near)  the B coefficient
+```
+
+The GS evaluates `F = A/z + B`, which gives `F = 255` at the near edge and `0`
+at the far edge, linear in `1/z`. Working `1 - F/255` through algebraically:
+
+```
+1 - F/255  =  f * (1 - n/z) / (f - n)  =  (1/n - 1/z) / (1/n - 1/f)
+```
+
+which is exactly the curve `emitFogCoord` supplies. **The port's fog is the
+hardware's fog**, not an approximation -- previously it was believed right but
+only argued from the shape of the coefficients.
+
+### Backface culling is in VU1, and it is gated
+
+MAC flag layout, from `pcsx2/VUops.cpp:44-79`: the sign nibble is `0x0010 <<
+shift` with shift 3/2/1/0 for x/y/z/w, so `Sx=0x80 Sy=0x40 Sz=0x20 Sw=0x10`.
+That decodes the two flag tests in the microprogram:
+
+```
+016f..0177  two SUBs, FMOR accumulated, IAND 0xe0 (= Sx|Sy|Sz), IBNE -> reject
+            a bounding-extent reject: any of x/y/z negative and the draw dies
+
+0181  OPMULA.xyz ACC,  vf28, vf29     cross of two edge vectors,
+0182  OPMSUB.xyz vf00, vf29, vf28     discarded into vf00 -- flags only
+0183  IBNE vi05, vi00 -> 018f         header[1].y non-zero: skip the test
+0186  FMAND vi14, vi09  (vi09 = 0x20) sign of the cross product's Z
+0188  IBEQ vi14, vi00 -> 018f         Z >= 0: front-facing, accept
+018a  IBEQ vi10, vi06  (vi06 = 3)     3 vertices: no second half, reject
+018b  FMAND vi14, vi09                sign of the second half's cross
+018d  IBNE vi14, vi00 -> 01fc         also backfacing: reject
+```
+
+The projected position carries `.z = 1.0` (`ADDw.z vf23, vf00, vf00w`), so the
+cross product's Z is the 2D signed area -- this is a **screen-space winding
+test**, run after transform, on the draw's first three or four vertices, and
+rejecting only when both halves of a quad fail.
+
+**This does not mean the port should simply enable `GL_CULL_FACE`.** The
+observation behind `map_viewer.cpp:576` still holds: assets genuinely ship with
+primitives whose winding opposes their stored normal, and culling them all
+produced holes. What the microcode adds is that the test is **conditional** --
+`IBNE vi05, vi00` skips it entirely when `header[1].y` is non-zero, which is a
+per-draw two-sided flag the port does not read. So the promising change is to
+read that flag and cull only when it is clear, not to cull unconditionally.
+What the EE writes into `header[1].y` has not been traced yet, so this is a
+lead rather than a finding.
+
+### Open
+
+- **The intensity floor.** `MAXz.xyzw vf16, vf16, vf15z` floors every intensity
+  at `itof(header[2].z) * 1/320`. The header is VIFcode `0x6e03c000` -- UNPACK
+  V4-8 unsigned, three quadwords -- so that is a 0..255 byte and the floor spans
+  0..0.797. `FUN_00212058:228` writes it as `~*(byte *)(iVar19 + 0xd)`, the
+  complement of a per-draw record byte; byte 13 gets the uncomplemented value
+  and lands in `vf15.y`. What the source byte means is the remaining unknown.
+  The port leaves the floor at zero, which is what a source byte of 255 gives.
+- **The second additive term.** When draw header `[1].w` is non-zero, VU1
+  `0x01da`..`0x01e0` adds `itof(extra) * colour * 1/128` from a second
+  per-vertex stream at `20(vi08)` before the saturation clamp. Unported.
+- **Lights 1..3.** The upload path only ever writes a direction into slot 0 and
+  zero into the other three colours, so the remaining capacity is unused in
+  every scene observed. The port implements all four anyway, since that is what
+  the hardware does.
