@@ -17,7 +17,9 @@ namespace orphen::harness
   // the model path needs to ask for grp records by category too.
   inline constexpr std::uint16_t kGrpCategory = 0;     // PSC3 character/prop models
   inline constexpr std::uint16_t kScrCategory = 1;     // scene bytecode
-  inline constexpr std::uint16_t kMapCategory = 2;     // PSM2 map geometry
+  // PSM2 map geometry -- and also the PSC3 model for any prop streamed with the
+  // map rather than bound through the ELF's descriptor table.
+  inline constexpr std::uint16_t kMapCategory = 2;
   inline constexpr std::uint16_t kTextureCategory = 3; // BMPA texture pages
 
   struct McbSceneSelection

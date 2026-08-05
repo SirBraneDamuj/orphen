@@ -228,14 +228,49 @@ from all 190 populated MCB scene bundles and from the `s00_e000` boot bundle,
 whose ids in that range run `009a 009b 009c 009d 00a0 00a1 00a3` — genuinely
 sparse, missing `009e`, `009f` and `00a2`.
 
-**`MAP.BIN` is the likely home and the port never reads it.** It holds 500
-uncompressed `PSC3` models and 165 `PSM2` maps behind a count-plus-offset table,
-which fits "map-streamed prop". A model whose first `0x1C` header bytes are
-byte-identical to the loaded `grp_009F` sits at `0xcc2802`.
+**`MAP.BIN` is the home, and the port never reads it.** The decompilation does
+reference it. `PTR_s_GRP_BIN_00315a58` is a nine-entry table of archive names,
+and `MAP.BIN` is index 2:
 
-**Unresolved:** past that header the on-disc bytes diverge from the memory copy
-(3582 of the first 4096 differ, beyond the expected relocation of `+0x1C..+0x2B`).
-So `0xcc2802` is *not* confirmed to be `grp_009F` — the `0x9F..0xA3` records are
-a family of same-topology props, and identical table offsets are exactly what
-siblings would share. Settling it means parsing `MAP.BIN`'s index rather than
-pattern-matching headers.
+```
+0 GRP.BIN   1 SCR.BIN   2 MAP.BIN   3 TEX.BIN   4 ITM.BIN
+5 (0x34bb78) 6 SND.BIN  7 MCB0.BIN  8 MCB1.BIN
+```
+
+`FUN_00223268(archiveIndex, resourceId, dest)` is the generic loader. It
+switches on the archive index to choose a per-archive offset lookup; case 2 is
+`FUN_00221b48`, a flat u32 table:
+
+```c
+return *(undefined4 *)(param_1 * 4 + iGpffffbc28);   // iGpffffbc28 == 0x00355B98
+```
+
+The caller seeks with `(entry >> 17) << 11` — sector index x 2048
+(`FUN_00223268:85`, and `FUN_00223038` on the non-debug path).
+
+That table is the head of `MAP.BIN` itself, entry `[id]` at byte offset
+`id * 4`. Decoding it reproduces the archive:
+
+```
+id 0x01 -> 0x001000   PSM2
+id 0x02 -> 0x019800   PSM2
+id 0x9F -> 0xCC2800   PSC3    <- grp_009F
+```
+
+`0xCC2800` is the address reached independently by searching for the loaded
+model's header signature. Two routes agreeing settles what a header match alone
+could not: the model there **is** `grp_009F`. The archive holds 500 `PSC3`
+models and 165 `PSM2` maps, uncompressed.
+
+**Still open, and worth settling before trusting a parser:**
+
+- Records begin slightly *before* their magic — one byte for the `PSM2`
+  entries, two for this `PSC3` one — so the per-record framing is not pinned
+  down. The two bytes at `0xCC2800` are `20 2E`; `0x2E20` = 11808 would be a
+  plausible size for this model, but that is a guess, not a reading.
+- Past the header the on-disc bytes diverge from the loaded copy far more than
+  the `+0x1C..+0x2B` pointer relocation accounts for: 3582 of the first 4096
+  differ, in scattered runs. Something else is rewritten at load.
+- Where the `0x2C` record table at `0x00F466xx` comes from is still unknown.
+  Locating the model does not by itself give the port the mesh/tex pairing for
+  type `0x272`, so both halves are needed to draw it.

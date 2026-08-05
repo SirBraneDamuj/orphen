@@ -78,6 +78,17 @@ namespace orphen::harness
     const orphen::ported::psm2::Psm2RuntimeState *loadedMap() const;
     const SceneResourceProvider *loadedSceneResources() const;
     const std::string &loadedSourceDescription() const { return loadedSourceDescription_; }
+    // The scene currently loaded from the disc, or nullopt when the map came
+    // from --psm2. `section` is the stage number, which FUN_0022a418:50 uses as
+    // the map-streamed prop bank.
+    std::optional<McbSceneSelection> loadedDiscScene() const
+    {
+      if (discScenes_.empty() || currentDiscSceneIndex_ >= discScenes_.size())
+      {
+        return std::nullopt;
+      }
+      return discScenes_[currentDiscSceneIndex_];
+    }
     std::size_t loadedTexturePageCount() const { return texturePages_.size(); }
     std::uint64_t loadedMapGeneration() const { return loadedMapGeneration_; }
 

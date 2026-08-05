@@ -26,6 +26,7 @@
 
 #include "harness/scene_resource_provider.h"
 #include "ported/entity/entity_descriptor_table.h"
+#include "ported/entity/map_prop_descriptor_table.h"
 #include "ported/model/psc3_model.h"
 #include "ported/resource/texture_slot_cache.h"
 
@@ -68,9 +69,21 @@ namespace orphen::port
 
     // FUN_00266118. Idempotent; the binding is cached per model record address.
     const EntityModelBinding *ensureLoaded(std::uint32_t modelRecordAddress);
+    // Builds a binding from an already-read record.
+    const EntityModelBinding *bindRecord(std::uint32_t bindingKey,
+                                         const orphen::ported::entity::EntityModelRecord &record);
+    const EntityModelBinding *bindMapProp(std::uint32_t typeId);
 
     // Convenience: resolve a type id all the way through the descriptor table.
     const EntityModelBinding *bindingForTypeId(std::uint32_t typeId);
+
+    // The map-streamed prop banks (FUN_00228e28) plus the scene's stage number,
+    // which is the bank FUN_00229980 uses for the 0x272 range. Both come from
+    // outside this class: the banks from SCR.BIN, the stage from the scene
+    // selection.
+    void setMapPropTable(const orphen::ported::entity::MapPropDescriptorTable *table, int stageBank);
+    const orphen::ported::entity::MapPropDescriptorTable *mapPropTable() const { return mapProps_; }
+    int stageBank() const { return stageBank_; }
 
     const orphen::ported::resource::TextureSlotCache &textureSlots() const { return textureSlots_; }
     std::size_t loadedModelCount() const { return models_.size(); }
@@ -80,6 +93,8 @@ namespace orphen::port
     const orphen::harness::SceneResourceProvider *sceneResources_ = nullptr;
     std::optional<orphen::harness::SceneResourceProvider> bootResources_;
     const orphen::ported::entity::EntityDescriptorTable *descriptors_ = nullptr;
+    const orphen::ported::entity::MapPropDescriptorTable *mapProps_ = nullptr;
+    int stageBank_ = -1;
 
     orphen::ported::resource::TextureSlotCache textureSlots_;
     std::map<std::uint16_t, orphen::ported::model::Psc3Model> models_;

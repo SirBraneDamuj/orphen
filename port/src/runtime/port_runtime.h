@@ -99,6 +99,7 @@ namespace orphen::port
     // Kept so a map cycle can rebind the model store against the new scene's
     // bundle the same way initialize does.
     std::filesystem::path discRoot_;
+    orphen::ported::entity::MapPropDescriptorTable mapPropTable_;
     const char *spawnSourceLabel_ = "map centre";
     float previousStickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
@@ -142,6 +143,8 @@ namespace orphen::port
     // The whole per-scene load: model bindings, player reset, scene script.
     // Shared by initialize and the map-cycle path so they cannot drift.
     void loadSceneForCurrentMap();
+    // FUN_00228e28: the map-streamed prop banks, built once from SCR.BIN.
+    void loadMapPropDescriptors();
     void runSceneScript();
     // FUN_0022a418's environment defaults, then the values the script left
     // behind. Called either side of the init/start entries.

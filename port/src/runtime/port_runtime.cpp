@@ -1,5 +1,7 @@
 #include "runtime/port_runtime.h"
 
+#include "harness/flat_bin_archive.h"
+
 #include "runtime/psm2_ground_query.h"
 #include "ported/model/psc3_model.h"
 #include "ported/model/psc3_skeleton.h"
@@ -128,6 +130,7 @@ namespace orphen::port
     }
 
     discRoot_ = config.discRoot;
+    loadMapPropDescriptors();
 
     if (mapViewer_.loadedMap() != nullptr)
     {
@@ -342,11 +345,48 @@ namespace orphen::port
   // first scene and cycling to another go through the same code -- the two
   // paths having diverged is what left cycled maps rendering the first scene's
   // fog, model bindings and entity set.
+  // FUN_00228e28:150-193. Boot loads SCR.BIN resource 0xBD once and derives the
+  // map-streamed prop banks from it; nothing per-scene about it, so this runs at
+  // initialize rather than per scene load.
+  void PortRuntime::loadMapPropDescriptors()
+  {
+    mapPropTable_.reset();
+    if (discRoot_.empty())
+    {
+      return;
+    }
+
+    orphen::harness::FlatBinArchive scrArchive;
+    if (!scrArchive.open(discRoot_ / "SCR.BIN"))
+    {
+      std::cout << "[props] SCR.BIN not found; map-streamed props unavailable\n";
+      return;
+    }
+
+    constexpr std::uint32_t kDAT_00228e28_descriptorResource = 0xBD;
+    const std::vector<std::uint8_t> blob = scrArchive.decode(kDAT_00228e28_descriptorResource);
+    if (blob.empty() || !mapPropTable_.FUN_00228e28_build(blob))
+    {
+      std::cout << "[props] SCR.BIN resource 0xBD did not yield prop banks\n";
+      return;
+    }
+
+    std::cout << "[props] SCR.BIN 0xBD " << blob.size() << " bytes -> "
+              << mapPropTable_.bankCount() << " banks\n";
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // Models bind before the script runs, so the spawn path can report a
     // missing model at the moment it spawns the entity that wanted it.
     modelStore_.initialize(mapViewer_.loadedSceneResources(), discRoot_, &descriptorTable_);
+
+    // FUN_0022a418:50 sets DAT_00355208 from DAT_003551f4, the stage number of
+    // the scene being entered -- s01_e024 is stage 1. That is the bank
+    // FUN_00229980 uses for the 0x272 type range.
+    const auto scene = mapViewer_.loadedDiscScene();
+    modelStore_.setMapPropTable(&mapPropTable_, scene.has_value() ? static_cast<int>(scene->section) : -1);
+
     modelStore_.FUN_00221fd8_bind_boot_textures();
     // FUN_0022a418 lines 190-197 bind the lead player's model before the
     // scene script runs, straight through FUN_00221d20 with the default bank

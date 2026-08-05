@@ -47,6 +47,10 @@ target_sources(orphen_port
     src/harness/scene_resource_provider.h
     src/harness/scene_resource_tree.cpp
     src/harness/scene_resource_tree.h
+        src/harness/flat_bin_archive.cpp
+        src/harness/flat_bin_archive.h
+        src/ported/entity/map_prop_descriptor_table.cpp
+        src/ported/entity/map_prop_descriptor_table.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp

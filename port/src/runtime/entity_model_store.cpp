@@ -2,6 +2,7 @@
 
 #include "harness/disc_resource_loader.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -31,6 +32,7 @@ namespace orphen::port
 
     // The two FUN_002102d0 calls at 0x2E and 0x2F take an already-decoded buffer
     // through a different path and are not reproduced.
+
   } // namespace
 
   void EntityModelStore::initialize(const orphen::harness::SceneResourceProvider *sceneResources,
@@ -121,7 +123,15 @@ namespace orphen::port
       return existing->second.valid ? &existing->second : nullptr;
     }
 
-    const std::vector<std::uint8_t> bytes = decodeResource(orphen::harness::kGrpCategory, meshId);
+    // Category 0 is where entity models normally live, but a map-streamed prop
+    // ships in category 2 alongside the map geometry instead -- s01_e024 carries
+    // its type 0x272 chest as category 2 id 0x009F, and nothing in category 0.
+    // Both decode to a plain PSC3, so the only difference is where to look.
+    std::vector<std::uint8_t> bytes = decodeResource(orphen::harness::kGrpCategory, meshId);
+    if (bytes.empty())
+    {
+      bytes = decodeResource(orphen::harness::kMapCategory, meshId);
+    }
     orphen::ported::model::Psc3Model model = orphen::ported::model::loadPsc3Model(bytes);
     const auto inserted = models_.emplace(meshId, std::move(model)).first;
     return inserted->second.valid ? &inserted->second : nullptr;
@@ -171,40 +181,77 @@ namespace orphen::port
       return nullptr;
     }
 
+    return bindRecord(modelRecordAddress, *record);
+  }
+
+  // Split out from ensureLoaded so a record from somewhere other than the ELF
+  // can reuse it once that source is identified.
+  const EntityModelBinding *EntityModelStore::bindRecord(
+      std::uint32_t bindingKey, const orphen::ported::entity::EntityModelRecord &record)
+  {
     EntityModelBinding binding;
-    binding.meshId = record->meshId0x00;
-    binding.textureId = record->texId0x02;
-    binding.model = loadModel(record->meshId0x00);
+    binding.meshId = record.meshId0x00;
+    binding.textureId = record.texId0x02;
+    binding.model = loadModel(record.meshId0x00);
     if (binding.model == nullptr)
     {
-      const auto stored = models_.find(record->meshId0x00);
+      const auto stored = models_.find(record.meshId0x00);
       binding.diagnostic = stored != models_.end() && !stored->second.diagnostic.empty()
                                ? stored->second.diagnostic
                                : "grp record not in any open bundle";
     }
 
-    if (record->texId0x02 != 0)
+    if (record.texId0x02 != 0)
     {
-      if (record->bindsTextureStatically())
+      if (record.bindsTextureStatically())
       {
         // Already bound by FUN_00221fd8's second pass, at the record's own slot.
-        binding.textureSlot = record->staticSlot0x07;
+        binding.textureSlot = record.staticSlot0x07;
       }
-      else if (textureSlots_.slot(record->staticSlot0x07).DAT_003429a8_residentId == record->texId0x02)
+      else if (textureSlots_.slot(record.staticSlot0x07).DAT_003429a8_residentId == record.texId0x02)
       {
         // One of the seven fixed boot binds. The record does not advertise
         // itself as static, but its slot already holds exactly its texture --
         // which is how the chests get theirs.
-        binding.textureSlot = record->staticSlot0x07;
+        binding.textureSlot = record.staticSlot0x07;
       }
       else
       {
         binding.textureSlot = textureSlots_.FUN_00266118_bind_texture(
-            record->texId0x02, record->usesAltTextureBank(), record->storesNegatedTextureId());
+            record.texId0x02, record.usesAltTextureBank(), record.storesNegatedTextureId());
       }
     }
 
-    return &bindings_.emplace(modelRecordAddress, std::move(binding)).first->second;
+    return &bindings_.emplace(bindingKey, std::move(binding)).first->second;
+  }
+
+  void EntityModelStore::setMapPropTable(const orphen::ported::entity::MapPropDescriptorTable *table,
+                                         int stageBank)
+  {
+    mapProps_ = table;
+    stageBank_ = stageBank;
+  }
+
+  // FUN_00229980's map-streamed branch. The record is real data out of SCR.BIN,
+  // so this is the same binding path as the ELF one -- only the lookup differs.
+  const EntityModelBinding *EntityModelStore::bindMapProp(std::uint32_t typeId)
+  {
+    if (mapProps_ == nullptr || !mapProps_->valid())
+    {
+      return nullptr;
+    }
+    const auto record = mapProps_->FUN_00229980_resolve(typeId, stageBank_);
+    if (!record.has_value())
+    {
+      return nullptr;
+    }
+
+    // These records have no address of their own -- the original allocates them
+    // on the heap and identifies them by that pointer. The port needs *some*
+    // stable identity for the binding cache, so it uses the type id in a range
+    // no ELF record address can occupy. This is bookkeeping, not data.
+    constexpr std::uint32_t kMapPropKeyBase = 0xF0000000u;
+    return bindRecord(kMapPropKeyBase | typeId, *record);
   }
 
   const EntityModelBinding *EntityModelStore::bindingForTypeId(std::uint32_t typeId)
@@ -223,7 +270,7 @@ namespace orphen::port
     const auto descriptor = descriptors_->FUN_00229980_resolve(typeId);
     if (!descriptor.has_value() || descriptor->modelRecordAddress == 0)
     {
-      return nullptr;
+      return bindMapProp(typeId);
     }
     modelRecordForTypeId_.emplace(typeId, descriptor->modelRecordAddress);
     return ensureLoaded(descriptor->modelRecordAddress);
