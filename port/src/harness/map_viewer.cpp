@@ -649,7 +649,64 @@ namespace orphen::harness
         return orphen::harness::posedViewerVertex(model, palette, vertexIndex);
       };
 
-      glBegin(GL_TRIANGLES);
+      const bool multiPass =
+          g_sceneLighting != nullptr && g_sceneLighting->applySubdrawPasses;
+
+      // The blend state a subdraw's mode nibble selects, from the GS register
+      // blocks at VU1 memory 608 + mode*3 (see SceneLighting). State changes are
+      // illegal between glBegin/glEnd, so switching mode closes the current
+      // batch and opens a new one; passes are emitted in the original's order,
+      // so a run of same-mode passes still costs one batch.
+      // Blend and depth state are restored on the way out rather than reset to
+      // assumed values: the map path draws after this one and has its own
+      // blending, and hardcoding a "default" here turned its alpha-blended
+      // geometry -- the hanging chains -- opaque.
+      glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+      int activeBlendMode = -1;
+      const auto setBlendMode = [&activeBlendMode](int mode) {
+        if (mode == activeBlendMode)
+        {
+          return;
+        }
+        if (activeBlendMode >= 0)
+        {
+          glEnd();
+        }
+        activeBlendMode = mode;
+        switch (mode)
+        {
+        case 2:
+          // ALPHA 0x48, (Cs - 0) * As + Cd. ZMSK is set on this block, so it
+          // tests depth without writing, and LEQUAL because an overlay pass sits
+          // at exactly the depth the base pass just wrote.
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+          glDepthMask(GL_FALSE);
+          glDepthFunc(GL_LEQUAL);
+          break;
+        case 1:
+        case 3:
+          // Mode 1 is ALPHA 0x44 with ZMSK set. Mode 3 is ALPHA 0xa1,
+          // (Cd - Cs) * 128 >> 7, a reverse subtract that needs
+          // glBlendEquation -- not in the fixed-function entry points this
+          // harness links, and unused by every model in s01_e024. It falls back
+          // to straight alpha so it shows up as wrong rather than as missing.
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glDepthMask(GL_FALSE);
+          glDepthFunc(GL_LEQUAL);
+          break;
+        case 0:
+        default:
+          glDisable(GL_BLEND);
+          glDepthMask(GL_TRUE);
+          glDepthFunc(GL_LESS);
+          break;
+        }
+        glBegin(GL_TRIANGLES);
+      };
+
       for (const auto &primitive : model.primitives)
       {
         if (primitive.skipped())
@@ -667,40 +724,25 @@ namespace orphen::harness
           continue;
         }
 
-        // FUN_00212058 draws one pass per active subdraw index, in order, and
-        // the port draws only one of them because it has no per-pass blend
-        // state yet. **Take the first, not the last.** Pass 0 is the opaque
-        // base layer; later passes are translucent overlays, and taking the
-        // last one rendered the overlay's UVs opaquely with the base skipped
-        // entirely -- a polygon that is drawn, but samples a patch of the sheet
-        // it was never meant to, which reads on screen as a hole.
+        // FUN_00212058 draws one pass per active subdraw index, in order, each
+        // with the blend mode its texFlags select. With --lighting-passes off
+        // the port draws only the first, which is what it did before per-pass
+        // blend state existed: pass 0 is the opaque base and the later ones are
+        // overlays, so taking the first is the safe single-pass choice.
         //
-        // grp_0006 prim 110 is the case that showed it up: passes [106, 107],
-        // where 106 is texFlags 0x0000 (blend mode 0) and 107 is 0x8019 (blend
-        // mode 2, alpha 25 of 127). 10 primitives in that model have a second
-        // pass, 18 in grp_0008 and 60 in grp_0009.
-        int chosen = -1;
-        for (std::size_t pass = 0; pass < 4; ++pass)
-        {
-          if (primitive.subdrawIndices[pass] >= 0)
-          {
-            chosen = primitive.subdrawIndices[pass];
-            break;
-          }
-        }
-
-        const orphen::ported::model::Psc3Subdraw *subdraw =
-            (chosen >= 0 && static_cast<std::size_t>(chosen) < model.subdraws.size())
-                ? &model.subdraws[static_cast<std::size_t>(chosen)]
-                : nullptr;
-
+        // grp_0006 prim 110 is why "first" and not "last": passes [106, 107],
+        // where 106 is texFlags 0x0000 (mode 0) and 107 is 0x8019 (mode 2,
+        // alpha 25 of 127). Drawing only the overlay sampled a patch of the
+        // sheet it was never meant to, which read on screen as a hole.
         std::array<orphen::ported::psm2::Vec3, 4> points{};
         for (std::size_t corner = 0; corner < corners; ++corner)
         {
           points[corner] = posed(primitive.vertexIndices[corner]);
         }
 
-        const auto emit = [&](std::size_t corner) {
+        const auto emit = [&](std::size_t corner,
+                              const orphen::ported::model::Psc3Subdraw *subdraw,
+                              float passAlpha) {
           if (subdraw != nullptr)
           {
             const std::uint16_t packed = subdraw->packedUv[corner];
@@ -767,30 +809,79 @@ namespace orphen::harness
           {
             // The game's colour bytes run to 0x80 for full brightness, the same
             // convention the map path divides by 128 for.
-            glColor3f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]),
+            glColor4f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]),
                       std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f * light[1]),
-                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]));
+                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]),
+                      passAlpha);
           }
           else
           {
-            glColor3f(std::min(1.0f, light[0]), std::min(1.0f, light[1]),
-                      std::min(1.0f, light[2]));
+            glColor4f(std::min(1.0f, light[0]), std::min(1.0f, light[1]),
+                      std::min(1.0f, light[2]), passAlpha);
           }
           emitFogCoord(points[corner].x, points[corner].y, points[corner].z);
           glVertex3f(points[corner].x, points[corner].y, points[corner].z);
         };
 
-        emit(0);
-        emit(1);
-        emit(2);
-        if (corners == 4)
+        for (std::size_t pass = 0; pass < 4; ++pass)
         {
-          emit(0);
-          emit(2);
-          emit(3);
+          const std::int16_t index = primitive.subdrawIndices[pass];
+          if (index < 0)
+          {
+            continue;
+          }
+          const orphen::ported::model::Psc3Subdraw *subdraw =
+              static_cast<std::size_t>(index) < model.subdraws.size()
+                  ? &model.subdraws[static_cast<std::size_t>(index)]
+                  : nullptr;
+
+          // FUN_00212058:137-141. Mode 0 never enables ABE, so its alpha field
+          // is not read at all; otherwise 0x7F is the sentinel for 0x80, fully
+          // opaque, and anything else is the value straight out of the low
+          // seven bits.
+          int mode = 0;
+          float passAlpha = 1.0f;
+          if (multiPass && subdraw != nullptr)
+          {
+            mode = static_cast<int>(subdraw->blendMode());
+            if (mode != 0)
+            {
+              const std::uint16_t raw = subdraw->alpha();
+              passAlpha = raw == 0x7F ? 1.0f : static_cast<float>(raw) / 128.0f;
+              // A fully opaque alpha blend is pointless, so the original folds
+              // it straight back to the opaque mode -- and only for mode 1, not
+              // for the additive one, where full alpha still means something.
+              // grp_0172 is 60 passes of exactly this, and blending them is what
+              // made every ordinary chest translucent.
+              if (raw == 0x7F && mode == 1)
+              {
+                mode = 0;
+              }
+            }
+          }
+          setBlendMode(mode);
+
+          emit(0, subdraw, passAlpha);
+          emit(1, subdraw, passAlpha);
+          emit(2, subdraw, passAlpha);
+          if (corners == 4)
+          {
+            emit(0, subdraw, passAlpha);
+            emit(2, subdraw, passAlpha);
+            emit(3, subdraw, passAlpha);
+          }
+
+          if (!multiPass)
+          {
+            break;
+          }
         }
       }
-      glEnd();
+      if (activeBlendMode >= 0)
+      {
+        glEnd();
+      }
+      glPopAttrib();
 
       // The specular pass, VU1 0x0200. FUN_00212058 appends a second GIF packet
       // -- untextured, gouraud, ABE on, additive, depth-tested but not

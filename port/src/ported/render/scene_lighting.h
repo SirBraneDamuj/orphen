@@ -138,6 +138,21 @@ namespace orphen::ported::render
     bool applyLightFloor = false; // vf15.z, the MAXz floor on every intensity
     bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
     bool applyGleamPass = false;  // the additive specular pass at VU1 0x0200
+    // Draw every subdraw pass with its own blend mode instead of only the
+    // first opaque one. FUN_00212058:139 puts the subdraw's mode nibble in
+    // plVar5[6], :217 writes draw header byte 8 = mode * 3, and VU1 0x1a7
+    // loads three GS registers from 608 + mode*3. Those blocks, read out of
+    // the save state, are:
+    //
+    //   0 -> ALPHA 0x44  (Cs-Cd)*As + Cd,  ZMSK 0   the opaque base
+    //   1 -> ALPHA 0x44  same,             ZMSK 1
+    //   2 -> ALPHA 0x48  (Cs- 0)*As + Cd,  ZMSK 1   additive
+    //   3 -> ALPHA 0xa1  (Cd-Cs)*128>>7,   ZMSK 1   reverse subtract
+    //
+    // grp_009f is why this matters: 15 of its 35 passes are mode 2, including
+    // a second pass on each of the six lid primitives, and dropping them is
+    // what makes the port's version of that chest look flat.
+    bool applySubdrawPasses = false;
 
     // ---- The specular pass ------------------------------------------------
     //
