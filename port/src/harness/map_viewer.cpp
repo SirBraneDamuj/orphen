@@ -807,6 +807,28 @@ namespace orphen::harness
 
       batchReset(texture != 0);
 
+      // Texturing is per *pass*, not per model: a model with a bound texture can
+      // still carry bit-15 passes that draw flat colour. Switching it closes the
+      // batch, the same way a blend-mode change does.
+      int activeTextured = texture != 0 ? 1 : 0;
+      const auto setTextured = [&activeTextured](bool textured) {
+        if (activeTextured == (textured ? 1 : 0))
+        {
+          return;
+        }
+        batchFlush();
+        activeTextured = textured ? 1 : 0;
+        if (textured)
+        {
+          glEnable(GL_TEXTURE_2D);
+        }
+        else
+        {
+          glDisable(GL_TEXTURE_2D);
+        }
+        g_batchTextured = textured;
+      };
+
       int activeBlendMode = -1;
       const auto setBlendMode = [&activeBlendMode](int mode) {
         if (mode == activeBlendMode)
@@ -894,7 +916,8 @@ namespace orphen::harness
 
         const auto emit = [&](std::size_t corner,
                               const orphen::ported::model::Psc3Subdraw *subdraw,
-                              float passAlpha) {
+                              float passAlpha,
+                              int colourOverride) {
           // Immediate mode carried the last glTexCoord2f forward when a pass
           // did not set one; the array path has to say so explicitly, so the
           // pair persists across emits exactly as GL's current-texcoord did.
@@ -917,8 +940,16 @@ namespace orphen::harness
           // per-vertex ones have a colour per corner. Same for the normal:
           // +0x06 per vertex under flag 0x8, +0x16 for the whole primitive
           // otherwise.
+          // FUN_002129b8 line 87: a bit-15 pass replaces the primitive's own
+          // +0x0A with the low 15 bits of the pass index. Everything else about
+          // the lookup -- per-corner under flag 0x8, corner 0's colour reused
+          // otherwise -- is the same either way.
+          const bool untexturedPass = colourOverride >= 0;
+          const std::size_t colourBase =
+              untexturedPass ? static_cast<std::size_t>(colourOverride)
+                             : primitive.colourIndex;
           const std::size_t colourEntry =
-              primitive.perVertexColour() ? primitive.colourIndex + corner : primitive.colourIndex;
+              primitive.perVertexColour() ? colourBase + corner : colourBase;
 
           float light[3] = {1.0f, 1.0f, 1.0f};
           // Draw header byte 15, FUN_00212058:229: primitive flag bit 8 makes
@@ -967,11 +998,20 @@ namespace orphen::harness
           float colour[4] = {0.0f, 0.0f, 0.0f, passAlpha};
           if (colourEntry * 3 + 2 < model.colours.size())
           {
-            // The game's colour bytes run to 0x80 for full brightness, the same
-            // convention the map path divides by 128 for.
-            colour[0] = std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]);
-            colour[1] = std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f * light[1]);
-            colour[2] = std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]);
+            // **Two different conventions, and which applies depends on TME.**
+            // A textured pass modulates: the GS computes (Ct * Cv) >> 7, so a
+            // vertex colour of 0x80 means "x1.0" and the divisor is 128, the
+            // same one the map path uses. An untextured pass has no texture to
+            // modulate -- FUN_00212058's mode 2 never sets TME -- so the colour
+            // register goes straight to the framebuffer over 0..255.
+            //
+            // grp_001E is the case that shows it. Its one colour entry is
+            // (191, 0, 0): meaningless as a modulator (x1.49, clamped to a
+            // blown-out pure red) and exactly right as a colour, 0xBF.
+            const float scale = untexturedPass ? 1.0f / 255.0f : 1.0f / 128.0f;
+            colour[0] = std::min(1.0f, model.colours[colourEntry * 3 + 0] * scale * light[0]);
+            colour[1] = std::min(1.0f, model.colours[colourEntry * 3 + 1] * scale * light[1]);
+            colour[2] = std::min(1.0f, model.colours[colourEntry * 3 + 2] * scale * light[2]);
           }
           else
           {
@@ -986,12 +1026,20 @@ namespace orphen::harness
         for (std::size_t pass = 0; pass < 4; ++pass)
         {
           const std::int16_t index = primitive.subdrawIndices[pass];
-          if (index < 0)
+          // **Only -1 skips a pass.** FUN_00212058 line 106 tests for exactly
+          // that value; any other negative is a pass that draws *untextured*,
+          // with the low 15 bits standing in for the primitive's colour index
+          // (FUN_002129b8 lines 85-111). Treating every negative as "no pass"
+          // dropped 26 passes on grp_0001, 43 on grp_0009 -- and all 20 of
+          // grp_001E, which is why the bandana was invisible.
+          if (index == -1)
           {
             continue;
           }
+          const bool untexturedPass = index < 0;
+          const int colourOverride = untexturedPass ? (index & 0x7FFF) : -1;
           const orphen::ported::model::Psc3Subdraw *subdraw =
-              static_cast<std::size_t>(index) < model.subdraws.size()
+              !untexturedPass && static_cast<std::size_t>(index) < model.subdraws.size()
                   ? &model.subdraws[static_cast<std::size_t>(index)]
                   : nullptr;
 
@@ -1020,15 +1068,19 @@ namespace orphen::harness
             }
           }
           setBlendMode(mode);
+          // The bit-15 branch never reaches FUN_00212058's alpha/ABE block, so
+          // it draws opaque -- FUN_002129b8 plants 0xFF in the alpha byte
+          // outright -- and through FUN_00212cf0, the untextured colour path.
+          setTextured(!untexturedPass && texture != 0);
 
-          emit(0, subdraw, passAlpha);
-          emit(1, subdraw, passAlpha);
-          emit(2, subdraw, passAlpha);
+          emit(0, subdraw, passAlpha, colourOverride);
+          emit(1, subdraw, passAlpha, colourOverride);
+          emit(2, subdraw, passAlpha, colourOverride);
           if (corners == 4)
           {
-            emit(0, subdraw, passAlpha);
-            emit(2, subdraw, passAlpha);
-            emit(3, subdraw, passAlpha);
+            emit(0, subdraw, passAlpha, colourOverride);
+            emit(2, subdraw, passAlpha, colourOverride);
+            emit(3, subdraw, passAlpha, colourOverride);
           }
           if (g_renderStats != nullptr)
           {
@@ -1246,7 +1298,9 @@ namespace orphen::harness
         {
           continue;
         }
-        const auto foot = toViewerSpace(object.position);
+        // worldOrigin, not position: an attached entity's position fields are a
+        // bone-local offset and would put its box at the world origin.
+        const auto foot = toViewerSpace(object.worldOrigin);
         const float halfWidth = object.descriptorResolved ? std::max(object.radius, 0.05f) : 0.25f;
         const float height = object.descriptorResolved ? std::max(object.height, 0.1f) : 0.6f;
 

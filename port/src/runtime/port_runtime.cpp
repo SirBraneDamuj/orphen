@@ -250,6 +250,40 @@ namespace orphen::port
         return orphen::ported::entity::ActorEnvironment::TerrainSurface{hit->height, hit->terrainFlags};
       };
     }
+
+    environment.bandanaState = &DAT_0054ee00_bandana_;
+    environment.bandanaEnvironment =
+        [this](std::size_t slot) -> orphen::ported::entity::BandanaEnvironment
+    {
+      orphen::ported::entity::BandanaEnvironment bandana;
+      bandana.selfPalette = DAT_00357e00_bonePalettes_[slot];
+      bandana.frameCounter003555b4 = DAT_003555b4_frameCounter_;
+      bandana.tickCounter003555b8 = DAT_003555b8_tickCounter_;
+      bandana.random = [this]() -> std::uint32_t
+      {
+        actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
+        return (actorRandomState_ >> 16) & 0x7FFFu;
+      };
+
+      // FUN_00213720's walk up +0x192 to the root of the attachment chain. The
+      // bandana hangs directly off the lead player, so one hop; the loop is
+      // here because the original has it and a second attachment would need it.
+      const auto &self = entityPool_.slot(slot);
+      std::size_t root = slot;
+      while (entityPool_.slot(root).parentSlot192 >= 0)
+      {
+        root = static_cast<std::size_t>(entityPool_.slot(root).parentSlot192);
+      }
+      const auto &rootEntity = entityPool_.slot(root);
+      bandana.rootFacingRadians = rootEntity.facingRadians5c;
+      bandana.rootFadeLevel = rootEntity.fadeLevel134;
+      // FUN_0020dc88's fallback, taken on the first frame before any palette
+      // exists: the root's world X with this entity's own +0x24 and +0x28, plus
+      // half its height. The mixture is the original's, not a simplification.
+      bandana.anchorFallback = {rootEntity.positionX20, self.positionZ24,
+                                self.positionY28 + self.height58 * 0.5f};
+      return bandana;
+    };
     return environment;
   }
 
@@ -447,9 +481,26 @@ namespace orphen::port
     const std::uint32_t leader = entityPool_.leadPlayer().typeId00 != 0
                                      ? entityPool_.leadPlayer().typeId00
                                      : kDAT_0058beb0_defaultLeader;
-    modelStore_.bindingForTypeId(leader);
+    const EntityModelBinding *leaderBinding = modelStore_.bindingForTypeId(leader);
 
     resetLeadPlayerForLoadedMap();
+
+    // FUN_0022a418:256, immediately after the pool clear and before the scene
+    // script runs. The lead player's model has to be bound first because the
+    // anchor bone is looked up by role out of grp_0001.
+    if (orphen::ported::entity::FUN_00251e40_attach_bandana(
+            entityPool_, descriptorTable_,
+            leaderBinding != nullptr ? leaderBinding->model : nullptr))
+    {
+      DAT_0054ee00_bandana_ = orphen::ported::entity::BandanaState{};
+      const auto &bandana = entityPool_.slot(orphen::ported::entity::kBandanaSlot);
+      std::cout << "[bandana] slot " << orphen::ported::entity::kBandanaSlot << " type 0x"
+                << std::hex << bandana.typeId00 << std::dec << " on bone "
+                << -static_cast<int>(bandana.attachBone194) << " (role "
+                << static_cast<int>(orphen::ported::entity::kBandanaAnchorBoneRole)
+                << ") of the lead player\n";
+    }
+
     runSceneScript();
   }
 
@@ -695,15 +746,40 @@ namespace orphen::port
       inputs.skipSmoothing1fe = (entity.halfword08 & 0x0200) != 0;
     }
 
-    const orphen::ported::model::Matrix4 root =
-        orphen::ported::model::FUN_0020cdc0_entity_root(
-            {view.position.x, view.position.y, view.position.z}, view.facingRadians,
-            view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
+    // FUN_0020cdc0's branch on +0x192. An attached entity's +0x20..+0x28 is a
+    // bone-local offset rather than a world position, so it never reaches the
+    // standalone path -- feeding it there would put the bandana 8 cm above the
+    // world origin.
+    orphen::ported::model::Matrix4 root;
+    if (entity.parentSlot192 >= 0 && entity.attachBone194 < 0)
+    {
+      const std::size_t parentSlot = static_cast<std::size_t>(entity.parentSlot192);
+      const auto &parent = entityPool_.slot(parentSlot);
+      root = orphen::ported::model::FUN_0020cdc0_attached_root(
+          DAT_00357e00_bonePalettes_[parentSlot],
+          static_cast<std::size_t>(-static_cast<int>(entity.attachBone194)),
+          {view.position.x, view.position.y, view.position.z},
+          {parent.positionX20, parent.positionZ24, parent.positionY28 + parent.height58 * 0.5f},
+          view.facingRadians, view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
+    }
+    else
+    {
+      root = orphen::ported::model::FUN_0020cdc0_entity_root(
+          {view.position.x, view.position.y, view.position.z}, view.facingRadians,
+          view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
+    }
+
+    // Row 3 of the root matrix, which for an attached entity is the bone point
+    // rather than anything in +0x20..+0x28.
+    view.worldOrigin = {root[12], root[13], root[14]};
 
     view.bonePalette = orphen::ported::model::FUN_0020d618_build_palette(
         *binding->model, binding->model->blob, entity.poseColumnAc, root,
         DAT_003ffe00_poseFilters_[view.slot], inputs,
         &DAT_004a7e00_boneOverrides_[view.slot]);
+    // 0x00357E00 + slot * 0xA80. Kept past the frame so an attached entity, and
+    // the rope simulation behind it, can read the bone it rides.
+    DAT_00357e00_bonePalettes_[view.slot] = view.bonePalette;
   }
 
   // FUN_00225c90 for every entity that has a model, run before the views are
@@ -720,7 +796,7 @@ namespace orphen::port
     };
 
     step(entityPool_.leadPlayer());
-    entityPool_.forEachScriptSpawnedMutable(
+    entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity) {
           if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
           {
@@ -734,10 +810,14 @@ namespace orphen::port
   {
     SceneObjectViewList views;
 
-    // Slot 0 is not script-spawned, so forEachScriptSpawned never reaches it and
-    // the lead player had no model for the same reason it has no entry in the
-    // actor report. FUN_0020c5a8 walks all 256 slots; this list is what stands
-    // in for that walk, so the lead player belongs in it.
+    // Slot 0 is not in forEachActive's range, and the lead player had no model
+    // for the same reason it has no entry in the actor report. FUN_0020c5a8
+    // walks all 256 slots; this list is what stands in for that walk, so the
+    // lead player belongs in it.
+    //
+    // **Slot 0 must be published before the walk**, because slot 4 -- the
+    // bandana -- reads slot 0's palette out of DAT_00357e00_bonePalettes_ to
+    // find the neck, and this is the pass that writes it.
     {
       auto &lead = entityPool_.leadPlayer();
       SceneObjectView view;
@@ -745,6 +825,7 @@ namespace orphen::port
       view.typeId = lead.typeId00;
       view.modelIndex = lead.modelIndex;
       view.position = {lead.positionX20, lead.positionZ24, lead.positionY28};
+      view.worldOrigin = view.position;
       view.facingRadians = lead.facingRadians5c;
       view.radius = lead.radius54;
       view.height = lead.height58;
@@ -759,7 +840,7 @@ namespace orphen::port
       views.push_back(view);
     }
 
-    entityPool_.forEachScriptSpawnedMutable(
+    entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
           SceneObjectView view;
@@ -767,6 +848,7 @@ namespace orphen::port
           view.typeId = entity.typeId00;
           view.modelIndex = entity.modelIndex;
           view.position = {entity.positionX20, entity.positionZ24, entity.positionY28};
+          view.worldOrigin = view.position;
           view.facingRadians = entity.facingRadians5c;
           view.radius = entity.radius54;
           view.height = entity.height58;
@@ -1126,7 +1208,7 @@ namespace orphen::port
     };
 
     describe(0, entityPool_.leadPlayer());
-    entityPool_.forEachScriptSpawned(
+    entityPool_.forEachActive(
         [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
           if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
           {
@@ -1426,7 +1508,7 @@ namespace orphen::port
     }
 
     std::size_t live = 0;
-    entityPool_.forEachScriptSpawned(
+    entityPool_.forEachActive(
         [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
         {
           if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
@@ -1463,6 +1545,39 @@ namespace orphen::port
             std::cout << "  UNRESOLVED";
           }
           std::cout << '\n';
+
+          // The bandana's entity position is a bone-local offset, so the line
+          // above says nothing about where it actually is. Its rope is the
+          // interesting state, and `s01_e24.bin` has the same numbers to check
+          // against: the anchor at (-3.31224, -12.75, 0.93703) with the player
+          // standing at (-3.25, -12.75, 0) and each link exactly 0.025 long.
+          if (entity.typeId00 == orphen::ported::entity::kBandanaTypeId)
+          {
+            for (std::size_t chainIndex = 0;
+                 chainIndex < orphen::ported::entity::kBandanaChainCount; ++chainIndex)
+            {
+              const auto &chain = DAT_0054ee00_bandana_.chains[chainIndex];
+              const auto &anchor = chain.segments.front().position;
+              const auto &tip = chain.segments.back().position;
+              const float dx = tip.x - anchor.x;
+              const float dy = tip.y - anchor.y;
+              const float dz = tip.z - anchor.z;
+              // The tip's bone override translation, which is what the dump
+              // pins directly: (spread, DAT_003151a0[9], -0.225) at rest, i.e.
+              // (-0.011, 0.067, -0.225) for chain 0 and (+0.011, ...) for chain
+              // 1. It is the number the sin/cos identity gets wrong -- swap them
+              // and the clamp lands in the first slot instead of the second.
+              const std::size_t tipBone = chainIndex * 9u + 1u;
+              const auto &pose = DAT_004a7e00_boneOverrides_[slot].overrides[tipBone].fields;
+              std::cout << "    chain " << chainIndex << " gravity=" << std::fixed
+                        << std::setprecision(3) << chain.gravity << " anchor=("
+                        << std::setprecision(5) << anchor.x << "," << anchor.y << ","
+                        << anchor.z << ") tip=(" << tip.x << "," << tip.y << "," << tip.z
+                        << ") span=" << std::sqrt(dx * dx + dy * dy + dz * dz)
+                        << " tipBone" << tipBone << ".t=(" << pose[0] << "," << pose[1]
+                        << "," << pose[2] << ")" << std::defaultfloat << '\n';
+            }
+          }
         });
 
     std::cout << "live actors: " << live << " (slots 0 and 1 are not ticked by FUN_00239ce0)\n";
@@ -1624,6 +1739,12 @@ namespace orphen::port
   bool PortRuntime::update(const InputSnapshot &input, std::uint32_t frameTicks)
   {
     ++frameCount_;
+    // DAT_003555b4 and DAT_003555b8. Three EE dumps read b8 == b4 * 32 exactly,
+    // so b8 accumulates DAT_003555bc rather than counting frames -- a dropped
+    // frame advances a wave phase by the time it actually took. Nothing writes
+    // them in the decompiled sources, which is how they were pinned down.
+    ++DAT_003555b4_frameCounter_;
+    DAT_003555b8_tickCounter_ += frameTicks;
     // The viewer's free camera and the follow-yaw easing still think in seconds.
     // One simulation step is one nominal frame, so hand them that directly
     // rather than wall-clock time -- this is what makes --frames deterministic.
@@ -1787,6 +1908,14 @@ namespace orphen::port
     for (auto &overrides : DAT_004a7e00_boneOverrides_)
     {
       overrides.reset();
+    }
+    // A stale palette would put an attachment on the previous scene's bone
+    // positions for one frame. The original's bank survives a map load, but the
+    // original also rebuilds every entity that has one before anything reads it;
+    // the port drops them so an unrebuilt slot reads as "no palette" instead.
+    for (auto &palette : DAT_00357e00_bonePalettes_)
+    {
+      palette.clear();
     }
     mapViewer_.setSceneObjectViews({});
     leadPlayer_.bindEntity(entityPool_.leadPlayer());

@@ -99,10 +99,17 @@ namespace orphen::ported::entity
     std::uint16_t pendingDamageBe = 0;
     std::int16_t recordId130 = -1;           // +0x130: the placement record's id byte.
     std::uint16_t staggerTimer12a = 0;       // +0x12A: hit points the +0xBE drain eats into.
-    // +0x192: the interaction candidate gate FUN_00252a18 tests, signed and
-    // required negative. FUN_00229c40 seeds it to 0xFFFF for every entity it
-    // builds, so an entity is interactable until something takes it out.
-    std::int16_t interactGate192 = -1;
+    // +0x192: the pool slot of the entity this one is *attached to*, -1 when it
+    // stands on its own. FUN_00229c40 seeds it to 0xFFFF for everything it
+    // builds. FUN_0020cdc0 branches on it to build the world matrix, FUN_0020dc88
+    // walks it to the root of an attachment chain, and FUN_00252a18 requires it
+    // negative -- so "interactable" really means "not attached to anything".
+    std::int16_t parentSlot192 = -1;
+    // +0x194: which of the parent's bones to ride, as a *signed byte*. Negative
+    // means follow the bone's position only, keeping this entity's own facing
+    // (FUN_0020cdc0's middle branch); non-negative means inherit the whole bone
+    // matrix. Only meaningful when +0x192 names a parent.
+    std::int8_t attachBone194 = 0;
     std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
     std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
 

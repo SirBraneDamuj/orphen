@@ -5,6 +5,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_entity.h"
+#include "ported/entity/player_bandana.h"
 #include "ported/model/psc3_skeleton.h"
 
 #include <cstdint>
@@ -68,6 +69,12 @@ namespace orphen::ported::entity
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
+
+    // Everything type 0x19 -- the player's bandana -- needs. Supplied by the
+    // runtime because the rope reads a matrix palette and two frame counters,
+    // none of which the entity carries. Null state means no bandana this scene.
+    BandanaState *bandanaState = nullptr;
+    std::function<BandanaEnvironment(std::size_t slot)> bandanaEnvironment;
   };
 
   // FUN_0023a068: the freeze gate every behavior opens with. Advances the

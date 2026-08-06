@@ -468,6 +468,49 @@ namespace orphen::ported::model
                                 ComposeOrder::XYZ);
   }
 
+  Vec3 FUN_0020dc88_bone_point(std::span<const Matrix4> parentPalette,
+                               std::size_t bone,
+                               const Vec3 &localOffset,
+                               const Vec3 &parentFallbackPosition)
+  {
+    // FUN_0020dc88's `param_2 < 0 || param_2 == 0x29` clamp: a negative bone or
+    // the 42nd asks for the last one.
+    if (!parentPalette.empty() && (bone >= parentPalette.size() || bone == kMaxFilteredBones))
+    {
+      bone = parentPalette.size() - 1;
+    }
+    // The entity +0x0C bit 0x2000 test. In the original that bit means "this
+    // entity has a matrix palette this frame"; the port has no palette when the
+    // entity has no model, which is the same condition, so the fallback is the
+    // parent's own world position.
+    if (parentPalette.empty() || bone >= parentPalette.size())
+    {
+      return parentFallbackPosition;
+    }
+    return transformPoint(localOffset, parentPalette[bone]);
+  }
+
+  Matrix4 FUN_0020cdc0_attached_root(std::span<const Matrix4> parentPalette,
+                                     std::size_t parentBone,
+                                     const Vec3 &boneLocalOffset,
+                                     const Vec3 &parentFallbackPosition,
+                                     float facingRadians,
+                                     float rotationX154,
+                                     float rotationY158,
+                                     float scaleXY14c,
+                                     float scaleZ150)
+  {
+    const Vec3 anchor =
+        FUN_0020dc88_bone_point(parentPalette, parentBone, boneLocalOffset, parentFallbackPosition);
+    // The middle branch takes the bone's *position* and the entity's own facing.
+    // It never picks up the bone's orientation -- that is the third branch, the
+    // rigid one, which concatenates the parent's bone matrix instead.
+    return FUN_0020cf28_compose(anchor, scaleXY14c, scaleZ150,
+                                Vec3{rotationX154, rotationY158,
+                                     facingRadians + kfGpffff80cc_attachedFacingBias},
+                                ComposeOrder::XYZ);
+  }
+
   std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
                                                   std::span<const std::uint8_t> blob,
                                                   std::uint16_t poseColumn,

@@ -91,8 +91,14 @@ Complex condition involving:
 
 #### Math/Physics
 
-- `FUN_00305130`: Sine function for movement
-- `FUN_00305218`: Cosine function for movement
+- `FUN_00305130`: **cosf** (fdlibm; the small-|x| path calls `__kernel_cos(x, 0)`)
+- `FUN_00305218`: **sinf** (the small-|x| path calls `__kernel_sin(x, 0, 0)`)
+
+  These were listed the other way round here for a long time. Most of
+  `analyzed/` already has them right -- `camera_orientation_and_defaults.c`
+  reads `fGpffffbaf8 = distance * FUN_00305130(pitch)` as the cosine term, which
+  the port confirms numerically. `analyzed/battle_logo_state_manager.c` still has
+  them swapped.
 
 ### Data Structures
 

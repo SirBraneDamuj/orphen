@@ -138,6 +138,16 @@ namespace orphen::ported::model
     // and says 15), and the hierarchy below is built the way FUN_0020d618
     // builds it instead. Kept only so the record round-trips.
     std::uint16_t field0a = 0;
+    // The *high* byte of +0x0A is read, though. FUN_0020dd78 scans the submesh
+    // table for the first bone whose `+0x0B & 0xF` equals a requested role, so
+    // this nibble is how native code finds a semantic bone -- the hand it puts a
+    // weapon in, the head it turns to look at you, the neck it hangs the
+    // bandana from. Role 0 means "no role"; FUN_0020dd78 returns bone 0 when
+    // nothing matches, so a caller cannot tell a miss from a hit on bone 0.
+    //
+    // grp_0001 (Orphen): 9 = foot L, 8 = foot R, 2 = chest, 4 = right hand,
+    // 10 = left hand, 3/5/11 = fingers, 7 = neck, 1 = head.
+    std::uint8_t boneRole() const { return static_cast<std::uint8_t>((field0a >> 8) & 0x0F); }
     // +0x0C. Byte offset, from the model base, of this bone's child list.
     // Zero means no children. FUN_0020d618 recurses over it.
     std::uint16_t childListOffset = 0;
@@ -193,6 +203,11 @@ namespace orphen::ported::model
     std::size_t texturedPasses = 0;
     std::size_t untexturedPasses = 0;
   };
+
+  // FUN_0020dd78: the first bone carrying `role` in its +0x0B nibble, or 0.
+  // The original walks the submesh table in order and returns the running index,
+  // so ties go to the lowest bone index.
+  std::size_t FUN_0020dd78_bone_for_role(const Psc3Model &model, std::uint8_t role);
 
   bool hasPsc3Magic(std::span<const std::uint8_t> bytes);
 

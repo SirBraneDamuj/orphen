@@ -10,6 +10,7 @@
 #include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/entity/player_bandana.h"
 #include "runtime/entity_model_store.h"
 #include "ported/resource/elf_data_reader.h"
 #include "ported/script/scene_script.h"
@@ -153,6 +154,21 @@ namespace orphen::port
     std::vector<orphen::ported::model::EntityBoneOverrides> DAT_004a7e00_boneOverrides_ =
         std::vector<orphen::ported::model::EntityBoneOverrides>(
             orphen::ported::entity::kEntitySlotCount);
+    // DAT_00357e00 + slot * 0xA80, the matrix palette itself. The views carry a
+    // copy for the renderer, but they are rebuilt from scratch every frame and
+    // an attached entity needs *last* frame's -- FUN_00213720 runs in the actor
+    // loop, before FUN_0020c5a8 has rebuilt anything.
+    std::vector<std::vector<orphen::ported::model::Matrix4>> DAT_00357e00_bonePalettes_ =
+        std::vector<std::vector<orphen::ported::model::Matrix4>>(
+            orphen::ported::entity::kEntitySlotCount);
+    // DAT_0054EE00, the bandana's two rope chains. One block for the whole game,
+    // exactly as in the original -- there is only ever one bandana.
+    orphen::ported::entity::BandanaState DAT_0054ee00_bandana_;
+    // DAT_003555b4 / DAT_003555b8: the frame counter and the tick accumulator.
+    // Wave phases are read off them, so they advance with the simulation step
+    // and not with wall-clock time.
+    std::uint32_t DAT_003555b4_frameCounter_ = 0;
+    std::uint32_t DAT_003555b8_tickCounter_ = 0;
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.

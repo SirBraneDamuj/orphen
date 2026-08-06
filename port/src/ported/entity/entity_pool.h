@@ -99,6 +99,34 @@ namespace orphen::ported::entity
       }
     }
 
+    // Slots 1..255, which is what FUN_0020c5a8's draw walk and FUN_00239ce0's
+    // tick cover between them -- the reserved band below kFirstScriptSlot is not
+    // always empty. FUN_0022a418 builds slot 4 (the player's bandana) by hand,
+    // and it has a model, a behavior and a bone palette like anything else.
+    template <typename Visitor>
+    void forEachActiveMutable(Visitor &&visitor)
+    {
+      for (std::size_t index = 1; index < kEntitySlotCount; ++index)
+      {
+        if (status_[index] != SlotStatus::Free)
+        {
+          visitor(index, slots_[index]);
+        }
+      }
+    }
+
+    template <typename Visitor>
+    void forEachActive(Visitor &&visitor) const
+    {
+      for (std::size_t index = 1; index < kEntitySlotCount; ++index)
+      {
+        if (status_[index] != SlotStatus::Free)
+        {
+          visitor(index, slots_[index]);
+        }
+      }
+    }
+
     std::size_t scriptSpawnedCount() const;
 
   private:

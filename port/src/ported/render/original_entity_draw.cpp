@@ -21,8 +21,11 @@ namespace orphen::ported::render
       }
 
       // The entity's origin in view space. FUN_0020c810 stores this at
-      // ctx+0x68 after running the world transform through VU0.
-      const Vec3 viewPosition = viewProjection.toViewSpace(object.position);
+      // ctx+0x68 after running the world transform through VU0 -- and for an
+      // entity attached to a parent bone it copies the *parent's* instead, which
+      // is what `worldOrigin` carries. Sorting the bandana by its own +0x20 put
+      // it at the world origin, thirteen units from where it draws.
+      const Vec3 viewPosition = viewProjection.toViewSpace(object.worldOrigin);
 
       int bucket = 0;
       if (viewPosition.z <= 0.0f)

@@ -568,6 +568,7 @@ namespace orphen::ported::entity
     case 0x002D1EA8u: // FUN_002d1ea8, type 0x3A
     case 0x0025AB68u: // FUN_0025ab68, party members
     case 0x002CD0A0u: // FUN_002cd0a0, the type 0x62 enemy
+    case 0x00213720u: // FUN_00213720, type 0x19, the player's bandana
       return true;
     default:
       return false;
@@ -586,6 +587,8 @@ namespace orphen::ported::entity
       return "FUN_0025ab68 (party member)";
     case 0x002CD0A0u:
       return "FUN_002cd0a0 (enemy)";
+    case 0x00213720u:
+      return "FUN_00213720 (player bandana)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -665,12 +668,28 @@ namespace orphen::ported::entity
       case 0x002CD0A0u:
         FUN_002cd0a0_enemy62(entity, slotEnvironment, trace);
         break;
+      case 0x00213720u:
+        if (environment.bandanaState != nullptr && environment.bandanaEnvironment &&
+            slot < environment.boneOverrides.size())
+        {
+          FUN_00213720_bandana(entity, *environment.bandanaState,
+                               environment.boneOverrides[slot],
+                               environment.bandanaEnvironment(slot));
+        }
+        break;
       case kFUN_00239e78_noOp:
       default:
         break;
       }
 
-      integrateNonPlayerMovement(entity, environment);
+      // An attached entity's +0x20..+0x28 is an offset in its parent bone's
+      // space, not a world position -- FUN_0020cdc0's middle branch is what
+      // says so. Integrating a movement request into it would drag the
+      // attachment point off the bone.
+      if (entity.parentSlot192 < 0)
+      {
+        integrateNonPlayerMovement(entity, environment);
+      }
     }
   }
 

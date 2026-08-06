@@ -53,6 +53,17 @@ port's parser is `port/src/ported/model/psc3_model.{h,cpp}`.
     - +0x0A: u16. Its low byte holds the parent bone index for every non-root
       bone, but the game never reads it and root bones carry junk there. Build
       the hierarchy from the child lists instead (see +0x10).
+      Its **high byte is read**, though: `FUN_0020dd78(entity, role)` scans the
+      submesh table for the first entry whose `+0x0B & 0xF` equals a requested
+      role and returns that bone index. This is how native code finds a semantic
+      bone in a model it was not authored against — the hand a weapon goes in,
+      the head that turns to look at you, the neck the bandana hangs from. Role 0
+      means "none", and the function returns bone 0 on a miss, so a caller cannot
+      distinguish a miss from a hit on bone 0. Roles 1..11 are used across the
+      executable; on `grp_0001` (Orphen) they are 1 = head (bone 33),
+      2 = chest (9), 3/5/11 = fingers (18/17/16), 4 = right hand (14),
+      7 = neck (32), 8/9 = feet (8/4), 10 = left hand (24). See
+      `analyzed/actor_behaviors/type_0x19_player_bandana.c`.
     - +0x0C: u16 byte offset, from the model base, of this bone's **child bone
       list**. Zero means a leaf. `FUN_0020d618` recurses over it.
     - +0x10: u32 byte offset into the section at +0x10's region
@@ -94,10 +105,20 @@ port's parser is `port/src/ported/model/psc3_model.{h,cpp}`.
       `+0x0A + i`.
     - +0x0C: u8 fog/detail byte, only applied on the last active pass.
     - +0x0D: u8 alpha.
-    - +0x0E..+0x14: 4 x i16 subdraw indices, one per pass. -1 means unused.
-      A **negative value other than -1 is not a subdraw index**: `FUN_002129b8`
-      masks off bit 15 and uses the rest as a colour index, drawing the pass
-      untextured.
+    - +0x0E..+0x14: 4 x i16 subdraw indices, one per pass. **Only -1 means
+      unused** — `FUN_00212058:106` tests for exactly that value. A negative
+      value other than -1 is not a subdraw index: `FUN_002129b8:85-111` masks
+      off bit 15 and uses the rest as a colour index, drawing the pass
+      untextured. Such a pass never reaches `FUN_00212058`'s ABE block either,
+      so it is opaque and blend mode 0. `grp_001E`, the bandana, is drawn
+      entirely this way: every primitive's first pass is `0x8000`, colour entry
+      0, which is (191, 0, 0).
+      **The colour scale differs between the two.** Mode 2 never sets TME
+      (`uVar7 = 0x41` rather than `0x412` at `FUN_00212058`'s tail), so an
+      untextured pass's colour goes straight to the framebuffer over 0..255,
+      while a textured one modulates through the GS's `(Ct * Cv) >> 7` where
+      `0x80` means x1.0. 191 is nonsense as a modulator and exactly `0xBF` as a
+      colour.
     - +0x16: u16 flat normal index, used when flag 0x8 is clear.
 - +0x20: u32 offs_color_table
   - Three bytes per entry, indexed as described under primitive +0x0A. Read

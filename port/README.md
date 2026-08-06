@@ -120,7 +120,8 @@ opcode VM uses. `--actor-report` lists every live entity with the handler addres
 it resolves to and whether that handler is ported. That report, not guesswork,
 picks the next behavior to write.
 
-One behavior is implemented: type `0x3A`, `FUN_002d1ea8`, the treasure chest.
+Two behaviors are implemented outright. Type `0x3A`, `FUN_002d1ea8`, the
+treasure chest.
 It is the only handler in the game with no state table -- it switches on the
 animation id directly. Its `+0x198` is an **event flag id** (the placement
 record's param byte plus `0x400`), not a pointer; flag clear means closed, set
@@ -129,7 +130,9 @@ means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
 ### State of play
 
 `s01_e024` runs both load-time entries **and** its per-frame entry to a clean
-block end with **zero** unimplemented opcodes, and spawns 14 entities.
+block end with **zero** unimplemented opcodes, and spawns 14 entities. Slot 4,
+the player's bandana, is created outside the script by `FUN_00251e40`, so the
+pool holds 20 live actors rather than 19.
 
 **Object registers are entity fields.** Opcodes `0x76`..`0x7C` look like a
 register file but `FUN_0025c8f8` and `FUN_0025c548` are a switch whose cases
@@ -166,6 +169,62 @@ executable: `0x4004` on party members sends them to scene script header word 3,
   inline dialogue, is where it stops, and that is the right place: its operands
   are a variable-length text stream, so a stub would desync everything after it.
   The party swap itself is not implemented.
+
+### The bandana
+
+Orphen's bandana is not part of his mesh. It is a **separate entity** -- type
+`0x19`, model `grp_001E` -- in reserved pool slot 4, attached to the player's
+neck bone and simulated as two nine-link ropes. Three original functions, all
+ported: `FUN_00251e40` creates it (and only when the lead player is type 1),
+`FUN_00213720` is the simulation, and `FUN_00213640` releases its bones.
+`analyzed/actor_behaviors/type_0x19_player_bandana.c` is the full reading.
+
+Nothing calls `FUN_00213720` by name. It is `PTR_FUN_0031c6c0[0x19 - 1]`, which
+is what identifies it as a behavior rather than a helper -- every neighbouring
+entry in that table is the generic no-op or the party-member shell.
+
+Three things the port did not have before:
+
+- **`FUN_0020dd78`, the bone role lookup.** The high byte of a PSC3 submesh's
+  `+0x0A` carries a semantic role in its low nibble, and native code finds bones
+  by scanning for one. Role 7 is the neck; role 4 is the hand a weapon goes in.
+  The docs previously said the game never reads `+0x0A` at all.
+- **`FUN_0020cdc0`'s attached branch.** An entity with `+0x192 >= 0` and a
+  *negative* `+0x194` rides that bone's position and keeps its own facing, and
+  its `+0x20..+0x28` is a bone-local offset rather than a world position. That
+  last part is why `SceneObjectView` now carries `worldOrigin` separately: the
+  depth sort and the debug box both need a world point, and the entity's own
+  position fields are not one.
+- **Only `-1` skips a draw pass, and an untextured pass uses a different colour
+  scale.** The port was dropping every negative subdraw index; `FUN_00212058:106`
+  tests for exactly -1, and `FUN_002129b8` masks bit 15 off anything else and
+  draws the pass untextured with the remainder as a colour index. All 20 of
+  `grp_001E`'s primitives are that case, which is why the bandana was invisible
+  even once it was being simulated -- and 26 passes on `grp_0001` and 43 on
+  `grp_0009` were being dropped too. Such a pass never sets TME, so its colour
+  goes straight to the framebuffer over 0..255 rather than through the GS's
+  `(Ct * Cv) >> 7` where `0x80` means x1.0. `grp_001E`'s one colour entry is
+  `(191, 0, 0)`: nonsense as a modulator (x1.49, saturating to pure red) and
+  exactly right as a colour, `0xBF`. Divided by 128 the bandana rendered about
+  twice as bright as the emulator and lost its shading entirely.
+
+**`FUN_00305218` is `sinf` and `FUN_00305130` is `cosf`**, not the reverse --
+0x00305218's small-|x| path calls `__kernel_sin(x, 0, 0)` and its `n&3` switch is
+fdlibm's sine. Two older files under `analyzed/` label them backwards. It matters:
+`FUN_00213720` stores sine at scratch `+0x15` and cosine at `+0x16`, and swapping
+them rotates the tail frame a quarter turn, which puts `DAT_003151a0`'s body
+clamp -- up to 0.067, six times the 0.011 tail spread -- on the sideways axis. The
+tails then drift into the neck instead of trailing.
+
+The resting state is checkable against `s01_e24.bin`, which has slot 4 live:
+the anchor sits at (-3.31224, -12.75, 0.93703) with the player at
+(-3.25, -12.75, 0), each of the nine links is exactly 0.025 long, and the two
+chains hold gravity 0.018 and 0.010 -- both from the `{0.006, 0.010, 0.014,
+0.018}` set the sim re-rolls into every 64th frame. Solving the dump's bone
+matrices back for each override translation gives `(±0.011, DAT_003151a0[i],
+-0.025 * i)` -- the spread in the first slot, the body clamp in the second, which
+is the pair the sine/cosine identity gets wrong. `--actor-report` prints the
+port's own anchor, tip, span and tip-bone translation beside slot 4.
 
 **Actor behavior dispatches twice.** `FUN_0025ab68` and `FUN_002cd0a0` are shells
 that index a per-type state table with `+0x60`; those tables are read out of the

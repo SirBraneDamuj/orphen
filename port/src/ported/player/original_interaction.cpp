@@ -85,10 +85,11 @@ namespace orphen::ported::player
 
       OriginalEntity &candidate = pool.slot(slot);
 
-      // +0x192 is the candidate gate, a signed halfword the descriptor init
-      // (FUN_00229c40) seeds to 0xFFFF. Something else clears it to take an
-      // entity out of the running; nothing in this port does yet.
-      if (candidate.interactGate192 >= 0)
+      // +0x192 is the parent slot, which the descriptor init (FUN_00229c40)
+      // seeds to 0xFFFF. Requiring it negative means an entity attached to
+      // another entity's bone is never an interaction candidate -- the player's
+      // bandana is the one this port creates.
+      if (candidate.parentSlot192 >= 0)
       {
         continue;
       }

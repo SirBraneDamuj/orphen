@@ -77,6 +77,7 @@ target_sources(orphen_port
     src/ported/entity/actor_dispatch_table.cpp
     src/ported/entity/actor_dispatch_table.h
     src/ported/entity/actor_frame_update.cpp
+    src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h
     src/ported/entity/actor_trace.cpp
     src/ported/entity/actor_trace.h

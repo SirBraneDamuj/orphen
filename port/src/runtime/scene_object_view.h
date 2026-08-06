@@ -23,6 +23,14 @@ namespace orphen::port
     std::int32_t typeId = 0;
     std::int32_t modelIndex = -1; // -1 when the descriptor was not resolvable
     orphen::ported::psm2::Vec3 position{};
+    // Where the entity actually *is*. Normally the same as `position`, but an
+    // entity attached to another's bone (+0x192) keeps a bone-local offset in
+    // +0x20..+0x28, so its world origin is the translation of the root matrix
+    // FUN_0020cdc0 built from the bone. FUN_0020c810's attached branch copies
+    // the parent's screen position into the child for exactly this reason: the
+    // depth sort and the debug box both need a world point, and the entity's own
+    // position fields are not one.
+    orphen::ported::psm2::Vec3 worldOrigin{};
     float facingRadians = 0.0f;
     float radius = 0.0f;
     float height = 0.0f;

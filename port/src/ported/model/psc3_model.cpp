@@ -331,4 +331,16 @@ namespace orphen::ported::model
     return model;
   }
 
+  std::size_t FUN_0020dd78_bone_for_role(const Psc3Model &model, std::uint8_t role)
+  {
+    for (std::size_t index = 0; index < model.submeshes.size(); ++index)
+    {
+      if (model.submeshes[index].boneRole() == (role & 0x0F))
+      {
+        return index;
+      }
+    }
+    return 0;
+  }
+
 } // namespace orphen::ported::model

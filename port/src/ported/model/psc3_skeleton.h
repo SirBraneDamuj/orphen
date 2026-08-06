@@ -153,15 +153,46 @@ namespace orphen::ported::model
   // 10430.380859, and being 12 bytes out put fGpffff80c8 on an unrelated 0.9.
   inline constexpr float kfGpffff80c8_modelFacingBias = 1.570796013f;
 
-  // FUN_0020cdc0's first branch: the entity's own world matrix. The other two
-  // branches handle an entity attached to a parent bone (+0x192 / +0x194) and
-  // are not ported.
+  // fGpffff80cc, at 0x0035203C. The same quarter turn as fGpffff80c8, applied
+  // by FUN_0020cdc0's *attached* branch instead. Two separate globals holding
+  // the same 1.5707960 in the shipped executable.
+  inline constexpr float kfGpffff80cc_attachedFacingBias = 1.570796013f;
+
+  // FUN_0020cdc0's first branch: the entity's own world matrix.
   Matrix4 FUN_0020cdc0_entity_root(const Vec3 &position,
                                    float facingRadians,
                                    float rotationX154,
                                    float rotationY158,
                                    float scaleXY14c,
                                    float scaleZ150);
+
+  // FUN_0020dc88: a point in a parent bone's space, in world space. `bone` is
+  // already the positive bone index -- FUN_0020cdc0 negates the signed byte at
+  // entity +0x194 before it gets here. An empty palette stands for the original's
+  // "entity +0x0C has no 0x2000 bit" case and falls back to the parent's own
+  // world position.
+  Vec3 FUN_0020dc88_bone_point(std::span<const Matrix4> parentPalette,
+                               std::size_t bone,
+                               const Vec3 &localOffset,
+                               const Vec3 &parentFallbackPosition);
+
+  // FUN_0020cdc0's second branch, taken when entity +0x192 names a parent slot
+  // and the bone byte at +0x194 is *negative*. The attached entity rides the
+  // named bone's position and keeps its own facing; the third branch (a
+  // non-negative bone byte, a fully rigid attachment that inherits the bone's
+  // orientation too) is still not ported, because nothing in the port takes it.
+  //
+  // For the player's bandana, `boneLocalOffset` is the entity's own +0x20..+0x28
+  // -- which for a parented entity is a bone-local offset, not a world position.
+  Matrix4 FUN_0020cdc0_attached_root(std::span<const Matrix4> parentPalette,
+                                     std::size_t parentBone,
+                                     const Vec3 &boneLocalOffset,
+                                     const Vec3 &parentFallbackPosition,
+                                     float facingRadians,
+                                     float rotationX154,
+                                     float rotationY158,
+                                     float scaleXY14c,
+                                     float scaleZ150);
 
   // DAT_00352188 / DAT_0035218c, read out of s01_e24.bin. The game's pi is
   // 3.141592025756836, a hair short of the real one, and every wrap in the pose
