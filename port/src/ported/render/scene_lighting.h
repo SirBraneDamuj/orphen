@@ -131,28 +131,27 @@ namespace orphen::ported::render
     //
     // Each of these is read straight out of the microprogram and each is
     // believed correct, but none has been matched against a reference frame
-    // yet, and the specular pass is known to over-brighten grp_0172. They
-    // default OFF so the port renders the behaviour that was last confirmed
-    // good by eye; --lighting-floor / --lighting-unlit / --lighting-gleam turn
-    // them on individually so a regression can be attributed to exactly one.
+    // yet. They default OFF so the port renders the behaviour that has been
+    // confirmed by eye; --lighting-floor / --lighting-unlit / --lighting-gleam
+    // turn them on individually so a regression is attributable to exactly one.
+    //
+    // The specular pass in particular is unfinished business: it over-brightened
+    // grp_0172 when it was the only thing added, but that was measured before
+    // the additive subdraw passes were drawn at all, so the sheen it was trying
+    // to explain may already be accounted for. Re-measure before trusting it.
     bool applyLightFloor = false; // vf15.z, the MAXz floor on every intensity
     bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
     bool applyGleamPass = false;  // the additive specular pass at VU1 0x0200
-    // Draw every subdraw pass with its own blend mode instead of only the
-    // first opaque one. FUN_00212058:139 puts the subdraw's mode nibble in
-    // plVar5[6], :217 writes draw header byte 8 = mode * 3, and VU1 0x1a7
-    // loads three GS registers from 608 + mode*3. Those blocks, read out of
-    // the save state, are:
+    // Subdraw pass blending is NOT a toggle -- it is always on. The draw loop
+    // walks every pass and takes its blend mode from the subdraw's texFlags:
+    // FUN_00212058:139 puts the mode nibble in plVar5[6], :217 writes draw
+    // header byte 8 = mode * 3, and VU1 0x1a7 loads three GS registers from
+    // 608 + mode*3. Those blocks, read out of the save state, are:
     //
     //   0 -> ALPHA 0x44  (Cs-Cd)*As + Cd,  ZMSK 0   the opaque base
-    //   1 -> ALPHA 0x44  same,             ZMSK 1
+    //   1 -> ALPHA 0x44  same,             ZMSK 1   folded to 0 at full alpha
     //   2 -> ALPHA 0x48  (Cs- 0)*As + Cd,  ZMSK 1   additive
     //   3 -> ALPHA 0xa1  (Cd-Cs)*128>>7,   ZMSK 1   reverse subtract
-    //
-    // grp_009f is why this matters: 15 of its 35 passes are mode 2, including
-    // a second pass on each of the six lid primitives, and dropping them is
-    // what makes the port's version of that chest look flat.
-    bool applySubdrawPasses = false;
 
     // ---- The specular pass ------------------------------------------------
     //

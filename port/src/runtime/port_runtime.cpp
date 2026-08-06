@@ -116,7 +116,6 @@ namespace orphen::port
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
     mapViewer_.mutableSceneLighting().applyGleamPass = config.applyGleamPass;
-    mapViewer_.mutableSceneLighting().applySubdrawPasses = config.applySubdrawPasses;
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
@@ -379,7 +378,6 @@ namespace orphen::port
     lighting.applyLightFloor = mapViewer_.sceneLighting().applyLightFloor;
     lighting.applyUnlitFlag = mapViewer_.sceneLighting().applyUnlitFlag;
     lighting.applyGleamPass = mapViewer_.sceneLighting().applyGleamPass;
-    lighting.applySubdrawPasses = mapViewer_.sceneLighting().applySubdrawPasses;
     mapViewer_.setSceneLighting(lighting);
   }
 
@@ -1354,7 +1352,6 @@ namespace orphen::port
               << (mapViewer_.sceneLighting().applyLightFloor ? "on" : "off")
               << " unlit=" << (mapViewer_.sceneLighting().applyUnlitFlag ? "on" : "off")
               << " gleam=" << (mapViewer_.sceneLighting().applyGleamPass ? "on" : "off")
-              << " passes=" << (mapViewer_.sceneLighting().applySubdrawPasses ? "on" : "off")
               << '\n'
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn

@@ -649,9 +649,6 @@ namespace orphen::harness
         return orphen::harness::posedViewerVertex(model, palette, vertexIndex);
       };
 
-      const bool multiPass =
-          g_sceneLighting != nullptr && g_sceneLighting->applySubdrawPasses;
-
       // The blend state a subdraw's mode nibble selects, from the GS register
       // blocks at VU1 memory 608 + mode*3 (see SceneLighting). State changes are
       // illegal between glBegin/glEnd, so switching mode closes the current
@@ -725,15 +722,10 @@ namespace orphen::harness
         }
 
         // FUN_00212058 draws one pass per active subdraw index, in order, each
-        // with the blend mode its texFlags select. With --lighting-passes off
-        // the port draws only the first, which is what it did before per-pass
-        // blend state existed: pass 0 is the opaque base and the later ones are
-        // overlays, so taking the first is the safe single-pass choice.
-        //
-        // grp_0006 prim 110 is why "first" and not "last": passes [106, 107],
-        // where 106 is texFlags 0x0000 (mode 0) and 107 is 0x8019 (mode 2,
-        // alpha 25 of 127). Drawing only the overlay sampled a patch of the
-        // sheet it was never meant to, which read on screen as a hole.
+        // with the blend mode its texFlags select. Pass 0 is the opaque base and
+        // the later ones are overlays -- additive glow layers, mostly. Drawing
+        // only the base is what the port did before it had per-pass blend state,
+        // and it is what made map_009f's chest look flat next to the real frame.
         std::array<orphen::ported::psm2::Vec3, 4> points{};
         for (std::size_t corner = 0; corner < corners; ++corner)
         {
@@ -841,7 +833,7 @@ namespace orphen::harness
           // seven bits.
           int mode = 0;
           float passAlpha = 1.0f;
-          if (multiPass && subdraw != nullptr)
+          if (subdraw != nullptr)
           {
             mode = static_cast<int>(subdraw->blendMode());
             if (mode != 0)
@@ -869,11 +861,6 @@ namespace orphen::harness
             emit(0, subdraw, passAlpha);
             emit(2, subdraw, passAlpha);
             emit(3, subdraw, passAlpha);
-          }
-
-          if (!multiPass)
-          {
-            break;
           }
         }
       }

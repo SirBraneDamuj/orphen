@@ -49,7 +49,6 @@ namespace orphen::port
     bool applyLightFloor = false;
     bool applyUnlitFlag = false;
     bool applyGleamPass = false;
-    bool applySubdrawPasses = false;
     bool printGleamReport = false;
     // DAT_00355628 override, for experimenting before the script opcode that
     // normally sets it (FUN_00263cb8) is wired up.

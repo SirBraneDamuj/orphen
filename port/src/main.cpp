@@ -129,17 +129,11 @@ namespace
         config.applyGleamPass = true;
         continue;
       }
-      if (argument == "--lighting-passes")
-      {
-        config.applySubdrawPasses = true;
-        continue;
-      }
       if (argument == "--lighting-all")
       {
         config.applyLightFloor = true;
         config.applyUnlitFlag = true;
         config.applyGleamPass = true;
-        config.applySubdrawPasses = true;
         continue;
       }
       if (argument == "--gleam-report")

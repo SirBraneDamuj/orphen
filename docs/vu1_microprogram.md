@@ -401,13 +401,34 @@ coincidence of packing.
 `port/src/ported/render/scene_lighting.h` plus the two draw sites in
 `port/src/harness/map_viewer.cpp`.
 
-Implemented: half-Lambert against four directions, the byte-valued colours and
-ambient, the `/256`, the 255 clamp, the per-primitive light floor, the unlit
-flag, and (in the map path) the two-sided flag and winding cull.
+**On by default**, confirmed against the real frame:
 
-Also implemented: the specular pass at `0x200` -- the half-vector rebuilt each
-frame from the camera angles, the per-primitive threshold and scale, and an
-additive untextured second draw with depth-write off.
+- Half-Lambert against four directions, the byte-valued colours and ambient, the
+  `/256` and the 255 clamp.
+- The two-sided flag and the screen-winding cull, on the map path.
+- **Every subdraw pass, with its blend mode** taken from the `texFlags` nibble
+  and mapped through the register blocks at `608 + mode*3`. Mode 1 at alpha
+  `0x7F` folds back to opaque, per `FUN_00212058:141`. This is what makes
+  `map_009f` -- the script-spawned chest in s01_e024 -- read correctly: 15 of
+  its 35 passes are additive, including a second pass on each of the six lid
+  primitives, and drawing only the opaque base left it visibly flat.
+- Normals renormalised after the bone transform, matching micro-program `0x015`'s
+  orthonormalisation of the palette at `0x0033..0x0055`. Without it the type
+  `0x62` enemies rendered with normals about 0.35 long and were nearly unshaded.
+
+**Behind flags, derived but not visually confirmed** -- `--lighting-floor`,
+`--lighting-unlit`, `--lighting-gleam`, or `--lighting-all`:
+
+- The per-primitive light floor (`vf15.z`).
+- The unlit flag (draw header byte 15 / primitive flag bit 8).
+- The specular pass at `0x0200`. It over-brightened `grp_0172` when it was the
+  only thing added -- but that was measured before the additive subdraw passes
+  were drawn at all, so the sheen it was trying to explain may already be
+  accounted for. Re-measure before trusting it.
+
+`--gleam-report` measures the specular pass without drawing it: per model, how
+many primitives reached it, how many corners lit, the maximum `dot(N, H)` and the
+range of `|N|`. It needs a windowed run, since the probe fills from `render()`.
 
 Not implemented, deliberately:
 
@@ -417,5 +438,6 @@ Not implemented, deliberately:
 - **The second additive term.** For entities `ctx+0x1BC` is zero. For the map
   it needs the VU0 point-light program and the light list that feeds it, which is
   a separate port — this is the remaining real gap in the lighting.
-- **The environment map, the alternate alphas and the second pass.** Each is
-  fully described above; none has been needed yet.
+- **The environment map and the alternate alphas.** Both are fully described
+  above; neither has been needed yet. (The specular pass at `0x0200` is
+  implemented but flag-gated, above.)
