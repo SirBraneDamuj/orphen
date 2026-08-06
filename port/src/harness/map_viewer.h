@@ -24,6 +24,23 @@
 namespace orphen::harness
 {
 
+  // One entry per model drawn while a diagnostic run is collecting. Enough to
+  // answer the two questions the specular pass raises without another
+  // build-and-look cycle: does a given model reach the pass at all, and are the
+  // dot products it computes in range.
+  struct GleamProbe
+  {
+    std::size_t slot = 0;
+    std::int32_t typeId = 0;
+    std::size_t primitivesTested = 0;  // passed the fogByte / flag gate
+    std::size_t cornersEvaluated = 0;
+    std::size_t cornersLit = 0;        // produced an opacity above zero
+    float maxDot = -2.0f;              // dot(N, H); above 1 means N is not unit
+    float maxOpacity = 0.0f;
+    float minNormalLength = 0.0f;      // 1.0 unless the bone transform scales
+    float maxNormalLength = 0.0f;
+  };
+
   class MapViewer
   {
   public:
@@ -63,6 +80,11 @@ namespace orphen::harness
     // Rebuilds the specular half-vector, which moves with the camera and so has
     // to be refreshed every frame rather than only when the scene changes.
     void setGleamDirection(float yawRadians, float pitchRadians);
+    // Non-null makes render() measure the specular pass into the sink, clearing
+    // it each frame, whether or not the pass is drawing.
+    void setGleamProbeSink(std::vector<GleamProbe> *sink) { gleamProbeSink_ = sink; }
+    // Which of the derived-but-unconfirmed lighting behaviours are live.
+    orphen::ported::render::SceneLighting &mutableSceneLighting() { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
     float fogNear() const { return fogNear_; }
     float fogFar() const { return fogFar_; }
@@ -144,6 +166,7 @@ namespace orphen::harness
     float fogNear_ = 8.0f;
     float fogFar_ = 32.0f;
     orphen::ported::render::SceneLighting sceneLighting_;
+    std::vector<GleamProbe> *gleamProbeSink_ = nullptr;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;

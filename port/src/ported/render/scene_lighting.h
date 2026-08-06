@@ -81,15 +81,19 @@
 // FUN_00212058:354 appends after every entity, clears all three again --
 // which is why a save state taken mid-frame shows 0x2a4..0x2a6 as (0,0,0,1).
 //
-// FUN_0020eec0:67-94 is what fills entity+0xB0: for each of three entries in
-// the global light table at DAT_00343898 (stride 5 floats, first float zero
-// means disabled) it calls VU0 program 0x198, which returns a normalised
-// direction and a distance-attenuated colour. So lights 1..3 are the three
-// nearest dynamic point lights, resolved to directional lights per entity.
+// FUN_0020eec0:67-94 fills that block, which lives in a per-draw scratchpad
+// context (DAT_70000000), *not* in the entity record -- FUN_0020c810:245 swaps
+// its two arguments on the way in, which is easy to misread. For each of three
+// entries in the global light table at DAT_00343898 (stride 0x14: float3
+// position, u32 rgb, float radius; radius zero means disabled) it calls VU0
+// program 0x198, which returns a normalised direction and a distance-attenuated
+// colour. So lights 1..3 are the three nearest dynamic point lights, resolved
+// to directional lights per draw.
 //
 // The port leaves them black. Reproducing them needs the light table and the
-// VU0 falloff, which is its own piece of work; in every scene examined here the
-// table is empty and the block is zero, so nothing is currently lost.
+// VU0 falloff, which is its own piece of work. In s01_e024 the table holds 14
+// entries with real positions and colours but every radius is 0, so the game
+// zeroes all three slots too and nothing is currently lost.
 //
 // Not implemented here: the second additive term at 0x01da..0x01e0, enabled by
 // header byte 11 (hardcoded 1 in both builders). It adds `extra * colour / 128`
@@ -122,6 +126,18 @@ namespace orphen::ported::render
     // False until a scene pushes the block through, so an unlit fallback stays
     // available rather than silently rendering everything black.
     bool active = false;
+
+    // ---- Derived but not yet visually confirmed --------------------------
+    //
+    // Each of these is read straight out of the microprogram and each is
+    // believed correct, but none has been matched against a reference frame
+    // yet, and the specular pass is known to over-brighten grp_0172. They
+    // default OFF so the port renders the behaviour that was last confirmed
+    // good by eye; --lighting-floor / --lighting-unlit / --lighting-gleam turn
+    // them on individually so a regression can be attributed to exactly one.
+    bool applyLightFloor = false; // vf15.z, the MAXz floor on every intensity
+    bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
+    bool applyGleamPass = false;  // the additive specular pass at VU1 0x0200
 
     // ---- The specular pass ------------------------------------------------
     //

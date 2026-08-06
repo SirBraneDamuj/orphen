@@ -112,6 +112,14 @@ namespace orphen::port
     runScriptTick_ = config.runScriptTick;
     printActorReport_ = config.printActorReport;
     printRenderReport_ = config.printRenderReport;
+    printGleamReport_ = config.printGleamReport;
+    mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
+    mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
+    mapViewer_.mutableSceneLighting().applyGleamPass = config.applyGleamPass;
+    if (printGleamReport_)
+    {
+      mapViewer_.setGleamProbeSink(&gleamProbes_);
+    }
     if (config.drawDistanceOverride.has_value())
     {
       mapViewer_.setDrawDistance(*config.drawDistanceOverride);
@@ -365,6 +373,11 @@ namespace orphen::port
     orphen::ported::render::SceneLighting::unpack(state.uGpffffb700_vectorRgb,
                                                   lighting.gleamColour);
     lighting.gleamActive = true;
+    // setSceneLighting replaces the block wholesale, so the toggles have to be
+    // carried across or a scene change would silently turn them back off.
+    lighting.applyLightFloor = mapViewer_.sceneLighting().applyLightFloor;
+    lighting.applyUnlitFlag = mapViewer_.sceneLighting().applyUnlitFlag;
+    lighting.applyGleamPass = mapViewer_.sceneLighting().applyGleamPass;
     mapViewer_.setSceneLighting(lighting);
   }
 
@@ -1335,6 +1348,11 @@ namespace orphen::port
               << mapViewer_.sceneLighting().gleamDirection.y << ','
               << mapViewer_.sceneLighting().gleamDirection.z
               << "  (VU1 mem[0x18], DAT_00314800)\n"
+              << "[render] lighting toggles: floor="
+              << (mapViewer_.sceneLighting().applyLightFloor ? "on" : "off")
+              << " unlit=" << (mapViewer_.sceneLighting().applyUnlitFlag ? "on" : "off")
+              << " gleam=" << (mapViewer_.sceneLighting().applyGleamPass ? "on" : "off")
+              << '\n'
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
               << " hidden=" << visibilityReport_.hiddenSkipped
@@ -1356,6 +1374,31 @@ namespace orphen::port
               << " 0x100 primitives point down; others: " << otherUp << " up, "
               << otherDown << " down, " << otherFlat << " vertical\n"
               << "[render] " << twoSided << " primitives are two-sided (flag 0x1) and skip culling\n";
+
+    if (printGleamReport_)
+    {
+      std::cout << "[gleam] " << gleamProbes_.size()
+                << " models reached the specular pass on the final rendered frame"
+                << (gleamProbes_.empty()
+                        ? "  <- nothing measured. The probe only fills from render(),"
+                          " so run windowed with the model on screen and close the"
+                          " window to print this."
+                        : "")
+                << '\n';
+      for (const auto &probe : gleamProbes_)
+      {
+        std::cout << "[gleam]  slot=" << probe.slot << " type=0x" << std::hex
+                  << probe.typeId << std::dec << "  prims=" << probe.primitivesTested
+                  << " corners=" << probe.cornersEvaluated << " lit=" << probe.cornersLit
+                  << "  maxDot=" << probe.maxDot << " maxAlpha=" << probe.maxOpacity
+                  << "  |N|=" << probe.minNormalLength << ".." << probe.maxNormalLength
+                  << '\n';
+      }
+      // A model absent from that list never reached the pass at all, which is a
+      // different failure from reaching it and never clearing the threshold.
+      // |N| away from 1.0 means posedWorldNormal is scaling, which inflates the
+      // dot product and would over-brighten every highlight it feeds.
+    }
 
     // The near-plane polygon clip itself is not ported: the original hands
     // those primitives to FUN_00209ca0 -> FUN_0020b600, while the port draws

@@ -52,10 +52,12 @@ namespace orphen::ported::model
   // Primitive flag bits, from FUN_00212058 / FUN_002129b8.
   inline constexpr std::uint16_t kPrimitiveSkip = 0x0020;        // not drawn at all
   inline constexpr std::uint16_t kPrimitivePerVertex = 0x0008;   // per-vertex normal and colour
-  // Bit 8 does two jobs. FUN_00212058:84 suppresses the +0x0C byte with it, and
-  // :229 also copies it into draw header byte 15, which VU1 0x01ba reads to
-  // branch past the whole lighting block -- so the primitive keeps its authored
-  // colour untouched.
+  // Bit 8 does two jobs. FUN_00212058:84 suppresses the +0x0C specular byte
+  // with it, and :229 copies it into draw header byte 15, which VU1 0x01ba reads
+  // to branch past the lighting block -- so the primitive's authored vertex
+  // colour reaches the GS untouched. In grp_0172 the 72 bit-8 primitives are the
+  // chest lid, and their colour entry ramps 0 -> 128 across the quad, which is
+  // what makes the lid read as a lit highlight without being lit.
   inline constexpr std::uint16_t kPrimitiveUnlit = 0x0100;
   inline constexpr std::uint16_t kPrimitiveUntexturedColour = 0x0200;
   inline constexpr std::uint16_t kPrimitiveNoAlphaBlend = 0x0400;

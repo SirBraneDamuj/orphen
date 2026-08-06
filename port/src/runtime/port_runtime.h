@@ -42,6 +42,14 @@ namespace orphen::port
     bool printRenderReport = false;
     // --model-report: parse every grp record in the bundle and print its counts.
     bool printModelReport = false;
+    // Lighting behaviours derived from VU1 this session. Off by default so the
+    // port renders the last visually confirmed state; each can be enabled alone
+    // so a regression is attributable. --gleam-report measures the specular
+    // pass without drawing it.
+    bool applyLightFloor = false;
+    bool applyUnlitFlag = false;
+    bool applyGleamPass = false;
+    bool printGleamReport = false;
     // DAT_00355628 override, for experimenting before the script opcode that
     // normally sets it (FUN_00263cb8) is wired up.
     std::optional<float> drawDistanceOverride;
@@ -135,6 +143,8 @@ namespace orphen::port
     bool printActorReport_ = false;
     bool printScriptReport_ = false;
     bool printRenderReport_ = false;
+    bool printGleamReport_ = false;
+    std::vector<orphen::harness::GleamProbe> gleamProbes_;
     // Set once, the first time a per-frame script run stops on an unimplemented
     // opcode, so a halting tick says so instead of failing silently every frame.
     mutable bool reportedTickHalt_ = false;

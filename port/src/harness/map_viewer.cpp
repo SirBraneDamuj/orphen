@@ -102,6 +102,11 @@ namespace orphen::harness
     // and threading the block through every one of them buys nothing.
     const orphen::ported::render::SceneLighting *g_sceneLighting = nullptr;
 
+    // Set only while a diagnostic run is collecting. When non-null the specular
+    // loop runs and measures even if applyGleamPass is off, so the numbers can
+    // be read without the pass touching the framebuffer.
+    std::vector<orphen::harness::GleamProbe> *g_gleamProbes = nullptr;
+
     // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
     // edge, 1 at the far edge. applyFogState sets GL_FOG_START 0 and
     // GL_FOG_END 1, so GL's linear ramp passes this straight through.
@@ -720,8 +725,20 @@ namespace orphen::harness
 
           float light[3] = {1.0f, 1.0f, 1.0f};
           // Draw header byte 15, FUN_00212058:229: primitive flag bit 8 makes
-          // VU1 0x01ba branch straight past the whole lighting block.
+          // VU1 0x01ba branch past the whole lighting block, so vf17 keeps the
+          // raw LQI'd vertex colour and the authored value reaches the GS
+          // untouched.
+          //
+          // grp_0172 is the case that shows why this matters. The chest lid is
+          // 72 primitives -- the only bit-8 set in the model -- and all 72 share
+          // colourIndex 21, whose four corners are (0,0,0), (0,0,0),
+          // (128,128,128), (128,128,128): a ramp to full brightness, not a flat
+          // colour. Lit, the bright corners get multiplied by the modulator
+          // (about 0.54, 0.77, 1.10 for an up-facing normal) and come out dimmer
+          // and bluer; unlit they stay at 1.0 and keep the texture's warm red.
+          // That is exactly the difference between the port and the real frame.
           const bool unlit =
+              g_sceneLighting != nullptr && g_sceneLighting->applyUnlitFlag &&
               (primitive.flags & orphen::ported::model::kPrimitiveUnlit) != 0;
           if (g_sceneLighting != nullptr && g_sceneLighting->active && !unlit)
           {
@@ -738,8 +755,10 @@ namespace orphen::harness
               g_sceneLighting->modulator(
                   orphen::harness::posedWorldNormal(model, palette, bone,
                                                     model.normals[normalIndex]),
-                  orphen::ported::render::SceneLighting::floorFromSourceByte(
-                      primitive.alphaByte),
+                  g_sceneLighting->applyLightFloor
+                      ? orphen::ported::render::SceneLighting::floorFromSourceByte(
+                            primitive.alphaByte)
+                      : 0.0f,
                   light);
             }
           }
@@ -777,21 +796,42 @@ namespace orphen::harness
       // -- untextured, gouraud, ABE on, additive, depth-tested but not
       // depth-written -- to any primitive whose +0x0C is non-zero, drawn in the
       // scene's light-0 colour. See SceneLighting's gleam block.
-      if (g_sceneLighting != nullptr && g_sceneLighting->gleamActive)
+      const bool gleamDraw = g_sceneLighting != nullptr &&
+                             g_sceneLighting->gleamActive &&
+                             g_sceneLighting->applyGleamPass;
+      if (g_sceneLighting != nullptr && g_sceneLighting->gleamActive &&
+          (gleamDraw || g_gleamProbes != nullptr))
       {
+        GleamProbe probe;
+        probe.slot = object.slot;
+        probe.typeId = object.typeId;
+        probe.minNormalLength = 1e9f;
+
         glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_ENABLE_BIT |
                      GL_TEXTURE_BIT);
         glDisable(GL_TEXTURE_2D);
         glDisable(GL_ALPHA_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        // Depth-test but do not write, matching ZBUF.ZMSK on the GS state this
+        // pass selects. GL_LEQUAL, not the default GL_LESS: this is the same
+        // geometry at the same depth the main pass just wrote, so under LESS
+        // every fragment fails and the highlight never appears. The GS has no
+        // such problem -- its depth test is GEQUAL against a reversed Z, which
+        // passes on equality.
         glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
 
-        glBegin(GL_TRIANGLES);
+        if (gleamDraw)
+        {
+          glBegin(GL_TRIANGLES);
+        }
         for (const auto &primitive : model.primitives)
         {
-          // FUN_00212058:84-89 zeroes the source byte when flag bit 8 is set, so
-          // an unlit primitive never carries the pass either.
+          // FUN_00212058:84-89 zeroes the source byte when flag bit 8 is set,
+          // so a bit-8 primitive never carries the pass either. Redundant with
+          // the fogByte test on every model seen so far, kept because the two
+          // come from different lines of the original.
           if (primitive.skipped() || primitive.fogByte == 0 ||
               (primitive.flags & orphen::ported::model::kPrimitiveUnlit) != 0)
           {
@@ -807,6 +847,7 @@ namespace orphen::harness
           {
             continue;
           }
+          ++probe.primitivesTested;
 
           std::array<orphen::ported::psm2::Vec3, 4> points{};
           for (std::size_t corner = 0; corner < corners; ++corner)
@@ -820,15 +861,21 @@ namespace orphen::harness
                     ? model.vertices[primitive.vertexIndices[corner]].normalIndex
                     : primitive.flatNormalIndex;
             float opacity = 0.0f;
+            ++probe.cornersEvaluated;
             if (normalIndex < model.normals.size())
             {
               const std::uint16_t bone =
                   model.vertices[primitive.vertexIndices[corner]].boneIndex;
               const orphen::ported::psm2::Vec3 normal = orphen::harness::posedWorldNormal(
                   model, palette, bone, model.normals[normalIndex]);
+              const float normalLength = std::sqrt(
+                  normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+              probe.minNormalLength = std::min(probe.minNormalLength, normalLength);
+              probe.maxNormalLength = std::max(probe.maxNormalLength, normalLength);
               const orphen::ported::psm2::Vec3 &half = g_sceneLighting->gleamDirection;
               const float dotNH =
                   normal.x * half.x + normal.y * half.y + normal.z * half.z;
+              probe.maxDot = std::max(probe.maxDot, dotNH);
               // * vertexAlpha * 0.5 in GS units is * vertexAlpha / 256 once the
               // 128-is-one convention is divided out, and vertexAlpha is
               // 255 * (1 - fog).
@@ -837,6 +884,15 @@ namespace orphen::harness
                         (1.0f - fogAmountAt(points[corner].x, points[corner].y,
                                             points[corner].z)) *
                         (255.0f / 256.0f);
+              probe.maxOpacity = std::max(probe.maxOpacity, opacity);
+              if (opacity > 0.0f)
+              {
+                ++probe.cornersLit;
+              }
+            }
+            if (!gleamDraw)
+            {
+              return;
             }
             glColor4f(std::min(1.0f, g_sceneLighting->gleamColour[0] / 128.0f),
                       std::min(1.0f, g_sceneLighting->gleamColour[1] / 128.0f),
@@ -855,10 +911,25 @@ namespace orphen::harness
             emitGleam(3);
           }
         }
-        glEnd();
+        if (gleamDraw)
+        {
+          glEnd();
+        }
 
+        // GL_DEPTH_BUFFER_BIT in the push covers the mask and the func, but the
+        // explicit restore keeps the pass readable next to its setup.
         glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
         glPopAttrib();
+
+        if (g_gleamProbes != nullptr)
+        {
+          if (probe.minNormalLength > 1e8f)
+          {
+            probe.minNormalLength = 0.0f;
+          }
+          g_gleamProbes->push_back(probe);
+        }
       }
 
       glDisable(GL_TEXTURE_2D);
@@ -1014,16 +1085,23 @@ namespace orphen::harness
       // VU1 0x01b2..0x01e0. The map path is unskinned -- the microprogram's
       // per-vertex bone rotation is gated on header byte 10, which
       // FUN_00211230:191 writes as a constant zero -- so the face normal goes
-      // straight into the dot products. Byte 15 (flags bit 13) skips the whole
-      // block, byte 14 is the complement of +0x2D and becomes the MAXz floor.
-      const bool unlit = (record80.primitiveFlags & kRecord80UnlitBit) != 0;
+      // straight into the dot products. Byte 14 is the complement of +0x2D and
+      // becomes the MAXz floor.
+      //
+      // Byte 15 (flags bit 13) skips the whole block, the same way flag bit 8
+      // does on the entity path. No map primitive in s01_e024 sets it.
+      const bool unlit = g_sceneLighting != nullptr &&
+                         g_sceneLighting->applyUnlitFlag &&
+                         (record80.primitiveFlags & kRecord80UnlitBit) != 0;
       if (g_sceneLighting != nullptr && g_sceneLighting->active && !unlit)
       {
         float light[3];
         g_sceneLighting->modulator(
             record80.normal,
-            orphen::ported::render::SceneLighting::floorFromSourceByte(
-                record80.staticAlpha),
+            g_sceneLighting->applyLightFloor
+                ? orphen::ported::render::SceneLighting::floorFromSourceByte(
+                      record80.staticAlpha)
+                : 0.0f,
             light);
         red *= light[0];
         green *= light[1];
@@ -1636,6 +1714,11 @@ namespace orphen::harness
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
     g_sceneLighting = &sceneLighting_;
+    g_gleamProbes = gleamProbeSink_;
+    if (g_gleamProbes != nullptr)
+    {
+      g_gleamProbes->clear();
+    }
 
     // The ported camera works in game space; the free viewer still works in
     // the viewer space this file has always used, so only one of the two

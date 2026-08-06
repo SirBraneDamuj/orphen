@@ -114,6 +114,34 @@ namespace
         config.probeRadius = parsed[3];
         continue;
       }
+      if (argument == "--lighting-floor")
+      {
+        config.applyLightFloor = true;
+        continue;
+      }
+      if (argument == "--lighting-unlit")
+      {
+        config.applyUnlitFlag = true;
+        continue;
+      }
+      if (argument == "--lighting-gleam")
+      {
+        config.applyGleamPass = true;
+        continue;
+      }
+      if (argument == "--lighting-all")
+      {
+        config.applyLightFloor = true;
+        config.applyUnlitFlag = true;
+        config.applyGleamPass = true;
+        continue;
+      }
+      if (argument == "--gleam-report")
+      {
+        config.printGleamReport = true;
+        config.printRenderReport = true;
+        continue;
+      }
       if (argument == "--render-report")
       {
         config.printRenderReport = true;
@@ -354,6 +382,11 @@ int main(int argc, char **argv)
       window.swapBuffers();
     }
 
+    // The headless and --load-only paths already do this. The windowed one did
+    // not, so any report asked for interactively was collected and silently
+    // dropped -- which matters most for the reports that can only be filled
+    // from render(), since headless never calls it.
+    runtime.printExitReports();
     return 0;
   }
   catch (const std::exception &error)

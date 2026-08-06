@@ -71,10 +71,10 @@ directly visible as two mirrored occupied regions in `vu1Memory.bin`.
 | `0x0e0..` | `FUN_0020eec0` `0x6c0000e0` | Raw bone matrices, `NUM` = bone count. |
 | `0x0c0..` | (via `0x020`) | Where the vertex loop reads a bone matrix: `LQ 192(vi13)`, three quadwords, `vi13` = the normal's `.w`. |
 | `0x1a0`, `0x1df`, `0x21f`, `0x260` | GIF register blocks | Indexed by header bytes 5/6/7 and 8. |
-| `0x278` | `FUN_0020eec0` `0x6e054278` | `.x` = bone count (`entity+0x1E8`), `.y` = `entity+0x1EA + 1`, `.z` = `entity+0x1FC` (0 if >= 0x7f). |
-| `0x279` | same | `entity+0x1BC` — the per-entity additive tint, see the second additive term. |
-| `0x27a..0x27c` | same | Entity light colours 1..3, bytes, from `entity+0xBC / +0xCC / +0xDC`. |
-| `0x27d..0x27f` | `FUN_0020eec0` `0x6803027d` | Entity light directions 1..3, floats, from `entity+0xB0 / +0xC0 / +0xD0`. **Also** reused as a 4x4 by program `0x228` (`FUN_0020c2f0` `0x6c04027d`). |
+| `0x278` | `FUN_0020eec0` `0x6e054278` | `.x` = bone count (`ctx+0x1E8`), `.y` = `ctx+0x1EA + 1`, `.z` = `ctx+0x1FC` (0 if >= 0x7f). |
+| `0x279` | same | `ctx+0x1BC` — the per-draw additive tint, see the second additive term. |
+| `0x27a..0x27c` | same | Light colours 1..3, bytes, from `ctx+0xBC / +0xCC / +0xDC`. |
+| `0x27d..0x27f` | `FUN_0020eec0` `0x6803027d` | Light directions 1..3, floats, from `ctx+0xB0 / +0xC0 / +0xD0`. **Also** reused as a 4x4 by program `0x228` (`FUN_0020c2f0` `0x6c04027d`). |
 | `0x2a0..0x2a2` | `FUN_00200e38` `0x6c0302a0` (lane x only) + program `0x015` (lanes y/z/w) | The light direction matrix. Its **columns** are the four directions. |
 | `0x2a3..0x2a7` | `FUN_00200e38` `0x6e0542a3` | Light colours 0..3 and the ambient, as bytes; the init program ITOF0s them in place. |
 | `0x2b0..0x2b6` | `FUN_0020eec0` / `FUN_0020c2f0` `0x640702b0` | Seven quadwords of V2-32, a secondary transform. |
@@ -183,8 +183,8 @@ packed RGB globals. Verified against the save state:
 So the u32 at `0x35566C` reads `0xRRGGBB`, and `unpack()` in
 `port/src/ported/render/scene_lighting.h` is right.
 
-**Lights 1..3 are per entity.** `FUN_0020eec0:112-142` uploads the block at
-`entity+0xB0` — three records of `{float3 direction, u32 rgb}` — and program
+**Lights 1..3 are per draw.** `FUN_0020eec0:112-142` uploads the block at
+`ctx+0xB0` — three records of `{float3 direction, u32 rgb}` — and program
 `0x015` transposes the directions into lanes y/z/w and ITOF0s the colours into
 `0x2a4..0x2a6`. Program `0x07b`, appended after every entity, clears them again,
 which is exactly why a save state shows `0x2a4..0x2a6 = (0,0,0,1)` — `vf00`.
@@ -236,7 +236,7 @@ Two different producers fill that region:
   that moves.
 - **Entity draws.** No builder unpacks there; instead program `0x015` writes
   `mem[0x279]` into `TOPS+0x2f..0x32` of **both** buffer halves
-  (`SQ vf20, 815(vi00)` and `SQ vf20, 943(vi00)`), i.e. `entity+0x1BC`
+  (`SQ vf20, 815(vi00)` and `SQ vf20, 943(vi00)`), i.e. `ctx+0x1BC`
   broadcast to every vertex. A per-entity additive tint — a flash or glow. It is
   zero in every scene examined here.
 
@@ -297,7 +297,18 @@ That 2.0-to-255 encoding is the other half of VU1's second additive term, which
 divides by 128. The two agree to within the byte quantisation, which is the
 tightest confirmation available that the chain is read correctly end to end.
 
-### `entity+0xB0` and `entity+0x1BC`, resolved
+### `ctx+0xB0` and `ctx+0x1BC`, resolved
+
+> **`ctx` is not the entity.** `FUN_0020c5a8:21` sets `iVar8 = DAT_70000000` --
+> the EE scratchpad -- and passes it as `FUN_0020c810`'s *first* argument with
+> the entity second; `FUN_0020c810:245` then calls `FUN_0020eec0(param_2,
+> param_1)`, swapping them. So inside `FUN_0020eec0`, `param_1` is the entity
+> (0x1D8 stride: `+0x138` bias, `+0x160` model record, `+0x168` submesh bytes)
+> and `param_2` is a **per-draw scratchpad context** rebuilt every frame. The
+> light block and the tint live in that context, not in the entity -- which is
+> also why they read as zero in an entity-pool dump. The give-away is that
+> `param_2 + 0x1E8` is past the end of an entity record.
+
 
 `FUN_0020eec0` fills both, immediately before uploading them:
 
@@ -306,12 +317,12 @@ tightest confirmation available that the chain is read correctly end to end.
   entity's position from `+0xA0`, put the light's record index (0, 3, 6 --
   matching VU0's three-quadword stride) into `vf20`, and `_vcallms(0x198)`.
   VU0 returns the **normalised direction** in `vf16` and the **attenuated
-  colour** in `vf17`; the EE `_sqc2`s the direction to `entity+0xB0+i*0x10` and
+  colour** in `vf17`; the EE `_sqc2`s the direction to `ctx+0xB0+i*0x10` and
   `_ppacb`s the colour into that record's `+0x0C`. Disabled entries are zeroed
   outright. This is exactly the `{float3 direction, u32 rgb}` layout the VU1
   side needs -- producer and consumer now both traced.
 - **Lines 44-64.** `_vcallms(0x220)` runs the same loop over *the rest* of the
-  lights and packs the sum into `entity+0x1BC`, then adds a per-model bias from
+  lights and packs the sum into `ctx+0x1BC`, then adds a per-entity bias from
   `param_1 + 0x138`, clamped at 255.
 
 So the three nearest lights become directional lights 1..3 and shade the model,
@@ -400,10 +411,10 @@ additive untextured second draw with depth-write off.
 
 Not implemented, deliberately:
 
-- **Lights 1..3.** The VU-side contract is settled; what writes `entity+0xB0` is
+- **Lights 1..3.** The VU-side contract is settled; the dynamic light table that feeds `ctx+0xB0` is
   not identified, and the block is zero in every scene examined. The four slots
   exist so this becomes a data question only.
-- **The second additive term.** For entities `entity+0x1BC` is zero. For the map
+- **The second additive term.** For entities `ctx+0x1BC` is zero. For the map
   it needs the VU0 point-light program and the light list that feeds it, which is
   a separate port — this is the remaining real gap in the lighting.
 - **The environment map, the alternate alphas and the second pass.** Each is

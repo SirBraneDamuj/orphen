@@ -16,6 +16,7 @@
 #include "runtime/scene_object_view.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
@@ -51,10 +52,35 @@ namespace orphen::harness
     (void)model;
     const std::size_t bone = boneIndex < palette.size() ? boneIndex : 0u;
     const auto &m = palette[bone];
-    return orphen::ported::psm2::Vec3{
+    orphen::ported::psm2::Vec3 rotated{
         normal.x * m[0] + normal.y * m[4] + normal.z * m[8],
         normal.x * m[1] + normal.y * m[5] + normal.z * m[9],
         normal.x * m[2] + normal.y * m[6] + normal.z * m[10]};
+
+    // Renormalise. The palette matrices carry the entity's scale, so rotating a
+    // unit normal by one does not give a unit normal back -- measured lengths
+    // ran 0.35 on the type 0x62 enemies and 1.07 on the player, which
+    // compressed the first group's shading almost flat and slightly over-lit
+    // the second.
+    //
+    // This is not a fudge to make the numbers nicer: VU1 never sees a scaled
+    // matrix. Micro-program 0x015 orthonormalises the whole bone palette before
+    // any of it is used -- instructions 0x0033..0x0055 take ERLENG (reciprocal
+    // length) of each row and scale the row by it, three rows per matrix, which
+    // is exactly this normalisation done once per bone instead of once per
+    // vertex. The port keeps the raw matrices because the same palette is used
+    // for positions, where the scale is wanted, so the normalisation happens
+    // here instead.
+    const float lengthSquared =
+        rotated.x * rotated.x + rotated.y * rotated.y + rotated.z * rotated.z;
+    if (lengthSquared > 0.0f)
+    {
+      const float scale = 1.0f / std::sqrt(lengthSquared);
+      rotated.x *= scale;
+      rotated.y *= scale;
+      rotated.z *= scale;
+    }
+    return rotated;
   }
 
   // Why a primitive the ray hit was not rasterised. kDrawn means it was.
