@@ -28,4 +28,14 @@ namespace orphen::port::gl
   // Only meaningful after loadFogCoordExtension() has returned true.
   void fogCoord(float value);
 
+  // GL_FOG_COORD_ARRAY, the client-state token for the array form.
+  inline constexpr unsigned int kFogCoordinateArray = 0x8457;
+
+  // The array counterpart of fogCoord, for the vertex-array draw path. Resolved
+  // by loadFogCoordExtension alongside glFogCoordf; a driver that has one has
+  // the other, but the two are reported separately so a partial failure falls
+  // back rather than crashes.
+  bool hasFogCoordPointer();
+  void fogCoordPointer(int stride, const void *pointer);
+
 } // namespace orphen::port::gl

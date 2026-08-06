@@ -19,6 +19,7 @@ Reverse engineering of the PS2 game "Orphen: Scion of Sorcery" using Ghidra deco
 - `out/` — Extracted assets (gitignored)
 - `scr/`, `scr_jp/` — Script data (binary and extracted)
 - `globals.json`, `strings.json` — Ghidra-exported metadata (gitignored, generated via scripts)
+- `port/` — Native C++ port harness (SDL2 + fixed-function OpenGL). See `port/README.md`.
 
 ## Analysis Workflow
 
@@ -35,6 +36,40 @@ Reverse engineering of the PS2 game "Orphen: Scion of Sorcery" using Ghidra deco
 - **Do NOT rename functions that haven't been analyzed** — leave unknown callees as `FUN_*`
 - **Do NOT treat `scripts/` as source of truth** — they are experimental tools
 - **Keep responses terse** — avoid sensationalizing discoveries
+
+## Native Port (`port/`)
+
+**Build Release for anything involving frame rate, and confirm which build is
+running before investigating a performance complaint.** `port/build-msvc.bat`
+defaults to `Debug`, and Debug is ~8x slower here: MSVC's debug runtime makes
+every `std::vector` index a checked call and inlines nothing, which this
+renderer — a tight `std::vector` loop doing per-vertex maths on the CPU — is
+the worst case for. Measured on `s01_e024`: 40.5 ms/frame Debug vs 4.9 ms
+Release. It presents worse than that, because `main()`'s fixed-timestep
+accumulator runs catch-up simulation steps when a frame overruns 16.6 ms, so a
+slow frame makes itself slower; Debug settles at ~4.4 steps/frame and ~12 fps.
+
+```bat
+port\build-msvc.bat Release
+port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024
+```
+
+Debug is still the right build for debugging. Just never quote a frame time
+from it.
+
+Two traps when measuring (details and current numbers in `port/README.md`):
+
+- **`--no-vsync` is not honoured.** The DWM paces windowed surfaces to the
+  refresh regardless, and the wait surfaces in whichever GL call fills the
+  driver queue rather than in `swapBuffers`. A total sitting on ~16.6 ms is
+  measuring the compositor, and per-phase timings under it will appear to move
+  between phases run to run. Use `--render-bench N` to clear that floor.
+- **Verify draw-path changes with `--screenshot <path>[:<frame>]`**, which
+  forces one simulation step per rendered frame so captures are reproducible.
+  Two builds captured at the same frame diff byte for byte.
+
+Behaviour must stay deterministic: `--frames N` with `--actor-report` and
+`--scr-report` is the regression guard, and rendering work must not change it.
 
 ## Technical Context
 

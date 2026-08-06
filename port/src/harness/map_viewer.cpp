@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -107,6 +108,39 @@ namespace orphen::harness
     // needing a second traversal.
     std::vector<orphen::harness::GleamProbe> *g_gleamProbes = nullptr;
 
+    // Set for the duration of render() when a --frame-stats run is collecting.
+    // Null on every other run, so the counter sites below are a predicted
+    // not-taken branch rather than work.
+    orphen::harness::RenderStats *g_renderStats = nullptr;
+
+    // Wall-clock for one render phase, added to `sink` on scope exit. Coarse by
+    // design -- see RenderStats.
+    class PhaseTimer
+    {
+    public:
+      explicit PhaseTimer(std::uint64_t *sink)
+          : sink_(sink), start_(sink != nullptr ? std::chrono::steady_clock::now()
+                                                : std::chrono::steady_clock::time_point{})
+      {
+      }
+      ~PhaseTimer()
+      {
+        if (sink_ != nullptr)
+        {
+          *sink_ += static_cast<std::uint64_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - start_)
+                  .count());
+        }
+      }
+      PhaseTimer(const PhaseTimer &) = delete;
+      PhaseTimer &operator=(const PhaseTimer &) = delete;
+
+    private:
+      std::uint64_t *sink_;
+      std::chrono::steady_clock::time_point start_;
+    };
+
     // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
     // edge, 1 at the far edge. applyFogState sets GL_FOG_START 0 and
     // GL_FOG_END 1, so GL's linear ramp passes this straight through.
@@ -128,6 +162,112 @@ namespace orphen::harness
         amount = (g_vertexFog.inverseNear - 1.0f / depth) * g_vertexFog.inverseSpan;
       }
       return std::clamp(amount, 0.0f, 1.0f);
+    }
+
+    // Immediate mode costs four GL calls per vertex -- glTexCoord2f, glColor4f,
+    // glFogCoordf, glVertex3f -- and s01_e024 emits roughly 59,000 vertices a
+    // frame between the map, the models and the specular pass. That is about
+    // 205,000 driver calls per frame, and it measured as the entire frame
+    // budget: the total pinned at 16.6 ms no matter which call the stall
+    // happened to surface in. Removing a 7 ms glGetFloatv did not make the
+    // frame faster, it just moved the 7 ms into the next call that filled the
+    // queue, which is the signature of being submission-bound rather than slow
+    // at any one thing.
+    //
+    // Vertex arrays are the fixed-function answer: pack the vertices into a CPU
+    // buffer and hand GL one glDrawArrays per state change. No shaders, no VBOs
+    // and nothing newer than GL 1.1 except the fog-coord pointer, which is
+    // resolved next to glFogCoordf and falls back to GL's own eye-distance fog
+    // when the driver has neither.
+    //
+    // Draw order is preserved exactly. The buffer is flushed wherever glEnd
+    // used to be -- on every blend-mode change, texture bind and pass boundary
+    // -- so the sequence of primitives reaching the GS-equivalent is unchanged.
+    struct DrawVertex
+    {
+      float position[3];
+      float texCoord[2];
+      float colour[4];
+      float fogCoord;
+    };
+
+    // Reused across frames and across all three draw paths, so the per-frame
+    // allocation is one growth to the high-water mark and nothing after.
+    std::vector<DrawVertex> g_batchVertices;
+
+    // What the accumulated vertices need switched on when they go out. Tracked
+    // rather than inferred so a batch with no texture does not leave the
+    // texture-coordinate array enabled for the next one.
+    bool g_batchTextured = false;
+
+    void batchReset(bool textured)
+    {
+      g_batchVertices.clear();
+      g_batchTextured = textured;
+    }
+
+    void batchPush(const orphen::ported::psm2::Vec3 &position,
+                   float u, float v,
+                   const float colour[4],
+                   float fogCoord)
+    {
+      DrawVertex &vertex = g_batchVertices.emplace_back();
+      vertex.position[0] = position.x;
+      vertex.position[1] = position.y;
+      vertex.position[2] = position.z;
+      vertex.texCoord[0] = u;
+      vertex.texCoord[1] = v;
+      vertex.colour[0] = colour[0];
+      vertex.colour[1] = colour[1];
+      vertex.colour[2] = colour[2];
+      vertex.colour[3] = colour[3];
+      vertex.fogCoord = fogCoord;
+    }
+
+    // One draw call for everything accumulated since the last flush. Leaves the
+    // client-state switches off on the way out, because the debug overlay and
+    // the HUD still draw in immediate mode and a stale enabled array would make
+    // GL read vertices out of a buffer they know nothing about.
+    void batchFlush()
+    {
+      if (g_batchVertices.empty())
+      {
+        return;
+      }
+
+      const DrawVertex *base = g_batchVertices.data();
+      const GLsizei stride = static_cast<GLsizei>(sizeof(DrawVertex));
+
+      glEnableClientState(GL_VERTEX_ARRAY);
+      glVertexPointer(3, GL_FLOAT, stride, &base->position[0]);
+      glEnableClientState(GL_COLOR_ARRAY);
+      glColorPointer(4, GL_FLOAT, stride, &base->colour[0]);
+      if (g_batchTextured)
+      {
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glTexCoordPointer(2, GL_FLOAT, stride, &base->texCoord[0]);
+      }
+      const bool fogged = g_vertexFog.active && orphen::port::gl::hasFogCoordPointer();
+      if (fogged)
+      {
+        glEnableClientState(orphen::port::gl::kFogCoordinateArray);
+        orphen::port::gl::fogCoordPointer(stride, &base->fogCoord);
+      }
+
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(g_batchVertices.size()));
+
+      glDisableClientState(GL_VERTEX_ARRAY);
+      glDisableClientState(GL_COLOR_ARRAY);
+      if (g_batchTextured)
+      {
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+      }
+      if (fogged)
+      {
+        glDisableClientState(orphen::port::gl::kFogCoordinateArray);
+      }
+
+      g_batchVertices.clear();
     }
 
     void emitFogCoord(float x, float y, float z)
@@ -660,16 +800,27 @@ namespace orphen::harness
       // geometry -- the hanging chains -- opaque.
       glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+      if (g_renderStats != nullptr)
+      {
+        ++g_renderStats->entityModels;
+      }
+
+      batchReset(texture != 0);
+
       int activeBlendMode = -1;
       const auto setBlendMode = [&activeBlendMode](int mode) {
         if (mode == activeBlendMode)
         {
           return;
         }
-        if (activeBlendMode >= 0)
+        if (g_renderStats != nullptr)
         {
-          glEnd();
+          ++g_renderStats->entityBatches;
         }
+        // Where glEnd used to be: everything accumulated under the old blend
+        // state goes out before the new state is set, so the order the GS would
+        // have seen is preserved.
+        batchFlush();
         activeBlendMode = mode;
         switch (mode)
         {
@@ -701,8 +852,12 @@ namespace orphen::harness
           glDepthFunc(GL_LESS);
           break;
         }
-        glBegin(GL_TRIANGLES);
       };
+
+      // GL's current texture coordinate, carried by hand. Scoped to the model
+      // the same way the GL state it replaces effectively was.
+      float currentU = 0.0f;
+      float currentV = 0.0f;
 
       for (const auto &primitive : model.primitives)
       {
@@ -731,10 +886,18 @@ namespace orphen::harness
         {
           points[corner] = posed(primitive.vertexIndices[corner]);
         }
+        if (g_renderStats != nullptr)
+        {
+          ++g_renderStats->entityPrimitives;
+          g_renderStats->vertexTransforms += corners;
+        }
 
         const auto emit = [&](std::size_t corner,
                               const orphen::ported::model::Psc3Subdraw *subdraw,
                               float passAlpha) {
+          // Immediate mode carried the last glTexCoord2f forward when a pass
+          // did not set one; the array path has to say so explicitly, so the
+          // pair persists across emits exactly as GL's current-texcoord did.
           if (subdraw != nullptr)
           {
             const std::uint16_t packed = subdraw->packedUv[corner];
@@ -747,8 +910,8 @@ namespace orphen::harness
             // decompilation. This order is the one
             // tools/resource_extract/v2/psc3_gltf.py uses, which was arrived at
             // by looking at textured exports rather than by reading code.
-            glTexCoord2f(static_cast<float>(packed & 0xFF) / 256.0f,
-                         static_cast<float>((packed >> 8) & 0xFF) / 256.0f);
+            currentU = static_cast<float>(packed & 0xFF) / 256.0f;
+            currentV = static_cast<float>((packed >> 8) & 0xFF) / 256.0f;
           }
           // Flat-shaded primitives hold one colour at colourIndex; only the
           // per-vertex ones have a colour per corner. Same for the normal:
@@ -784,6 +947,10 @@ namespace orphen::harness
             {
               const std::uint16_t bone =
                   model.vertices[primitive.vertexIndices[corner]].boneIndex;
+              if (g_renderStats != nullptr)
+              {
+                ++g_renderStats->lightingEvaluations;
+              }
               // Header byte 14, FUN_00212058:228: the complement of the
               // primitive's +0x0D, which VU1 scales by 1/320 into vf15.z.
               g_sceneLighting->modulator(
@@ -797,22 +964,23 @@ namespace orphen::harness
             }
           }
 
+          float colour[4] = {0.0f, 0.0f, 0.0f, passAlpha};
           if (colourEntry * 3 + 2 < model.colours.size())
           {
             // The game's colour bytes run to 0x80 for full brightness, the same
             // convention the map path divides by 128 for.
-            glColor4f(std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]),
-                      std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f * light[1]),
-                      std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]),
-                      passAlpha);
+            colour[0] = std::min(1.0f, model.colours[colourEntry * 3 + 0] / 128.0f * light[0]);
+            colour[1] = std::min(1.0f, model.colours[colourEntry * 3 + 1] / 128.0f * light[1]);
+            colour[2] = std::min(1.0f, model.colours[colourEntry * 3 + 2] / 128.0f * light[2]);
           }
           else
           {
-            glColor4f(std::min(1.0f, light[0]), std::min(1.0f, light[1]),
-                      std::min(1.0f, light[2]), passAlpha);
+            colour[0] = std::min(1.0f, light[0]);
+            colour[1] = std::min(1.0f, light[1]);
+            colour[2] = std::min(1.0f, light[2]);
           }
-          emitFogCoord(points[corner].x, points[corner].y, points[corner].z);
-          glVertex3f(points[corner].x, points[corner].y, points[corner].z);
+          batchPush(points[corner], currentU, currentV, colour,
+                    fogAmountAt(points[corner].x, points[corner].y, points[corner].z));
         };
 
         for (std::size_t pass = 0; pass < 4; ++pass)
@@ -862,12 +1030,13 @@ namespace orphen::harness
             emit(2, subdraw, passAlpha);
             emit(3, subdraw, passAlpha);
           }
+          if (g_renderStats != nullptr)
+          {
+            g_renderStats->entityTriangles += corners == 4 ? 2u : 1u;
+          }
         }
       }
-      if (activeBlendMode >= 0)
-      {
-        glEnd();
-      }
+      batchFlush();
       glPopAttrib();
 
       // The specular pass, VU1 0x0200. FUN_00212058 appends a second GIF packet
@@ -898,10 +1067,7 @@ namespace orphen::harness
         glDepthMask(GL_FALSE);
         glDepthFunc(GL_LEQUAL);
 
-        if (gleamDraw)
-        {
-          glBegin(GL_TRIANGLES);
-        }
+        batchReset(false);
         for (const auto &primitive : model.primitives)
         {
           // FUN_00212058:84-89 zeroes the source byte when flag bit 8 is set,
@@ -930,8 +1096,12 @@ namespace orphen::harness
           {
             points[corner] = posed(primitive.vertexIndices[corner]);
           }
+          if (g_renderStats != nullptr)
+          {
+            g_renderStats->vertexTransforms += corners;
+          }
 
-          const auto emitGleam = [&](std::size_t corner) {
+          const auto cornerOpacity = [&](std::size_t corner) -> float {
             const std::uint16_t normalIndex =
                 primitive.perVertexColour()
                     ? model.vertices[primitive.vertexIndices[corner]].normalIndex
@@ -942,6 +1112,10 @@ namespace orphen::harness
             {
               const std::uint16_t bone =
                   model.vertices[primitive.vertexIndices[corner]].boneIndex;
+              if (g_renderStats != nullptr)
+              {
+                ++g_renderStats->lightingEvaluations;
+              }
               const orphen::ported::psm2::Vec3 normal = orphen::harness::posedWorldNormal(
                   model, palette, bone, model.normals[normalIndex]);
               const float normalLength = std::sqrt(
@@ -966,38 +1140,62 @@ namespace orphen::harness
                 ++probe.cornersLit;
               }
             }
-            if (!gleamDraw)
-            {
-              return;
-            }
-            // /255, not the /128 the rest of the file uses. That 128 is the
-            // GS's 1.0 for *texture modulation*, and this pass has TME off --
-            // with no texture the RGBAQ value is the fragment colour itself and
-            // goes into the blend unit as a plain 8-bit level, where full scale
-            // is 255. Using /128 here made the highlight almost exactly twice
-            // as bright as the hardware and clipped its blue channel at 1.0,
-            // which skewed the hue too.
-            glColor4f(std::min(1.0f, g_sceneLighting->gleamColour[0] / 255.0f),
-                      std::min(1.0f, g_sceneLighting->gleamColour[1] / 255.0f),
-                      std::min(1.0f, g_sceneLighting->gleamColour[2] / 255.0f),
-                      std::clamp(opacity, 0.0f, 1.0f));
-            glVertex3f(points[corner].x, points[corner].y, points[corner].z);
+            return opacity;
           };
 
-          emitGleam(0);
-          emitGleam(1);
-          emitGleam(2);
+          // Every corner is evaluated whether or not the result is drawn: the
+          // probe's whole job is to report the dot products, including the ones
+          // that came to nothing.
+          std::array<float, 4> opacities{};
+          bool anyLit = false;
+          for (std::size_t corner = 0; corner < corners; ++corner)
+          {
+            opacities[corner] = std::clamp(cornerOpacity(corner), 0.0f, 1.0f);
+            anyLit = anyLit || opacities[corner] > 0.0f;
+          }
+
+          // An additive pass at alpha zero adds zero. Roughly half of the
+          // 6,672 specular triangles a frame in s01_e024 are facing away from
+          // the half-vector and contribute nothing, so submitting them was
+          // paying full vertex cost for an invisible result.
+          if (!gleamDraw || !anyLit)
+          {
+            continue;
+          }
+          if (g_renderStats != nullptr)
+          {
+            g_renderStats->gleamTriangles += corners == 4 ? 2u : 1u;
+          }
+
+          // /255, not the /128 the rest of the file uses. That 128 is the GS's
+          // 1.0 for *texture modulation*, and this pass has TME off -- with no
+          // texture the RGBAQ value is the fragment colour itself and goes into
+          // the blend unit as a plain 8-bit level, where full scale is 255.
+          // Using /128 here made the highlight almost exactly twice as bright
+          // as the hardware and clipped its blue channel at 1.0, which skewed
+          // the hue too.
+          float gleamColour[4] = {
+              std::min(1.0f, g_sceneLighting->gleamColour[0] / 255.0f),
+              std::min(1.0f, g_sceneLighting->gleamColour[1] / 255.0f),
+              std::min(1.0f, g_sceneLighting->gleamColour[2] / 255.0f),
+              0.0f};
+          const auto pushGleam = [&](std::size_t corner) {
+            gleamColour[3] = opacities[corner];
+            batchPush(points[corner], 0.0f, 0.0f, gleamColour,
+                      fogAmountAt(points[corner].x, points[corner].y, points[corner].z));
+          };
+
+          pushGleam(0);
+          pushGleam(1);
+          pushGleam(2);
           if (corners == 4)
           {
-            emitGleam(0);
-            emitGleam(2);
-            emitGleam(3);
+            pushGleam(0);
+            pushGleam(2);
+            pushGleam(3);
           }
         }
-        if (gleamDraw)
-        {
-          glEnd();
-        }
+        batchFlush();
 
         // GL_DEPTH_BUFFER_BIT in the push covers the mask and the func, but the
         // explicit restore keeps the pass readable next to its setup.
@@ -1089,10 +1287,15 @@ namespace orphen::harness
       glLineWidth(1.0f);
     }
 
+    orphen::ported::psm2::Vec3 viewerVertex(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                            std::uint16_t vertexIndex)
+    {
+      return toViewerSpace(map.DAT_0035569c_sectionCRecords.at(vertexIndex).position);
+    }
+
     void emitVertex(const orphen::ported::psm2::Psm2RuntimeState &map, std::uint16_t vertexIndex)
     {
-      const auto &source = map.DAT_0035569c_sectionCRecords.at(vertexIndex).position;
-      const auto viewerPosition = toViewerSpace(source);
+      const auto viewerPosition = viewerVertex(map, vertexIndex);
       emitFogCoord(viewerPosition.x, viewerPosition.y, viewerPosition.z);
       glVertex3f(viewerPosition.x, viewerPosition.y, viewerPosition.z);
     }
@@ -1199,55 +1402,112 @@ namespace orphen::harness
         blue *= static_cast<float>((flat >> 16) & 0xff) / 64.0f;
       }
 
-      glColor4f(std::min(red, 1.0f), std::min(green, 1.0f), std::min(blue, 1.0f), alpha);
+      const float vertexColour[4] = {std::min(red, 1.0f), std::min(green, 1.0f),
+                                     std::min(blue, 1.0f), alpha};
 
       const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex);
-      glTexCoord2f(u, v);
-      emitVertex(map, triangle.vertexIndices[triangleCornerIndex]);
+      const auto position = viewerVertex(map, triangle.vertexIndices[triangleCornerIndex]);
+      batchPush(position, u, v, vertexColour,
+                fogAmountAt(position.x, position.y, position.z));
+    }
+
+    // What the accumulated map vertices were built under. A run of primitives
+    // sharing a texture page and cull mode is one draw call, which is the whole
+    // point: s01_e024's map is 407 visible primitives for 778 triangles, so
+    // per-primitive batching meant 407 draws and 407 texture binds to move less
+    // geometry than a single character model.
+    struct MapBatchState
+    {
+      unsigned int texture = 0;
+      bool cullDisabled = false;
+      bool valid = false;
+    };
+
+    // Flushes and clears the batch state, so whatever comes next starts clean.
+    // Called before an entity is drawn: entities are interleaved into the map
+    // by depth bucket and set their own GL state, so any map vertices still
+    // accumulated have to go out first or they would be drawn after the entity
+    // that was supposed to be in front of them.
+    void flushMapBatch(MapBatchState &state)
+    {
+      batchFlush();
+      if (state.cullDisabled)
+      {
+        glEnable(GL_CULL_FACE);
+        state.cullDisabled = false;
+      }
+      state.valid = false;
     }
 
     void drawPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
                        const std::vector<unsigned int> &textureIds,
                        std::size_t primitiveIndex,
                        float alpha,
-                       bool cullingEnabled)
+                       bool cullingEnabled,
+                       MapBatchState &state)
     {
       const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, primitiveIndex);
       const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
-
-      if (hasTexture)
-      {
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, textureIds[*texturePage]);
-      }
-      else
-      {
-        glDisable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, 0);
-      }
+      const unsigned int texture = hasTexture ? textureIds[*texturePage] : 0u;
 
       const bool modulate = !hasTexture;
       const auto &record80 = map.DAT_003556ac_dRecords80[primitiveIndex];
-
       const bool twoSided = (record80.primitiveFlags & kRecord80TwoSidedBit) != 0;
-      if (cullingEnabled && twoSided)
+      const bool wantCullDisabled = cullingEnabled && twoSided;
+
+      // The fade alpha rides in the vertex colour, so it is not part of the
+      // key -- only the two things that are actual GL state are.
+      if (!state.valid || state.texture != texture ||
+          state.cullDisabled != wantCullDisabled)
       {
-        glDisable(GL_CULL_FACE);
+        batchFlush();
+
+        if (texture != 0)
+        {
+          glEnable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, texture);
+        }
+        else
+        {
+          glDisable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        if (wantCullDisabled != state.cullDisabled)
+        {
+          if (wantCullDisabled)
+          {
+            glDisable(GL_CULL_FACE);
+          }
+          else
+          {
+            glEnable(GL_CULL_FACE);
+          }
+        }
+
+        state.texture = texture;
+        state.cullDisabled = wantCullDisabled;
+        state.valid = true;
+        batchReset(texture != 0);
+
+        if (g_renderStats != nullptr)
+        {
+          ++g_renderStats->mapBatches;
+          ++g_renderStats->mapTextureBinds;
+        }
       }
 
-      glBegin(GL_TRIANGLES);
+      if (g_renderStats != nullptr)
+      {
+        ++g_renderStats->mapPrimitives;
+        g_renderStats->mapTriangles += record80.triangleCount;
+      }
+
       for (std::size_t offset = 0; offset < record80.triangleCount; ++offset)
       {
         const auto &triangle = map.derivedTriangles[record80.firstTriangle + offset];
         emitTexturedVertex(map, triangle, 0, alpha, modulate);
         emitTexturedVertex(map, triangle, 1, alpha, modulate);
         emitTexturedVertex(map, triangle, 2, alpha, modulate);
-      }
-      glEnd();
-
-      if (cullingEnabled && twoSided)
-      {
-        glEnable(GL_CULL_FACE);
       }
     }
 
@@ -1263,11 +1523,22 @@ namespace orphen::harness
                  const std::vector<orphen::ported::render::EntityDrawItem> &entityDrawList,
                  const std::vector<unsigned int> &slotTextures)
     {
+      MapBatchState batchState;
       std::size_t entityCursor = 0;
       const auto drawEntitiesUpTo = [&](int bucket) {
+        if (entityCursor < entityDrawList.size() &&
+            entityDrawList[entityCursor].depthBucket <= bucket)
+        {
+          flushMapBatch(batchState);
+        }
         while (entityCursor < entityDrawList.size() &&
                entityDrawList[entityCursor].depthBucket <= bucket)
         {
+          // Timed here rather than inside drawObjectModel so the map's own cost
+          // can be had by subtraction: the two are interleaved by depth bucket
+          // and cannot be timed as separate spans.
+          PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->entityDrawMicros
+                                                    : nullptr);
           drawObjectModel(objects[entityDrawList[entityCursor].viewIndex], slotTextures);
           ++entityCursor;
         }
@@ -1276,10 +1547,12 @@ namespace orphen::harness
       for (const auto &item : drawList)
       {
         drawEntitiesUpTo(item.depthBucket);
-        drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade), cullingEnabled);
+        drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade), cullingEnabled,
+                      batchState);
       }
       // Anything nearer than the last map primitive, plus the blended bucket.
       drawEntitiesUpTo(orphen::ported::render::entityDraw::kBlendedBucket);
+      flushMapBatch(batchState);
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
@@ -1289,14 +1562,16 @@ namespace orphen::harness
     // has no player and so no occlusion fade to compute.
     void drawMapUnsorted(const orphen::ported::psm2::Psm2RuntimeState &map, const std::vector<unsigned int> &textureIds)
     {
+      MapBatchState batchState;
       for (std::size_t primitiveIndex = 0; primitiveIndex < map.DAT_003556ac_dRecords80.size(); ++primitiveIndex)
       {
         if ((map.DAT_003556ac_dRecords80[primitiveIndex].primitiveFlags & kRecord80HiddenBit) != 0)
         {
           continue;
         }
-        drawPrimitive(map, textureIds, primitiveIndex, 1.0f, false);
+        drawPrimitive(map, textureIds, primitiveIndex, 1.0f, false, batchState);
       }
+      flushMapBatch(batchState);
 
       glDisable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, 0);
@@ -1792,15 +2067,21 @@ namespace orphen::harness
 
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
+    const auto prologueStart = std::chrono::steady_clock::now();
     ensureTexturesUploaded();
     ensureSlotTexturesUploaded();
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
     g_sceneLighting = &sceneLighting_;
     g_gleamProbes = gleamProbeSink_;
+    g_renderStats = renderStatsSink_;
     if (g_gleamProbes != nullptr)
     {
       g_gleamProbes->clear();
+    }
+    if (g_renderStats != nullptr)
+    {
+      ++g_renderStats->frames;
     }
 
     // The ported camera works in game space; the free viewer still works in
@@ -1858,19 +2139,33 @@ namespace orphen::harness
       glLoadMatrixf(camera.projection.data());
       glMatrixMode(GL_MODELVIEW);
       glLoadMatrixf(camera.modelView.data());
+
+      // Keep the copies we just uploaded rather than reading them back. A
+      // glGetFloatv is a sync point -- the driver has to finish everything
+      // queued before it can answer -- and the pair below measured 7.05 ms per
+      // frame, 42% of the whole frame, on a scene that draws 13k triangles.
+      // Nothing was learned for it: these are exactly the matrices glCameraFor
+      // just returned.
+      probeModelView_ = camera.modelView;
+      probeProjection_ = camera.projection;
+      probeMatricesValid_ = true;
     }
     else
     {
       setPerspective(framebufferWidth, framebufferHeight, 60.0f, cameraDistance_ * 8.0f);
       applyCamera(cameraTarget_, cameraDistance_, cameraYawDegrees_, cameraPitchDegrees_);
+
+      // The free viewer builds its matrices through glFrustum and glRotatef, so
+      // there is no CPU-side copy to keep and the readback stays. It costs the
+      // same sync, but this path has no game camera to be fast for.
+      PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->matrixReadMicros : nullptr);
+      glGetFloatv(GL_MODELVIEW_MATRIX, probeModelView_.data());
+      glGetFloatv(GL_PROJECTION_MATRIX, probeProjection_.data());
+      probeMatricesValid_ = true;
     }
 
     // Snapshot what the frame is actually being drawn with, so probeAt can
     // build its ray from the same matrices instead of a reconstruction.
-    glGetFloatv(GL_MODELVIEW_MATRIX, probeModelView_.data());
-    glGetFloatv(GL_PROJECTION_MATRIX, probeProjection_.data());
-    probeMatricesValid_ = true;
-
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1895,12 +2190,21 @@ namespace orphen::harness
 
     applyFogState(useOriginalCamera);
 
+    if (g_renderStats != nullptr)
+    {
+      g_renderStats->prologueMicros += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - prologueStart)
+              .count());
+    }
+
     // Sorted here rather than on the simulation step, because unlike the map's
     // fade byte nothing about it is per-frame state -- it is a pure function of
     // the camera and the entity positions, and it must not run headless.
     std::vector<orphen::ported::render::EntityDrawItem> entityDrawList;
     if (renderCamera_.has_value() && !sceneObjectViews_.empty())
     {
+      PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->entityListMicros : nullptr);
       entityDrawList = orphen::ported::render::FUN_0020eec0_buildEntityDrawList(sceneObjectViews_,
                                                                                 *renderCamera_);
     }
@@ -1913,8 +2217,24 @@ namespace orphen::harness
     {
       if (useOriginalCamera)
       {
+        // The two are interleaved by depth bucket, so the map's own cost is the
+        // span minus whatever the entity timer collected inside it.
+        const std::uint64_t entityBefore =
+            g_renderStats != nullptr ? g_renderStats->entityDrawMicros : 0;
+        const auto spanStart = std::chrono::steady_clock::now();
+
         drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_,
                 sceneObjectViews_, entityDrawList, slotTextureIds_);
+
+        if (g_renderStats != nullptr)
+        {
+          const auto spanMicros = static_cast<std::uint64_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - spanStart)
+                  .count());
+          const std::uint64_t entitySpan = g_renderStats->entityDrawMicros - entityBefore;
+          g_renderStats->mapDrawMicros += spanMicros > entitySpan ? spanMicros - entitySpan : 0;
+        }
       }
       else
       {
@@ -1928,6 +2248,7 @@ namespace orphen::harness
     glDisable(GL_CULL_FACE);
     if (debugOverlayVisible_)
     {
+      PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->overlayMicros : nullptr);
       if (leadPlayerView_.has_value())
       {
         drawLeadPlayer(*leadPlayerView_);
@@ -1949,8 +2270,21 @@ namespace orphen::harness
 
     if (hudVisible_)
     {
+      PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->hudMicros : nullptr);
       debugText_.draw(framebufferWidth, framebufferHeight, hudLines_);
     }
+
+    if (g_renderStats != nullptr)
+    {
+      // Immediate mode only queues; the driver translates and submits later, so
+      // without this the cost of a draw shows up in whatever call the queue
+      // fills on -- which is why the phase timings summed to a third of the
+      // measured render time before this existed.
+      PhaseTimer timer(&g_renderStats->gpuDrainMicros);
+      glFinish();
+    }
+
+    g_renderStats = nullptr;
   }
 
   orphen::ported::psm2::Psm2RuntimeState *MapViewer::loadedMap()

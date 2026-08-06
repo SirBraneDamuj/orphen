@@ -41,6 +41,54 @@ namespace orphen::harness
     float maxNormalLength = 0.0f;
   };
 
+  // Where a frame's render time goes, accumulated across a window of frames so
+  // the numbers are steady enough to compare two builds.
+  //
+  // The phases are timed and everything finer is counted, deliberately. A
+  // clock read per primitive would be a large fraction of what it is measuring
+  // -- the map path draws 1630 primitives per frame in s01_e024, so timing each
+  // one costs more than some of them do. The counters are what make the timings
+  // interpretable: microseconds alone cannot tell you whether a phase is slow
+  // because of the work or because of the number of times it asks GL to change
+  // state.
+  struct RenderStats
+  {
+    std::uint32_t frames = 0;
+
+    // Microseconds, summed over `frames`.
+    std::uint64_t entityListMicros = 0; // the entity depth sort
+    std::uint64_t mapDrawMicros = 0;    // map primitives only
+    std::uint64_t entityDrawMicros = 0; // model draw, base passes and specular
+    std::uint64_t overlayMicros = 0;    // debug boxes, labels, axes
+    std::uint64_t hudMicros = 0;
+    // A glFinish at the end of the frame, so everything the driver deferred is
+    // billed to one bucket instead of surfacing inside whichever later call
+    // happens to fill its queue. Only collected while --frame-stats is on --
+    // the finish itself is a stall and does not belong in a normal frame.
+    std::uint64_t gpuDrainMicros = 0;
+    // Everything before the first draw: viewport, the fog-colour clear, the
+    // camera matrices, the fog state.
+    std::uint64_t prologueMicros = 0;
+    // The two glGetFloatv calls that snapshot the frame's matrices for the
+    // click probe. A get is a sync point on many drivers.
+    std::uint64_t matrixReadMicros = 0;
+
+    // Counts, summed over `frames`.
+    std::uint64_t mapPrimitives = 0;
+    std::uint64_t mapTriangles = 0;
+    std::uint64_t mapBatches = 0;      // glBegin/glEnd pairs
+    std::uint64_t mapTextureBinds = 0; // glBindTexture calls
+    std::uint64_t entityModels = 0;
+    std::uint64_t entityPrimitives = 0;
+    std::uint64_t entityTriangles = 0;
+    std::uint64_t entityBatches = 0;
+    std::uint64_t gleamTriangles = 0;
+    // posedWorldNormal + modulator, the per-corner lighting evaluation.
+    std::uint64_t lightingEvaluations = 0;
+    // posedViewerVertex, the per-corner bone transform.
+    std::uint64_t vertexTransforms = 0;
+  };
+
   class MapViewer
   {
   public:
@@ -83,6 +131,10 @@ namespace orphen::harness
     // Non-null makes render() measure the specular pass into the sink, clearing
     // it each frame, whether or not the pass is drawing.
     void setGleamProbeSink(std::vector<GleamProbe> *sink) { gleamProbeSink_ = sink; }
+    // Non-null makes render() accumulate its phase timings and counters into
+    // the sink. Null -- the default -- costs one predicted branch per counted
+    // event and nothing else.
+    void setRenderStatsSink(RenderStats *sink) { renderStatsSink_ = sink; }
     // Which of the derived-but-unconfirmed lighting behaviours are live.
     orphen::ported::render::SceneLighting &mutableSceneLighting() { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
@@ -167,6 +219,7 @@ namespace orphen::harness
     float fogFar_ = 32.0f;
     orphen::ported::render::SceneLighting sceneLighting_;
     std::vector<GleamProbe> *gleamProbeSink_ = nullptr;
+    RenderStats *renderStatsSink_ = nullptr;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     bool hudVisible_ = true;

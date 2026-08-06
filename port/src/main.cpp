@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -29,6 +30,16 @@ namespace
                  "                  dispatches to, and which of them are ported.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
                  "                  print its geometry counts.\n"
+                 "  --frame-stats   print where each frame's time goes, once per\n"
+                 "                  second. Windowed runs only.\n"
+                 "  --render-bench <N>\n"
+                 "                  draw each frame N times before presenting, so the\n"
+                 "                  render cost can be measured past the compositor's\n"
+                 "                  refresh pacing. Implies --frame-stats.\n"
+                 "  --screenshot <path>[:<frame>]\n"
+                 "                  run one simulation step per frame, write a PPM at\n"
+                 "                  <frame> and exit. Deterministic, so two builds can\n"
+                 "                  be compared pixel for pixel.\n"
                  "  --cycle-map-every <frames>\n"
                  "                  headless only: advance to the next scene every\n"
                  "                  N frames, exercising the map-cycle reload.\n";
@@ -141,6 +152,43 @@ namespace
         config.printRenderReport = true;
         continue;
       }
+      if (argument == "--frame-stats")
+      {
+        config.printFrameStats = true;
+        continue;
+      }
+      if (argument == "--no-vsync")
+      {
+        config.vsync = false;
+        continue;
+      }
+      if (argument == "--render-bench")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--render-bench requires a count");
+        }
+        config.rendersPerFrame = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
+        config.printFrameStats = true;
+        continue;
+      }
+      if (argument == "--screenshot")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--screenshot needs <path>[:<frame>]");
+        }
+        std::string value = argv[++argumentIndex];
+        // Split on the last colon so a drive letter survives.
+        const std::size_t colon = value.rfind(':');
+        if (colon != std::string::npos && colon > 1)
+        {
+          config.screenshotFrame = static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
+          value = value.substr(0, colon);
+        }
+        config.screenshotPath = value;
+        continue;
+      }
       if (argument == "--model-report")
       {
         config.printModelReport = true;
@@ -234,6 +282,86 @@ namespace
     return config;
   }
 
+  // --frame-stats. Accumulated over a second's worth of frames and printed as
+  // one block, because a per-frame number jitters too much to compare against.
+  struct LoopStats
+  {
+    std::uint64_t simMicros = 0;
+    std::uint64_t renderMicros = 0;
+    std::uint64_t swapMicros = 0;
+    std::uint64_t clearMicros = 0;
+    std::uint32_t simSteps = 0;
+    // Presented frames. Under --render-bench this is smaller than the render
+    // count, so the two are divided by different denominators: simulation and
+    // present happen once per displayed frame, the render phases N times.
+    std::uint32_t displayedFrames = 0;
+  };
+
+  constexpr std::uint32_t kFrameStatsWindow = 60;
+
+  std::uint64_t microsSince(const std::chrono::steady_clock::time_point &start)
+  {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+  }
+
+  void printFrameStats(const LoopStats &loop,
+                       const orphen::harness::RenderStats &render)
+  {
+    const auto frames = render.frames != 0 ? render.frames : 1u;
+    const auto displayed = loop.displayedFrames != 0 ? loop.displayedFrames : 1u;
+    const double scale = 1000.0 * static_cast<double>(frames); // micros -> ms/render
+    const double displayScale = 1000.0 * static_cast<double>(displayed);
+    const auto ms = [scale](std::uint64_t micros) {
+      return static_cast<double>(micros) / scale;
+    };
+    const auto msDisplayed = [displayScale](std::uint64_t micros) {
+      return static_cast<double>(micros) / displayScale;
+    };
+    const auto perFrame = [frames](std::uint64_t total) {
+      return static_cast<double>(total) / static_cast<double>(frames);
+    };
+
+    // Swap is excluded from the ceiling: with vsync on it is idle waiting for
+    // the refresh, not work, and including it would make every frame look like
+    // exactly one refresh interval no matter how much headroom there was.
+    const double workMs = msDisplayed(loop.simMicros) + ms(loop.renderMicros);
+
+    std::cout << "[frame-stats] " << frames << " renders / " << displayed
+              << " frames | work " << std::fixed << std::setprecision(2) << workMs
+              << " ms/frame (" << (workMs > 0.0 ? 1000.0 / workMs : 0.0) << " fps ceiling)"
+              << " | sim " << msDisplayed(loop.simMicros)
+              << " render " << ms(loop.renderMicros)
+              << " swap-wait " << msDisplayed(loop.swapMicros) << '\n';
+    std::cout << "[frame-stats]   map      " << ms(render.mapDrawMicros) << " ms  "
+              << perFrame(render.mapPrimitives) << " prim  "
+              << perFrame(render.mapTriangles) << " tri  "
+              << perFrame(render.mapBatches) << " batches  "
+              << perFrame(render.mapTextureBinds) << " binds\n";
+    std::cout << "[frame-stats]   entities " << ms(render.entityDrawMicros) << " ms  "
+              << perFrame(render.entityModels) << " models  "
+              << perFrame(render.entityPrimitives) << " prim  "
+              << perFrame(render.entityTriangles) << " tri  "
+              << perFrame(render.entityBatches) << " batches  "
+              << perFrame(render.gleamTriangles) << " gleam-tri\n";
+    std::cout << "[frame-stats]   drain    " << ms(render.gpuDrainMicros)
+              << " ms  (driver/GPU catching up on queued immediate-mode calls)\n";
+    std::cout << "[frame-stats]   prologue " << ms(render.prologueMicros)
+              << " ms  (of which matrix readback " << ms(render.matrixReadMicros)
+              << ")  clear " << ms(loop.clearMicros) << '\n';
+    std::cout << "[frame-stats]   sort " << ms(render.entityListMicros)
+              << "  overlay " << ms(render.overlayMicros)
+              << "  hud " << ms(render.hudMicros)
+              << "  | lighting " << perFrame(render.lightingEvaluations)
+              << "/render  transforms " << perFrame(render.vertexTransforms)
+              << "/render  sim-steps "
+              << static_cast<double>(loop.simSteps) / static_cast<double>(displayed)
+              << "/frame\n";
+    std::cout.flush();
+  }
+
   void validateSourceConfig(const orphen::port::PortRuntimeConfig &config)
   {
     const bool hasDecodedPsm2 = !config.decodedPsm2Path.empty();
@@ -310,7 +438,7 @@ int main(int argc, char **argv)
 
     // 4:3, the shape the game was displayed at. The 3D viewport letterboxes to
     // that aspect anyway, so this just avoids shipping default bars.
-    orphen::port::SdlGlWindow window({"Orphen Native Port Harness", 960, 720});
+    orphen::port::SdlGlWindow window({"Orphen Native Port Harness", 960, 720, config.vsync});
     orphen::port::PortRuntime runtime;
 
     runtime.initialize(config);
@@ -325,6 +453,18 @@ int main(int argc, char **argv)
     auto previousTick = std::chrono::steady_clock::now();
     float accumulatedSeconds = 0.0f;
     bool running = true;
+    LoopStats loopStats;
+    const bool capturing = !config.screenshotPath.empty();
+    std::uint32_t renderedFrames = 0;
+
+    if (!config.vsync && window.swapInterval() != 0)
+    {
+      std::cout << "[render] --no-vsync was not honoured (swap interval "
+                << window.swapInterval()
+                << "). Windows composites windowed surfaces through the DWM, "
+                   "which paces them to the refresh regardless; frame timings "
+                   "at or near the refresh interval are measuring that wait.\n";
+    }
 
     while (running)
     {
@@ -346,7 +486,12 @@ int main(int argc, char **argv)
         accumulatedSeconds = 0.0f;
       }
 
-      accumulatedSeconds += delta.count();
+      // In screenshot mode the simulation advances exactly one step per
+      // rendered frame regardless of wall clock. Otherwise the number of steps
+      // depends on how fast the machine ran, and two builds would be
+      // photographed at different points in the animation -- which would make
+      // the comparison meaningless in precisely the case it is needed for.
+      accumulatedSeconds = capturing ? kFixedStepSeconds : accumulatedSeconds + delta.count();
 
       // Drop simulation time rather than spiral after a stall (window drag,
       // breakpoint, scene load). The original degrades by stretching its own
@@ -360,20 +505,49 @@ int main(int argc, char **argv)
       // Edge-triggered inputs must fire on exactly one simulation step even when
       // a render frame drives several. Held axes carry across every step.
       orphen::port::InputSnapshot stepInput = input;
+      const auto simStart = std::chrono::steady_clock::now();
       while (running && accumulatedSeconds >= kFixedStepSeconds)
       {
         running = runtime.update(stepInput);
         accumulatedSeconds -= kFixedStepSeconds;
+        ++loopStats.simSteps;
 
         stepInput.jumpRequested = false;
         stepInput.toggleWireframeRequested = false;
         stepInput.previousMapRequested = false;
         stepInput.nextMapRequested = false;
       }
+      loopStats.simMicros += microsSince(simStart);
 
+      const auto renderStart = std::chrono::steady_clock::now();
       window.beginFrame(0.025f, 0.03f, 0.035f);
-      runtime.render(window.width(), window.height());
+      loopStats.clearMicros += microsSince(renderStart);
+      for (std::uint32_t repeat = 0; repeat < config.rendersPerFrame; ++repeat)
+      {
+        runtime.render(window.width(), window.height());
+      }
+      loopStats.renderMicros += microsSince(renderStart);
+
+      const auto swapStart = std::chrono::steady_clock::now();
       window.swapBuffers();
+      loopStats.swapMicros += microsSince(swapStart);
+      ++loopStats.displayedFrames;
+
+      ++renderedFrames;
+      if (capturing && renderedFrames >= config.screenshotFrame)
+      {
+        const bool wrote = window.captureFramebuffer(config.screenshotPath.c_str());
+        std::cout << (wrote ? "[screenshot] wrote " : "[screenshot] FAILED to write ")
+                  << config.screenshotPath << " at frame " << renderedFrames << '\n';
+        break;
+      }
+
+      if (runtime.frameStatsEnabled() && runtime.frameStats().frames >= kFrameStatsWindow)
+      {
+        printFrameStats(loopStats, runtime.frameStats());
+        loopStats = LoopStats{};
+        runtime.frameStats() = orphen::harness::RenderStats{};
+      }
     }
 
     // The headless and --load-only paths already do this. The windowed one did

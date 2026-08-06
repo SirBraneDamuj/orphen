@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace orphen::port
@@ -49,6 +50,24 @@ namespace orphen::port
     bool applyLightFloor = false;
     bool applyUnlitFlag = false;
     bool printGleamReport = false;
+    // --frame-stats: accumulate a per-phase render breakdown and print it
+    // every kFrameStatsWindow frames. Windowed runs only -- headless never
+    // calls render(), which is where all of it is collected.
+    bool printFrameStats = false;
+    // --no-vsync. Read by main() when it opens the window, not by the runtime.
+    bool vsync = true;
+    // --screenshot <path>[:<frame>]. Runs the window on a fixed one-simulation-
+    // step-per-frame schedule so the captured frame is reproducible, writes a
+    // PPM and exits. Read by main().
+    std::string screenshotPath;
+    std::uint32_t screenshotFrame = 120;
+    // --render-bench N: draw the frame N times before presenting it. The DWM
+    // paces a windowed surface to the refresh whether or not the swap interval
+    // is zero, so a single render per present can never measure more than
+    // "fits in 16.6 ms". Amortising one present over N renders puts the real
+    // per-render cost back above the floor. Benchmarking only -- the extra
+    // renders are identical and land in the same back buffer.
+    std::uint32_t rendersPerFrame = 1;
     // DAT_00355628 override, for experimenting before the script opcode that
     // normally sets it (FUN_00263cb8) is wired up.
     std::optional<float> drawDistanceOverride;
@@ -88,6 +107,12 @@ namespace orphen::port
     // Reports that are only meaningful after frames have run. Called once at
     // shutdown; a no-op unless the matching flag was passed.
     void printExitReports() const;
+
+    // --frame-stats. main() owns the loop, so it owns the simulation and
+    // buffer-swap timings; the render breakdown is collected in here and read
+    // back out through this.
+    bool frameStatsEnabled() const { return printFrameStats_; }
+    orphen::harness::RenderStats &frameStats() { return frameStats_; }
 
   private:
     Ps2Memory memory_;
@@ -144,6 +169,8 @@ namespace orphen::port
     bool printRenderReport_ = false;
     bool printGleamReport_ = false;
     std::vector<orphen::harness::GleamProbe> gleamProbes_;
+    bool printFrameStats_ = false;
+    orphen::harness::RenderStats frameStats_;
     // Set once, the first time a per-frame script run stops on an unimplemented
     // opcode, so a halting tick says so instead of failing silently every frame.
     mutable bool reportedTickHalt_ = false;

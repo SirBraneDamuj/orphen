@@ -119,6 +119,11 @@ namespace orphen::port
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
     }
+    printFrameStats_ = config.printFrameStats;
+    if (printFrameStats_)
+    {
+      mapViewer_.setRenderStatsSink(&frameStats_);
+    }
     if (config.drawDistanceOverride.has_value())
     {
       mapViewer_.setDrawDistance(*config.drawDistanceOverride);

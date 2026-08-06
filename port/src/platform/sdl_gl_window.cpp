@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace orphen::port
 {
@@ -98,7 +100,7 @@ namespace orphen::port
       throw sdlError("SDL_GL_MakeCurrent failed");
     }
 
-    SDL_GL_SetSwapInterval(1);
+    SDL_GL_SetSwapInterval(config.vsync ? 1 : 0);
 
     window_ = window;
     glContext_ = context;
@@ -106,6 +108,36 @@ namespace orphen::port
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glViewport(0, 0, width_, height_);
+  }
+
+  int SdlGlWindow::swapInterval() const
+  {
+    return SDL_GL_GetSwapInterval();
+  }
+
+  bool SdlGlWindow::captureFramebuffer(const char *path) const
+  {
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width_) *
+                                      static_cast<std::size_t>(height_) * 3u);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(GL_FRONT);
+    glReadPixels(0, 0, width_, height_, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+
+    std::ofstream output(path, std::ios::binary);
+    if (!output)
+    {
+      return false;
+    }
+    output << "P6\n" << width_ << ' ' << height_ << "\n255\n";
+    // GL reads bottom-up; PPM is top-down.
+    for (int row = height_ - 1; row >= 0; --row)
+    {
+      output.write(reinterpret_cast<const char *>(
+                       pixels.data() + static_cast<std::size_t>(row) *
+                                           static_cast<std::size_t>(width_) * 3u),
+                   static_cast<std::streamsize>(width_) * 3);
+    }
+    return output.good();
   }
 
   SdlGlWindow::~SdlGlWindow()

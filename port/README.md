@@ -338,34 +338,122 @@ cmake --build port/build
 
 On Windows with a multi-config generator, the executable is usually under `port/build/Debug/orphen_port.exe` or `port/build/Release/orphen_port.exe`.
 
-The MSVC wrapper uses `NMake Makefiles`, so its executable is under `port/build/msvc-Debug/orphen_port.exe` or `port/build/msvc-Release/orphen_port.exe`.
+The MSVC wrapper uses `NMake Makefiles`, so its executable is under
+`port/build/msvc-<config>/orphen_port.exe`. **The examples below use the Release
+build** — see "Build a Release binary to play in" for why that matters.
 
 If using Visual Studio/MSVC from Git Bash, use the repo-local wrapper so MSYS path conversion does not mangle `cmd.exe /c` flags or quoted Visual Studio paths:
 
 ```sh
 cmd.exe //c port\\check-msvc.bat
-cmd.exe //c port\\build-msvc.bat Debug
+cmd.exe //c port\\build-msvc.bat Release
 ```
 
 From Command Prompt or PowerShell, use the normal Windows path form:
 
 ```bat
 port\check-msvc.bat
-port\build-msvc.bat Debug
+port\build-msvc.bat Release
 ```
+
+The config argument is optional and defaults to `Debug`. Pass it.
+
+### Build a Release binary to play in
+
+`build-msvc.bat` defaults to `Debug`, which is the right build to debug in and
+the wrong one to judge the frame rate by. MSVC's debug runtime turns every
+`std::vector` index into a checked call and inlines nothing, and this renderer
+is a tight loop over `std::vector` doing per-vertex maths on the CPU.
+
+Measured on `s01_e024`, one simulation step and one render per frame:
+
+| | Debug | Release |
+|---|---|---|
+| simulation | 11.88 ms | 0.76 ms |
+| render | 28.60 ms | 4.16 ms |
+| **frame** | **40.5 ms (24 fps)** | **4.9 ms (203 fps)** |
+
+Debug is worse in practice than even that suggests. The fixed-timestep
+accumulator in `main()` runs up to `kMaxStepsPerFrame` simulation steps per
+rendered frame, so once a frame costs more than 16.6 ms it starts running
+several steps to catch up, which makes the frame cost more again. It settles
+against the cap at about 4.4 steps per frame and roughly 12 fps.
+
+```bat
+port\build-msvc.bat Release
+port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024
+```
+
+## Performance
+
+`--frame-stats` prints where a frame's time goes, once a second:
+
+```
+[frame-stats] 64 renders / 8 frames | work 4.91 ms/frame (203.51 fps ceiling) | sim 0.76 render 4.16 swap-wait 0.17
+[frame-stats]   map      0.19 ms  407 prim  778 tri  101.62 batches  101.62 binds
+[frame-stats]   entities 2.92 ms  20 models  7023 prim  12871 tri  242 batches  3838.75 gleam-tri
+[frame-stats]   drain    0.98 ms  (driver/GPU catching up on queued immediate-mode calls)
+```
+
+Two things about measuring this are easy to get wrong, and both cost real time
+to rediscover:
+
+**The compositor paces the window, and `--no-vsync` does not stop it.** Windows
+composites windowed surfaces through the DWM at the refresh rate whether or not
+`SDL_GL_SetSwapInterval(0)` succeeds — and here it does not succeed, it returns
+an interval of 1. So a single render per present can never measure worse than
+"fits in 16.6 ms", and the wait does not politely sit in `swapBuffers`: it
+surfaces in whichever GL call fills the driver's queue. That is why the phase
+timings appeared to move between the map, the entities and a `glGetFloatv`
+while the total stayed pinned at exactly 16.6 ms. `--render-bench N` draws the
+frame N times per present so the per-render cost clears that floor; the numbers
+above come from `--render-bench 8`.
+
+**`--screenshot <path>[:<frame>]` is the regression test for anything that
+touches the draw path.** It runs one simulation step per rendered frame, so the
+captured frame is reproducible, writes a PPM and exits. Two builds photographed
+at the same frame can be compared byte for byte — which is how the vertex-array
+conversion below was shown to change nothing about the picture.
+
+### What the draw path does and why
+
+The renderer is fixed-function, but it is not immediate mode. Immediate mode
+costs four GL calls per vertex (`glTexCoord2f`, `glColor4f`, `glFogCoordf`,
+`glVertex3f`) and `s01_e024` emits about 59,000 vertices a frame, so roughly
+205,000 driver calls. Vertices are packed into a CPU buffer instead and handed
+to GL as one `glDrawArrays` per state change — no shaders, no VBOs, nothing
+past GL 1.1 except `glFogCoordPointer`, which is resolved next to `glFogCoordf`
+and falls back to GL's eye-distance fog when a driver has neither.
+
+Draw order is preserved exactly: the buffer is flushed wherever `glEnd` used to
+be, including before each entity, since entities are interleaved into the map by
+depth bucket and would otherwise be drawn behind geometry they occlude.
+
+Three things this bought, in the order they were worth finding:
+
+- The camera matrices are kept from `glCameraFor` rather than read back with
+  `glGetFloatv`. A get is a sync point, and the pair measured 7 ms per frame
+  purely to hand back matrices the frame had just uploaded.
+- Map primitives that share a texture page and cull mode batch together. The
+  map is 407 visible primitives for 778 triangles, so per-primitive batching
+  meant 407 draws and 407 texture binds to move less geometry than one
+  character model. It is about 102 of each now.
+- The specular pass skips primitives whose corners are all at zero opacity.
+  Roughly 43% of its triangles face away from the half-vector and add nothing,
+  and they were being submitted at full vertex cost.
 
 ## Running The PSM2 Slice
 
 From the repository root after building:
 
 ```sh
-port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2
+port/build/msvc-Release/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2
 ```
 
 Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1.BIN`:
 
 ```sh
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012
 ```
 
 **A scene does carry its own spawn point**, and it is in the SCR. `FUN_0025b600`,
@@ -402,24 +490,24 @@ scenes with no defaults block.
 To validate the loader without opening a window:
 
 ```sh
-port/build/msvc-Debug/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2 --load-only
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --load-only
+port/build/msvc-Release/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2 --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012 --load-only
 ```
 
 To inspect the resources loaded by a disc scene:
 
 ```sh
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e012 --scene-tree --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012 --scene-tree --load-only
 ```
 
 The scene tree currently groups MCB bundle records by category and prints record ids, bundle offsets, packed/decoded sizes, and known decoded signatures such as PSM2, BMPA, SCR, and PSC3. `s01_e024` is a useful early exploratory scene because it is much smaller than `s01_e012` and appears to be a debug scene:
 
 ```sh
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only --scr-report
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --load-only --actor-report
-port/build/msvc-Debug/orphen_port.exe --disc-root . --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only --scr-report
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only --actor-report
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
 ```
 
 `--scr-tick` runs the per-frame script entry and the object-script slots.
