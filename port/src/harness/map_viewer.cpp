@@ -102,9 +102,9 @@ namespace orphen::harness
     // and threading the block through every one of them buys nothing.
     const orphen::ported::render::SceneLighting *g_sceneLighting = nullptr;
 
-    // Set only while a diagnostic run is collecting. When non-null the specular
-    // loop runs and measures even if applyGleamPass is off, so the numbers can
-    // be read without the pass touching the framebuffer.
+    // Set only while a diagnostic run is collecting, so --gleam-report can
+    // report the specular pass's dot products and normal lengths without
+    // needing a second traversal.
     std::vector<orphen::harness::GleamProbe> *g_gleamProbes = nullptr;
 
     // amount = (1/near - 1/z) / (1/near - 1/far), clamped: 0 at the band's near
@@ -874,9 +874,7 @@ namespace orphen::harness
       // -- untextured, gouraud, ABE on, additive, depth-tested but not
       // depth-written -- to any primitive whose +0x0C is non-zero, drawn in the
       // scene's light-0 colour. See SceneLighting's gleam block.
-      const bool gleamDraw = g_sceneLighting != nullptr &&
-                             g_sceneLighting->gleamActive &&
-                             g_sceneLighting->applyGleamPass;
+      const bool gleamDraw = g_sceneLighting != nullptr && g_sceneLighting->gleamActive;
       if (g_sceneLighting != nullptr && g_sceneLighting->gleamActive &&
           (gleamDraw || g_gleamProbes != nullptr))
       {
@@ -972,9 +970,16 @@ namespace orphen::harness
             {
               return;
             }
-            glColor4f(std::min(1.0f, g_sceneLighting->gleamColour[0] / 128.0f),
-                      std::min(1.0f, g_sceneLighting->gleamColour[1] / 128.0f),
-                      std::min(1.0f, g_sceneLighting->gleamColour[2] / 128.0f),
+            // /255, not the /128 the rest of the file uses. That 128 is the
+            // GS's 1.0 for *texture modulation*, and this pass has TME off --
+            // with no texture the RGBAQ value is the fragment colour itself and
+            // goes into the blend unit as a plain 8-bit level, where full scale
+            // is 255. Using /128 here made the highlight almost exactly twice
+            // as bright as the hardware and clipped its blue channel at 1.0,
+            // which skewed the hue too.
+            glColor4f(std::min(1.0f, g_sceneLighting->gleamColour[0] / 255.0f),
+                      std::min(1.0f, g_sceneLighting->gleamColour[1] / 255.0f),
+                      std::min(1.0f, g_sceneLighting->gleamColour[2] / 255.0f),
                       std::clamp(opacity, 0.0f, 1.0f));
             glVertex3f(points[corner].x, points[corner].y, points[corner].z);
           };

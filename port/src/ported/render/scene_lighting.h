@@ -132,16 +132,10 @@ namespace orphen::ported::render
     // Each of these is read straight out of the microprogram and each is
     // believed correct, but none has been matched against a reference frame
     // yet. They default OFF so the port renders the behaviour that has been
-    // confirmed by eye; --lighting-floor / --lighting-unlit / --lighting-gleam
-    // turn them on individually so a regression is attributable to exactly one.
-    //
-    // The specular pass in particular is unfinished business: it over-brightened
-    // grp_0172 when it was the only thing added, but that was measured before
-    // the additive subdraw passes were drawn at all, so the sheen it was trying
-    // to explain may already be accounted for. Re-measure before trusting it.
+    // confirmed by eye; --lighting-floor / --lighting-unlit turn them on
+    // individually so a regression is attributable to exactly one.
     bool applyLightFloor = false; // vf15.z, the MAXz floor on every intensity
     bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
-    bool applyGleamPass = false;  // the additive specular pass at VU1 0x0200
     // Subdraw pass blending is NOT a toggle -- it is always on. The draw loop
     // walks every pass and takes its blend mode from the subdraw's texFlags:
     // FUN_00212058:139 puts the mode nibble in plVar5[6], :217 writes draw

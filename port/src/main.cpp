@@ -124,16 +124,10 @@ namespace
         config.applyUnlitFlag = true;
         continue;
       }
-      if (argument == "--lighting-gleam")
-      {
-        config.applyGleamPass = true;
-        continue;
-      }
       if (argument == "--lighting-all")
       {
         config.applyLightFloor = true;
         config.applyUnlitFlag = true;
-        config.applyGleamPass = true;
         continue;
       }
       if (argument == "--gleam-report")

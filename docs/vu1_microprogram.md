@@ -415,20 +415,29 @@ coincidence of packing.
 - Normals renormalised after the bone transform, matching micro-program `0x015`'s
   orthonormalisation of the palette at `0x0033..0x0055`. Without it the type
   `0x62` enemies rendered with normals about 0.35 long and were nearly unshaded.
+- **The specular pass at `0x0200`.** Its presence is confirmed against the
+  emulator -- without it the chests lose their sheen entirely.
+
+  One unit trap here, worth knowing because it is not the convention the rest of
+  the renderer uses: this pass runs with **TME off**, so there is no texture and
+  the RGBAQ value *is* the fragment colour. It enters the blend unit as a plain
+  8-bit level, where full scale is **255**, not the 128 that is 1.0 for texture
+  modulation. Emitting it as `Cs/128` makes the highlight almost exactly twice
+  as bright as the hardware and clips its blue channel. The additive subdraw
+  passes are textured, so their modulate output is already a final colour and
+  `/128` stays correct there.
 
 **Behind flags, derived but not visually confirmed** -- `--lighting-floor`,
-`--lighting-unlit`, `--lighting-gleam`, or `--lighting-all`:
+`--lighting-unlit`, or `--lighting-all`:
 
 - The per-primitive light floor (`vf15.z`).
 - The unlit flag (draw header byte 15 / primitive flag bit 8).
-- The specular pass at `0x0200`. It over-brightened `grp_0172` when it was the
-  only thing added -- but that was measured before the additive subdraw passes
-  were drawn at all, so the sheen it was trying to explain may already be
-  accounted for. Re-measure before trusting it.
 
-`--gleam-report` measures the specular pass without drawing it: per model, how
-many primitives reached it, how many corners lit, the maximum `dot(N, H)` and the
-range of `|N|`. It needs a windowed run, since the probe fills from `render()`.
+`--gleam-report` measures the specular pass: per model, how many primitives
+reached it, how many corners lit, the maximum `dot(N, H)` and the range of `|N|`.
+It needs a windowed run, since the probe fills from `render()`. `|N|` away from
+1.0 means the bone transform is scaling, which inflates every dot product it
+feeds -- that is how the enemy-normal bug above was found.
 
 Not implemented, deliberately:
 

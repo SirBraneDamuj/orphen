@@ -115,7 +115,6 @@ namespace orphen::port
     printGleamReport_ = config.printGleamReport;
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
-    mapViewer_.mutableSceneLighting().applyGleamPass = config.applyGleamPass;
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
@@ -377,7 +376,6 @@ namespace orphen::port
     // carried across or a scene change would silently turn them back off.
     lighting.applyLightFloor = mapViewer_.sceneLighting().applyLightFloor;
     lighting.applyUnlitFlag = mapViewer_.sceneLighting().applyUnlitFlag;
-    lighting.applyGleamPass = mapViewer_.sceneLighting().applyGleamPass;
     mapViewer_.setSceneLighting(lighting);
   }
 
@@ -1351,7 +1349,6 @@ namespace orphen::port
               << "[render] lighting toggles: floor="
               << (mapViewer_.sceneLighting().applyLightFloor ? "on" : "off")
               << " unlit=" << (mapViewer_.sceneLighting().applyUnlitFlag ? "on" : "off")
-              << " gleam=" << (mapViewer_.sceneLighting().applyGleamPass ? "on" : "off")
               << '\n'
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
