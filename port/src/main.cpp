@@ -1,8 +1,11 @@
 #include "platform/sdl_gl_window.h"
 #include "harness/map_viewer.h"
+#include "harness/audio_device.h"
 #include "runtime/port_runtime.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -100,6 +103,54 @@ namespace
       if (argument == "--actor-report")
       {
         config.printActorReport = true;
+        continue;
+      }
+      if (argument == "--sound-report")
+      {
+        config.printSoundReport = true;
+        continue;
+      }
+      if (argument == "--sound-dump")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a path");
+        }
+        config.soundDumpPath = argv[++argumentIndex];
+        continue;
+      }
+      if (argument == "--hold-stick")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--hold-stick needs <angle>,<magnitude>");
+        }
+        const std::string value = argv[++argumentIndex];
+        const std::size_t comma = value.find(',');
+        const float angle = std::stof(value.substr(0, comma));
+        const float magnitude = comma == std::string::npos ? 128.0f : std::stof(value.substr(comma + 1));
+        config.holdStick = std::make_pair(angle, magnitude);
+        continue;
+      }
+      if (argument == "--window")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--window needs <width>x<height>");
+        }
+        const std::string value = argv[++argumentIndex];
+        const std::size_t cross = value.find('x');
+        if (cross == std::string::npos)
+        {
+          throw std::runtime_error("--window needs <width>x<height>");
+        }
+        config.windowWidth = std::stoi(value.substr(0, cross));
+        config.windowHeight = std::stoi(value.substr(cross + 1));
+        continue;
+      }
+      if (argument == "--no-audio")
+      {
+        config.audio = false;
         continue;
       }
       if (argument == "--probe")
@@ -254,7 +305,23 @@ namespace
         {
           throw std::runtime_error(std::string(argument) + " requires a frame number");
         }
-        config.pressConfirmFrame = static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
+        // Comma-separated, so one run can open a chest and then dismiss the
+        // caption it raises.
+        const std::string frames{argv[++argumentIndex]};
+        for (std::size_t start = 0; start < frames.size();)
+        {
+          const std::size_t comma = frames.find(',', start);
+          const std::string one = frames.substr(start, comma - start);
+          if (!one.empty())
+          {
+            config.pressConfirmFrames.push_back(static_cast<std::uint32_t>(std::stoul(one)));
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
         continue;
       }
       if (argument == "--cycle-map-every")
@@ -410,17 +477,33 @@ int main(int argc, char **argv)
       orphen::port::PortRuntime runtime;
       runtime.initialize(config);
 
+      // --sound-dump. One frame of mixer output per simulation step, which is
+      // the same schedule a 60 Hz device would pull at.
+      const std::size_t framesPerStep =
+          static_cast<std::size_t>(orphen::ported::sound::kSpuBaseSampleRate / 60.0f);
+      std::vector<float> soundDump;
+      std::vector<float> stepMix(framesPerStep * 2, 0.0f);
+
       orphen::port::InputSnapshot input;
       for (std::uint32_t frameIndex = 0; frameIndex < config.headlessFrameCount; ++frameIndex)
       {
-        // --press-confirm fires Cross on one frame, edge-triggered the same way
-        // the window path does, so the interaction probe can be exercised
-        // without a pad or a window.
+        // --press-confirm fires Cross on the listed frames, edge-triggered the
+        // same way the window path does, so the interaction probe can be
+        // exercised without a pad or a window.
         constexpr std::uint16_t kRawPadCross = 0x0040;
-        const bool pressThisFrame = config.pressConfirmFrame != 0 &&
-                                    frameIndex + 1 == config.pressConfirmFrame;
+        const bool pressThisFrame =
+            std::find(config.pressConfirmFrames.begin(), config.pressConfirmFrames.end(),
+                      frameIndex + 1) != config.pressConfirmFrames.end();
         input.rawPressedPad = pressThisFrame ? kRawPadCross : 0;
         input.rawHeldPad = input.rawPressedPad;
+
+        if (config.holdStick.has_value())
+        {
+          input.stickAngle = config.holdStick->first;
+          input.stickMagnitude = config.holdStick->second;
+          input.moveX = std::cos(input.stickAngle);
+          input.moveY = std::sin(input.stickAngle);
+        }
 
         // Edge-triggered the same way the window path delivers it, so the
         // scene reload runs exactly once per request.
@@ -431,6 +514,25 @@ int main(int argc, char **argv)
         {
           break;
         }
+
+        if (!config.soundDumpPath.empty())
+        {
+          runtime.soundEngine().mix(stepMix.data(), framesPerStep);
+          soundDump.insert(soundDump.end(), stepMix.begin(), stepMix.end());
+        }
+        else
+        {
+          // Nothing is mixing, so the queue would otherwise grow for the whole
+          // run.
+          runtime.soundEngine().drainPendingKeyOns();
+        }
+      }
+      if (!config.soundDumpPath.empty() &&
+          orphen::harness::writeStereoWav(config.soundDumpPath, soundDump,
+                                          static_cast<int>(orphen::ported::sound::kSpuBaseSampleRate)))
+      {
+        std::cout << "[snd] wrote " << config.soundDumpPath << " ("
+                  << soundDump.size() / 2 << " frames)\n";
       }
       runtime.printExitReports();
       return 0;
@@ -438,10 +540,23 @@ int main(int argc, char **argv)
 
     // 4:3, the shape the game was displayed at. The 3D viewport letterboxes to
     // that aspect anyway, so this just avoids shipping default bars.
-    orphen::port::SdlGlWindow window({"Orphen Native Port Harness", 960, 720, config.vsync});
+    orphen::port::SdlGlWindow window(
+        {"Orphen Native Port Harness", config.windowWidth, config.windowHeight, config.vsync});
     orphen::port::PortRuntime runtime;
 
     runtime.initialize(config);
+
+    // Sound. Windowed runs only -- a headless --frames run must not depend on an
+    // audio device existing, and drains the queue itself instead. Capture runs
+    // do open one, so the same command that checks a frame also exercises the
+    // mixer; the audio thread cannot reach anything the capture compares.
+    orphen::harness::AudioDevice audio;
+    if (config.audio)
+    {
+      std::cout << (audio.open(&runtime.soundEngine())
+                        ? "[snd] audio device open at 48 kHz\n"
+                        : "[snd] no audio device; the port runs silent\n");
+    }
 
     // The original is a 60 Hz title and every ported constant is per-frame, so
     // the simulation runs on a fixed step decoupled from the render rate. See
@@ -505,6 +620,18 @@ int main(int argc, char **argv)
       // Edge-triggered inputs must fire on exactly one simulation step even when
       // a render frame drives several. Held axes carry across every step.
       orphen::port::InputSnapshot stepInput = input;
+
+      // --press-confirm, so a capture run can reach the interaction path the
+      // same way --frames does. Only meaningful alongside --screenshot, where
+      // the step schedule is fixed and the frame number means something.
+      if (std::find(config.pressConfirmFrames.begin(), config.pressConfirmFrames.end(),
+                    renderedFrames + 1) != config.pressConfirmFrames.end())
+      {
+        constexpr std::uint16_t kRawPadCross = 0x0040;
+        stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCross);
+        stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCross);
+      }
+
       const auto simStart = std::chrono::steady_clock::now();
       while (running && accumulatedSeconds >= kFixedStepSeconds)
       {

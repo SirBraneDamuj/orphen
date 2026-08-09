@@ -10,6 +10,7 @@
 #include "ported/render/original_map_visibility.h"
 #include "ported/render/original_view_projection.h"
 #include "ported/render/scene_lighting.h"
+#include "ported/text/original_dialogue_text.h"
 #include "runtime/player_view_state.h"
 #include "runtime/scene_object_view.h"
 
@@ -152,6 +153,16 @@ namespace orphen::harness
     void resetCamera();
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
     void render(int framebufferWidth, int framebufferHeight) const;
+    // FUN_0025d0e0's output: the full-screen fade quad's colour and coverage.
+    // Drawn over the scene and under both debug overlays, which is where the
+    // original's own overlay sits relative to the debug text.
+    void setScreenFadeOverlay(std::uint32_t packedRgb, std::uint8_t alpha);
+
+    // The dialogue system's sprite list for this frame -- FUN_00237fc0's
+    // 300-entry glyph array, reduced to what is actually placed. Drawn over the
+    // fade, out of the texture slots, in the order given. Empty hides it.
+    void setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites);
+
     void setHudLines(std::vector<std::string> lines);
     // FUN_00268270's placed glyphs for this frame, drained from the ported
     // debug text buffer by PortRuntime on the simulation step.
@@ -226,11 +237,17 @@ namespace orphen::harness
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
     std::vector<orphen::ported::debug::DebugGlyph> originalDebugGlyphs_;
-    bool hudVisible_ = true;
+    std::uint32_t screenFadeRgb_ = 0;
+    std::uint8_t screenFadeAlpha_ = 0;
+    std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
+    // H: the harness's own screen-space text. Off by default -- it covers the
+    // game's picture, and the game has a debug overlay of its own.
+    bool hudVisible_ = false;
     // B: the in-world debug drawing -- magenta collision boxes, entity labels,
     // the lead player's box and ground triangle, and the origin axes. Separate
-    // from the HUD, which is screen-space text.
-    bool debugOverlayVisible_ = true;
+    // from the HUD, which is screen-space text. Off by default for the same
+    // reason.
+    bool debugOverlayVisible_ = false;
     bool wireframe_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);
@@ -238,6 +255,18 @@ namespace orphen::harness
     void releaseUploadedTextures() const;
     void ensureTexturesUploaded() const;
     void ensureSlotTexturesUploaded() const;
+    // The 4:3 box the game's picture occupies inside the window.
+    struct ViewportRect
+    {
+      int x = 0;
+      int y = 0;
+      int width = 0;
+      int height = 0;
+    };
+    static ViewportRect gameViewportRect(int framebufferWidth, int framebufferHeight);
+    // FUN_00239020's sprites, fitted to the framebuffer the same way the
+    // ported debug overlay is.
+    void drawDialogueSprites(int framebufferWidth, int framebufferHeight) const;
     void applyFogState(bool enabled) const;
   };
 

@@ -35,6 +35,8 @@ add_executable(orphen_port)
 target_sources(orphen_port
     PRIVATE
         src/main.cpp
+    src/harness/audio_device.cpp
+    src/harness/audio_device.h
     src/harness/debug_text.cpp
     src/harness/debug_text.h
     src/harness/entity_probe.cpp
@@ -55,6 +57,20 @@ target_sources(orphen_port
         src/ported/debug/original_debug_text.h
         src/ported/debug/original_position_display.cpp
         src/ported/debug/original_position_display.h
+        src/ported/player/original_chest_cutscene.cpp
+        src/ported/player/original_chest_cutscene.h
+        src/ported/player/original_item_window.cpp
+        src/ported/player/original_item_window.h
+        src/ported/resource/item_database.cpp
+        src/ported/resource/item_database.h
+        src/ported/sound/original_sound_bank.cpp
+        src/ported/sound/original_sound_bank.h
+        src/ported/sound/original_sound_engine.cpp
+        src/ported/sound/original_sound_engine.h
+        src/ported/text/original_dialogue_text.cpp
+        src/ported/text/original_dialogue_text.h
+        src/ported/render/original_screen_fade.cpp
+        src/ported/render/original_screen_fade.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp
@@ -83,6 +99,8 @@ target_sources(orphen_port
     src/ported/entity/actor_frame_update.cpp
     src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h
+    src/ported/entity/original_entity_sound.cpp
+    src/ported/entity/original_entity_sound.h
     src/ported/entity/actor_trace.cpp
     src/ported/entity/actor_trace.h
     src/ported/player/original_interaction.cpp
@@ -129,6 +147,8 @@ target_sources(orphen_port
     src/ported/input/original_analog_stick.h
     src/ported/camera/original_field_camera.cpp
     src/ported/camera/original_field_camera.h
+    src/ported/camera/original_camera_path.cpp
+    src/ported/camera/original_camera_path.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime.h
         src/runtime/original_lead_player.cpp

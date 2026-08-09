@@ -3,6 +3,7 @@
 #include "ported/script/object_registers.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace orphen::ported::entity
@@ -18,6 +19,31 @@ namespace orphen::ported::entity
     constexpr std::uint16_t kHidden02 = 0x0800;    // +0x02
     constexpr std::uint16_t kSuspended04 = 0x4000; // +0x04
     constexpr std::uint16_t kFading04 = 0x0800;    // +0x04
+
+    // FUN_002d1ea8's camera flourish, from the constant block at 0x00354668.
+    constexpr float fGpffffa6f8_firstSwing = 1.570796012878418f;   // pi/2
+    constexpr float fGpffffa6fc_secondSwing = 0.785398006439209f;  // pi/4
+    constexpr float fGpffffa700_riseAtEnd = 0.2f;
+    constexpr float fGpffffa704_lookHeight = 0.3f;
+    // Inline in FUN_002d1ea8: the eye closes a quarter unit by the middle
+    // control point and another quarter by the last.
+    constexpr float kSwingCloseIn = 0.25f;
+    // The zoom curve, in pre-FUN_00218230 units. 1.0 is the shipped projection
+    // scale, so this ends at three times it.
+    constexpr float kZoomStart = 1.5f;
+    constexpr float kZoomMiddle = 2.0f;
+    constexpr float kZoomEnd = 3.0f;
+    // FUN_002d1ea8:97. 0x1680 ticks is 180 nominal frames -- three seconds.
+    constexpr std::uint16_t kSwingDuration = 0x1680;
+    // cGpffffb6e1 == 0x23, the script camera. Without one already installed the
+    // chest leaves the camera alone; that is the "no item" look.
+    constexpr std::uint8_t kScriptCameraSubMode = 0x23;
+    // FUN_002d59e0 == FUN_00267d38(0x9F, chest): the contents cue, bank 0
+    // program 11 note 60. It plays whether or not the chest has an item.
+    constexpr std::uint16_t kChestContentsCue = 0x9F;
+    // FUN_002cde50 / FUN_002cde40: type 0x62's wing beat and its death cry.
+    constexpr std::uint16_t kEnemyWingCue = 0x196;
+    constexpr std::uint16_t kEnemyDeathCue = 0x197;
   } // namespace
 
   bool FUN_0023a068_freeze_gate(OriginalEntity &entity, std::uint32_t frameTicks)
@@ -94,6 +120,53 @@ namespace orphen::ported::entity
     pool.releaseSlot(slot);
   }
 
+  namespace
+  {
+    // FUN_002d1ea8:46-91. Three control points for the eye and one for the
+    // look-at, handed to FUN_00217fe8 as a three-second path.
+    //
+    // The geometry is all relative to where the player's cutscene left the
+    // camera: the swing keeps the current elevation, orbits 90 degrees and then
+    // another 45 about the chest, closes a quarter unit at each step, and rises
+    // 0.2 at the end. The look-at drops from the player's chest height to the
+    // treasure's, 0.3 above the chest's own origin.
+    void startContentsCameraSwing(OriginalEntity &entity,
+                                  orphen::ported::camera::OriginalFieldCamera &camera)
+    {
+      const auto &pose = camera.pose();
+      const float toEyeX = pose.eye.x - pose.target.x;
+      const float toEyeY = pose.eye.y - pose.target.y;
+      const float distance = std::sqrt(toEyeX * toEyeX + toEyeY * toEyeY) - kSwingCloseIn;
+      const float azimuth = std::atan2(toEyeY, toEyeX);
+
+      const float firstAngle =
+          orphen::ported::script::FUN_00216690_wrapAngle(azimuth - fGpffffa6f8_firstSwing);
+      const float secondAngle =
+          orphen::ported::script::FUN_00216690_wrapAngle(firstAngle - fGpffffa6fc_secondSwing);
+
+      const std::array<orphen::ported::psm2::Vec3, 3> eyePoints{{
+          pose.eye,
+          {entity.positionX20 + distance * std::cos(firstAngle),
+           entity.positionZ24 + distance * std::sin(firstAngle),
+           pose.eye.z},
+          {entity.positionX20 + (distance - kSwingCloseIn) * std::cos(secondAngle),
+           entity.positionZ24 + (distance - kSwingCloseIn) * std::sin(secondAngle),
+           pose.eye.z + fGpffffa700_riseAtEnd},
+      }};
+      const std::array<orphen::ported::psm2::Vec3, 1> lookAtPoints{{
+          {entity.positionX20, entity.positionZ24, entity.positionY28 + fGpffffa704_lookHeight},
+      }};
+      const std::array<float, 3> rollValues{{0.0f, 0.0f, 0.0f}};
+      const std::array<float, 3> zoomScales{{kZoomStart, kZoomMiddle, kZoomEnd}};
+
+      camera.FUN_00217e18_release_manual_camera(false);
+      camera.FUN_00217fe8_set_camera_path(eyePoints, rollValues, zoomScales, lookAtPoints);
+
+      entity.effectTimer19c = 0;
+      entity.effectActive19e = 1;
+    }
+  } // namespace
+
   void FUN_002d1ea8_treasure_chest(OriginalEntity &entity, const ActorEnvironment &environment)
   {
     const auto flagSet = [&environment](std::uint32_t flagId) {
@@ -128,15 +201,33 @@ namespace orphen::ported::entity
       return; // 6 is terminal
     }
 
-    // Opening. The original's contents effect is gated on cGpffffb6e1 == 0x23, a
-    // global mode the port never enters, and its body builds a GS packet at
-    // 0x70000000. The port has no primitive submission path, so that branch is
-    // deliberately absent; with it absent +0x19E is never set and the timer tail
-    // below never runs either. Both are kept so the shape survives.
-    constexpr std::uint16_t kEffectDuration = 0x1680; // 0x120 frames at 0x20 ticks
+    // Opening. On the keyframe that carries the 0x100 event marker the chest
+    // takes the camera off the player's cutscene and swings it round itself --
+    // but only when it has something in it. That is the whole difference
+    // between the two chest cutscenes: an empty chest never reaches this, so
+    // its camera stands where FUN_00254db0 put it.
+    if ((entity.flagsAa & 0x0100) != 0 && (entity.flags06 & 0x0008) != 0)
+    {
+      if (environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kChestContentsCue, entity); // FUN_002d59e0
+      }
+      if (entity.recordId130 >= 0 && environment.camera != nullptr &&
+          environment.camera->cGpffffb6e1_subMode() == kScriptCameraSubMode)
+      {
+        startContentsCameraSwing(entity, *environment.camera);
+      }
+    }
+
     if (entity.effectActive19e != 0)
     {
-      if (entity.effectTimer19c < kEffectDuration)
+      // FUN_00218158 is called with the timer *before* it advances, so the
+      // first frame samples the path at exactly zero.
+      if (environment.camera != nullptr)
+      {
+        environment.camera->FUN_00218158_step_camera_path(entity.effectTimer19c, kSwingDuration);
+      }
+      if (entity.effectTimer19c < kSwingDuration)
       {
         entity.effectTimer19c = static_cast<std::uint16_t>(entity.effectTimer19c + environment.frameTicks);
       }
@@ -455,6 +546,10 @@ namespace orphen::ported::entity
         entity.halfword04 = static_cast<std::uint16_t>((entity.halfword04 & 0xFFF7u) | 0x10u);
         entity.collisionFlags0c &= ~1u;
         entity.fadeLevel134 = 0x7C;
+        if (environment.FUN_00267d38_playSound)
+        {
+          environment.FUN_00267d38_playSound(kEnemyDeathCue, entity); // FUN_002cde40
+        }
       }
       entity.fadeColor138 = 0xC0;
       entity.hitFlash1c2 = 0x1E0;
@@ -488,12 +583,27 @@ namespace orphen::ported::entity
       FUN_002cd3a0_enemy62_chase(entity, environment);
     }
 
-    // FUN_002cd0a0 lines 39-40: the flap runs after the state handler, gated on
-    // +0x08 bit 0 being clear and the state not being 6 (the death stagger).
-    // FUN_002cde50, the periodic re-roll the same branch drives, is not ported.
+    // FUN_002cd0a0 lines 39-52: the flap runs after the state handler, gated on
+    // +0x08 bit 0 being clear and the state not being 6 (the death stagger),
+    // and the same branch retriggers the wing cue.
     if ((entity.halfword08 & 1) == 0 && entity.state60 != 6)
     {
       FUN_002cdb28_wing_flap(entity, environment);
+
+      // The buzz. +0x1C6 is a period, rolled once to 0x18..0x1F frames, and
+      // the cue fires whenever the *global* frame counter divides by it -- so
+      // each enemy drones at its own rate and they beat against each other.
+      // The waveform is 1.3 s long against a period of 24..31 frames, so the
+      // repeats overlap into a continuous sound rather than a pulse.
+      if (entity.repathTimer1c6 == 0 && environment.random)
+      {
+        entity.repathTimer1c6 = static_cast<std::uint16_t>((environment.random() & 7) + 0x18);
+      }
+      if (entity.repathTimer1c6 != 0 && environment.FUN_00267d38_playSound &&
+          environment.DAT_003555b4_frameCounter % entity.repathTimer1c6 == 0)
+      {
+        environment.FUN_00267d38_playSound(kEnemyWingCue, entity); // FUN_002cde50
+      }
     }
   }
 

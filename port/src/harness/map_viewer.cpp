@@ -103,6 +103,11 @@ namespace orphen::harness
     // and threading the block through every one of them buys nothing.
     const orphen::ported::render::SceneLighting *g_sceneLighting = nullptr;
 
+    // Entity +0x134 for the model currently being drawn, already turned into a
+    // 0..1 multiplier. 1.0 is the not-fading case, which is what a zero +0x134
+    // means -- FUN_0020c810:142 substitutes 0x80 for it.
+    float g_entityFadeAlpha = 1.0f;
+
     // Set only while a diagnostic run is collecting, so --gleam-report can
     // report the specular pass's dot products and normal lengths without
     // needing a second traversal.
@@ -738,6 +743,11 @@ namespace orphen::harness
         return;
       }
 
+      // FUN_0020c810:140. A zero +0x134 is "not fading" and becomes 0x80.
+      g_entityFadeAlpha = object.fadeLevel == 0
+                              ? 1.0f
+                              : std::min(1.0f, static_cast<float>(object.fadeLevel) / 128.0f);
+
       // **Models are drawn double-sided.** The backface culling set up for the
       // map does not belong to this path and produces holes here: it was
       // derived from FUN_0022c6e8's corner order and the map VU1 program at
@@ -1048,7 +1058,7 @@ namespace orphen::harness
           // opaque, and anything else is the value straight out of the low
           // seven bits.
           int mode = 0;
-          float passAlpha = 1.0f;
+          float passAlpha = g_entityFadeAlpha;
           if (subdraw != nullptr)
           {
             mode = static_cast<int>(subdraw->blendMode());
@@ -1065,6 +1075,15 @@ namespace orphen::harness
               {
                 mode = 0;
               }
+              passAlpha *= g_entityFadeAlpha;
+            }
+            // A fading entity has to blend whatever its passes say. The
+            // original gets this for free: +0x134 rides in the draw header and
+            // VU1 folds it into the vertex alpha before the GS's own ALPHA
+            // register ever sees it.
+            if (mode == 0 && g_entityFadeAlpha < 1.0f)
+            {
+              mode = 1;
             }
           }
           setBlendMode(mode);
@@ -1912,6 +1931,114 @@ namespace orphen::harness
     hudLines_ = std::move(lines);
   }
 
+  void MapViewer::setScreenFadeOverlay(std::uint32_t packedRgb, std::uint8_t alpha)
+  {
+    screenFadeRgb_ = packedRgb;
+    screenFadeAlpha_ = alpha;
+  }
+
+  void MapViewer::setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites)
+  {
+    dialogueSprites_ = std::move(sprites);
+  }
+
+  void MapViewer::drawDialogueSprites(int framebufferWidth, int framebufferHeight) const
+  {
+    if (textureSlots_ == nullptr || framebufferWidth <= 0 || framebufferHeight <= 0)
+    {
+      return;
+    }
+
+    // The same fit the ported debug overlay uses: the original's 640x448
+    // picture, centred and uniformly scaled, so the two overlays agree with
+    // each other about where the edges of the screen are.
+    namespace debugText = orphen::ported::debug::text;
+    const float scale = std::min(static_cast<float>(framebufferWidth) / debugText::kScreenWidth,
+                                 static_cast<float>(framebufferHeight) / debugText::kScreenHeight);
+    const float offsetX = (framebufferWidth - debugText::kScreenWidth * scale) * 0.5f;
+    const float offsetY = (framebufferHeight - debugText::kScreenHeight * scale) * 0.5f;
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_FOG);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Every entry the dialogue system builds carries 0x80808080, which is x1.0
+    // through the GS's (Ct * Cv) >> 7.
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    unsigned int boundTexture = 0;
+    for (const auto &sprite : dialogueSprites_)
+    {
+      const auto slot = static_cast<std::size_t>(sprite.textureSlot);
+      if (slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
+      {
+        continue;
+      }
+      const auto &texture = textureSlots_->slot(slot).texture;
+      if (texture.width == 0 || texture.height == 0)
+      {
+        continue;
+      }
+
+      if (slotTextureIds_[slot] != boundTexture)
+      {
+        boundTexture = slotTextureIds_[slot];
+        glBindTexture(GL_TEXTURE_2D, boundTexture);
+      }
+
+      const float u0 = static_cast<float>(sprite.u) / texture.width;
+      const float u1 = static_cast<float>(sprite.u + sprite.sourceWidth) / texture.width;
+      const float v0 = static_cast<float>(sprite.v) / texture.height;
+      const float v1 = static_cast<float>(sprite.v + sprite.sourceHeight) / texture.height;
+
+      const float left = offsetX + sprite.x * scale;
+      const float top = offsetY + sprite.y * scale;
+      const float right = left + sprite.width * scale;
+      const float bottom = top + sprite.height * scale;
+
+      glBegin(GL_QUADS);
+      glTexCoord2f(u0, v0);
+      glVertex2f(left, top);
+      glTexCoord2f(u1, v0);
+      glVertex2f(right, top);
+      glTexCoord2f(u1, v1);
+      glVertex2f(right, bottom);
+      glTexCoord2f(u0, v1);
+      glVertex2f(left, bottom);
+      glEnd();
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_BLEND);
+    glDisable(GL_TEXTURE_2D);
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
   void MapViewer::setOriginalDebugGlyphs(std::vector<orphen::ported::debug::DebugGlyph> glyphs)
   {
     originalDebugGlyphs_ = std::move(glyphs);
@@ -2072,6 +2199,24 @@ namespace orphen::harness
     followCameraPose_ = {};
   }
 
+  // The 4:3 box the game's picture occupies inside the window, and the bars
+  // around it. render() sets the 3D viewport to this and the fade quad covers
+  // exactly the same rectangle -- FUN_0025d0e0's sprite is drawn in GS screen
+  // space, so it covers the picture and nothing else. Letting it cover the
+  // whole window whited out the bars too, which the original has no way to do.
+  MapViewer::ViewportRect MapViewer::gameViewportRect(int framebufferWidth, int framebufferHeight)
+  {
+    const float aspect = orphen::ported::render::constants::kDisplayAspect;
+    int width = framebufferWidth;
+    int height = static_cast<int>(static_cast<float>(framebufferWidth) / aspect + 0.5f);
+    if (height > framebufferHeight)
+    {
+      height = framebufferHeight;
+      width = static_cast<int>(static_cast<float>(framebufferHeight) * aspect + 0.5f);
+    }
+    return {(framebufferWidth - width) / 2, (framebufferHeight - height) / 2, width, height};
+  }
+
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
   {
     if (input.toggleHudRequested)
@@ -2154,16 +2299,11 @@ namespace orphen::harness
     // which is screen-space and belongs to the harness rather than the game.
     if (useOriginalCamera)
     {
-      const float aspect = orphen::ported::render::constants::kDisplayAspect;
-      int viewWidth = framebufferWidth;
-      int viewHeight = static_cast<int>(static_cast<float>(framebufferWidth) / aspect + 0.5f);
-      if (viewHeight > framebufferHeight)
-      {
-        viewHeight = framebufferHeight;
-        viewWidth = static_cast<int>(static_cast<float>(framebufferHeight) * aspect + 0.5f);
-      }
-      const int viewX = (framebufferWidth - viewWidth) / 2;
-      const int viewY = (framebufferHeight - viewHeight) / 2;
+      const ViewportRect view = gameViewportRect(framebufferWidth, framebufferHeight);
+      const int viewX = view.x;
+      const int viewY = view.y;
+      const int viewWidth = view.width;
+      const int viewHeight = view.height;
       glViewport(viewX, viewY, viewWidth, viewHeight);
 
       // Clear the 3D area to the fog colour rather than to the window's
@@ -2326,6 +2466,85 @@ namespace orphen::harness
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
     glViewport(0, 0, framebufferWidth, framebufferHeight);
+
+    if (screenFadeAlpha_ != 0)
+    {
+      // FUN_0025d0e0's quad. It covers the scene, so it goes down before the
+      // debug overlays -- the original's debug text is drawn by FUN_00268270
+      // after the fade for the same reason.
+      //
+      // **Only over the game's picture.** The original's sprite is a GS
+      // primitive inside the 640x224 frame; there is nothing outside that frame
+      // for it to cover. The port's frame is the letterboxed 4:3 box, so the
+      // quad is scissored to it and the bars stay the window's own colour --
+      // drawn full-window, the fade to white washed the bars out too.
+      const ViewportRect gameView =
+          useOriginalCamera ? gameViewportRect(framebufferWidth, framebufferHeight)
+                            : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
+      const GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+      GLint previousScissor[4] = {0, 0, 0, 0};
+      glGetIntegerv(GL_SCISSOR_BOX, previousScissor);
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(gameView.x, gameView.y, gameView.width, gameView.height);
+
+      glMatrixMode(GL_PROJECTION);
+      glPushMatrix();
+      glLoadIdentity();
+      glOrtho(0.0, 1.0, 1.0, 0.0, -1.0, 1.0);
+      glMatrixMode(GL_MODELVIEW);
+      glPushMatrix();
+      glLoadIdentity();
+
+      const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+      const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
+      const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_TEXTURE_2D);
+      glDisable(GL_FOG);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+      glColor4f((screenFadeRgb_ & 0xFF) / 255.0f,
+                ((screenFadeRgb_ >> 8) & 0xFF) / 255.0f,
+                ((screenFadeRgb_ >> 16) & 0xFF) / 255.0f,
+                screenFadeAlpha_ / 255.0f);
+      glBegin(GL_QUADS);
+      glVertex2f(0.0f, 0.0f);
+      glVertex2f(1.0f, 0.0f);
+      glVertex2f(1.0f, 1.0f);
+      glVertex2f(0.0f, 1.0f);
+      glEnd();
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+      if (fogWasEnabled == GL_TRUE)
+      {
+        glEnable(GL_FOG);
+      }
+      if (textureWasEnabled == GL_TRUE)
+      {
+        glEnable(GL_TEXTURE_2D);
+      }
+      if (depthWasEnabled == GL_TRUE)
+      {
+        glEnable(GL_DEPTH_TEST);
+      }
+      glScissor(previousScissor[0], previousScissor[1], previousScissor[2], previousScissor[3]);
+      if (scissorWasEnabled != GL_TRUE)
+      {
+        glDisable(GL_SCISSOR_TEST);
+      }
+
+      glMatrixMode(GL_MODELVIEW);
+      glPopMatrix();
+      glMatrixMode(GL_PROJECTION);
+      glPopMatrix();
+      glMatrixMode(GL_MODELVIEW);
+    }
+
+    if (!dialogueSprites_.empty())
+    {
+      drawDialogueSprites(framebufferWidth, framebufferHeight);
+    }
 
     {
       PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->hudMicros : nullptr);

@@ -7,6 +7,12 @@
 #include "ported/camera/original_field_camera.h"
 #include "ported/debug/original_debug_text.h"
 #include "ported/debug/original_position_display.h"
+#include "ported/player/original_chest_cutscene.h"
+#include "ported/player/original_item_window.h"
+#include "ported/sound/original_sound_engine.h"
+#include "ported/text/original_dialogue_text.h"
+#include "ported/resource/item_database.h"
+#include "ported/render/original_screen_fade.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"
@@ -23,6 +29,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -44,6 +51,8 @@ namespace orphen::port
     bool printScriptReport = false;
     bool printActorReport = false;
     bool printRenderReport = false;
+    // --sound-report: every cue the frame loop asked for, and what happened.
+    bool printSoundReport = false;
     // --model-report: parse every grp record in the bundle and print its counts.
     bool printModelReport = false;
     // Lighting behaviours derived from VU1 this session. Off by default so the
@@ -59,6 +68,17 @@ namespace orphen::port
     bool printFrameStats = false;
     // --no-vsync. Read by main() when it opens the window, not by the runtime.
     bool vsync = true;
+    // --no-audio. Read by main(): headless and capture runs never open a
+    // device anyway, so this only matters for a normal windowed run.
+    bool audio = true;
+    // --window <w>x<h>. The default is 4:3, which is the shape the game was
+    // displayed at and so has no letterbox bars; anything else does, which is
+    // the only way to see whether something respects them.
+    int windowWidth = 960;
+    int windowHeight = 720;
+    // --sound-dump <path>: mix the frame loop's cues into a WAV. Headless only;
+    // it is how the mixer gets checked without a speaker.
+    std::string soundDumpPath;
     // --screenshot <path>[:<frame>]. Runs the window on a fixed one-simulation-
     // step-per-frame schedule so the captured frame is reproducible, writes a
     // PPM and exits. Read by main().
@@ -85,8 +105,15 @@ namespace orphen::port
     // behaviour; runs are deterministic either way.
     bool runScriptTick = true;
     std::uint32_t headlessFrameCount = 0;
-    // 1-based frame on which --frames should press Cross, or 0 for never.
-    std::uint32_t pressConfirmFrame = 0;
+    // 1-based frames on which a headless or capture run should press Cross.
+    // A list, because the chest cutscene needs two: one to open the chest and
+    // one to dismiss the item caption.
+    std::vector<std::uint32_t> pressConfirmFrames;
+    // --hold-stick <angle>,<magnitude>: drive the analog stick for every
+    // headless or capture frame, so movement-driven behaviour -- footsteps
+    // above all -- is reachable without a pad. Magnitude is the original's
+    // 0..128; above 100 is a run.
+    std::optional<std::pair<float, float>> holdStick;
     // Fires the next-map request every N headless frames, so the map-cycle
     // scene reload can be exercised without a window.
     std::uint32_t cycleMapEveryFrames = 0;
@@ -229,6 +256,49 @@ namespace orphen::port
     void updateHud(const InputSnapshot &input, std::uint32_t frameTicks);
     // FUN_002239c8's POSITION_DISP block, then FUN_00268270's layout pass.
     void updateOriginalDebugOverlay();
+    // The player-state handler for the chest cutscene, installed on the
+    // controller. Returns true when it owned the frame.
+    bool stepScriptedPlayerState(std::uint32_t frameTicks);
+
+    // DAT_00354d2c / iGpffffadbc. 0 is the field frame (FUN_00224218 plus the
+    // rest of FUN_002239c8); 6 is the cutscene frame (FUN_002245d8), which
+    // runs the player and the actors but neither the scene script nor the
+    // field camera.
+    std::uint32_t DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+    orphen::ported::render::ScreenFade DAT_00571dc0_screenFade_;
+    // DAT_00355700. FUN_00209140 hands it to VU1 as the cap on every map
+    // primitive's fade byte, against the 0x80 = x1.0 scale -- so a small
+    // non-zero value renders the world nearly black. Zero is "no cap".
+    std::uint8_t DAT_00355700_globalFadeCap_ = 0;
+    // FUN_002342c0's render-state block: while the item scene is up, the two
+    // VU1 light colours drop and the fog colour goes to black. Held as a flag
+    // rather than as three overwritten globals so applySceneEnvironment stays
+    // the single place the scene's own values are read.
+    bool itemSceneRenderState_ = false;
+    void setItemSceneRenderState(bool enable);
+    // FUN_00254f60's item branch, and the caption it ends with.
+    bool buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId);
+    orphen::ported::player::ItemWindow itemWindow_;
+    orphen::ported::resource::ItemDatabase itemDatabase_;
+    // The proportional width table FUN_00238c90 measures out of slots 0x2E and
+    // 0x2F at boot, and this frame's glyph list built against it.
+    orphen::ported::text::DialogueFont dialogueFont_;
+    std::vector<orphen::ported::text::DialogueSprite> buildDialogueSprites() const;
+
+    // FUN_00228e28:81's cue table lives in SCR.BIN resource 199, alongside the
+    // item names in resource 1.
+    static constexpr std::uint32_t kScrSoundCueResource = 199;
+    orphen::ported::sound::SoundEngine soundEngine_;
+    bool printSoundReport_ = false;
+    void loadSoundData();
+    void FUN_0022a418_stamp_lead_player_flags();
+    void printSoundReport() const;
+
+  public:
+    // main() owns the audio device, because only a windowed run has one.
+    orphen::ported::sound::SoundEngine &soundEngine() { return soundEngine_; }
+
+  private:
 
     // DAT_00572c38 / DAT_003551dc, the debug overlay's text buffer.
     orphen::ported::debug::DebugTextBuffer DAT_00572c38_debugText_;

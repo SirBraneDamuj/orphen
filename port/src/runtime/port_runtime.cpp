@@ -60,6 +60,17 @@ namespace orphen::port
       case 0: return "IDLE";
       case 1: return "MOVING";
       case 2: return "AIR";
+      // The chest cutscene, in the order it runs them.
+      case 0x0C: return "CHEST-FADEOUT";
+      case 0x0D: return "CHEST-PLACE";
+      case 0x0E: return "CHEST-FADEIN";
+      case 0x0F: return "CHEST-OPEN";
+      case 0x10: return "CHEST-ITEM";
+      case 0x11: return "CHEST-ITEMFADE";
+      case 0x12: return "CHEST-WHITEOUT";
+      case 0x13: return "CHEST-RESTORE";
+      case 0x14: return "CHEST-LAND";
+      case 0x15: return "CHEST-WHITEIN";
       default: return "OTHER";
       }
     }
@@ -102,6 +113,13 @@ namespace orphen::port
     // Bind before reset: the lead player is pool slot 0, so the controller must
     // already be writing there when resetToMap places it.
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
+    leadPlayer_.setScriptedStateStep(
+        [this](std::uint32_t frameTicks) { return stepScriptedPlayerState(frameTicks); });
+    // The player reaches the sound engine through the same callback an actor
+    // behaviour does, so FUN_00256ff8's footsteps are not a special case.
+    leadPlayer_.setSoundPlayer(
+        [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
+        { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); });
 
     reset();
     spawnOverride_ = config.spawnOverride;
@@ -111,6 +129,7 @@ namespace orphen::port
     }
     runScriptTick_ = config.runScriptTick;
     printActorReport_ = config.printActorReport;
+    printSoundReport_ = config.printSoundReport;
     printRenderReport_ = config.printRenderReport;
     printGleamReport_ = config.printGleamReport;
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
@@ -143,6 +162,15 @@ namespace orphen::port
 
     discRoot_ = config.discRoot;
     loadMapPropDescriptors();
+
+    // FUN_00228e28:119. Optional, like the executable: without it the item
+    // caption falls back to naming the id.
+    if (!discRoot_.empty() && !itemDatabase_.load(discRoot_))
+    {
+      std::cout << "[items] SCR.BIN resource 1 not readable; item names unavailable\n";
+    }
+
+    loadSoundData();
 
     if (mapViewer_.loadedMap() != nullptr)
     {
@@ -227,6 +255,11 @@ namespace orphen::port
     environment.eventFlag = [this](std::uint32_t flagId)
     { return sceneScript_.state().FUN_00266368_eventFlag(flagId); };
     environment.descriptors = &descriptorTable_;
+    environment.camera = &fieldCamera_;
+    environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
+    environment.FUN_00267d38_playSound =
+        [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
+    { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
 
     // FUN_00216868. A plain LCG rather than the original's generator, which has
     // not been analysed; what matters here is that it is seeded once and stepped
@@ -322,6 +355,7 @@ namespace orphen::port
         return;
       }
       leadPlayer_.resetToMap(*map, orphen::ported::psm2::Vec3{x, y, z});
+      FUN_0022a418_stamp_lead_player_flags();
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
     };
 
@@ -367,9 +401,91 @@ namespace orphen::port
 
   // Push whatever survived the script into the renderer: the fog band, and the
   // light block that FUN_00200e38:121-167 uploads to VU1 memory 0x2a0..0x2a7.
+  // FUN_00254f60's item branch. The original builds the entity in place at
+  // 0x0058C260 -- pool slot 2 -- and hangs it off the chest's role-1 bone.
+  bool PortRuntime::buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId)
+  {
+    constexpr std::size_t kItemSlot = 2;
+    // FUN_00229c40(0x58c260, chest[+0x130] + 0x1F1). The 0x1F1 band shares one
+    // descriptor and indexes its model record by the raw type id, so the item
+    // id picks the model directly.
+    const std::int32_t typeId = static_cast<std::int32_t>(itemId) + 0x1F1;
+
+    auto &item = entityPool_.slot(kItemSlot);
+    entityPool_.FUN_00229c40_initialize(kItemSlot, typeId, descriptorTable_);
+
+    // The 0x1F1 band's meshes come out of ITM.BIN, which is not in every
+    // extracted disc root. Say so rather than cross-fading to an empty box --
+    // the caption still works, so the cutscene is not dropped for it.
+    const EntityModelBinding *binding = modelStore_.bindingForTypeId(typeId);
+    if (binding == nullptr || binding->model == nullptr)
+    {
+      std::cout << "[chest] item id " << itemId << " (type 0x" << std::hex << typeId << std::dec
+                << ") has no model -- ITM.BIN missing from the disc root?\n";
+    }
+
+    orphen::ported::entity::FUN_00225bc8_set_animation(item, 4);
+
+    auto &chest = entityPool_.slot(chestSlot);
+    item.facingRadians5c = chest.facingRadians5c;
+    // 0x4000 is the bit FUN_00239ce0:17 and FUN_00251ed8 both read as "do not
+    // run this entity's behavior". Without it the item runs its *usable* handler
+    // -- for a lantern that is FUN_002d4cd8, which lights the player and then
+    // deletes itself.
+    item.halfword04 = static_cast<std::uint16_t>(item.halfword04 | 0x4100);
+    item.halfword08 = static_cast<std::uint16_t>(item.halfword08 | 0x0001);
+
+    // FUN_0020dd78(chest, 1) then FUN_0020dc88: the item sits on the chest's
+    // role-1 bone. Falling back to the chest's own origin keeps it in frame
+    // when the palette is not built yet.
+    orphen::ported::psm2::Vec3 anchor{chest.positionX20, chest.positionZ24, chest.positionY28};
+    const auto &palette = DAT_00357e00_bonePalettes_[chestSlot];
+    const EntityModelBinding *chestBinding = modelStore_.bindingForTypeId(chest.typeId00);
+    if (chestBinding != nullptr && chestBinding->model != nullptr && !palette.empty())
+    {
+      const std::size_t bone =
+          orphen::ported::model::FUN_0020dd78_bone_for_role(*chestBinding->model, 1);
+      if (bone < palette.size())
+      {
+        const auto &matrix = palette[bone];
+        anchor = {matrix[12], matrix[13], matrix[14]};
+      }
+    }
+    item.positionX20 = anchor.x;
+    item.positionZ24 = anchor.y;
+    item.positionY28 = anchor.z;
+    item.groundHeight4c = item.positionY28;
+
+    // The ramp the cross-fade reads, and the level it starts at.
+    item.fadeRamp62 = 0x60;
+    item.fadeLevel134 = 3;
+    return true;
+  }
+
+  // FUN_002342c0:39-47 and the half of FUN_00233eb8 that undoes it. The item
+  // scene replaces the scene's own lighting and fog for as long as it is up.
+  void PortRuntime::setItemSceneRenderState(bool enable)
+  {
+    itemSceneRenderState_ = enable;
+    applySceneEnvironment();
+  }
+
   void PortRuntime::applySceneEnvironment()
   {
     const auto &state = sceneScript_.state();
+
+    // FUN_002342c0's block, in its own order:
+    //   DAT_0035566c = 0x404040   the ambient
+    //   DAT_00355670 = 0x808080   light 0's colour
+    //   DAT_00355674 = 0          the fog colour
+    //   DAT_003439c8 = (0, 0, -1) the light direction, straight down
+    //
+    // The fog colour is the one that shows. The global fade cap makes every
+    // map primitive nearly transparent rather than nearly black, so what the
+    // room reads as is whatever is behind it -- which is the fog-colour clear.
+    constexpr std::uint32_t kItemSceneAmbient = 0x404040;
+    constexpr std::uint32_t kItemSceneLight = 0x808080;
+    constexpr std::uint32_t kItemSceneFog = 0x000000;
 
     // 0xB8 writes DAT_0032538c and fGpffffb6b8 = DAT_00355628 together, and
     // DAT_00355628 is what the visibility pass culls against -- so a script
@@ -380,7 +496,7 @@ namespace orphen::port
       mapViewer_.setDrawDistance(state.DAT_0032538c_cameraDistance);
     }
 
-    mapViewer_.setFogColour(state.uGpffffb704_color1);
+    mapViewer_.setFogColour(itemSceneRenderState_ ? kItemSceneFog : state.uGpffffb704_color1);
     mapViewer_.setFogBand(state.fGpffffb70c_fadeNear, state.fGpffffb710_fadeFar);
 
     // FUN_00200e38:121-167 builds the two VIF unpacks that feed VU1's lighting:
@@ -393,16 +509,20 @@ namespace orphen::port
     // Only slot 0 ever gets a direction on this path, so slots 1..3 sit at zero
     // colour and contribute nothing regardless of their intensity.
     orphen::ported::render::SceneLighting lighting;
-    orphen::ported::render::SceneLighting::unpack(state.uGpffffb6fc_globalRgb,
-                                                  lighting.ambient);
-    orphen::ported::render::SceneLighting::unpack(state.uGpffffb700_vectorRgb,
-                                                  lighting.lightColour[0]);
+    orphen::ported::render::SceneLighting::unpack(
+        itemSceneRenderState_ ? kItemSceneAmbient : state.uGpffffb6fc_globalRgb,
+        lighting.ambient);
+    orphen::ported::render::SceneLighting::unpack(
+        itemSceneRenderState_ ? kItemSceneLight : state.uGpffffb700_vectorRgb,
+        lighting.lightColour[0]);
     // The EE negates the vector on upload, so the microprogram's dot product is
     // against -D and this holds the already-negated form.
-    lighting.lightDirection[0] = orphen::ported::psm2::Vec3{
-        -state.DAT_003439c8_vector[0],
-        -state.DAT_003439c8_vector[1],
-        -state.DAT_003439c8_vector[2]};
+    lighting.lightDirection[0] =
+        itemSceneRenderState_
+            ? orphen::ported::psm2::Vec3{0.0f, 0.0f, 1.0f}
+            : orphen::ported::psm2::Vec3{-state.DAT_003439c8_vector[0],
+                                         -state.DAT_003439c8_vector[1],
+                                         -state.DAT_003439c8_vector[2]};
     lighting.active = true;
     // VU1 0x0206 reads the specular pass's colour straight from 0x2a3, the same
     // quadword as light 0, so the sheen is always tinted by the scene's
@@ -466,6 +586,13 @@ namespace orphen::port
     modelStore_.setMapPropTable(&mapPropTable_, scene.has_value() ? static_cast<int>(scene->section) : -1);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
+    // FUN_00238c90, which the original runs inline in FUN_00221fd8 on the
+    // decoded buffer before it hands it to the slot. Same measurement, one
+    // step later.
+    dialogueFont_.FUN_00238c90_measure(
+        0, modelStore_.textureSlots().slot(orphen::ported::text::kFontSlotLow).texture);
+    dialogueFont_.FUN_00238c90_measure(
+        1, modelStore_.textureSlots().slot(orphen::ported::text::kFontSlotHigh).texture);
     // FUN_0022a418 lines 190-197 bind the lead player's model before the
     // scene script runs, straight through FUN_00221d20 with the default bank
     // rather than through FUN_00266118. It reads the party leader from
@@ -681,6 +808,7 @@ namespace orphen::port
     if (const auto &scriptSpawn = sceneScript_.sceneSpawn(); scriptSpawn.has_value())
     {
       leadPlayer_.resetToMap(*loadedMap, *scriptSpawn);
+      FUN_0022a418_stamp_lead_player_flags();
       fieldCamera_.FUN_00216930_install_normal_field_defaults();
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
       mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
@@ -696,6 +824,7 @@ namespace orphen::port
         continue;
       }
       leadPlayer_.resetToMap(*loadedMap, record.position);
+      FUN_0022a418_stamp_lead_player_flags();
       fieldCamera_.FUN_00216930_install_normal_field_defaults();
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
       mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
@@ -806,6 +935,47 @@ namespace orphen::port
         });
   }
 
+  // FUN_00228e28's cue table and FUN_00205118's three banks. Both are optional:
+  // a disc root without SND.BIN still runs, it just reports every cue as
+  // "bank not loaded" rather than playing it.
+  void PortRuntime::loadSoundData()
+  {
+    if (discRoot_.empty())
+    {
+      return;
+    }
+
+    orphen::harness::FlatBinArchive scr;
+    if (scr.open(discRoot_ / "SCR.BIN"))
+    {
+      const std::vector<std::uint8_t> resource = scr.decode(kScrSoundCueResource);
+      if (resource.empty() || !soundEngine_.FUN_00228e28_load_cue_table(resource))
+      {
+        std::cout << "[snd] SCR.BIN resource " << kScrSoundCueResource
+                  << " unreadable: " << soundEngine_.diagnostic() << '\n';
+      }
+    }
+
+    orphen::harness::FlatBinArchive snd;
+    if (!snd.open(discRoot_ / "SND.BIN"))
+    {
+      std::cout << "[snd] SND.BIN missing from the disc root -- cues resolve but stay silent\n";
+      return;
+    }
+    for (std::size_t bank = 0; bank < orphen::ported::sound::kBankCount; ++bank)
+    {
+      // SND resources are stored uncompressed; see FlatBinArchive::raw.
+      const std::vector<std::uint8_t> resource =
+          snd.raw(orphen::ported::sound::kBootBankResources[bank]);
+      if (resource.empty() || !soundEngine_.FUN_00205310_load_bank(bank, resource))
+      {
+        std::cout << "[snd] bank " << bank << " (SND.BIN resource "
+                  << orphen::ported::sound::kBootBankResources[bank]
+                  << ") did not load: " << soundEngine_.diagnostic() << '\n';
+      }
+    }
+  }
+
   void PortRuntime::publishSceneObjectViews(std::uint32_t frameTicks)
   {
     SceneObjectViewList views;
@@ -831,18 +1001,39 @@ namespace orphen::port
       view.height = lead.height58;
       view.groundHeight = lead.groundHeight4c;
       view.descriptorResolved = lead.modelIndex >= 0;
+      view.fadeLevel = lead.fadeLevel134;
       view.scale = lead.scale14c;
       view.scaleZ150 = lead.scaleZ150;
       view.rotationX154 = lead.rotationX154;
       view.rotationY158 = lead.rotationY158;
       view.drawDebugBox = false;
+      // The palette is built either way: slot 4, the bandana, reads slot 0's to
+      // find the neck, and FUN_0020c5a8's hidden test is a *draw* skip -- the
+      // pose work has already happened by then.
       attachModel(view, lead, frameTicks);
-      views.push_back(view);
+      if ((lead.halfword08 & 1) != 0)
+      {
+        lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 0x0010);
+      }
+      else
+      {
+        views.push_back(view);
+      }
     }
 
     entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
+          // FUN_0020c5a8:69. Entity +0x08 bit 0 is "hidden": the draw walk
+          // skips the slot outright and raises bit 0x10 so the pose sampler
+          // knows there is no previous frame to blend out of. The chest
+          // cutscene is what raises it, on every slot from 2 up.
+          if ((entity.halfword08 & 1) != 0)
+          {
+            entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x0010);
+            return;
+          }
+
           SceneObjectView view;
           view.slot = slot;
           view.typeId = entity.typeId00;
@@ -854,6 +1045,7 @@ namespace orphen::port
           view.height = entity.height58;
           view.groundHeight = entity.groundHeight4c;
           view.descriptorResolved = entity.modelIndex >= 0;
+          view.fadeLevel = entity.fadeLevel134;
           view.scale = entity.scale14c;
           view.scaleZ150 = entity.scaleZ150;
           view.rotationX154 = entity.rotationX154;
@@ -1043,6 +1235,40 @@ namespace orphen::port
     std::cout << "[scr] further per-frame halts are not reported\n";
   }
 
+  void PortRuntime::printSoundReport() const
+  {
+    std::cout << "\n=== sound report ===\n";
+    std::cout << "cue table: " << soundEngine_.cueCount() << " entries\n";
+    for (std::size_t bank = 0; bank < orphen::ported::sound::kBankCount; ++bank)
+    {
+      std::cout << "bank " << bank << " (SND.BIN resource "
+                << orphen::ported::sound::kBootBankResources[bank] << "): ";
+      if (!soundEngine_.bankLoaded(bank))
+      {
+        std::cout << "not loaded\n";
+        continue;
+      }
+      std::cout << soundEngine_.bank(bank).usedProgramCount() << " programs\n";
+    }
+    if (soundEngine_.cueLog().empty())
+    {
+      std::cout << "no cues were requested\n";
+    }
+    for (const auto &entry : soundEngine_.cueLog())
+    {
+      std::cout << "frame " << entry.frame << " cue " << entry.cue
+                << " -> bank " << static_cast<int>(entry.bank)
+                << " program " << static_cast<int>(entry.program)
+                << " note " << static_cast<int>(entry.note)
+                << " vol " << static_cast<int>(entry.volumeLeft) << '/'
+                << static_cast<int>(entry.volumeRight)
+                << " -> waveform " << entry.waveform << ", " << entry.samples
+                << " samples at " << static_cast<int>(entry.sampleRate) << " Hz"
+                << "  " << entry.outcome << '\n';
+    }
+    std::cout << "=== end sound report ===\n";
+  }
+
   void PortRuntime::printExitReports() const
   {
     // The load-time script report is a load inventory. When frames have run it
@@ -1052,6 +1278,10 @@ namespace orphen::port
     {
       std::cout << "(after " << frameCount_ << " frames)";
       printScriptReport();
+    }
+    if (printSoundReport_)
+    {
+      printSoundReport();
     }
     if (printActorReport_)
     {
@@ -1631,22 +1861,23 @@ namespace orphen::port
     {
     case orphen::ported::player::InteractionKind::Chest:
     {
-      // PLACEHOLDER OUTCOME, and deliberately so.
+      // FUN_00252828's chest branch: state 0xC with animation 1. Everything
+      // after that is the cutscene, which runs out of the player state table
+      // -- see ported/player/original_chest_cutscene.*. It is what sets the
+      // event flag, on the frame animation 0x57 reaches its marked keyframe.
       //
-      // The original enters player state 0xC (FUN_00254d58), which starts a
-      // three-state camera sequence: 0xC arms the fade and hands to 0xD
-      // (FUN_00254db0), which snaps the player to a fixed offset in front of
-      // the chest, installs a look-at camera through FUN_00217d70, and hands to
-      // 0xE. None of that is ported.
-      //
-      // What is ported is the thing the sequence exists to do: set the chest's
-      // event flag. FUN_002d1ea8 only ever *observes* that flag, so setting it
-      // here drives the real, already-ported behavior -- the chest animates
-      // 4 (closed) -> 5 (opening) -> 6 (open) on its own from the next frame.
-      sceneScript_.state().FUN_002663a0_setEventFlag(result.chestFlagId);
+      // FUN_00252828 has already written the chest's slot to the player's
+      // +0x198 and 0x4B00 to +0x1B8; the probe reproduces both.
+      auto &lead = entityPool_.leadPlayer();
+      lead.state60 = 0x0C;
+      lead.stateResetA4 = 999;
+      lead.animationA0 = 1;
+      lead.previousSubstateA2 = 0xffff;
+      lead.flags06 &= 0xff38;
+      lead.substateFrameA8 = 0;
       std::cout << "[interact] chest slot=" << result.targetSlot
                 << " flag=0x" << std::hex << result.chestFlagId << std::dec
-                << " opened (cutscene states 0xC-0xE not ported)\n";
+                << " -> player state 0xC (chest cutscene)\n";
       return true;
     }
 
@@ -1745,6 +1976,7 @@ namespace orphen::port
     // them in the decompiled sources, which is how they were pinned down.
     ++DAT_003555b4_frameCounter_;
     DAT_003555b8_tickCounter_ += frameTicks;
+    soundEngine_.setFrame(frameCount_);
     // The viewer's free camera and the follow-yaw easing still think in seconds.
     // One simulation step is one nominal frame, so hand them that directly
     // rather than wall-clock time -- this is what makes --frames deterministic.
@@ -1778,7 +2010,13 @@ namespace orphen::port
       // lead player update, FUN_00239ce0 (the actors) after it, and
       // FUN_0025b918 (the late object-script slots) after that. The camera,
       // FUN_00216aa0, comes last.
-      if (runScriptTick_ && sceneScript_.loaded())
+      // FUN_002245d8, the mode 6 frame, runs FUN_00251ed8 and FUN_00239ce0 and
+      // nothing else from the field frame -- no FUN_0025b778, no FUN_0025b918
+      // and, crucially, no FUN_00216aa0. That last omission is what leaves a
+      // cutscene camera where FUN_00217d70 put it.
+      const bool cutsceneFrame = DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeCutscene;
+
+      if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("tick");
@@ -1802,7 +2040,7 @@ namespace orphen::port
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 
-      if (runScriptTick_ && sceneScript_.loaded())
+      if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("late slots");
@@ -1824,7 +2062,10 @@ namespace orphen::port
       cameraInput.autoFocusGoalYaw = leadState.facingRadians;
       previousStickMagnitude_ = input.stickMagnitude;
 
-      fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
+      if (!cutsceneFrame)
+      {
+        fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
+      }
 
       mapViewer_.setLeadPlayerView(leadState);
       mapViewer_.setFollowCameraPose(fieldCamera_.pose());
@@ -1836,6 +2077,19 @@ namespace orphen::port
       mapViewer_.setMapDrawList({});
     }
     reportLeadPlayerGroundChange();
+
+    // FUN_00237fc0, which mode 6 runs after the actors. Cross is raw pad 0x40,
+    // the same bit the interaction probe reads.
+    itemWindow_.FUN_00237fc0_update(frameTicks, (input.rawPressedPad & 0x0040) != 0);
+    mapViewer_.setDialogueSprites(buildDialogueSprites());
+
+    // FUN_00267a80 measures against DAT_0058C0A8 and uGpffffb6d4 -- the camera,
+    // not the player. Published after the camera has run for the frame.
+    soundEngine_.setListener({fieldCamera_.pose().eye.x, fieldCamera_.pose().eye.y,
+                              fieldCamera_.pose().eye.z, fieldCamera_.yawRadians()});
+
+    mapViewer_.setScreenFadeOverlay(DAT_00571dc0_screenFade_.overlay().colour,
+                                    DAT_00571dc0_screenFade_.overlay().alpha);
     updateOriginalDebugOverlay();
     updateHud(input, frameTicks);
 
@@ -1856,12 +2110,17 @@ namespace orphen::port
     cameraView.eye = fieldCamera_.pose().eye;
     cameraView.yawRadians = fieldCamera_.yawRadians();
     cameraView.pitchRadians = fieldCamera_.pitchRadians();
+    // uGpffffb6dc / fGpffffb6e8. Both stand at their defaults until a camera
+    // path moves them, which for this scene is the chest's contents swing.
+    cameraView.rollRadians = fieldCamera_.uGpffffb6dc_roll();
+    cameraView.zoomLog2 = fieldCamera_.fGpffffb6e8_zoomLog2();
     renderCamera_ = orphen::ported::render::FUN_0020bec8_build(cameraView);
 
     orphen::ported::render::MapVisibilityInput visibilityInput;
     visibilityInput.DAT_0058bed0_playerPosition = leadState.position;
     visibilityInput.DAT_0058bf08_playerHeadOffset = leadState.bodyHeight;
     visibilityInput.drawDistance = mapViewer_.drawDistance();
+    visibilityInput.globalFadeCap = DAT_00355700_globalFadeCap_;
 
     // The original culls at a fixed 90 degrees, wider than the 67.4 it draws.
     // A window wider than about 17:9 needs more than that, so widen rather
@@ -1888,6 +2147,28 @@ namespace orphen::port
   void PortRuntime::render(int framebufferWidth, int framebufferHeight) const
   {
     mapViewer_.render(framebufferWidth, framebufferHeight);
+  }
+
+  // FUN_0022a418:204, `DAT_0058beb4 = DAT_0058beb4 & 0xffe7 | 0x3000`.
+  // DAT_0058BEB4 is pool slot 0's +0x04, and 0x1000 of what it sets is the bit
+  // FUN_00256ff8 tests before it will play a footstep -- the party members'
+  // +0x04 never gets it, which is why only the lead player is audible. Type 1's
+  // descriptor supplies the low bits (0x0024), so this lands on the 0x3024 the
+  // s01_e024 dump holds.
+  //
+  // Called after every placement rather than once, because the port re-runs
+  // resetToMap as the spawn is narrowed down and each of those clears the slot.
+  void PortRuntime::FUN_0022a418_stamp_lead_player_flags()
+  {
+    auto &lead = entityPool_.leadPlayer();
+    std::uint16_t base = lead.halfword04;
+    if (const auto descriptor =
+            descriptorTable_.FUN_00229980_resolve(static_cast<std::uint32_t>(lead.typeId00));
+        descriptor.has_value())
+    {
+      base = descriptor->halfword0x18;
+    }
+    lead.halfword04 = static_cast<std::uint16_t>((base & 0xFFE7u) | 0x3000u);
   }
 
   void PortRuntime::resetLeadPlayerForLoadedMap()
@@ -1921,7 +2202,16 @@ namespace orphen::port
     mapViewer_.setSceneObjectViews({});
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
     leadPlayer_.resetToMap(*loadedMap, spawnOverride_);
+    FUN_0022a418_stamp_lead_player_flags();
+
     previousStickMagnitude_ = 0.0f;
+    // A map load cannot leave a cutscene half-run behind it. FUN_0022a418:293
+    // clears the fade cap for the same reason.
+    DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+    DAT_00355700_globalFadeCap_ = 0;
+    itemSceneRenderState_ = false;
+    DAT_00571dc0_screenFade_.reset();
+    fieldCamera_.FUN_00217e18_release_manual_camera(false);
     fieldCamera_.FUN_00216930_install_normal_field_defaults();
     fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
     mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
@@ -1956,10 +2246,124 @@ namespace orphen::port
               << (groundHit.sampledByOriginalTerrain ? " sampled" : " unsampled") << '\n';
   }
 
+  // The half of FUN_00251ed8's state-table dispatch the player controller does
+  // not own. Installed on the controller, so it runs in the same place the
+  // table entry would.
+  bool PortRuntime::stepScriptedPlayerState(std::uint32_t frameTicks)
+  {
+    auto &lead = entityPool_.leadPlayer();
+    if (!orphen::ported::player::isChestCutsceneState(lead.state60))
+    {
+      return false;
+    }
+
+    orphen::ported::player::ChestCutsceneContext context;
+    context.pool = &entityPool_;
+    context.player = &lead;
+    context.fade = &DAT_00571dc0_screenFade_;
+    context.camera = &fieldCamera_;
+    context.DAT_00354d2c_gameMode = &DAT_00354d2c_gameMode_;
+    context.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
+    context.setItemSceneRenderState = [this](bool enable) { setItemSceneRenderState(enable); };
+    context.buildItemEntity = [this](std::size_t chestSlot, std::int16_t itemId) {
+      return buildChestItemEntity(chestSlot, itemId);
+    };
+    context.openItemWindow = [this](std::size_t messageIndex, std::int32_t itemId) {
+      itemWindow_.FUN_00237b38_open(messageIndex, itemId, itemDatabase_);
+      std::cout << "[chest] message " << messageIndex << " \"" << itemWindow_.text() << "\"\n";
+      if (itemWindow_.unhandledCode() != 0)
+      {
+        std::cout << "[chest] message stream stopped on control code 0x" << std::hex
+                  << static_cast<int>(itemWindow_.unhandledCode()) << std::dec << '\n';
+      }
+    };
+    context.itemWindowOpen = [this] { return itemWindow_.FUN_00237c60_isOpen(); };
+    context.FUN_00267d38_playSound =
+        [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
+    { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
+    context.frameTicks = frameTicks;
+    context.FUN_002663a0_setEventFlag = [this](std::uint32_t flagId) {
+      sceneScript_.state().FUN_002663a0_setEventFlag(flagId);
+      std::cout << "[chest] event flag 0x" << std::hex << flagId << std::dec << " set\n";
+    };
+
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap != nullptr)
+    {
+      context.FUN_00227798_groundHeight =
+          [loadedMap](float x, float y, float z) -> std::optional<float> {
+        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, z);
+        if (!hit.has_value())
+        {
+          return std::nullopt;
+        }
+        return hit->height;
+      };
+    }
+
+    const std::uint16_t before = lead.state60;
+    orphen::ported::player::FUN_00251ed8_step_chest_cutscene(context);
+    if (lead.state60 != before)
+    {
+      std::cout << "[chest] player state 0x" << std::hex << before << " -> 0x" << lead.state60
+                << std::dec << " (frame " << frameCount_ << ")\n";
+    }
+    return true;
+  }
+
   // FUN_002239c8 lines 140-165 followed by FUN_00268270. The original runs the
   // printf side inside the frame function and the layout side later in the
   // same frame; the port does both on the simulation step so the glyph list a
   // render sees is the one that frame produced, however many times it renders.
+  // What FUN_00237fc0 would have in its glyph array this frame: the revealed
+  // part of the caption on line 0 of the window FUN_00237b38 opened, and the
+  // book prompt after it once the line is complete.
+  //
+  // The original builds this incrementally -- FUN_00238a08 appends one entry
+  // per character as the stream runs and FUN_00237fc0 redraws the whole array
+  // every frame -- so rebuilding it from the revealed count lands in the same
+  // place for a single line, which is all a caption is.
+  std::vector<orphen::ported::text::DialogueSprite> PortRuntime::buildDialogueSprites() const
+  {
+    namespace text = orphen::ported::text;
+    if (!itemWindow_.FUN_00237c60_isOpen() || !dialogueFont_.measured())
+    {
+      return {};
+    }
+
+    // The typewriter counts characters across the whole stream, so the reveal
+    // spills from one line onto the next the way FUN_00237de8 emits them.
+    std::size_t remaining = itemWindow_.revealedCharacters();
+    std::vector<text::DialogueSprite> sprites;
+    int penX = 0;
+    int lastLine = 0;
+    for (const auto &line : itemWindow_.lines())
+    {
+      if (remaining == 0)
+      {
+        break;
+      }
+      const std::size_t take = std::min(remaining, line.text.size());
+      remaining -= take;
+      // iGpffffbcd8 steps the row and FUN_00238f98 puts the pen back to zero.
+      penX = 0;
+      lastLine = line.index;
+      const int originY = text::kWindowOriginY + line.index * text::kLineStep;
+      const std::vector<text::DialogueSprite> row = text::FUN_00238a08_layoutLine(
+          std::string_view(line.text).substr(0, take), dialogueFont_, text::kWindowOriginX,
+          originY, penX);
+      sprites.insert(sprites.end(), row.begin(), row.end());
+    }
+
+    if (itemWindow_.awaitingConfirm())
+    {
+      sprites.push_back(text::promptSprite(text::kWindowOriginX,
+                                           text::kWindowOriginY + lastLine * text::kLineStep, penX,
+                                           static_cast<int>(itemWindow_.promptTicks())));
+    }
+    return sprites;
+  }
+
   void PortRuntime::updateOriginalDebugOverlay()
   {
     // cGpffffb66a and cGpffffb66c. Both are cheat/menu bytes in the original

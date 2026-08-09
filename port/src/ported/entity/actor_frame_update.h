@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ported/camera/original_field_camera.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
@@ -75,6 +76,23 @@ namespace orphen::ported::entity
     // none of which the entity carries. Null state means no bandana this scene.
     BandanaState *bandanaState = nullptr;
     std::function<BandanaEnvironment(std::size_t slot)> bandanaEnvironment;
+
+    // The camera globals. Only one behaviour reaches them -- the treasure
+    // chest, which swings the camera round itself while its lid opens -- but it
+    // reaches them the way the original does, by reading cGpffffb6e1 and then
+    // calling FUN_00217e18 / FUN_00217fe8 directly. Null in harnesses that have
+    // no camera, which just skips the flourish.
+    orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
+
+    // FUN_00267d38(cue, entity). Behaviours reach the sound engine through
+    // small wrappers -- FUN_002d59e0 is the chest's -- so this is the shape
+    // they all have: a cue number and the entity to place it at.
+    std::function<void(std::uint16_t cue, const OriginalEntity &at)> FUN_00267d38_playSound;
+
+    // DAT_003555b4, the global frame counter. Type 0x62's wing cue fires when
+    // it divides by the entity's own period, so the sound is phase-locked to
+    // the frame number rather than to anything the entity tracks.
+    std::uint32_t DAT_003555b4_frameCounter = 0;
   };
 
   // FUN_0023a068: the freeze gate every behavior opens with. Advances the

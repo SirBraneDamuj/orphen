@@ -73,4 +73,23 @@ namespace orphen::harness
         std::span<const std::uint8_t>(data_.data() + byteOffset, packedBytes));
   }
 
+  std::vector<std::uint8_t> FlatBinArchive::raw(std::uint32_t resourceId) const
+  {
+    const std::size_t entryOffset = static_cast<std::size_t>(resourceId) * 4u;
+    if (data_.size() < entryOffset + 4 || resourceId > entryCount())
+    {
+      return {};
+    }
+
+    const std::uint32_t entry = readU32(data_, entryOffset);
+    const std::size_t byteOffset = static_cast<std::size_t>(entry >> 17) * kSectorBytes;
+    const std::size_t bytes = static_cast<std::size_t>(entry & 0x1FFFFu) * 4u;
+    if (bytes == 0 || byteOffset + bytes > data_.size())
+    {
+      return {};
+    }
+    return std::vector<std::uint8_t>(data_.begin() + static_cast<std::ptrdiff_t>(byteOffset),
+                                     data_.begin() + static_cast<std::ptrdiff_t>(byteOffset + bytes));
+  }
+
 } // namespace orphen::harness

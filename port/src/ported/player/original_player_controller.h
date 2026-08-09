@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ported/entity/original_entity.h"
+#include "ported/entity/original_entity_sound.h"
 #include "ported/psm2/psm2_runtime.h"
 
 #include <cstdint>
@@ -63,6 +64,16 @@ namespace orphen::ported::player
   // interact on the same frame. Supplied as a callback because the probe needs
   // the whole entity pool and the controller only owns slot 0.
   using OriginalInteractionProbe = std::function<bool()>;
+
+  // The states FUN_00251ed8 dispatches through PTR_FUN_0031e0e8 that the
+  // controller does not own itself. Installed rather than called directly
+  // because the chest cutscene needs the pool, the camera and the fade, none
+  // of which belong to a controller bound to one slot.
+  //
+  // Returns true when it handled the state, which is what tells the controller
+  // to skip its own field branch this frame -- the original's table dispatch
+  // is exclusive.
+  using OriginalScriptedStateStep = std::function<bool(std::uint32_t frameTicks)>;
 
   using OriginalMovementBlocker = std::function<bool(float originalStartX,
                                                      float originalStartZ,
@@ -131,9 +142,21 @@ namespace orphen::ported::player
     // it stays usable on its own.
     void bindEntity(orphen::ported::entity::OriginalEntity &slot) { entityStorage_ = &slot; }
 
+    void setScriptedStateStep(OriginalScriptedStateStep step) { scriptedStateStep_ = std::move(step); }
+
+    // FUN_00267d38. The controller reaches the sound engine the same way an
+    // actor behaviour does -- see ported/entity/original_entity_sound.h -- so
+    // the footstep path here is the generic one, not a player-specific hook.
+    void setSoundPlayer(orphen::ported::entity::EntitySoundPlayer play)
+    {
+      FUN_00267d38_playSound_ = std::move(play);
+    }
+
   private:
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
+    OriginalScriptedStateStep scriptedStateStep_;
+    orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;
 
     orphen::ported::entity::OriginalEntity &entity() { return *entityStorage_; }
     const orphen::ported::entity::OriginalEntity &entity() const { return *entityStorage_; }
@@ -141,6 +164,13 @@ namespace orphen::ported::player
     // cGpffffb6e1 == 0x1D. Only in that camera sub-mode does FUN_00256ab0 ease
     // facing through FUN_0023a320; every other path assigns it outright.
     bool input0x1dTurnSmoothing_ = false;
+
+    // The D-record word FUN_00255d88 reads the material out of. The original
+    // looks it up through the cached primitive index at entity +0x0A; the port
+    // keeps the settled surface's own word in +0x6C, which is the same word.
+    // Nullopt when the player is not standing on anything, which is the
+    // original's FUN_00227798-failed path.
+    std::optional<std::uint32_t> currentSurfaceTerrainFlags() const;
 
     void FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate);
     void FUN_00252d88_return_to_idle_state();

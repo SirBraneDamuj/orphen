@@ -9,12 +9,14 @@
 // from. The original keeps all of its state in globals; the DAT_/gp names are
 // preserved as field-name suffixes so the mapping stays checkable.
 
+#include "ported/camera/original_camera_path.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
 
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 
 namespace orphen::ported::camera
 {
@@ -81,6 +83,53 @@ namespace orphen::ported::camera
                              const orphen::ported::psm2::Vec3 &target,
                              const CameraGroundSampler &groundSampler = {});
 
+    // FUN_00217d70: pin the camera to an explicit eye and look-at, the way a
+    // cutscene does. Refuses while a manual camera is already installed
+    // (cGpffffad2f), and saves the current pose so FUN_00217e18 can put it
+    // back. Sets the submode to 0x23, which is the script camera -- with no
+    // interpolation armed, FUN_00217b88 leaves the pose exactly here.
+    void FUN_00217d70_set_manual_camera(const orphen::ported::psm2::Vec3 &eye,
+                                        const orphen::ported::psm2::Vec3 &lookAt);
+
+    // FUN_00217e18: drop the manual camera. `restore` is the original's
+    // non-zero argument, which puts the saved eye, yaw and pitch back and asks
+    // the follow camera to snap.
+    void FUN_00217e18_release_manual_camera(bool restore);
+
+    bool manualCameraActive() const { return cGpffffad2f_manualCamera_ != 0; }
+    // cGpffffb6e1. 0x23 is the script camera; behaviours that want to take the
+    // camera over test for it before they do, because a path can only be
+    // installed on top of one that is already there.
+    std::uint8_t cGpffffb6e1_subMode() const { return cGpffffb6e1_subMode_; }
+
+    // FUN_00217d40 / FUN_00217d10: move an installed script camera's eye or
+    // look-at. Both are no-ops unless the submode is 0x23.
+    void FUN_00217d40_set_eye(const orphen::ported::psm2::Vec3 &eye);
+    void FUN_00217d10_set_look_at(const orphen::ported::psm2::Vec3 &lookAt);
+
+    // FUN_00217fe8: install a camera path. The caller has already dropped
+    // whatever camera was there (FUN_00217e18(0)); this puts a fresh manual
+    // camera at the first eye point and keeps the curves for
+    // FUN_00218158_step_camera_path to sample.
+    //
+    // `zoomScales` are the pre-FUN_00218230 values, the way the caller writes
+    // them into its scratch block.
+    void FUN_00217fe8_set_camera_path(std::span<const orphen::ported::psm2::Vec3> eyePoints,
+                                      std::span<const float> rollValues,
+                                      std::span<const float> zoomScales,
+                                      std::span<const orphen::ported::psm2::Vec3> lookAtPoints);
+
+    // FUN_00218158: sample the path at elapsed/duration and publish the eye,
+    // the look-at, the roll and the zoom.
+    void FUN_00218158_step_camera_path(int elapsed, int duration);
+    bool cameraPathActive() const { return cameraPath_.active(); }
+
+    // uGpffffb6dc and fGpffffb6e8, which FUN_0020bec8 reads when it builds the
+    // projection. FUN_002241d8 puts the zoom back to 1.0 when a cutscene ends.
+    float uGpffffb6dc_roll() const { return uGpffffb6dc_roll_; }
+    float fGpffffb6e8_zoomLog2() const { return fGpffffb6e8_zoomLog2_; }
+    void FUN_002241d8_reset_zoom();
+
     const CameraPose &pose() const { return pose_; }
 
     float yawRadians() const { return fGpffffb6d4_yaw_; }
@@ -118,9 +167,25 @@ namespace orphen::ported::camera
     std::uint8_t cGpffffb6e2_cutsceneGate_ = 0;
     std::uint8_t cGpffffb6e3_snapRequest_ = 0;
     std::uint8_t cGpffffb6e4_freeLook_ = 0;
+    // cGpffffad2f: a manual camera is installed. FUN_00217d70 latches it so a
+    // second request cannot displace the first.
+    std::uint8_t cGpffffad2f_manualCamera_ = 0;
+    // DAT_0055f8d8 / DAT_0055f8e4 / DAT_0055f8e8: the pose FUN_00217d70 saved.
+    orphen::ported::psm2::Vec3 DAT_0055f8d8_savedEye_{};
+    float DAT_0055f8e4_savedYaw_ = 0.0f;
+    float DAT_0055f8e8_savedPitch_ = 0.0f;
     std::uint8_t cGpffffb6e6_disableGroundClamp_ = 0;
     std::int8_t cGpffffad08_autoFocusDirection_ = 0;
     float DAT_0058bf0c_freeLookEntryYaw_ = 0.0f;
+
+    // --- the scripted camera path ------------------------------------------
+    // FUN_00217b88's interpolators are dead in the retail build -- nothing
+    // ever writes iGpffffbb0c or iGpffffbb14 a non-zero duration -- so the only
+    // thing that moves a 0x23 camera is FUN_00218158, driven by whoever
+    // installed the path.
+    CameraPath cameraPath_;
+    float uGpffffb6dc_roll_ = 0.0f;
+    float fGpffffb6e8_zoomLog2_ = 1.0f;
 
     // --- smoothing accumulators --------------------------------------------
     float fGpffffacfc_horizontalSpeed_ = 0.0f;

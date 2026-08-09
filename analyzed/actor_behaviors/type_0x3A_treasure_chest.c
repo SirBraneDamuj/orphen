@@ -80,12 +80,13 @@
  * ---------------------------------------------------------------------------
  *
  *     if ((entity[+0xAA] & 0x100) && (entity[+0x06] & 8)) {
- *       FUN_002d59e0(entity);                  // == FUN_00267d38(0x9F, entity), a sound cue
+ *       FUN_002d59e0(entity);                  // == FUN_00267d38(0x9F, entity), the lid cue
  *       if (entity[+0x130] >= 0) {
- *         if (cGpffffb6e1 == 0x23) {           // only in one global mode
- *           /-* build a 0x14-quadword packet at DAT_70000000 describing a beam
- *              from the chest up toward the camera-relative point, then
- *              FUN_00217e18(0) + FUN_00217fe8(...) to submit it *-/
+ *         if (cGpffffb6e1 == 0x23) {           // a script camera is installed
+ *           /-* fill a 0x14-word scratch block at DAT_70000000 with three eye
+ *              control points, three (roll, zoom) pairs and one look-at point,
+ *              then FUN_00217e18(0) + FUN_00217fe8(block, block+9, 3,
+ *              block+0xF, 1) *-/
  *           entity[+0x19C] = 0;                // start the timer
  *           entity[+0x19E] = 1;                // timer active
  *         }
@@ -103,26 +104,66 @@
  * - `entity[+0x06] & 8` is one of the bits FUN_00225bc8 *clears* on the
  *   transition into animation 5, so the effect cannot fire on the frame the
  *   chest starts opening. It fires once the animation system sets the bit again,
- *   which is how the effect syncs to the lid actually being up.
- * - `cGpffffb6e1 == 0x23` is a global mode selector. The port never enters it, so
- *   the whole packet-building body is dead in a port that has no such mode -- and
- *   with it, +0x19E is never set, so the timer tail never runs either.
+ *   which is how the effect syncs to the lid actually being up. In grp_0172 the
+ *   0x100 marker is on animation 5's *third* keyframe, 30 frames in.
+ * - `cGpffffb6e1 == 0x23` is the script-camera submode. A chest only reaches it
+ *   because the player's own cutscene installed a manual camera first
+ *   (FUN_00254db0 -> FUN_00217d70), so this is really "am I being watched".
  *
- * 0x1680 is 5760 = 0x120 frames at the nominal 0x20 tick, i.e. about 4.8 seconds
- * at 60 Hz.
+ * ---------------------------------------------------------------------------
+ * The camera swing
+ * ---------------------------------------------------------------------------
+ *
+ * This is not a particle effect: it is a three-second camera move, and it is
+ * the whole visible difference between opening a chest with something in it and
+ * opening an empty one. `entity[+0x130] < 0` -- no contents -- skips it, and the
+ * camera then stands wherever FUN_00254db0 parked it for the rest of the scene.
+ *
+ * The scratch block, in the order FUN_00217fe8 reads it:
+ *
+ *   [0..2]    the current eye, DAT_0058C0A8
+ *   [3..5]    chest.xy + (d - 0.25) * (cos, sin)(a - pi/2),   eye.z
+ *   [6..8]    chest.xy + (d - 0.50) * (cos, sin)(a - 3pi/4),  eye.z + 0.2
+ *   [9,10]    roll 0.0, zoom 1.5
+ *   [11,12]   roll 0.0, zoom 2.0
+ *   [13,14]   roll 0.0, zoom 3.0
+ *   [15..17]  chest.xyz, z + 0.3
+ *
+ * where `a` is atan2 from the current look-at to the current eye and `d` is
+ * that distance less 0.25. The constants pi/2, pi/4, 0.2 and 0.3 are the gp
+ * block at 0x00354668. So the camera orbits 135 degrees round the chest, closes
+ * half a unit, rises 0.2, and re-aims from the player's chest height down to the
+ * treasure -- while the zoom triples.
+ *
+ * The zoom pairs go through FUN_00218230, which is log(2x)/log(2) = log2(2x).
+ * FUN_0020bec8 builds the projection's x scale as `2^fGpffffb6e8 * 3840`, so
+ * the shipped 1.0 is 7680 and the curve's 1.5/2.0/3.0 are 11520/15360/23040.
+ * Writing the curve in the pre-log units is why the numbers read as multipliers.
+ *
+ * Both curves are natural cubic splines with uniform knots (FUN_00266a78 with a
+ * zero fourth argument), and FUN_00266708 copies the eye curve's knots into the
+ * roll/zoom curve so the two stay in step -- which is why FUN_00266738 is called
+ * with -1, meaning "do not re-derive the knots".
+ *
+ * 0x1680 is 5760 = 180 frames at the nominal 0x20 tick, i.e. three seconds at
+ * 60 Hz -- matching the curve's own 0..3 zoom range.
+ *
+ * FUN_00217b88, the interpolator FUN_00216aa0 runs for submode 0x23, is dead:
+ * nothing in the executable ever writes a non-zero duration to iGpffffbb0c or
+ * iGpffffbb14. The only thing that moves a 0x23 camera is FUN_00218158, called
+ * from here.
  *
  * ---------------------------------------------------------------------------
  * Notes for the port
  * ---------------------------------------------------------------------------
  *
- * - Implement the three-state logic and the timer tail. Where the original
- *   builds a GS packet, do nothing: the port has no primitive submission path,
- *   and the branch is unreachable anyway without the 0x23 mode.
  * - The observable behavior in a port with no flags set is: every chest picks
  *   animation 4 on its first tick and then sits there. That is correct, and it
  *   is what the original does too until something opens the chest.
  * - Do not call FUN_0023a068 here. This handler genuinely skips the freeze gate,
  *   so a frozen chest keeps ticking.
+ * - FUN_002d59e0 plays cue 0x9F -- bank 0, program 11, note 60. See
+ *   analyzed/sound_effect_playback.c.
  */
 
 /* Signatures, for reference; bodies are in src/. */

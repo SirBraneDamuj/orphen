@@ -24,6 +24,7 @@
 // So this reproduces the *observed memory* rather than the original's file
 // path. If GRP.BIN turns up, this is the thing to revisit.
 
+#include "harness/flat_bin_archive.h"
 #include "harness/scene_resource_provider.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/map_prop_descriptor_table.h"
@@ -97,6 +98,11 @@ namespace orphen::port
     int stageBank_ = -1;
 
     orphen::ported::resource::TextureSlotCache textureSlots_;
+    // ITM.BIN, archive index 4. The 0x1F1 item band's meshes are not in any
+    // scene bundle: FUN_00221fd8 loads them through FUN_00221b78, which is
+    // that archive's own table of contents. Empty when the file is absent,
+    // which is not fatal -- the item just has no model.
+    orphen::harness::FlatBinArchive itmArchive_;
     std::map<std::uint16_t, orphen::ported::model::Psc3Model> models_;
     std::map<std::uint32_t, EntityModelBinding> bindings_;
     std::map<std::uint32_t, std::uint32_t> modelRecordForTypeId_;

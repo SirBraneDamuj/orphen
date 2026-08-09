@@ -125,7 +125,19 @@ namespace orphen::ported::player
     entity().desiredDeltaZ34 = 0.0f;
     entity().desiredDeltaY38 = 0.0f;
 
-    if (entity().state60 == 2)
+    // FUN_00251ed8's table dispatch is exclusive: exactly one handler runs.
+    // A state owned elsewhere -- the chest cutscene, states 0x0C..0x15 --
+    // takes the frame and the field branches below do not see it.
+    const bool handledElsewhere = scriptedStateStep_ && scriptedStateStep_(clampedFrameTicks);
+
+    if (handledElsewhere)
+    {
+      // Physics still runs after the handler, exactly as FUN_00251ed8 falls
+      // through to FUN_00253080. The cutscene states write positions directly
+      // and leave the movement request at zero, so this only re-settles them
+      // onto the floor.
+    }
+    else if (entity().state60 == 2)
     {
       FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
     }
@@ -155,6 +167,15 @@ namespace orphen::ported::player
             entity().height58,
             grounded,
             entity().running};
+  }
+
+  std::optional<std::uint32_t> OriginalPlayerController::currentSurfaceTerrainFlags() const
+  {
+    if ((entity().collisionFlags0c & kPhysicsFlagGrounded) == 0)
+    {
+      return std::nullopt;
+    }
+    return entity().flagWord6c;
   }
 
   void OriginalPlayerController::FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate)
@@ -200,6 +221,16 @@ namespace orphen::ported::player
       entity().pendingJumpImpulse = true;
       entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
       entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
+      // FUN_00256bb8's jump branch plays FUN_00255d88(entity, 2) -- the same
+      // surface table, column 2. The takeoff, not the landing.
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(
+            orphen::ported::entity::FUN_00255d88_surface_cue(
+                entity().typeId00, currentSurfaceTerrainFlags(), entity().interactTarget68 >= 0,
+                orphen::ported::entity::SurfaceSoundKind::Jump),
+            entity());
+      }
       FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
       return;
     }
@@ -240,6 +271,14 @@ namespace orphen::ported::player
     entity().idleTimer1b6 = 0;
 
     const float speed = entity().running ? kOriginalRunStepPerFrame : kOriginalWalkStepPerFrame;
+
+    // FUN_00256ff8, before the impulse and before this frame's animation is
+    // chosen -- so it reads the keyframe the animation step already landed on.
+    // The whole footstep mechanism is in there: it fires only on a keyframe
+    // carrying 0x100, and the cue comes from the material under the entity.
+    orphen::ported::entity::FUN_00256ff8_footstep(entity(), entity().running,
+                                                  currentSurfaceTerrainFlags(),
+                                                  FUN_00267d38_playSound_);
 
     // FUN_00256bb8: FUN_00256ab0(iGpffffb64c * speed * 0.03125, entity).
     FUN_00256ab0_apply_movement_impulse(orphen::ported::movementScaleForFrameTicks(frameTicks) * speed,

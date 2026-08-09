@@ -36,6 +36,11 @@ namespace orphen::port
     float height = 0.0f;
     float groundHeight = 0.0f;
     bool descriptorResolved = false;
+    // Entity +0x134. FUN_0020c810:140 copies it into the draw header and
+    // substitutes 0x80 when it is zero, so this is an alpha on the GS's
+    // 0x80 = x1.0 scale and **zero means fully opaque**, not invisible. The
+    // chest cutscene's cross-fade is the only thing that drives it so far.
+    std::uint8_t fadeLevel = 0;
 
     // Null when the type has no static descriptor (the map-streamed ids from
     // 0x272) or the grp record is not in any open bundle.

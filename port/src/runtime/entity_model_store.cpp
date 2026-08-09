@@ -20,7 +20,7 @@ namespace orphen::port
       std::uint16_t textureId;
     };
 
-    constexpr std::array<BootTextureBind, 7> kFUN_00221fd8_fixedBinds{{
+    constexpr std::array<BootTextureBind, 9> kFUN_00221fd8_fixedBinds{{
         {0x30, 0x179},
         {0x2A, 0x178},
         {0x2B, 0x177},
@@ -28,10 +28,14 @@ namespace orphen::port
         {0x20, 0x19C},
         {0x21, 0x19B},
         {0x28, 0x171},
+        // The dialogue font. The original takes these two through
+        // FUN_00210218 + FUN_00238c90 + FUN_002102d0 rather than FUN_00210280,
+        // because FUN_00238c90 measures the decoded sheet on the way past to
+        // build the proportional width table. The port measures out of the slot
+        // afterwards instead, so the load itself can go the ordinary way.
+        {0x2E, 0x173},
+        {0x2F, 0x172},
     }};
-
-    // The two FUN_002102d0 calls at 0x2E and 0x2F take an already-decoded buffer
-    // through a different path and are not reproduced.
 
   } // namespace
 
@@ -45,6 +49,7 @@ namespace orphen::port
 
     if (!discRoot.empty())
     {
+      itmArchive_.open(discRoot / "ITM.BIN");
       try
       {
         bootResources_ = orphen::harness::SceneResourceProvider::loadFromDisc(
@@ -131,6 +136,13 @@ namespace orphen::port
     if (bytes.empty())
     {
       bytes = decodeResource(orphen::harness::kMapCategory, meshId);
+    }
+    if (bytes.empty() && itmArchive_.valid())
+    {
+      // FUN_00221fd8's own model pass: the records at PTR_DAT_0031FEC8 pull
+      // their meshes from ITM.BIN by the record's +0x00 id rather than from a
+      // bundle. That is where the 0x1F1 band's item models live.
+      bytes = itmArchive_.decode(meshId);
     }
     orphen::ported::model::Psc3Model model = orphen::ported::model::loadPsc3Model(bytes);
     const auto inserted = models_.emplace(meshId, std::move(model)).first;

@@ -198,6 +198,124 @@ namespace orphen::ported::camera
     cGpffffb6e3_snapRequest_ = 1;
   }
 
+  void OriginalFieldCamera::FUN_00217d70_set_manual_camera(const orphen::ported::psm2::Vec3 &eye,
+                                                           const orphen::ported::psm2::Vec3 &lookAt)
+  {
+    if (cGpffffad2f_manualCamera_ != 0)
+    {
+      return;
+    }
+
+    DAT_0055f8d8_savedEye_ = DAT_0058c0a8_eye_;
+    DAT_0055f8e4_savedYaw_ = fGpffffb6d4_yaw_;
+    DAT_0055f8e8_savedPitch_ = fGpffffb6d8_pitch_;
+    cGpffffad2f_manualCamera_ = 0xff;
+
+    // 0x23, the script camera. FUN_00217d70 also zeroes the two interpolation
+    // counters (iGpffffbb0c / iGpffffbb14), so FUN_00217b88 has nothing to
+    // move and the pose stays exactly where this puts it. The port has no
+    // interpolator to zero.
+    cGpffffb6e1_subMode_ = 0x23;
+
+    DAT_0058be90_lookAt_ = lookAt;
+    DAT_0058c0a8_eye_ = eye;
+
+    // FUN_00217a70, which publishOrientation is a superset of.
+    publishOrientation();
+  }
+
+  void OriginalFieldCamera::FUN_00217d40_set_eye(const orphen::ported::psm2::Vec3 &eye)
+  {
+    if (cGpffffb6e1_subMode_ != 0x23)
+    {
+      return;
+    }
+    DAT_0058c0a8_eye_ = eye;
+    publishOrientation();
+  }
+
+  void OriginalFieldCamera::FUN_00217d10_set_look_at(const orphen::ported::psm2::Vec3 &lookAt)
+  {
+    if (cGpffffb6e1_subMode_ != 0x23)
+    {
+      return;
+    }
+    DAT_0058be90_lookAt_ = lookAt;
+    publishOrientation();
+  }
+
+  void OriginalFieldCamera::FUN_00217fe8_set_camera_path(
+      std::span<const orphen::ported::psm2::Vec3> eyePoints,
+      std::span<const float> rollValues,
+      std::span<const float> zoomScales,
+      std::span<const orphen::ported::psm2::Vec3> lookAtPoints)
+  {
+    // FUN_00217fe8:13. A camera already installed wins; the caller is expected
+    // to have released it.
+    if (cGpffffad2f_manualCamera_ != 0 || eyePoints.empty() || lookAtPoints.empty())
+    {
+      return;
+    }
+
+    FUN_00217d70_set_manual_camera(eyePoints.front(), lookAtPoints.front());
+
+    // The first pair goes straight into the globals, before the first sample.
+    if (!rollValues.empty() && !zoomScales.empty())
+    {
+      uGpffffb6dc_roll_ = rollValues.front();
+      fGpffffb6e8_zoomLog2_ = FUN_00218230_zoomLog2(zoomScales.front());
+    }
+
+    cameraPath_.FUN_00217fe8_build(eyePoints, rollValues, zoomScales, lookAtPoints);
+  }
+
+  void OriginalFieldCamera::FUN_00218158_step_camera_path(int elapsed, int duration)
+  {
+    if (!cameraPath_.active() || duration == 0)
+    {
+      return;
+    }
+
+    const CameraPathSample sample =
+        cameraPath_.sample(static_cast<float>(elapsed) / static_cast<float>(duration));
+
+    // FUN_00218158 publishes the pair first, then moves the camera.
+    uGpffffb6dc_roll_ = sample.roll;
+    fGpffffb6e8_zoomLog2_ = sample.zoomLog2;
+    FUN_00217d40_set_eye(sample.eye);
+    FUN_00217d10_set_look_at(sample.lookAt);
+  }
+
+  void OriginalFieldCamera::FUN_002241d8_reset_zoom()
+  {
+    cameraPath_.clear();
+    uGpffffb6dc_roll_ = 0.0f;
+    fGpffffb6e8_zoomLog2_ = 1.0f;
+  }
+
+  void OriginalFieldCamera::FUN_00217e18_release_manual_camera(bool restore)
+  {
+    if (cGpffffb6e1_subMode_ == 0)
+    {
+      return;
+    }
+
+    cGpffffad2f_manualCamera_ = 0;
+    cGpffffb6e1_subMode_ = 0;
+
+    if (!restore)
+    {
+      // The original's zero-argument path only sets DAT_0058c0ea, a settle
+      // counter for the follow camera that is not ported.
+      return;
+    }
+
+    DAT_0058c0a8_eye_ = DAT_0055f8d8_savedEye_;
+    fGpffffb6d4_yaw_ = DAT_0055f8e4_savedYaw_;
+    fGpffffb6d8_pitch_ = DAT_0055f8e8_savedPitch_;
+    cGpffffb6e3_snapRequest_ = 1;
+  }
+
   void OriginalFieldCamera::snapToTarget(const orphen::ported::psm2::Vec3 &target)
   {
     DAT_0055f8c8_targetWork_ = {target.x, target.y, target.z + fGpffffbafc_verticalFollow_};
@@ -258,6 +376,20 @@ namespace orphen::ported::camera
         DAT_0058c0a8_eye_.z -= pose_.forward.z * fGpffff8234_freeLookRelease;
         cGpffffb6e4_freeLook_ = 0;
       }
+    }
+
+    // --- manual / script camera -------------------------------------------
+    // FUN_00216aa0:79. A non-zero submode takes the frame away from the follow
+    // camera entirely: 0x1B..0x1E go to FUN_00218710, 0x23 to FUN_00217b88 and
+    // 0x20 re-aims at the target, and every one of them then jumps to the tail.
+    // Without this a cutscene camera survives exactly one frame -- FUN_00217d70
+    // installs it and the follow path overwrites the look-at on the way past.
+    if (cGpffffb6e1_subMode_ != 0)
+    {
+      // 0x23 runs FUN_00217b88(1), which only moves anything while an
+      // interpolation is armed. FUN_00217d70 arms none, so the pose stands.
+      // The other submodes are the manual cameras, still unported.
+      return;
     }
 
     // --- camera mode from the raw pad ------------------------------------

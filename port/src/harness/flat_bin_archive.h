@@ -49,6 +49,12 @@ namespace orphen::harness
     // empty, or the extent falls outside the file.
     std::vector<std::uint8_t> decode(std::uint32_t resourceId) const;
 
+    // The stored bytes, undecompressed. FUN_00223268 only ever DMAs sectors --
+    // every *caller* that wants a compressed resource runs FUN_002f3118 over
+    // the result itself, and FUN_00205548, which reads SND.BIN, does not. So
+    // sound banks are stored raw and need this rather than decode().
+    std::vector<std::uint8_t> raw(std::uint32_t resourceId) const;
+
   private:
     std::vector<std::uint8_t> data_;
   };

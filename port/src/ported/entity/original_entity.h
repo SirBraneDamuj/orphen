@@ -126,6 +126,11 @@ namespace orphen::ported::entity
     std::int32_t interactTarget198 = -1;
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
+    // +0x19C on the *lead player*: the entity holding the item a chest just
+    // gave up, as a pool slot rather than the original's pointer. Zero means
+    // there is none, which is what routes the chest cutscene's state 0x0F
+    // straight to 0x12 instead of through the item display.
+    std::int32_t itemEntity19c = 0;
     std::uint8_t effectActive19e = 0;        // +0x19E: that timer's enable.
 
     // Type 0x62's own block, all written by FUN_002cd210 and read by its states.

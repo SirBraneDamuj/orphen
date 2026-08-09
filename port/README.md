@@ -160,15 +160,261 @@ are ported and hooked into `FUN_00256bb8`'s grounded branch on Cross. The branch
 executable: `0x4004` on party members sends them to scene script header word 3,
 `0x0100` on the chest takes the native path.
 
-- **Chests** work end to end. The cutscene (player states `0xC` -> `0xD` -> `0xE`)
-  is deliberately not ported; instead the chest's event flag is set, which is what
-  the cutscene exists to do, and the already-ported `FUN_002d1ea8` animates
-  4 (closed) -> 5 (opening) from the next frame.
+- **Chests** run their whole cutscene. See The Chest Cutscene below.
 - **Party members** run header word 3 and halt honestly. `0x70` (the angle from
   an object to the player -- how a character turns to face you) is ported; `0x33`,
   inline dialogue, is where it stops, and that is the right place: its operands
   are a variable-length text stream, so a stub would desync everything after it.
   The party swap itself is not implemented.
+
+### The chest cutscene
+
+`src/ported/player/original_chest_cutscene.*` is player states `0x0C`..`0x15`,
+the sequence `FUN_00252828`'s chest branch starts. `analyzed/player_states/chest_cutscene_0x0C_0x15.c`
+is the reading. Six of the ten states have no `src/FUN_*.c` — nothing calls
+them directly, so Ghidra never made functions at `0x002550F0`, `0x00255148`,
+`0x00255260`, `0x002552B0` or `0x00255448`; they came out of the disassembly.
+
+What runs, with the frame each transition lands on in `s01_e024`:
+
+| state | | frame |
+|---|---|---|
+| `0x0C` | arm the fade to black | 61 |
+| `0x0D` | on black: stand the player 0.372 in front of the chest, install the cutscene camera, fade in, enter game mode 6 | 89 |
+| `0x0E` | on visible: play animation `0x57` | 111 |
+| `0x0F` | on the animation's marked keyframe, **set the chest's event flag**; on its last, build the item and hand on | 365 |
+| `0x10` | reveal the item entity | 366 |
+| `0x11` | cross-fade the chest and player out, the item in, raise the caption | 399 |
+| `0x12` | on the caption being dismissed with Cross, arm the fade to white | — |
+| `0x13` | on white: release the camera, push the player clear of the chest, leave mode 6 | 394 |
+| `0x14` | once grounded, arm the fade in from white | 400 |
+| `0x15` | on visible, back to idle | 422 |
+
+Those 254 frames in state `0x0F` are exactly the sum of animation `0x57`'s
+twelve keyframe durations, read out of `grp_0001`. Its keyframe 1 carries
+`0x100` in the trailing word, which lands in entity `+0xAA`; `FUN_00225c90`
+already raised `+0x06` bit 8 on the frame a new entry is taken, so the pair is
+"the lid just came up" and that is where the flag is set.
+
+**Game mode 6 is what freezes the camera.** `DAT_00354D2C` selects the frame
+loop through `PTR_FUN_00318a88`, and entry 6 (`FUN_002245d8`) runs the player,
+the actors and the draw — but not the scene script and **not `FUN_00216aa0`**.
+`PortRuntime::update` reproduces that by gating the script tick and the camera
+update on the mode.
+
+That alone was not enough, and the missing piece is worth recording:
+`FUN_00216aa0:79` gives the whole frame away to the manual camera whenever
+`cGpffffb6e1` is non-zero. Without it the follow camera runs once more on the
+frame state `0x0D` installs the cutscene camera — the mode is read at the *top*
+of `FUN_002239c8`, so that frame still finishes as a field frame — and
+overwrites the look-at with the player's. The port now takes the same early
+exit.
+
+`src/ported/render/original_screen_fade.*` is `FUN_0025d1c0` / `FUN_0025d238` /
+`FUN_0025d2f8`: two blocks, a 0..0x1FE0 ramp whose top five bits are the
+overlay alpha, and a 0xA0-tick hold on the out block once it is fully covered.
+The first transition fades through black and the second through white.
+
+### The camera swing
+
+The camera does not stand still through the opening — unless the chest is
+empty. The move belongs to the *chest*, not to the player's cutscene:
+`FUN_002d1ea8` runs while the lid opens, and on animation 5's third keyframe
+(the one carrying `0x100`) it takes the camera over, but only when
+`entity[+0x130] >= 0` (there is something inside) and `cGpffffb6e1 == 0x23` (a
+script camera is already installed, which is the player's cutscene having put
+one there). An empty chest fails the first test, and its camera stays where
+`FUN_00254db0` parked it. That is the difference between the two chest
+cutscenes.
+
+It is a three-second natural cubic spline. Three eye control points — the
+current eye, then 90 and 135 degrees round the chest, closing half a unit and
+rising 0.2 — one look-at at the chest's origin plus 0.3, and a parallel
+(roll, zoom) curve of `1.5 -> 2.0 -> 3.0`. The zoom values go through
+`FUN_00218230`, which is `log2(2x)`, and `FUN_0020bec8` raises 2 to the result
+against a 3840 base: the shipped `1.0` is 7680 and the curve ends at 23040, a
+3x telephoto. That is what puts the item preview up close.
+
+`ported/camera/original_camera_path.*` is the spline pair: `FUN_00266460`'s
+tridiagonal solve and `FUN_00266668`'s evaluation, which agree with the
+textbook `spline`/`splint` once you read the stored coefficients as the second
+derivative over six. `FUN_00266a78` and `FUN_00266738` build the curves,
+`FUN_00217fe8` installs them and `FUN_00218158` samples them each frame from
+the chest's own `+0x19C` timer against `0x1680` (180 frames).
+
+`FUN_00217b88`, the interpolator `FUN_00216aa0` runs for submode `0x23`, is
+dead code in the retail build: a scan of the whole text segment finds no store
+of a non-zero duration to `iGpffffbb0c` or `iGpffffbb14`. The only thing that
+moves a `0x23` camera is `FUN_00218158`.
+
+`FUN_002241d8`'s `DAT_00355658 = 1.0` puts the projection back at state
+`0x13`.
+
+**Slot 0 obeys the hidden bit too.** `FUN_0020c5a8` walks all 256 slots and
+skips any whose `+0x08` bit 0 is set; `0x11` raises it on the player once the
+cross-fade finishes, which is what leaves the item alone on screen.
+`publishSceneObjectViews` was pushing slot 0 unconditionally, so Orphen stayed
+visible behind the caption. It now takes the same skip — after `attachModel`,
+because the bandana reads slot 0's palette and the hidden test is a *draw*
+skip, not a pose one.
+
+### Why the room goes black
+
+Three separate things in `FUN_002342c0`, and none of them is the fade:
+
+1. **Every entity from pool slot 2 up is hidden.** Its tail loop raises `+0x08`
+   bit 0 and `+0x04` bit 0x4000 on slots 2..255, and `FUN_0020c5a8:69` skips a
+   slot whose `+0x08` bit 0 is set, raising bit 0x10 on it so the pose sampler
+   knows there is no previous frame to blend out of. Slot 0 is below the loop's
+   start and state `0x0D` clears both bits on the chest — so the other six
+   chests, the party, the enemies and the player's own bandana (slot 4) all
+   stop drawing.
+2. **`DAT_00355700` is left at 3.** It spins `FUN_002340e0` until that
+   function's done byte flips, and the first pass takes the darken branch.
+   `FUN_00209140:91` hands `DAT_00355700` to VU1 as the cap on every map
+   primitive's fade byte, against the same `0x80` = x1.0 scale the occlusion
+   fade uses, so the room draws at about 2%. The port had that cap plumbed
+   through `MapVisibilityInput::globalFadeCap` already and simply never had
+   anything to set it.
+3. **The lighting and fog are replaced**: ambient `0x404040`, light 0
+   `0x808080`, fog colour `0x000000`, light direction straight down. The fog
+   colour matters as much as the cap — a capped primitive is nearly
+   *transparent*, not nearly black, so what the room reads as is whatever is
+   behind it, and that is the fog-colour clear. Setting only the cap leaves a
+   flat grey screen.
+
+`FUN_00234400` undoes all three: its own loop restores `+0x04` and `+0x08` per
+slot, and `FUN_00233eb8` puts the camera, the lights, the fog and
+`DAT_00355700` back — the last from snapshot byte `+0x1DA65`.
+
+### The item display
+
+States `0x10` and `0x11` are the item reveal, and they run. `FUN_00254f60`'s
+item branch builds a second entity in **pool slot 2** with type `id + 0x1F1`,
+animation 4, positioned on the chest's role-1 bone, and `+0x04` bit `0x4000`
+set — that bit is load-bearing: without it `FUN_00239ce0` dispatches the
+item's *usable* handler, which for a lantern is `FUN_002d4cd8` and would light
+the player and then delete itself. `0x10` reveals the item, `0x11` ramps the
+chest and the player out on `+0x134` while the item ramps in, then raises the
+caption and hands to `0x12`.
+
+`+0x134` is an alpha on the GS's `0x80` = x1.0 scale where **zero means fully
+opaque** — `FUN_0020c810:142` substitutes `0x80` for it. It now reaches the
+renderer through `SceneObjectView::fadeLevel`.
+
+**The item's mesh comes from `ITM.BIN`.** The `0x1F1` band's model records
+(`DAT_0031A95C + typeId * 0x2C`) name a mesh that is in no scene bundle:
+`FUN_00221fd8` loads those through `FUN_00221b78`, which is archive index 4,
+`ITM.BIN`. `EntityModelStore` searches it after the scene and boot bundles. A
+disc root without the file is not fatal — the preview reports
+`has no model -- ITM.BIN missing from the disc root?` and the cutscene
+continues — but with it the lantern draws. The spin is the model's own
+animation 4, not a facing the code drives: nothing writes the item's `+0x5C`
+after the initial copy from the chest.
+
+`ported/resource/item_database.*` is `FUN_00228e28`'s SCR.BIN resource 1 plus
+`FUN_00229688`'s lookup: dword 8 points at per-group triples, and group 0's
+`[1]` and `[2]` are `u32 -> u16 -> string` chains for names and descriptions.
+The strings are plain ASCII — item 64 is `Blue Lantern`, 65 is
+`Purple Lantern`, which is what `s01_e024`'s chest slot 17 holds.
+
+### The two messages
+
+Both branches of the cutscene put a window up, and both come out of the same
+place: `FUN_0025b9e8(index)` reads dword 5 of the item-database blob — SCR.BIN
+resource 1 — as a table of message-stream offsets. `FUN_00254f60` picks index
+0 when the chest had something in it and index 1 when it did not.
+
+```
+index 0   1B 09 05 | 14 <id> | 01
+index 1   1B 09 05 | 07 | "The chest is empty." | 01
+```
+
+Four control codes between them, out of the 31-entry handler table at
+`0x0031C640`:
+
+| code | handler | what it does |
+|------|---------|--------------|
+| `0x1B` | `FUN_00239aa0` | set the event flag in the next **two** bytes — `0x0509`, which is what `FUN_002391d0` tests before it will draw anything |
+| `0x07` | `FUN_00239368` | `FUN_00238f98`, a new line |
+| `0x14` | `FUN_002397f0` | splice in an item name; **one** operand byte, which state `0x0F` patches with the chest's id through `FUN_00237ca0` |
+| `0x01` | `FUN_002391d0` | raise the prompt, wait for Cross, close |
+
+`0x1B`'s two operand bytes are the thing that makes this readable at all: read
+as three separate codes, `1B 09 05` looks like a prompt-and-wait before any
+text has been drawn.
+
+The empty line lands one row lower than the item line, because it leads with
+`0x07` and the item stream does not. `FUN_00238f18` clears the row counter when
+the window opens, so `0x07` steps it from 0 to 1.
+
+`player +0x19C` is the *stream pointer* in the original, not an item id — state
+`0x0F` stages `FUN_0025b9e8(0)` there with the id already patched in, and state
+`0x11` opens it. The port stages the message by number and reads the id back off
+the chest, so `+0x19C` is only the "there is a stream" marker the completion
+test reads it as. (Storing the id there, as an earlier pass did, would have sent
+a chest holding item 0 down the empty path.)
+
+**This is still not the dialogue system.** `ported/player/original_item_window.*`
+reads the real streams and expands the four codes above, but the other 27 stop
+the reader and get reported; there is no wrapping against `FUN_00237b38`'s
+600-unit width, and the glyph list is rebuilt each frame rather than
+accumulated. A real dialogue port should replace that file rather than build on
+it.
+
+The *font*, on the other hand, is the real one — see below.
+
+### The dialogue font and the book prompt
+
+`ported/text/original_dialogue_text.*` is the sheet, the metrics and the
+prompt; `MapViewer::drawDialogueSprites` blits what it produces.
+
+`FUN_00221fd8` binds texture `0x173` into slot `0x2E` and `0x172` into `0x2F`.
+Eleven columns of 22x22 cells indexed by `character - 0x20`, continuing in the
+second slot once the index runs off the bottom of the first at character
+`0x99` (`FUN_00238a08:52`, whose `+ 0xE` then modulo-256 is "subtract a sheet,
+keep the 14-unit remainder of the last row").
+
+**The font is proportional and the width table is not in the executable.**
+`FUN_00238c90` computes it at boot: for each cell it scans for the rightmost
+column holding a texel whose palette alpha clears 100, and stores `column + 2`
+(or 6 for a blank) at `0x0031C518 + character`. The port runs the same scan
+over the decoded slot. It agrees with the live table in the EE dump on all 121
+cells of `0x2E`. Text advances at 90% of the measured width —
+`(width * 0x5A) / 100` in `FUN_00238a08`, which is `FUN_00238608`'s
+`(cellWidth * 100) / 22` with the shipped 20-wide cell.
+
+The screen units are the debug overlay's: `FUN_00207938` writes x at `<< 4` and
+y at `<< 3` about the 2048-pixel GS centre, so the same 640x448 virtual screen,
+and `FUN_00239020` negates y on the way in — a larger entry y is further *up*.
+`FUN_00237b38` opens a window at entry `(-0x130, -0x78)`, which is screen
+`(16, 344)`; glyphs add 8 to the x and the prompt adds `0x10`.
+
+The prompt is the flipping book, not a character. `FUN_002391d0` builds it as a
+sprite in slot `0x2A` (texture `0x178`), 15x15 texels drawn at 20x22, and
+`FUN_00237fc0:77-95` animates it from the four-entry table at `0x0031C630` —
+cells at `(96,32)`, `(96,48)`, `(112,48)`, `(112,32)`, so the frames run *round*
+the 2x2 block rather than across it. The timer advances by the frame tick,
+holds each frame for `0x80` and wraps past `0x200`: four frames each, sixteen
+frames a cycle.
+
+`FUN_00238608`'s other branch — characters at or above `0xFC`, which draw a
+32x32 face-button icon from slot `0x2C` through the UV table at `0x0031C220` —
+is documented in the header but not reachable from a caption.
+
+For the camera half of `FUN_00234400`, `FUN_00217d70`'s own save/restore pair
+covers it.
+
+Checkable without a window, and `--press-confirm` now works under
+`--screenshot` too:
+
+```
+orphen_port --disc-root . --scene s01_e024 --frames 460 \
+    --spawn -4.5,-10.5,0 --press-confirm 60 --actor-report
+```
+
+That spawns beside chest slot 17, facing it, and the report ends with that
+chest on animation 6 and every other one still on 4.
 
 ### The bandana
 
@@ -243,8 +489,148 @@ enemy's chase state is not ported yet: it writes movement into `+0x30`/`+0x34`
 and a hover height into `+0x38`, and none of that is integrated for slots
 1..255, so porting it would look like nothing happened.
 
-`--press-confirm <frame>` fires Cross from `--frames`, so the interaction path is
-checkable without a window. `--frames` remains exactly deterministic.
+`--press-confirm <frame>[,<frame>...]` fires Cross on each listed frame from
+`--frames` or `--screenshot`, so the interaction path is checkable without a
+window — the chest cutscene needs two presses, one to open it and one to
+dismiss the caption. `--frames` remains exactly deterministic.
+
+## Sound
+
+The port makes noise now, for the two cues the chest cutscene plays. The
+sources are `ported/sound/original_sound_bank.*` (the container, the VAB and
+the PS-ADPCM decoder), `ported/sound/original_sound_engine.*` (the cue table,
+the attenuation and the mixer) and `harness/audio_device.*` (SDL2). The
+analysis is in `analyzed/sound_effect_playback.c`.
+
+**The EE never mixed anything.** Every sound function in the executable ends at
+a SIF command to the IOP, and the IOP runs a libsnd driver that owns SPU2. So
+the ported half stops exactly where `FUN_00204d88` does:
+
+```
+FUN_00204d88(0x4069, (vabId << 8) | program, note << 8, volLeft, volRight)
+```
+
+and everything past that is the harness's own.
+
+### Cues
+
+`FUN_00228e28` loads 711 eight-byte records out of **SCR.BIN resource 199**:
+bank, program, note, volume, cap. `FUN_00205118` loads three banks from
+**SND.BIN resources 1, 2 and 3**; bank 0 is where the common sound effects
+live. Both files are in the disc root already.
+
+`FUN_00267a80` measures against the **camera**, not the player: silent past 14
+units, panned by the angle between the sound and the camera's yaw, with a floor
+inside three units that keeps a close sound in both ears while the camera
+swings. `FUN_002057c8` then scales by the record's volume and the master.
+
+### What plays, and through what
+
+Nothing here is a per-sound hook. Each of these is the *mechanism* the original
+uses, ported once, with the specific sounds falling out of it:
+
+| sound | mechanism | ported in |
+|-------|-----------|-----------|
+| footsteps | `FUN_00256ff8`: an animation keyframe carrying `0x100`, then the surface table | `ported/entity/original_entity_sound.*` |
+| jump | the same surface table, column 2, from `FUN_00256bb8`'s jump branch | the player controller |
+| the flying enemies' buzz | `FUN_002cd0a0` retriggering `FUN_002cde50` on a per-entity period | `FUN_002cd0a0_enemy62` |
+| the chest lid | `FUN_002d59e0` on animation 5's event keyframe | `FUN_002d1ea8_treasure_chest` |
+| the item fanfare | `FUN_00257b10` at `0x00255240` | the chest cutscene's state `0x11` |
+
+**Footsteps are authored into the animation.** `FUN_00256ff8` fires only when
+the entity stepped onto a keyframe whose trailing word has `0x100`; in
+`grp_0001` the walk animation carries it on keyframes 1 and 3 of four, and the
+run on 4 and 9 of ten. `0x200` alongside it distinguishes the two feet, and
+picks the dust effect rather than the sound.
+
+The cue then comes from the **surface**: `FUN_00255d88` takes the top nibble of
+the collision record's word 1 -- the `terrainFlags` the ground query already
+returns -- as a material, indexes `DAT_0031E028[material][kind]`, and
+`FUN_00251c80` offsets that by the character's class. Orphen is class 0, base
+`0x3F`, so on material 0 he walks with cue 63 and runs with 67 -- 0.14 s and
+0.13 s of waveform. Walking around `s01_e024` reaches materials 0 and 3.
+
+`+0x04` bit `0x1000` gates it, and `FUN_0022a418:204` sets that bit on pool
+slot 0 and nowhere else -- so **only the lead player has footsteps**, which is
+also why `FUN_00256ff8` is only ever called from player states. The port was
+not setting `+0x04` on the lead player at all, which is what
+`FUN_0022a418_stamp_lead_player_flags` now fixes; the party members' `0x00A4`
+correctly stays silent.
+
+The buzz is one cue retriggered: type `0x62` rolls a period of 24..31 frames
+once into `+0x1C6` and fires cue `0x196` whenever the *global* frame counter
+divides by it. The waveform is 1.3 s long, so the repeats overlap into a drone,
+and because the test is against the frame counter rather than a per-entity
+timer, a group of them beats against itself. **Porting that roll shifts the
+RNG stream**, so the enemies and the bandana land in different places than the
+pre-sound baseline -- the original consumes `FUN_00216868` there and the port
+previously did not.
+
+### Waveforms
+
+Bank 0 is a standard Sony VAB, version 7, 14 programs. Its programs are **key
+split** -- every tone has `min == max`, so the note picks the waveform rather
+than transposing one. Program 11 note 60 is waveform 13 and program 0 note 67
+is waveform 54, and their centre notes put them at 11027 Hz and 22055 Hz
+against SPU2's 48 kHz pitch base. A VAB records a sample rate as a centre note.
+
+**The tone's `shift` is added, not subtracted:**
+
+```
+rate = 48000 * 2^(((note - centre) * 128 + shift) / (12 * 128))
+```
+
+The field reads like a fine tune *on* the centre note, which would subtract it
+-- and `shift` is 69 almost everywhere, so getting that backwards puts
+everything 1.08 semitones flat. Two checks say added: 86 of the 280 resolvable
+cues then land within 1% of a standard authoring rate against 9 the other way,
+and five of the SPU2 voice pitch registers in a PCSX2 savestate are reproduced
+*exactly* against none. Cue 8 lands on 22055 Hz and cue 159 on 11027, which are
+22050 and 11025 to within a cent.
+
+The decode was checked against a PCSX2 savestate: **SND.BIN resource 1's body
+section is byte-identical to the 241504 bytes at SPU2 RAM `0x19000`**, and its
+header matches the copy at IOP RAM `0x93900` apart from the `ProgAtr` block,
+which libsnd rewrites when it opens a VAB. `0x93900` is also what `DAT_00355A1C`
+holds in the EE dump, so what the EE calls a bank's "SPU address" is an IOP one.
+
+### Running it
+
+Audio opens on any windowed run, capture runs included -- the mixer is on its
+own thread and cannot reach anything a capture compares, and two captures of
+the same frame still hash identically with it open. `--no-audio` turns it off.
+
+Headless runs never open a device. To hear one anyway:
+
+```
+orphen_port --disc-root . --scene s01_e024 --frames 620     --spawn -4.5,-10.5,0 --press-confirm 60,440     --sound-dump out/sfx/chest_cutscene.wav --sound-report
+```
+
+`--hold-stick <angle>,<magnitude>` drives the analog stick for every headless
+or capture frame, which is how the footsteps get exercised without a pad --
+magnitude is the original's 0..128 and above 100 is a run:
+
+```
+orphen_port --disc-root . --scene s01_e024 --frames 400 --spawn -4.5,-10.5,0 --hold-stick 1.0,60 --sound-dump out/sfx/walk_and_buzz.wav --sound-report
+```
+
+`--sound-report` prints every cue with what it resolved to, which is how the
+C++ path was checked against an independent Python decode -- both land on
+waveform 13 at 18704 samples and waveform 54 at 50652 samples, same rates.
+`--sound-dump` renders one frame of mixer output per simulation step; the two
+bursts in that WAV start at frames 166 and 391, matching the cue log.
+
+### What is not ported
+
+- **ADSR.** The tones carry SPU envelopes and the mixer ignores them. These are
+  one-shots whose decay is in the waveform, so it is close, but a sustained cue
+  would hold forever.
+- **Sequences.** Section 2 of a bank is `SEQp` data and `FUN_00206128` is the
+  negative-cue path that plays it. No music.
+- **Scene-streamed banks.** A cue whose record byte +7 is non-zero picks its
+  bank through `FUN_00205778`; the report says `alternate bank not ported`.
+- **Absolute loudness.** The chain reproduces the game's relative volumes, but
+  nothing models the IOP's own master, so the overall level is a guess.
 
 ## Camera
 
@@ -298,6 +684,13 @@ decides which of them to call and in what order (`FUN_00209140`).
   window ("Hor+"), so a 4:3 window reproduces the shipped framing and a wider
   one reveals more to the sides. That deliberately differs from the game's own
   widescreen path (`cGpffffb66e`, a fixed 0.77 x squeeze).
+- The 3D viewport is a **4:3 box centred in the window**, with the leftover as
+  bars. Anything that belongs to the game's picture is confined to that box:
+  the fog-colour clear is scissored to it, and so is the screen fade
+  (`FUN_0025d0e0`'s sprite is a GS primitive inside the 640x224 frame, so there
+  is nothing outside the frame for it to cover -- drawn full-window, the
+  cutscene's fade to white washed the bars out with it). `--window <w>x<h>` is
+  the way to see that: the default 960x720 is already 4:3 and has no bars.
 - `original_map_visibility.*` ports the per-frame loop: the sphere-vs-frustum
   reject, the per-primitive occlusion fade, and the 4096-bucket back-to-front
   depth sort. It runs on the fixed simulation step, not in `render()`, because

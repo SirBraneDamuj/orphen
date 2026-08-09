@@ -18,6 +18,18 @@ namespace orphen::port
     // copy, so script opcodes that address entity 0 see the real player.
     void bindEntity(orphen::ported::entity::OriginalEntity &slot) { controller_.bindEntity(slot); }
 
+    // The player states FUN_00251ed8 dispatches that the controller does not
+    // implement itself -- currently the chest cutscene, 0x0C..0x15.
+    void setSoundPlayer(orphen::ported::entity::EntitySoundPlayer play)
+    {
+      controller_.setSoundPlayer(std::move(play));
+    }
+
+    void setScriptedStateStep(orphen::ported::player::OriginalScriptedStateStep step)
+    {
+      controller_.setScriptedStateStep(std::move(step));
+    }
+
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,
                     const std::optional<orphen::ported::psm2::Vec3> &spawnOverride = std::nullopt);
     void update(std::uint32_t frameTicks,
