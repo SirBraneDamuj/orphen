@@ -1836,6 +1836,7 @@ namespace orphen::port
       mapViewer_.setMapDrawList({});
     }
     reportLeadPlayerGroundChange();
+    updateOriginalDebugOverlay();
     updateHud(input, frameTicks);
 
     memory_.write(kHarnessFrameCounterAddress, frameCount_);
@@ -1953,6 +1954,53 @@ namespace orphen::port
               << " leading=0x" << std::hex << groundHit.leadingWord
               << " terrain=0x" << groundHit.terrainFlags << std::dec
               << (groundHit.sampledByOriginalTerrain ? " sampled" : " unsampled") << '\n';
+  }
+
+  // FUN_002239c8 lines 140-165 followed by FUN_00268270. The original runs the
+  // printf side inside the frame function and the layout side later in the
+  // same frame; the port does both on the simulation step so the glyph list a
+  // render sees is the one that frame produced, however many times it renders.
+  void PortRuntime::updateOriginalDebugOverlay()
+  {
+    // cGpffffb66a and cGpffffb66c. Both are cheat/menu bytes in the original
+    // and there is no way into either yet, so the port holds them on -- which
+    // is also the state the s01_e024 EE dump was captured in. Debug active
+    // plus output on is what selects the detailed readout.
+    DAT_00572c38_debugText_.setDAT_003555da_debugActive(true);
+    DAT_00572c38_debugText_.setDAT_003555dc_outputEnabled(true);
+
+    if (DAT_00355098_positionDisplay_)
+    {
+      const auto &lead = entityPool_.leadPlayer();
+      const auto &pose = fieldCamera_.pose();
+
+      orphen::ported::debug::PositionDisplayState state;
+      state.DAT_0058bed0_playerX = lead.positionX20;
+      state.DAT_0058bed4_playerY = lead.positionZ24;
+      state.DAT_0058bed8_playerZ = lead.positionY28;
+      state.DAT_0058bebc_moveFlags = lead.collisionFlags0c;
+      state.DAT_0058beb4_attrFlags = lead.halfword04;
+      state.DAT_0058beb8_stateFlags = lead.halfword08;
+      state.DAT_0058beb6_nowFlags = lead.flags06;
+      state.DAT_0058be90_targetX = pose.target.x;
+      state.DAT_0058be94_targetY = pose.target.y;
+      state.DAT_0058be98_targetZ = pose.target.z;
+      state.DAT_0058c0a8_cameraX = pose.eye.x;
+      state.DAT_0058c0ac_cameraY = pose.eye.y;
+      state.DAT_0058c0b0_cameraZ = pose.eye.z;
+
+      // DAT_003551f4 / DAT_003551f0. The MCB selection is the same pair: the
+      // dump for s01_e024 holds 1 and 0x18, and the line reads MP0124.
+      if (const auto scene = mapViewer_.loadedDiscScene())
+      {
+        state.iGpffffb284_mapSection = scene->section;
+        state.uGpffffb280_mapEntry = scene->entry;
+      }
+
+      orphen::ported::debug::FUN_002239c8_emitPositionDisplay(DAT_00572c38_debugText_, state);
+    }
+
+    mapViewer_.setOriginalDebugGlyphs(DAT_00572c38_debugText_.FUN_00268270_layoutAndDrain());
   }
 
   void PortRuntime::updateHud(const InputSnapshot &input, std::uint32_t frameTicks)

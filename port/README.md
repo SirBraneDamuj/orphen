@@ -615,6 +615,80 @@ Controls:
 - `F` toggles wireframe.
 - `H` toggles the debug HUD.
 
+## POSITION_DISP, the original's own overlay
+
+`src/ported/debug/` is the game's debug text path rather than the harness's:
+
+- `original_debug_text.*` is `FUN_002681c0` (the printf that appends into
+  `DAT_00572c38` behind the `DAT_003555dc` / `DAT_003555da` gates) and
+  `FUN_00268270` (the once-a-frame pass that walks that buffer placing one
+  glyph per printable character and then clears `DAT_003551dc`).
+- `original_position_display.*` is the `cGpffffb128` block of `FUN_002239c8`,
+  which is what the debug menu's `ON :POSITION DISP` row turns on.
+
+It draws **always** for now. `cGpffffb128` (`DAT_00355098`) is held on and both
+debug gates with it, because nothing reaches `FUN_00268d30`'s menu yet.
+
+There are two readouts and the original picks between them on the gates:
+`cGpffffb66a == 0 || cGpffffb66c != 0` takes the detailed one, otherwise the
+compact one. Both are ported; the port shows the detailed one, which is five
+lines:
+
+```
+(-3250, -12750, 0)
+MF:00003015 AF:3024 SF:0026 NF:0000
+tPOS>(-3250, -12750, 800)
+cPOS>(-6101, -12750, 875)
+MAP>(MP0124)
+```
+
+That block is the `s01_e024` EE dump read through the ported formatter, and it
+is the check the layout was built against: the unlabelled first line is the lead
+player's `+0x20` triple, `tPOS` is the camera's look-at (`DAT_0058be90`), `cPOS`
+is the camera entity's own position (`0x0058C088 + 0x20`), and `MAP` is
+`DAT_003551f4` / `DAT_003551f0`, which are the MCB section and entry. Positions
+are scaled by 1000 and truncated. **`AF`/`SF` do not match the dump yet** --
+`FUN_0022a418`'s `DAT_0058beb4 = ... | 0x3000` and `DAT_0058beb8 |= 4` are not
+in the port's scene bootstrap, so those two read 0.
+
+### Coordinates
+
+`FUN_00268270` works in the units `FUN_00268410` hands the sprite builder, and
+`FUN_00207938` writes x at `<<4` but y at `<<3`. With the shipped GS geometry
+(`SCISSOR_1` 640x224, `XYOFFSET_1` centred on 320 x 112) that makes one x unit
+one framebuffer pixel and one y unit half of one -- the framebuffer is a field,
+displayed at 448 lines. So the overlay is authored on a **640x448** screen:
+`screenX = 320 + x`, `screenY = 224 - y`, a 16-pixel left margin, a first line
+at y = 8, a 10x20 glyph cell, a 12-pixel advance and a 20-pixel line pitch.
+Lines wrap once x passes 304 and `~` jumps to a bottom line at y = 414,
+right-aligned on x = 640 by the length of *everything left in the buffer* --
+not the token that follows, which is what `FUN_002685e8` is actually measuring.
+
+The port fits that 640x448 box into the window uniformly and centred. The world
+is drawn Hor+, but the overlay's two anchors only line up with each other inside
+the shipped 4:3 frame.
+
+### The glyph atlas
+
+`FUN_00268410` textures each 10x20 quad from a 7x15 texel window at
+`(((c - 0x20) & 0x1F) * 8 + 1, ((c - 0x20) >> 5) * 16 + 1)` of texture slot
+`0x30` -- an 8x16 cell grid, 32 columns, three rows covering 0x20..0x7F, so a
+256x48 band. `FUN_00221fd8` binds slot `0x30` to texture `0x179`, which the EE
+dump confirms (`DAT_003429a8[0x30] == 0x179`), and the port already had it:
+it is one of `EntityModelStore::FUN_00221fd8_bind_boot_textures`' seven fixed
+binds, resolved out of the `s00_e000` boot bundle and uploaded per slot by
+`ensureSlotTexturesUploaded`. So the overlay draws the game's own glyphs.
+
+`0x179` is a 256x256 sheet shared with the chest and title art, and **the font
+band is at the bottom in storage order** -- v = 0 is the last stored row. That
+is exactly the flip `decodeBmpaTexture` already applies, so the window
+coordinates index the decoded image directly. Reading the raw record without
+the flip shows the particle sprites that sit at the sheet's other end, which is
+what made this look for a while like the wrong texture.
+
+The harness stroke font is still the fallback for a run with no boot bundle;
+it is sized to sit inside the original's cell so the layout does not change.
+
 ## Debug HUD
 
 `H` toggles an on-screen overlay showing position and facing, the entity `+0x60`
@@ -624,9 +698,13 @@ vertical velocity, stick magnitude with the resulting walk/run gait, camera mode
 PCSX2 trace comparison, so this overlay plus `--frames` determinism is how
 behavior gets judged.
 
-`src/harness/debug_text.*` is a small stroke font for that overlay only. It is
-PC-only diagnostics and is unrelated to the original's text renderer
-(`FUN_002681c0` and its glyph tables), which draws through the GS.
+It stacks below the ported POSITION_DISP overlay rather than through it.
+
+`src/harness/debug_text.*` is a small stroke font, PC-only diagnostics with no
+relationship to the game's own. It serves both overlays: the harness HUD lays
+out its own lines with it, and `drawOriginalOverlay` stamps the glyphs
+`FUN_00268270` already placed -- from slot `0x30`'s atlas when it is resident,
+falling back to the stroke font when it is not.
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 

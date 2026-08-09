@@ -5,6 +5,8 @@
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
+#include "ported/debug/original_debug_text.h"
+#include "ported/debug/original_position_display.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"
@@ -225,6 +227,15 @@ namespace orphen::port
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();
     void updateHud(const InputSnapshot &input, std::uint32_t frameTicks);
+    // FUN_002239c8's POSITION_DISP block, then FUN_00268270's layout pass.
+    void updateOriginalDebugOverlay();
+
+    // DAT_00572c38 / DAT_003551dc, the debug overlay's text buffer.
+    orphen::ported::debug::DebugTextBuffer DAT_00572c38_debugText_;
+    // cGpffffb128 / DAT_00355098, the debug menu's POSITION_DISP toggle. The
+    // original defaults it off and FUN_00268d30 turns it on; the port holds it
+    // on because there is no debug menu to reach it through yet.
+    bool DAT_00355098_positionDisplay_ = true;
   };
 
 } // namespace orphen::port

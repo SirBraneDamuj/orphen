@@ -2,6 +2,7 @@
 
 #include <SDL_opengl.h>
 
+#include <algorithm>
 #include <cctype>
 
 namespace orphen::harness
@@ -51,6 +52,9 @@ namespace orphen::harness
       static const StrokeSegment kY[] = {{0, 1, 0.5f, 0.5f}, {1, 1, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f, 0}};
       static const StrokeSegment kZ[] = {{0, 1, 1, 1}, {1, 1, 0, 0}, {0, 0, 1, 0}};
 
+      static const StrokeSegment kGreater[] = {{0.2f, 0.9f, 0.8f, 0.5f}, {0.8f, 0.5f, 0.2f, 0.1f}};
+      static const StrokeSegment kLess[] = {{0.8f, 0.9f, 0.2f, 0.5f}, {0.2f, 0.5f, 0.8f, 0.1f}};
+      static const StrokeSegment kPercent[] = {{0, 0, 1, 1}, {0, 0.75f, 0.3f, 0.75f}, {0.3f, 0.75f, 0.3f, 1}, {0.3f, 1, 0, 1}, {0, 1, 0, 0.75f}, {0.7f, 0, 1, 0}, {1, 0, 1, 0.25f}, {1, 0.25f, 0.7f, 0.25f}, {0.7f, 0.25f, 0.7f, 0}};
       static const StrokeSegment kMinus[] = {{0.1f, 0.5f, 0.9f, 0.5f}};
       static const StrokeSegment kPlus[] = {{0.1f, 0.5f, 0.9f, 0.5f}, {0.5f, 0.15f, 0.5f, 0.85f}};
       static const StrokeSegment kDot[] = {{0.4f, 0, 0.6f, 0}};
@@ -105,6 +109,9 @@ namespace orphen::harness
       case 'X': ORPHEN_GLYPH(kX);
       case 'Y': ORPHEN_GLYPH(kY);
       case 'Z': ORPHEN_GLYPH(kZ);
+      case '>': ORPHEN_GLYPH(kGreater);
+      case '<': ORPHEN_GLYPH(kLess);
+      case '%': ORPHEN_GLYPH(kPercent);
       case '-': ORPHEN_GLYPH(kMinus);
       case '+': ORPHEN_GLYPH(kPlus);
       case '.': ORPHEN_GLYPH(kDot);
@@ -134,6 +141,24 @@ namespace orphen::harness
 
   void DebugTextRenderer::drawGlyph(char character, float originX, float originY, float scale) const
   {
+    drawGlyph(character, originX, originY, scale, scale);
+  }
+
+  void DebugTextRenderer::drawGlyph(char character,
+                                    float originX,
+                                    float originY,
+                                    float scaleX,
+                                    float scaleY) const
+  {
+    // Lowercase has no strokes of its own; shrink the capital instead so a
+    // lowercase letter is at least distinguishable from its capital.
+    const unsigned char raw = static_cast<unsigned char>(character);
+    if (std::islower(raw))
+    {
+      character = static_cast<char>(std::toupper(raw));
+      scaleY *= kSmallCapHeight;
+    }
+
     int strokeCount = 0;
     const StrokeSegment *strokes = glyphStrokesImpl(character, strokeCount);
     if (strokes == nullptr)
@@ -144,15 +169,157 @@ namespace orphen::harness
     for (int strokeIndex = 0; strokeIndex < strokeCount; ++strokeIndex)
     {
       const StrokeSegment &stroke = strokes[strokeIndex];
-      glVertex2f(originX + stroke.x0 * scale, originY - stroke.y0 * scale);
-      glVertex2f(originX + stroke.x1 * scale, originY - stroke.y1 * scale);
+      glVertex2f(originX + stroke.x0 * scaleX, originY - stroke.y0 * scaleY);
+      glVertex2f(originX + stroke.x1 * scaleX, originY - stroke.y1 * scaleY);
     }
+  }
+
+  float DebugTextRenderer::drawOriginalOverlay(
+      int framebufferWidth,
+      int framebufferHeight,
+      const std::vector<orphen::ported::debug::DebugGlyph> &glyphs,
+      unsigned int fontAtlasTexture,
+      int fontAtlasWidth,
+      int fontAtlasHeight) const
+  {
+    namespace text = orphen::ported::debug::text;
+
+    if (glyphs.empty() || framebufferWidth <= 0 || framebufferHeight <= 0)
+    {
+      return 0.0f;
+    }
+
+    // Fit the original's 640x448 picture into the window without distorting
+    // it. The world is drawn Hor+ -- wider than 4:3 reveals more to the sides
+    // -- but the overlay is authored against the shipped framing, and both of
+    // its anchors (the left margin at x = 16, the '~' escape's right edge at
+    // x = 640) only line up with each other inside that box.
+    const float scale = std::min(static_cast<float>(framebufferWidth) / text::kScreenWidth,
+                                 static_cast<float>(framebufferHeight) / text::kScreenHeight);
+    const float offsetX = (framebufferWidth - text::kScreenWidth * scale) * 0.5f;
+    const float offsetY = (framebufferHeight - text::kScreenHeight * scale) * 0.5f;
+
+    const float cellWidth = text::kGlyphCellWidth * scale;
+    const float cellHeight = text::kGlyphCellHeight * scale;
+    const float capWidth = text::kGlyphCellWidth * kCapWidthFraction * scale;
+    const float capHeight = cellHeight * kCapHeightFraction;
+    const float baselineRise = cellHeight * kBaselineFraction;
+
+    const bool textured = fontAtlasTexture != 0 && fontAtlasWidth > 0 && fontAtlasHeight > 0;
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_FOG);
+
+    // FUN_00268410 passes 0x80808080 as the vertex colour, which is x1.0
+    // through the GS's (Ct * Cv) >> 7 -- so the glyph shows its own texels.
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    float lowestY = 0.0f;
+
+    if (textured)
+    {
+      const float atlasWidth = static_cast<float>(fontAtlasWidth);
+      const float atlasHeight = static_cast<float>(fontAtlasHeight);
+
+      glEnable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, fontAtlasTexture);
+      glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glBegin(GL_QUADS);
+
+      for (const auto &glyph : glyphs)
+      {
+        const auto window = orphen::ported::debug::FUN_00268410_glyphWindow(glyph.character);
+        const float u0 = window.u / atlasWidth;
+        const float u1 = (window.u + window.width) / atlasWidth;
+        const float v0 = window.v / atlasHeight;
+        const float v1 = (window.v + window.height) / atlasHeight;
+
+        const float left = offsetX + glyph.x * scale;
+        const float top = offsetY + glyph.y * scale;
+        const float right = left + cellWidth;
+        const float bottom = top + cellHeight;
+
+        glTexCoord2f(u0, v0);
+        glVertex2f(left, top);
+        glTexCoord2f(u1, v0);
+        glVertex2f(right, top);
+        glTexCoord2f(u1, v1);
+        glVertex2f(right, bottom);
+        glTexCoord2f(u0, v1);
+        glVertex2f(left, bottom);
+
+        lowestY = std::max(lowestY, bottom);
+      }
+
+      glEnd();
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    else
+    {
+      glDisable(GL_TEXTURE_2D);
+      glLineWidth(std::max(1.0f, scale * 0.75f));
+      glBegin(GL_LINES);
+
+      for (const auto &glyph : glyphs)
+      {
+        const float cellLeft = offsetX + glyph.x * scale;
+        const float cellBottom = offsetY + glyph.y * scale + cellHeight;
+        drawGlyph(glyph.character, cellLeft, cellBottom - baselineRise, capWidth, capHeight);
+        lowestY = std::max(lowestY, cellBottom);
+      }
+
+      glEnd();
+    }
+
+    if (blendWasEnabled == GL_FALSE)
+    {
+      glDisable(GL_BLEND);
+    }
+    if (textureWasEnabled == GL_FALSE)
+    {
+      glDisable(GL_TEXTURE_2D);
+    }
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (textureWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_TEXTURE_2D);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+
+    return lowestY;
   }
 
   void DebugTextRenderer::draw(int framebufferWidth,
                                int framebufferHeight,
                                const std::vector<std::string> &lines,
-                               float pixelsPerGlyph) const
+                               float pixelsPerGlyph,
+                               float topOffsetPixels) const
   {
     if (lines.empty() || framebufferWidth <= 0 || framebufferHeight <= 0)
     {
@@ -163,7 +330,7 @@ namespace orphen::harness
     const float advance = pixelsPerGlyph * 0.78f;
     const float lineHeight = pixelsPerGlyph * 1.6f;
     const float marginX = 10.0f;
-    const float marginY = 10.0f;
+    const float marginY = 10.0f + topOffsetPixels;
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();

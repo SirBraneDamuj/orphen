@@ -51,6 +51,10 @@ target_sources(orphen_port
         src/harness/flat_bin_archive.h
         src/ported/entity/map_prop_descriptor_table.cpp
         src/ported/entity/map_prop_descriptor_table.h
+        src/ported/debug/original_debug_text.cpp
+        src/ported/debug/original_debug_text.h
+        src/ported/debug/original_position_display.cpp
+        src/ported/debug/original_position_display.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp

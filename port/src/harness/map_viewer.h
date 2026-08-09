@@ -153,6 +153,9 @@ namespace orphen::harness
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
     void render(int framebufferWidth, int framebufferHeight) const;
     void setHudLines(std::vector<std::string> lines);
+    // FUN_00268270's placed glyphs for this frame, drained from the ported
+    // debug text buffer by PortRuntime on the simulation step.
+    void setOriginalDebugGlyphs(std::vector<orphen::ported::debug::DebugGlyph> glyphs);
     void toggleHud() { hudVisible_ = !hudVisible_; }
     // Left click: report every entity triangle under this pixel, drawn or not.
     void probeAt(int pixelX, int pixelY) const;
@@ -222,6 +225,7 @@ namespace orphen::harness
     RenderStats *renderStatsSink_ = nullptr;
     DebugTextRenderer debugText_;
     std::vector<std::string> hudLines_;
+    std::vector<orphen::ported::debug::DebugGlyph> originalDebugGlyphs_;
     bool hudVisible_ = true;
     // B: the in-world debug drawing -- magenta collision boxes, entity labels,
     // the lead player's box and ground triangle, and the origin axes. Separate

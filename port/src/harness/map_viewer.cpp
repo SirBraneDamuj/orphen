@@ -1912,6 +1912,11 @@ namespace orphen::harness
     hudLines_ = std::move(lines);
   }
 
+  void MapViewer::setOriginalDebugGlyphs(std::vector<orphen::ported::debug::DebugGlyph> glyphs)
+  {
+    originalDebugGlyphs_ = std::move(glyphs);
+  }
+
   orphen::ported::psm2::Vec3 MapViewer::freeViewerMovement(float strafe, float forward) const
   {
     const auto basis = viewerGroundBasis(cameraYawDegrees_);
@@ -2322,10 +2327,31 @@ namespace orphen::harness
 
     glViewport(0, 0, framebufferWidth, framebufferHeight);
 
-    if (hudVisible_)
     {
       PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->hudMicros : nullptr);
-      debugText_.draw(framebufferWidth, framebufferHeight, hudLines_);
+      // FUN_00268270's output first, because it owns the original's own
+      // corner of the screen; the harness HUD then stacks underneath it.
+      //
+      // The atlas is texture slot 0x30, already resident and already uploaded
+      // by ensureSlotTexturesUploaded -- FUN_00221fd8 binds it at boot and the
+      // model store reproduces that bind.
+      GLuint fontTexture = 0;
+      int fontWidth = 0;
+      int fontHeight = 0;
+      if (textureSlots_ != nullptr &&
+          static_cast<std::size_t>(orphen::ported::debug::text::kFontTextureSlot) < slotTextureIds_.size())
+      {
+        fontTexture = slotTextureIds_[orphen::ported::debug::text::kFontTextureSlot];
+        const auto &slotState = textureSlots_->slot(orphen::ported::debug::text::kFontTextureSlot);
+        fontWidth = slotState.texture.width;
+        fontHeight = slotState.texture.height;
+      }
+      const float overlayBottom = debugText_.drawOriginalOverlay(
+          framebufferWidth, framebufferHeight, originalDebugGlyphs_, fontTexture, fontWidth, fontHeight);
+      if (hudVisible_)
+      {
+        debugText_.draw(framebufferWidth, framebufferHeight, hudLines_, 11.0f, overlayBottom);
+      }
     }
 
     if (g_renderStats != nullptr)
