@@ -69,7 +69,7 @@ namespace orphen::ported::script
     // +0xA8, and the only case that scales: the operand is written doubled.
     // FUN_0025c548 halves it back with a signed divide, so a round trip through
     // an odd value loses the low bit.
-    case 0x06: entity.substateFrameA8 = static_cast<std::uint16_t>(asSigned(value) << 1); return true;
+    case 0x06: entity.timelineCursorA8 = static_cast<std::uint16_t>(asSigned(value) << 1); return true;
     case 0x07: entity.flagsAa = halfword; return true;
     case 0x08: entity.animationA0 = halfword; return true;
 
@@ -125,7 +125,7 @@ namespace orphen::ported::script
 
     // Signed halve, rounding toward zero, undoing the write's doubling.
     case 0x06:
-      value = static_cast<std::uint32_t>(static_cast<std::int16_t>(entity.substateFrameA8) / 2);
+      value = static_cast<std::uint32_t>(static_cast<std::int16_t>(entity.timelineCursorA8) / 2);
       return true;
     case 0x07: value = entity.flagsAa; return true;
     case 0x08: value = entity.animationA0; return true;

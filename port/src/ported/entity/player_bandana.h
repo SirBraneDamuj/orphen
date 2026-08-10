@@ -158,6 +158,21 @@ namespace orphen::ported::entity
   // model's own (static) pose.
   void FUN_00213640_release_bandana_bones(orphen::ported::model::EntityBoneOverrides &overrides);
 
+  // FUN_00213640 itself, which script extended opcode 0x146 calls to suspend and
+  // resume the bandana -- a cutscene does this when it wants Orphen's cloth to
+  // stop reacting.
+  //
+  // The mode lives in slot 4's **+0xA0**, which on every other entity is the
+  // animation id. Here it is a three-way state: 0 is running, 1 is suspended
+  // with the bones released, anything else is suspended without the release. The
+  // guards are asymmetric and easy to get backwards -- turning it off only
+  // clears the enable bit when the current mode is exactly 1, and turning it on
+  // only releases the bones when the current mode is exactly 0 -- so a repeated
+  // call in either direction is a no-op rather than a re-release.
+  void FUN_00213640_set_bandana_mode(EntityPool &pool,
+                                     orphen::ported::model::EntityBoneOverrides &overrides,
+                                     std::int32_t mode);
+
   // FUN_00251e40. Does nothing unless the lead player is type 1 -- Orphen is the
   // only party member who wears one, and this is the whole of the check: a
   // single `*(short *)param_1 == 1`. Returns true when slot 4 was built.

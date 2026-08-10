@@ -73,7 +73,7 @@ namespace orphen::ported::player
       entity.animationA0 = animation;
       entity.previousSubstateA2 = 0xffff;
       entity.flags06 &= 0xff38;
-      entity.substateFrameA8 = 0;
+      entity.timelineCursorA8 = 0;
     }
 
     OriginalEntity *chestFor(const ChestCutsceneContext &context)

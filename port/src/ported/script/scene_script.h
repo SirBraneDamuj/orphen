@@ -66,6 +66,15 @@ namespace orphen::ported::script
     // the game uses when you arrive without an explicit warp target -- which is
     // what loading a map from the debug menu does. Empty when the scene carries
     // no such block.
+    // Header word 5's table of dialogue record offsets, ascending, zero
+    // sentinel dropped. A record's extent is the gap to the next entry, which is
+    // how the text can be read without walking a single control code.
+    const std::vector<std::uint32_t> &dialogueRecordOffsets() const { return dialogueRecordOffsets_; }
+
+    // The half-open [begin, end) of the record containing `offset`, or an empty
+    // pair when it is not in the table.
+    std::pair<std::uint32_t, std::uint32_t> dialogueRecordBounds(std::uint32_t offset) const;
+
     const std::optional<orphen::ported::psm2::Vec3> &sceneSpawn() const { return sceneSpawn_; }
     const std::optional<float> &sceneDrawDistance() const { return sceneDrawDistance_; }
 
@@ -99,10 +108,20 @@ namespace orphen::ported::script
     //
     // Two things FUN_0025b778 does that the port deliberately does not: the
     // letterbox bars (FUN_0025cfb8, a GS packet) and the debug work-flag dump.
-    // A third, FUN_0025ce30's deferred trigger queue, is not modelled at all --
-    // no scene the port runs fills it, and a silent stub would be worse than a
-    // named absence.
     bool FUN_0025b778_run_tick(const ScriptEnvironment &environment, ScriptTrace &trace);
+
+    // FUN_0025ce30: the timed event scheduler, run from inside the tick between
+    // header word 2 and the slot loop.
+    //
+    // This is the mechanism a cutscene is actually built out of. Because the VM
+    // has no yield, a scene cannot express "walk here, wait, then speak" as one
+    // routine; instead opcode 0xA1 arms a channel with a stream of 8-byte
+    // records and this pays them out over time, sending each either straight
+    // into the dialogue driver or into a free object-script slot. s01_e012's
+    // opening is thirteen such streams.
+    //
+    // Public so it can be exercised on its own; the tick calls it.
+    void FUN_0025ce30_run_event_scheduler(const ScriptEnvironment &environment, ScriptTrace &trace);
 
     // FUN_0025b918: slots 0x3E and 0x3F, which the frame function runs later,
     // after the entity updates rather than before them.
@@ -118,6 +137,8 @@ namespace orphen::ported::script
     bool lastRunHaltedOnUnimplemented() const { return lastRunHaltedOnUnimplemented_; }
     std::uint16_t lastHaltOpcode() const { return lastHaltOpcode_; }
     std::uint32_t lastHaltOffset() const { return lastHaltOffset_; }
+    // The entry offset of the body that overran, so the desync can be traced.
+    std::uint32_t lastOverrunEntry() const { return lastOverrunEntry_; }
 
     // How many of the 65 object-script slots currently hold an entry, so the
     // report can say how much the per-frame path is carrying.
@@ -132,9 +153,11 @@ namespace orphen::ported::script
     std::vector<std::uint8_t> blob_;
     std::uint32_t headerWords_[kSceneScriptHeaderWordCount]{};
     std::vector<std::uint16_t> texturePageIds_;
+    std::vector<std::uint32_t> dialogueRecordOffsets_;
     std::optional<orphen::ported::psm2::Vec3> sceneSpawn_;
     std::optional<float> sceneDrawDistance_;
     void FUN_0025b600_read_scene_defaults();
+    void FUN_0025b288_read_dialogue_window();
     SceneScriptState state_;
 
     // Shared by runEntry and the slot loops.
@@ -144,6 +167,7 @@ namespace orphen::ported::script
                      std::size_t selectedEntity);
 
     bool lastRunOverran_ = false;
+    std::uint32_t lastOverrunEntry_ = 0;
     bool lastRunHaltedOnUnimplemented_ = false;
     std::uint16_t lastHaltOpcode_ = 0;
     std::uint32_t lastHaltOffset_ = 0;

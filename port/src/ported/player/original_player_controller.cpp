@@ -137,6 +137,18 @@ namespace orphen::ported::player
       // and leave the movement request at zero, so this only re-settles them
       // onto the floor.
     }
+    else if (entity().state60 == kStateScriptDriven)
+    {
+      // PTR_FUN_0031e0e8[10] is 0x00254cf0, which is `jr ra; nop` -- a real
+      // no-op, and the whole of how a cutscene takes the controller away. The
+      // player reads no input, requests no movement and changes no state; the
+      // scene's lead-bound script slot drives it instead. Opcode 0x6D puts the
+      // lead here and 0xA8 does too.
+      //
+      // Falling through to the grounded field branch, which is what used to
+      // happen, handed control straight back to the pad the moment a cutscene
+      // asked for it.
+    }
     else if (entity().state60 == 2)
     {
       FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
@@ -148,10 +160,13 @@ namespace orphen::ported::player
 
     FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler, movementBlocker);
 
-    if (entity().substateFrameA8 != std::numeric_limits<std::uint16_t>::max())
-    {
-      ++entity().substateFrameA8;
-    }
+    // +0xA8 used to be advanced here, once per frame, as a substate counter.
+    // It is not one: FUN_00225c90 owns that halfword and steps it by *two per
+    // keyframe* of the current animation, and FUN_002534d8's `< 4` / `== 4`
+    // jump-startup tests are against keyframes rather than frames. Advancing it
+    // here as well double-counted it, and -- because script object register 6
+    // reads the same halfword -- it was also being written by two owners at
+    // once. The animation pass is the only writer now.
   }
 
   OriginalPlayerSnapshot OriginalPlayerController::snapshot() const
@@ -161,7 +176,7 @@ namespace orphen::ported::player
             entity().facingRadians5c,
             entity().state60,
             entity().animationA0,
-            entity().substateFrameA8,
+            entity().timelineCursorA8,
             entity().collisionFlags0c,
             entity().verticalVelocity44,
             entity().height58,
@@ -185,7 +200,7 @@ namespace orphen::ported::player
     entity().animationA0 = substate;
     entity().previousSubstateA2 = 0xffff;
     entity().flags06 &= 0xff38;
-    entity().substateFrameA8 = 0;
+    entity().timelineCursorA8 = 0;
   }
 
   void OriginalPlayerController::FUN_00252d88_return_to_idle_state()
@@ -310,9 +325,9 @@ namespace orphen::ported::player
 
     if (entity().animationA0 == kAnimationJumpRise)
     {
-      if (entity().substateFrameA8 >= 4)
+      if (entity().timelineCursorA8 >= 4)
       {
-        if (entity().substateFrameA8 == 4 && entity().pendingJumpImpulse)
+        if (entity().timelineCursorA8 == 4 && entity().pendingJumpImpulse)
         {
           entity().verticalVelocity44 = kOriginalJumpVelocity;
           entity().pendingJumpImpulse = false;
@@ -623,7 +638,7 @@ namespace orphen::ported::player
     entity().previousGroundHeight50 = entity().groundHeight4c;
 
     const bool airborneState = entity().state60 == 2;
-    const bool jumpStartup = airborneState && entity().animationA0 == kAnimationJumpRise && entity().pendingJumpImpulse && entity().substateFrameA8 < 4;
+    const bool jumpStartup = airborneState && entity().animationA0 == kAnimationJumpRise && entity().pendingJumpImpulse && entity().timelineCursorA8 < 4;
     if (jumpStartup)
     {
       entity().desiredDeltaY38 = 0.0f;

@@ -18,6 +18,12 @@ namespace orphen::ported::player
 
   // FUN_00256bb8 animation ids written by the grounded path, and the airborne
   // ids from FUN_002534d8. Entity +0xA0 is an animation id, not a substate.
+  // Entity +0x60 state 10, whose handler in PTR_FUN_0031e0e8 is `jr ra; nop`.
+  // A cutscene parks the lead here (opcode 0x6D, or 0xA8 installing the
+  // lead-bound script slot) and drives it from script; the controller must do
+  // nothing at all while it is set.
+  constexpr std::uint16_t kStateScriptDriven = 10;
+
   constexpr std::uint16_t kAnimationStand = 0x01;
   constexpr std::uint16_t kAnimationWalk = 0x0b;
   constexpr std::uint16_t kAnimationRun = 0x0e;

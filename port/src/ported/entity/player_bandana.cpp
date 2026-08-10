@@ -43,6 +43,38 @@ namespace orphen::ported::entity
     }
   }
 
+  void FUN_00213640_set_bandana_mode(EntityPool &pool,
+                                     orphen::ported::model::EntityBoneOverrides &overrides,
+                                     std::int32_t mode)
+  {
+    OriginalEntity &bandana = pool.slot(kBandanaSlot);
+
+    // Everything below is guarded on slot 4 actually holding a bandana. The
+    // original reads the type unconditionally because the slot is reserved; the
+    // port can be run without one (a non-Orphen lead never gets slot 4 filled).
+    std::int16_t next = bandana.animationA0;
+    if (bandana.typeId00 == kBandanaTypeId)
+    {
+      next = static_cast<std::int16_t>(mode);
+      if (mode == 0)
+      {
+        if (bandana.animationA0 == 1)
+        {
+          bandana.halfword08 &= static_cast<std::uint16_t>(~1u);
+        }
+      }
+      else if (bandana.animationA0 == 0)
+      {
+        FUN_00213640_release_bandana_bones(overrides);
+        if (mode == 1)
+        {
+          bandana.halfword08 |= 1u;
+        }
+      }
+    }
+    bandana.animationA0 = static_cast<std::uint16_t>(next);
+  }
+
   bool FUN_00251e40_attach_bandana(EntityPool &pool,
                                    const EntityDescriptorTable &descriptors,
                                    const orphen::ported::model::Psc3Model *playerModel)

@@ -11,6 +11,7 @@
 #include "ported/player/original_item_window.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/text/original_dialogue_text.h"
+#include "ported/text/original_dialogue_stream.h"
 #include "ported/resource/item_database.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/entity/actor_dispatch_table.h"
@@ -210,7 +211,9 @@ namespace orphen::port
     std::uint32_t reportedBattleBoots_ = 0;
     void reportPanelActivity();
     bool printActorReport_ = false;
+    orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;
+    bool printModelReport_ = false;
     bool printRenderReport_ = false;
     bool printGleamReport_ = false;
     std::vector<orphen::harness::GleamProbe> gleamProbes_;

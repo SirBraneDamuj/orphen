@@ -12,6 +12,11 @@ namespace orphen::ported::script
     entriesRun_.clear();
     objectRegisters_.clear();
     terrainTriggers_.clear();
+    eventFlagChanges_.clear();
+    objectMethods_.clear();
+    eventDispatches_.clear();
+    eventStreamsArmed_.clear();
+    frame_ = 0;
     fadesArmed_.clear();
     playerLocks_.clear();
     battleBootCount_ = 0;
@@ -23,7 +28,18 @@ namespace orphen::ported::script
     leadTeleportZ_ = 0.0f;
   }
 
-  void ScriptTrace::recordOpcode(std::uint16_t opcode, std::uint32_t offset, bool implemented)
+  const char *opcodeSupportName(OpcodeSupport support)
+  {
+    switch (support)
+    {
+    case OpcodeSupport::Modelled: return "modelled";
+    case OpcodeSupport::OperandsOnly: return "operands-only";
+    case OpcodeSupport::Unimplemented: return "UNIMPLEMENTED";
+    default: return "?";
+    }
+  }
+
+  void ScriptTrace::recordOpcode(std::uint16_t opcode, std::uint32_t offset, OpcodeSupport support)
   {
     auto entry = opcodes_.find(opcode);
     if (entry == opcodes_.end())
@@ -31,12 +47,12 @@ namespace orphen::ported::script
       OpcodeStat stat;
       stat.hitCount = 1;
       stat.firstOffset = offset;
-      stat.implemented = implemented;
+      stat.support = support;
       opcodes_.emplace(opcode, stat);
       return;
     }
     ++entry->second.hitCount;
-    entry->second.implemented = implemented;
+    entry->second.support = support;
   }
 
   void ScriptTrace::recordLeadTeleport(float x, float y, float z)
@@ -97,6 +113,26 @@ namespace orphen::ported::script
     ++playerLocks_[static_cast<std::int32_t>(mode)];
   }
 
+  void ScriptTrace::recordEventFlagChange(const EventFlagChange &change)
+  {
+    eventFlagChanges_.push_back(change);
+  }
+
+  void ScriptTrace::recordObjectMethod(std::uint32_t method)
+  {
+    ++objectMethods_[method];
+  }
+
+  void ScriptTrace::recordEventDispatch(const EventDispatch &dispatch)
+  {
+    eventDispatches_.push_back(dispatch);
+  }
+
+  void ScriptTrace::recordEventStreamArmed(const EventStreamArmed &armed)
+  {
+    eventStreamsArmed_.push_back(armed);
+  }
+
   void ScriptTrace::recordObjectRegisterAccess(std::uint32_t index, bool write)
   {
     auto &stat = objectRegisters_[index];
@@ -108,6 +144,13 @@ namespace orphen::ported::script
     {
       ++stat.reads;
     }
+  }
+
+  void ScriptTrace::recordObjectRegisterValue(std::uint32_t index, std::int32_t slot, std::uint32_t value)
+  {
+    auto &stat = objectRegisters_[index];
+    stat.lastSlot = slot;
+    stat.lastValue = value;
   }
 
   void ScriptTrace::recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity)
@@ -130,30 +173,42 @@ namespace orphen::ported::script
     return count;
   }
 
+  namespace
+  {
+    std::uint32_t countOpcodes(const std::map<std::uint16_t, OpcodeStat> &opcodes,
+                               OpcodeSupport support,
+                               bool byHit)
+    {
+      std::uint32_t count = 0;
+      for (const auto &entry : opcodes)
+      {
+        if (entry.second.support == support)
+        {
+          count += byHit ? entry.second.hitCount : 1u;
+        }
+      }
+      return count;
+    }
+  } // namespace
+
   std::uint32_t ScriptTrace::unimplementedOpcodeCount() const
   {
-    std::uint32_t count = 0;
-    for (const auto &entry : opcodes_)
-    {
-      if (!entry.second.implemented)
-      {
-        ++count;
-      }
-    }
-    return count;
+    return countOpcodes(opcodes_, OpcodeSupport::Unimplemented, false);
   }
 
   std::uint32_t ScriptTrace::unimplementedHitCount() const
   {
-    std::uint32_t count = 0;
-    for (const auto &entry : opcodes_)
-    {
-      if (!entry.second.implemented)
-      {
-        count += entry.second.hitCount;
-      }
-    }
-    return count;
+    return countOpcodes(opcodes_, OpcodeSupport::Unimplemented, true);
+  }
+
+  std::uint32_t ScriptTrace::operandsOnlyOpcodeCount() const
+  {
+    return countOpcodes(opcodes_, OpcodeSupport::OperandsOnly, false);
+  }
+
+  std::uint32_t ScriptTrace::operandsOnlyHitCount() const
+  {
+    return countOpcodes(opcodes_, OpcodeSupport::OperandsOnly, true);
   }
 
 } // namespace orphen::ported::script

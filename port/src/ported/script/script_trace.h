@@ -13,11 +13,30 @@ namespace orphen::ported::script
   // comparison, so this is how a decode desync makes itself visible: a stream
   // that has gone out of sync produces a flood of opcodes that were never
   // implemented, at implausible offsets.
+  // How much of an opcode the port actually reproduces. "The script kept
+  // running" and "the script did the right thing" are different claims, and a
+  // report that conflates them is a report that hides gaps -- so they are
+  // counted apart.
+  enum class OpcodeSupport
+  {
+    // Operands consumed and the effect reproduced.
+    Modelled,
+    // Operands consumed exactly as the original reads them, effect deliberately
+    // not modelled. The stream stays in sync and the scene keeps running, which
+    // is the only way a long cutscene chain gets exercised at all. The arity
+    // must come from the original -- a guess desyncs everything after it.
+    OperandsOnly,
+    // Not decoded at all. The stream halts here rather than inventing operands.
+    Unimplemented,
+  };
+
+  const char *opcodeSupportName(OpcodeSupport support);
+
   struct OpcodeStat
   {
     std::uint32_t hitCount = 0;
     std::uint32_t firstOffset = 0; // offset into the script blob of the first hit
-    bool implemented = false;
+    OpcodeSupport support = OpcodeSupport::Unimplemented;
   };
 
   // One entity the script asked for. Recorded even when the spawn failed, so the
@@ -41,7 +60,7 @@ namespace orphen::ported::script
   public:
     void reset();
 
-    void recordOpcode(std::uint16_t opcode, std::uint32_t offset, bool implemented);
+    void recordOpcode(std::uint16_t opcode, std::uint32_t offset, OpcodeSupport support);
     void recordPreloadedResource(std::uint16_t resourceId) { preloadedResources_.push_back(resourceId); }
     void recordRegisteredScript(std::uint32_t scriptId) { registeredScripts_.push_back(scriptId); }
     void recordLeadTeleport(float x, float y, float z);
@@ -65,6 +84,12 @@ namespace orphen::ported::script
       std::uint32_t writes = 0;
       std::uint32_t unmodelledHits = 0;
       std::uint32_t noEntityHits = 0; // no object was selected at all
+      // Which entity the last access picked, and what it saw. A cutscene that
+      // polls a register until it reaches a value looks identical in the counts
+      // whether it is waiting patiently or waiting forever; the value is what
+      // tells the two apart.
+      std::int32_t lastSlot = -1;
+      std::uint32_t lastValue = 0;
     };
     // Opcode 0x61 (FUN_0025f4b8) is the terrain trigger: it tests the lead
     // player's +0x6C or +0x70 -- the words copied off whatever surface the
@@ -105,12 +130,68 @@ namespace orphen::ported::script
     void recordFadeArmed(std::uint32_t bank, std::uint32_t rate, std::uint32_t packedRgb);
     const std::vector<FadeArmed> &fadesArmed() const { return fadesArmed_; }
 
+    // FUN_0025ce30 paying out one record. Recorded rather than counted because
+    // the order and the timing *are* the cutscene: a stream that fires its
+    // records in the wrong order, or all on one frame, is the failure mode this
+    // subsystem has, and neither is visible from a total.
+    struct EventDispatch
+    {
+      std::uint32_t frame = 0;
+      std::uint8_t channel = 0;
+      std::uint16_t delayUnits = 0;
+      std::uint16_t gate = 0;
+      std::uint32_t targetOffset = 0;
+      bool toDialogue = false;  // inside the pointer-table window
+      std::int32_t slot = -1;   // the object-script slot it was queued into
+    };
+    void recordEventDispatch(const EventDispatch &dispatch);
+    const std::vector<EventDispatch> &eventDispatches() const { return eventDispatches_; }
+
+    // Opcode 0xA1 arming a channel, so the report can say which streams a scene
+    // asked for even when none of their records has come due yet.
+    struct EventStreamArmed
+    {
+      std::uint32_t frame = 0;
+      std::uint8_t channel = 0;
+      std::uint32_t streamOffset = 0;
+    };
+    void recordEventStreamArmed(const EventStreamArmed &armed);
+    const std::vector<EventStreamArmed> &eventStreamsArmed() const { return eventStreamsArmed_; }
+
+    // The frame counter the two records above stamp themselves with. Set once a
+    // frame by the caller; zero during the load-time entries.
+    void setFrame(std::uint32_t frame) { frame_ = frame; }
+    std::uint32_t frame() const { return frame_; }
+
+    // Every event-flag transition opcodes 0x3E..0x40 actually cause. The flags
+    // are how a scene records that a beat finished -- s01_e012's opening latches
+    // 0x515 when it hands control to the player -- and until they were listed
+    // there was no way to watch a cutscene make progress.
+    struct EventFlagChange
+    {
+      std::uint32_t frame = 0;
+      std::uint32_t flagId = 0;
+      std::uint32_t scriptOffset = 0;
+      bool set = false;
+    };
+    void recordEventFlagChange(const EventFlagChange &change);
+    const std::vector<EventFlagChange> &eventFlagChanges() const { return eventFlagChanges_; }
+
+    // Opcode 0xBD (FUN_00263e80 -> FUN_00242a18): the object-method dispatcher.
+    // Its method ids are a second, entirely separate instruction set, and 0x70
+    // / 0x71 / 0x72 are the voice-line play, tune and poll calls. Counting them
+    // by id is how the report can say a scene tried to speak, even though
+    // VOICE.BIN is not in the disc root and nothing can be played.
+    void recordObjectMethod(std::uint32_t method);
+    const std::map<std::uint32_t, std::uint32_t> &objectMethods() const { return objectMethods_; }
+
     void recordPlayerLock(std::int8_t mode);
     void recordBattleBoot() { ++battleBootCount_; }
     const std::map<std::int32_t, std::uint32_t> &playerLocks() const { return playerLocks_; }
     std::uint32_t battleBootCount() const { return battleBootCount_; }
 
     void recordObjectRegisterAccess(std::uint32_t index, bool write);
+    void recordObjectRegisterValue(std::uint32_t index, std::int32_t slot, std::uint32_t value);
     void recordUnmodelledObjectRegister(std::uint32_t index, bool noEntity);
     const std::map<std::uint32_t, ObjectRegisterStat> &objectRegisters() const { return objectRegisters_; }
     std::uint32_t unmodelledObjectRegisterHits() const;
@@ -135,6 +216,8 @@ namespace orphen::ported::script
 
     std::uint32_t unimplementedOpcodeCount() const;
     std::uint32_t unimplementedHitCount() const;
+    std::uint32_t operandsOnlyOpcodeCount() const;
+    std::uint32_t operandsOnlyHitCount() const;
 
   private:
     std::map<std::uint16_t, OpcodeStat> opcodes_;
@@ -144,6 +227,11 @@ namespace orphen::ported::script
     std::vector<std::string> entriesRun_;
     std::map<std::uint32_t, ObjectRegisterStat> objectRegisters_;
     std::map<std::uint32_t, TerrainTriggerStat> terrainTriggers_;
+    std::vector<EventFlagChange> eventFlagChanges_;
+    std::map<std::uint32_t, std::uint32_t> objectMethods_;
+    std::vector<EventDispatch> eventDispatches_;
+    std::vector<EventStreamArmed> eventStreamsArmed_;
+    std::uint32_t frame_ = 0;
     std::vector<FadeArmed> fadesArmed_;
     std::map<std::int32_t, std::uint32_t> playerLocks_;
     std::uint32_t battleBootCount_ = 0;

@@ -92,6 +92,11 @@ namespace orphen::ported::camera
     void clear();
 
     bool active() const { return eye_[0].pointCount() != 0; }
+    // FUN_00217e88 -- the two-curve installer script opcode 0x41 uses -- builds
+    // no roll/zoom curve at all. The original then samples whatever was left in
+    // the scratch block from the last three-curve path; the port leaves the
+    // live values alone instead, which is what the scene means.
+    bool hasRollZoom() const { return rollZoom_[0].pointCount() != 0; }
     CameraPathSample sample(float t) const;
 
   private:

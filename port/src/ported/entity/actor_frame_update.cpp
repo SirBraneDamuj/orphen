@@ -65,7 +65,7 @@ namespace orphen::ported::entity
     entity.stateResetA4 = 999;
     entity.previousSubstateA2 = 0xFFFF;
     entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFF38u);
-    entity.substateFrameA8 = 0;
+    entity.timelineCursorA8 = 0;
   }
 
   void FUN_00225bf0_set_state_and_animation(OriginalEntity &entity,

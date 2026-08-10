@@ -279,9 +279,14 @@ namespace orphen::ported::camera
     const CameraPathSample sample =
         cameraPath_.sample(static_cast<float>(elapsed) / static_cast<float>(duration));
 
-    // FUN_00218158 publishes the pair first, then moves the camera.
-    uGpffffb6dc_roll_ = sample.roll;
-    fGpffffb6e8_zoomLog2_ = sample.zoomLog2;
+    // FUN_00218158 publishes the pair first, then moves the camera. A path
+    // installed by FUN_00217e88 has no roll/zoom curve, so leave both where
+    // opcode 0x6C put them rather than resetting to the sample's defaults.
+    if (cameraPath_.hasRollZoom())
+    {
+      uGpffffb6dc_roll_ = sample.roll;
+      fGpffffb6e8_zoomLog2_ = sample.zoomLog2;
+    }
     FUN_00217d40_set_eye(sample.eye);
     FUN_00217d10_set_look_at(sample.lookAt);
   }

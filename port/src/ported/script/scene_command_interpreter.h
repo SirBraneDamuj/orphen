@@ -89,6 +89,12 @@ namespace orphen::ported::script
       return objectRegisters[bank * kObjectRegistersPerBank + index];
     }
 
+    // DAT_00355656, written by extended opcode 0x149 and zeroed by
+    // FUN_0022a418 at scene load. Nothing in the retail executable reads it
+    // back, so it is scene state with no consumer -- stored rather than skipped
+    // because it costs nothing and a later slice may find the reader.
+    std::uint8_t DAT_00355656_sceneByte = 0;
+
     // DAT_003437b8: byte counters opcode 0xBC increments, capped at 99. Used by
     // event scripts as one-shot gates.
     static constexpr std::size_t kEventCounterCount = 256;
@@ -103,9 +109,6 @@ namespace orphen::ported::script
     float fGpffffb70c_fadeNear = 0.0f;
     float fGpffffb710_fadeFar = 0.0f;
 
-    // Resource ids the script asked about through opcodes 0x3D..0x40. The port
-    // has no resource manager, so these are recorded and answered "not loaded".
-    std::vector<std::uint32_t> resourceQueries;
 
     // DAT_00355cf4: the object-script slot table, 65 dwords cleared by
     // FUN_0025b390. The original stores absolute pointers; the port stores blob
@@ -124,6 +127,94 @@ namespace orphen::ported::script
     // DAT_00355cf8 / iGpffffbd88: the slot currently executing, or -1 outside
     // the slot loop. Opcode 0x9E reads it to retire the slot it is running in.
     std::int32_t DAT_00355cf8_currentSlot = -1;
+
+    // FUN_00261de0, shared by opcode 0xA0 and the event scheduler: the first
+    // free general slot, or -1 when all 62 are taken.
+    std::int32_t findFreeObjectScriptSlot() const
+    {
+      for (std::size_t slot = 0; slot < kGeneralSlotCount; ++slot)
+      {
+        if (DAT_00355cf4_objectScriptSlots[slot] == 0)
+        {
+          return static_cast<std::int32_t>(slot);
+        }
+      }
+      return -1;
+    }
+
+    // ---- FUN_0025ce30, the timed event scheduler -------------------------
+    //
+    // This is how a cutscene keeps time. The VM has no yield, so a scene cannot
+    // write "walk here, wait two seconds, then speak" as a linear routine.
+    // Instead opcode 0xA1 arms a channel with a *stream* of 8-byte records and
+    // this scheduler pays them out, one per elapsed delay, either straight into
+    // the dialogue driver or into a free object-script slot.
+    //
+    // Three parallel arrays in the original (DAT_00571e40 / e44 / e48, 12-byte
+    // stride); one struct here because they are indexed together everywhere.
+    struct EventChannel
+    {
+      // The original holds an absolute pointer. The port holds a blob offset
+      // with 0 meaning idle, the same convention the object-script slot table
+      // uses -- the header occupies offsets 0..0x2B, so no record can sit at 0.
+      std::uint32_t cursor = 0;
+      std::uint32_t timer = 0;    // accumulates frameTicks; compared as timer >> 5
+      std::uint32_t consumed = 0; // records paid out, returned by opcode 0xA3
+    };
+    static constexpr std::size_t kEventChannelCount = 4;
+    EventChannel DAT_00571e40_eventChannels[kEventChannelCount]{};
+
+    // Each record is [u16 delayUnits][u16 gate][u32 targetOffset].
+    static constexpr std::size_t kEventRecordSize = 8;
+
+    // uGpffffbd70 / uGpffffbd74, which are DAT_00355ce0 / DAT_00355ce4 -- the
+    // same addresses under two Ghidra names. FUN_0025b288 walks header word 5's
+    // pointer table and stores its first and last non-zero entries. A scheduler
+    // target inside that half-open window is a *dialogue record* and is started
+    // directly; anything else is script and gets queued into a slot.
+    std::uint32_t DAT_00355ce0_dialogueWindowFirst = 0;
+    std::uint32_t DAT_00355ce4_dialogueWindowLast = 0;
+
+    // DAT_00343692: the seven party slots, 0x28 bytes apart in the original.
+    // Each holds the pool index of the entity bound to that slot; 0x100 means
+    // "released this scene" and is distinct from 0, which means never filled.
+    // Opcode 0xAC binds, 0xAD/0xAE release, 0xAF selects.
+    //
+    // The parallel event flags 0x501 + slot are the persistent half: 0xAC
+    // refuses to bind a slot whose flag is already set, and caps the party at
+    // three.
+    static constexpr std::size_t kPartySlotCount = 7;
+    std::uint16_t DAT_00343692_partySlots[kPartySlotCount]{};
+
+    // DAT_00571de0: parameter ramps, three floats each -- current, target,
+    // step. Opcode 0x90 arms one and 0x91 advances it, **returning 1 only once
+    // it has arrived**, which is how a cutscene waits for a fade or a move to
+    // finish. The dispatch table files call these audio; nothing about them is.
+    struct ParameterRamp
+    {
+      float current = 0.0f;
+      float target = 0.0f;
+      float step = 0.0f;
+    };
+    static constexpr std::size_t kParameterRampCount = 64;
+    ParameterRamp DAT_00571de0_ramps[kParameterRampCount]{};
+
+    // puGpffffb0d8: the entity the choreography opcodes 0xE9..0xF5 act on.
+    // Separate from the general selection (puGpffffb0d4) that 0x76..0x7C use,
+    // so a cutscene can hold one actor "in focus" across a whole sequence of
+    // moves while other opcodes address other entities.
+    std::size_t puGpffffb0d8_focusEntity = orphen::ported::entity::kEntitySlotCount;
+
+    // iGpffffbd78: the scripted camera path's elapsed time, in frame ticks.
+    // Opcodes 0x41 and 0x43 zero it when they build a path and 0x42/0x44
+    // accumulate into it. One global, not one per path -- a scene can only have
+    // one camera move in flight.
+    std::uint32_t uGpffffbd78_pathElapsed = 0;
+
+    // uGpffffb0f4: the scheduler's second gate. FUN_00237b38 clears bits 0x6000
+    // while a dialogue stream is running and sets them when it ends, so a
+    // record gated on those bits waits for the text to finish.
+    std::uint32_t uGpffffb0f4_gateMask = 0;
 
     // DAT_00354d2c: the battle-start state opcode 0xE1 raises to 0x10. The port
     // has no battle system; this is recorded so the report can say the scene
@@ -191,8 +282,33 @@ namespace orphen::ported::script
       return fade.finished;
     }
 
-    // FUN_002663a0: clear one bit of the flag bank.
-    void FUN_002663a0_clearEventFlag(std::uint32_t flagId)
+    // FUN_0025d2f8: step buffer 0, which runs the other way -- it is armed full
+    // and ramps *down* to zero, so it uncovers the screen. Returns 1 on the
+    // frame it reaches the bottom, which is the value opcode 0x88 hands back and
+    // scripts poll.
+    std::uint16_t FUN_0025d2f8_step_fade_out(std::uint32_t frameTicks)
+    {
+      FullscreenFade &fade = DAT_00571dc0_fades[0];
+      const std::int32_t stepped =
+          static_cast<std::int32_t>(fade.level) -
+          static_cast<std::int32_t>(fade.rate) * static_cast<std::int32_t>(frameTicks);
+      // The original tests the low 16 bits as a signed value, so the "still
+      // running" condition is that the subtraction did not go negative.
+      const bool stillRunning = static_cast<std::int16_t>(static_cast<std::uint16_t>(stepped)) >= 0;
+      fade.level = static_cast<std::uint16_t>(stepped);
+      if (!stillRunning)
+      {
+        fade.level = 0;
+      }
+      fade.finished = stillRunning ? 0u : 1u;
+      return fade.finished;
+    }
+
+    // FUN_002663d8: clear one bit of the flag bank. (This carried FUN_002663a0's
+    // name, which is the *setter* below -- 0x2663a0 ORs the bit in and 0x2663d8
+    // masks it out. Corrected because the FUN_ prefix is the traceable identity
+    // and party release, which clears flag 0x501 + slot, goes through here.)
+    void FUN_002663d8_clearEventFlag(std::uint32_t flagId)
     {
       const std::size_t bucket = static_cast<std::size_t>(static_cast<std::int32_t>(flagId) >> 3);
       if (bucket > 0x8FF || bucket >= kFlagBucketCount)
@@ -202,7 +318,7 @@ namespace orphen::ported::script
       DAT_00342b70_flags[bucket] &= static_cast<std::uint8_t>(~(1u << (flagId & 7u)));
     }
 
-    // FUN_002663f0: set one bit of the flag bank. Opening a chest is exactly
+    // FUN_002663a0: set one bit of the flag bank. Opening a chest is exactly
     // this -- FUN_002d1ea8 only observes the bit.
     void FUN_002663a0_setEventFlag(std::uint32_t flagId)
     {
@@ -212,6 +328,19 @@ namespace orphen::ported::script
         return;
       }
       DAT_00342b70_flags[bucket] |= static_cast<std::uint8_t>(1u << (flagId & 7u));
+    }
+
+    // FUN_00266418: flip one bit and report its new value.
+    bool FUN_00266418_toggleEventFlag(std::uint32_t flagId)
+    {
+      const std::size_t bucket = static_cast<std::size_t>(static_cast<std::int32_t>(flagId) >> 3);
+      if (bucket > 0x8FF || bucket >= kFlagBucketCount)
+      {
+        return false;
+      }
+      const std::uint8_t mask = static_cast<std::uint8_t>(1u << (flagId & 7u));
+      DAT_00342b70_flags[bucket] ^= mask;
+      return (DAT_00342b70_flags[bucket] & mask) != 0;
     }
 
     // FUN_00266368: one bit of the flag bank, which the actor tick also reads.
@@ -244,6 +373,58 @@ namespace orphen::ported::script
 
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
+
+    // FUN_00217e18: drop an installed script camera, restoring the saved pose
+    // when the argument is non-zero. Opcode 0x45's whole effect.
+    std::function<void(bool restore)> FUN_00217e18_release_camera;
+
+    // FUN_00218158: sample the installed camera path at elapsed/duration and
+    // publish the eye, look-at, roll and zoom. Opcode 0x44 steps it.
+    std::function<void(int elapsedFrames, int durationFrames)> FUN_00218158_step_camera_path;
+
+    // FUN_00217fe8: install a scripted camera path. `zoomScales` are the raw
+    // values from the script, before FUN_00218230's log.
+    std::function<void(std::span<const orphen::ported::psm2::Vec3> eyePoints,
+                       std::span<const float> rollValues,
+                       std::span<const float> zoomScales,
+                       std::span<const orphen::ported::psm2::Vec3> lookAtPoints)>
+        FUN_00217fe8_set_camera_path;
+
+    // FUN_00218230 + uGpffffb6e8: set the camera's log2 zoom outright.
+    std::function<void(float zoomLog2)> FUN_00218230_set_zoom;
+
+    // The camera's current eye and look-at, and cGpffffb6e1. Opcode 0x41 can
+    // splice the live pose into its curve as the first or last control point,
+    // which is how a cut starts from wherever the camera already is.
+    struct CameraPose
+    {
+      orphen::ported::psm2::Vec3 eye{};
+      orphen::ported::psm2::Vec3 lookAt{};
+      std::uint8_t subMode = 0;
+    };
+    std::function<CameraPose()> cameraPose;
+
+    // FUN_00216868: the engine RNG, read by opcode 0x95.
+    std::function<std::uint32_t()> FUN_00216868_random;
+
+    // FUN_00267d38: play a sound cue positioned on a pool entity. Extended
+    // opcodes 0x125 / 0x126.
+    std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
+
+    // FUN_00213640: suspend or resume the player's bandana. Extended opcode
+    // 0x146's whole effect; it needs the bone-override table, which lives on the
+    // runtime rather than in the pool.
+    std::function<void(std::int32_t mode)> FUN_00213640_set_bandana;
+
+    // FUN_00237b38: start a dialogue stream at a blob offset, or terminate the
+    // current one when the offset is zero. Both the scheduler and opcode 0x33
+    // reach the text system through this.
+    std::function<void(std::uint32_t blobOffset)> FUN_00237b38_start_dialogue;
+
+    // FUN_00237c60 / FUN_00237c70: is a stream up, and has it finished. Opcodes
+    // 0x34 and 0x35 poll these every frame while a cutscene waits on a line.
+    std::function<bool()> FUN_00237c60_dialogue_busy;
+    std::function<bool()> FUN_00237c70_dialogue_complete;
 
     // FUN_002661a8: resolve a type id to its model record and make sure the
     // model and its texture are resident. Opcode 0x4D's per-id call.
@@ -349,7 +530,7 @@ namespace orphen::ported::script
     void FUN_00261910_set_vector_with_rgb(); // 0x97
     std::uint32_t FUN_0025d768_read_work_or_flag(); // 0x36, 0x38
     std::uint32_t FUN_0025d818_write_work_or_flag(); // 0x37, 0x39
-    std::uint32_t FUN_0025e560_resource_flag();      // 0x3D..0x40
+    std::uint32_t FUN_0025e560_event_flag();          // 0x3D..0x40
     std::uint32_t FUN_00260318_read_object_register();    // 0x76
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
     std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
@@ -365,6 +546,36 @@ namespace orphen::ported::script
     void FUN_00263148_teleport_lead();           // 0xAB
     std::uint32_t FUN_0025f120_get_slot_index(); // 0x59
     std::uint32_t FUN_0025f4b8_test_lead_flag_word(); // 0x61
+    std::uint32_t FUN_002601f8_entity_distance_or_angle(); // 0x74, 0x75
+
+    // The choreography family. See the block comment in the .cpp: every one of
+    // these advances the focus entity's +0x1BC step counter when it finishes,
+    // which is how a cutscene keeps its place in a VM with no yield.
+    std::uint32_t FUN_00265840_set_focus();        // 0xEB
+    std::uint32_t FUN_00265880_set_step();         // 0xEC
+    std::uint32_t FUN_002658b0_get_step();         // 0xED
+    std::uint32_t FUN_00265d88_consume_interact(); // 0xE9
+    std::uint32_t FUN_00265818_focus_index();      // 0xEA
+    std::uint32_t FUN_002658c0_step_toward_xy();   // 0xEE..0xF1
+    std::uint32_t FUN_00265b90_anim_for_duration(); // 0xF2
+    std::uint32_t FUN_00265c30_anim_until_done();   // 0xF3
+    std::uint32_t FUN_00265cb0_rotate_toward();     // 0xF4
+    std::uint32_t FUN_00265d98_promote_state();     // 0xF5
+    std::uint32_t FUN_0025ee08_read_position();     // 0x53
+    std::uint32_t FUN_0025db20_build_camera_path_pair(); // 0x41
+    std::uint32_t FUN_0025de08_build_camera_path();   // 0x43
+    std::uint32_t FUN_0025dd60_step_camera_path();    // 0x44
+    std::uint32_t FUN_0025dfc8_release_camera();      // 0x45
+    void FUN_0025f5d8_attach_and_place_entity();      // 0x63
+    void FUN_0025f950_convert_to_npc();               // 0x66
+    void FUN_002589c0_release_party_slot(std::size_t slot);
+    std::uint32_t FUN_002631f0_bind_party_slot();     // 0xAC
+    std::uint32_t FUN_00263498_release_party_slot();  // 0xAD, 0xAE
+    std::uint32_t FUN_00260578_spawn_attached_prop(); // 0x140, 0x141
+    void FUN_00263c58_set_entity_short_and_word();    // 0xB7
+    std::uint32_t FUN_00265790_set_global_byte();     // 0x149
+    std::uint32_t FUN_00261100_arm_ramp();            // 0x90
+    std::uint32_t FUN_002611b8_step_ramp();           // 0x91
 
     // The two outcomes s01_e024's floor panels reach. Both have unambiguous
     // operand widths -- 0x6D takes one signed byte, 0xE1 takes none -- so
@@ -380,12 +591,34 @@ namespace orphen::ported::script
     std::uint32_t FUN_00261d18_clear_slot();     // 0x9E
     std::uint32_t FUN_00261d88_slot_occupied();  // 0x9F
     std::uint32_t FUN_00261de0_find_free_slot(); // 0xA0
+
+    // FUN_0025ce30's channels. See SceneScript::FUN_0025ce30_run_event_scheduler.
+    std::uint32_t FUN_00261e30_arm_event_channel();   // 0xA1
+    std::uint32_t FUN_00261ea8_clear_event_channel(); // 0xA2
+    std::uint32_t FUN_00261f08_read_event_channel();  // 0xA3
     std::uint32_t FUN_00262f38_install_lead_slot(); // 0xA8
     std::uint32_t FUN_00263118_clear_lead_slot();   // 0xAA
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
+    // puGpffffb0d8, or null when nothing is in focus.
+    orphen::ported::entity::OriginalEntity *focusEntity();
     void alignStreamTo4();
     std::uint32_t haltUnimplemented(std::uint16_t opcode);
+
+    // Record the opcode currently being dispatched. Called before the handler
+    // touches the stream, so `streamOffset_ - 1` is still the opcode byte.
+    void noteOpcode(std::uint16_t opcode, OpcodeSupport support);
+
+    // An opcode whose operands are read out of the original but whose effect is
+    // deliberately not modelled. Consumes `expressionCount` expressions and then
+    // `inlineBytes` raw stream bytes, in that order -- which is the shape of
+    // nearly every handler in PTR_LAB_0031e228. Anything that reads its inline
+    // bytes *before* its expressions, or that branches on an operand, needs a
+    // real handler instead.
+    //
+    // The counts must come from src/FUN_*.c. A wrong count desyncs the whole
+    // stream after it, which is exactly what haltUnimplemented exists to avoid.
+    std::uint32_t consumeOnly(std::uint16_t opcode, int expressionCount, std::size_t inlineBytes = 0);
   };
 
 } // namespace orphen::ported::script

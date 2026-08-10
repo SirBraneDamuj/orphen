@@ -1,5 +1,7 @@
 #include "runtime/port_runtime.h"
 
+#include <cstdio>
+
 #include "harness/flat_bin_archive.h"
 
 #include "runtime/psm2_ground_query.h"
@@ -149,6 +151,7 @@ namespace orphen::port
       drawDistanceOverridden_ = true;
     }
     printScriptReport_ = config.printScriptReport;
+    printModelReport_ = config.printModelReport;
     loadExecutable(config);
 
     if (!config.decodedPsm2Path.empty())
@@ -362,6 +365,73 @@ namespace orphen::port
     environment.FUN_002661a8_preload_model = [this](std::uint16_t typeId)
     {
       modelStore_.bindingForTypeId(typeId);
+    };
+
+    environment.FUN_00217e18_release_camera = [this](bool restore)
+    {
+      fieldCamera_.FUN_00217e18_release_manual_camera(restore);
+    };
+
+    environment.FUN_00218158_step_camera_path = [this](int elapsedFrames, int durationFrames)
+    {
+      fieldCamera_.FUN_00218158_step_camera_path(elapsedFrames, durationFrames);
+    };
+
+    environment.FUN_00217fe8_set_camera_path =
+        [this](std::span<const orphen::ported::psm2::Vec3> eyePoints,
+               std::span<const float> rollValues,
+               std::span<const float> zoomScales,
+               std::span<const orphen::ported::psm2::Vec3> lookAtPoints)
+    {
+      fieldCamera_.FUN_00217fe8_set_camera_path(eyePoints, rollValues, zoomScales, lookAtPoints);
+    };
+
+    environment.FUN_00237b38_start_dialogue = [this](std::uint32_t blobOffset)
+    {
+      if (blobOffset == 0)
+      {
+        dialogueStream_.FUN_00237b38_terminate(sceneScript_.state());
+        return;
+      }
+      const auto bounds = sceneScript_.dialogueRecordBounds(blobOffset);
+      dialogueStream_.FUN_00237b38_start(sceneScript_.blob(), bounds.first, bounds.second,
+                                         sceneScript_.state());
+      std::cout << "[dialogue] " << dialogueStream_.speaker() << ": \"" << dialogueStream_.line()
+                << "\"\n";
+    };
+
+    environment.FUN_00237c60_dialogue_busy = [this]() { return dialogueStream_.FUN_00237c60_busy(); };
+    environment.FUN_00237c70_dialogue_complete = [this]() {
+      return dialogueStream_.FUN_00237c70_complete();
+    };
+
+    environment.cameraPose = [this]() {
+      orphen::ported::script::ScriptEnvironment::CameraPose pose;
+      pose.eye = fieldCamera_.pose().eye;
+      pose.lookAt = fieldCamera_.pose().target;
+      pose.subMode = fieldCamera_.cGpffffb6e1_subMode();
+      return pose;
+    };
+
+    environment.FUN_00218230_set_zoom = [this](float zoomLog2)
+    { fieldCamera_.setZoomLog2(zoomLog2); };
+
+    environment.FUN_00216868_random = [this]() -> std::uint32_t
+    {
+      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
+      return (actorRandomState_ >> 16) & 0x7FFFu;
+    };
+
+    environment.FUN_00267d38_play_at_entity = [this](std::uint16_t cue, std::size_t slot)
+    {
+      const auto &entity = entityPool_.slot(slot);
+      soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
+    };
+
+    environment.FUN_00213640_set_bandana = [this](std::int32_t mode)
+    {
+      orphen::ported::entity::FUN_00213640_set_bandana_mode(
+          entityPool_, DAT_004a7e00_boneOverrides_[orphen::ported::entity::kBandanaSlot], mode);
     };
 
     return environment;
@@ -844,7 +914,7 @@ namespace orphen::port
                                 orphen::ported::entity::OriginalEntity &entity,
                                 std::uint32_t frameTicks)
   {
-    const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
+    const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
     if (binding == nullptr || binding->model == nullptr)
     {
       return;
@@ -916,7 +986,7 @@ namespace orphen::port
   void PortRuntime::advanceEntityAnimations(std::uint32_t frameTicks)
   {
     const auto step = [&](orphen::ported::entity::OriginalEntity &entity) {
-      const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.typeId00);
+      const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
       if (binding == nullptr || binding->model == nullptr)
       {
         return;
@@ -1096,8 +1166,13 @@ namespace orphen::port
       std::cout << "  0x" << std::hex << entry.first << std::dec
                 << "  hits=" << entry.second.hitCount
                 << "  first=0x" << std::hex << entry.second.firstOffset << std::dec
-                << (entry.second.implemented ? "  implemented" : "  UNIMPLEMENTED") << '\n';
+                << "  " << orphen::ported::script::opcodeSupportName(entry.second.support) << '\n';
     }
+    // Two different claims, so two different counters. "operands-only" means the
+    // stream stayed in sync and the scene kept running past an effect the port
+    // does not reproduce; "unimplemented" means the stream stopped.
+    std::cout << "operands-only: " << scriptTrace_.operandsOnlyOpcodeCount() << " distinct, "
+              << scriptTrace_.operandsOnlyHitCount() << " hits\n";
     std::cout << "unimplemented: " << scriptTrace_.unimplementedOpcodeCount() << " distinct, "
               << scriptTrace_.unimplementedHitCount() << " hits\n";
 
@@ -1115,6 +1190,79 @@ namespace orphen::port
                   << " id=" << static_cast<int>(record.id)
                   << " param=" << static_cast<int>(record.param) << '\n';
       }
+    }
+
+    // DAT_00355060. A cutscene keeps its cross-frame state here -- most often
+    // the pool index of something it spawned, which later opcodes address it by
+    // -- so a wrong value shows up as a script waiting on the wrong entity.
+    {
+      const auto &work = sceneScript_.state().DAT_00355060_work;
+      std::cout << "work memory (non-zero):";
+      bool any = false;
+      for (std::size_t index = 0; index < orphen::ported::script::SceneScriptState::kWorkWordCount; ++index)
+      {
+        if (work[index] != 0)
+        {
+          std::cout << "  [" << index << "]=" << work[index];
+          any = true;
+        }
+      }
+      std::cout << (any ? "" : "  (all zero)") << '\n';
+    }
+
+    // The flags are the cutscene's own record of what it has finished. Listed in
+    // order because that order is the plot.
+    std::cout << "event flag changes (opcodes 0x3E..0x40): " << scriptTrace_.eventFlagChanges().size() << '\n';
+    for (const auto &change : scriptTrace_.eventFlagChanges())
+    {
+      std::cout << "  frame " << change.frame << "  flag 0x" << std::hex << change.flagId
+                << (change.set ? " set" : " cleared") << "  at 0x" << change.scriptOffset << std::dec
+                << '\n';
+    }
+
+    if (!scriptTrace_.objectMethods().empty())
+    {
+      std::cout << "object methods called (opcode 0xBD -> FUN_00242a18):\n";
+      for (const auto &entry : scriptTrace_.objectMethods())
+      {
+        std::cout << "  method 0x" << std::hex << entry.first << std::dec
+                  << "  calls=" << entry.second;
+        if (entry.first >= 0x70 && entry.first <= 0x72)
+        {
+          std::cout << "  (voice: VOICE.BIN is not in the disc root)";
+        }
+        std::cout << '\n';
+      }
+    }
+
+    // FUN_0025ce30. The order and the frame each record lands on are the
+    // cutscene's timing, so they are listed rather than totalled.
+    std::cout << "event streams armed (opcode 0xA1): " << scriptTrace_.eventStreamsArmed().size() << '\n';
+    for (const auto &armed : scriptTrace_.eventStreamsArmed())
+    {
+      std::cout << "  frame " << armed.frame << " channel " << static_cast<int>(armed.channel)
+                << " stream 0x" << std::hex << armed.streamOffset << std::dec << '\n';
+    }
+    std::cout << "event records dispatched: " << scriptTrace_.eventDispatches().size() << '\n';
+    for (const auto &dispatch : scriptTrace_.eventDispatches())
+    {
+      std::cout << "  frame " << dispatch.frame << " ch" << static_cast<int>(dispatch.channel)
+                << " delay=" << dispatch.delayUnits
+                << " gate=0x" << std::hex << dispatch.gate
+                << " -> 0x" << dispatch.targetOffset << std::dec;
+      if (dispatch.toDialogue)
+      {
+        std::cout << "  dialogue";
+      }
+      else if (dispatch.slot >= 0)
+      {
+        std::cout << "  slot " << dispatch.slot;
+      }
+      else
+      {
+        std::cout << "  NO FREE SLOT";
+      }
+      std::cout << '\n';
     }
 
     std::cout << "spawns: " << scriptTrace_.spawns().size() << '\n';
@@ -1173,7 +1321,7 @@ namespace orphen::port
       for (const auto &entry : scriptTrace_.playerLocks())
       {
         std::cout << "  0x6D player lock mode=" << entry.first << " hits=" << entry.second
-                  << (entry.first < 1 ? "  (state 10 written; the lead's state-10 handler is not ported, so it does not hold)" : "  (release)")
+                  << (entry.first < 1 ? "  (state 10; the controller does nothing while it is set)" : "  (release)")
                   << '\n';
       }
       if (scriptTrace_.battleBootCount() != 0)
@@ -1192,6 +1340,10 @@ namespace orphen::port
         std::cout << "  reg 0x" << std::hex << entry.first << std::dec << " -> "
                   << (name ? name : "no case in the original (reads 0)")
                   << "  reads=" << entry.second.reads << " writes=" << entry.second.writes;
+        if (entry.second.lastSlot >= 0)
+        {
+          std::cout << "  last: slot " << entry.second.lastSlot << " = " << entry.second.lastValue;
+        }
         if (entry.second.unmodelledHits != 0)
         {
           std::cout << "  UNMODELLED=" << entry.second.unmodelledHits;
@@ -1230,7 +1382,8 @@ namespace orphen::port
     }
     else
     {
-      std::cout << "stream overran the blob\n";
+      std::cout << "stream overran the blob at 0x" << std::hex << sceneScript_.lastHaltOffset()
+                << " (body 0x" << sceneScript_.lastOverrunEntry() << ")" << std::dec << '\n';
     }
     std::cout << "[scr] further per-frame halts are not reported\n";
   }
@@ -1278,6 +1431,13 @@ namespace orphen::port
     {
       std::cout << "(after " << frameCount_ << " frames)";
       printScriptReport();
+    }
+    // Same reasoning as the script report: the load-time listing only covers
+    // what the scene bootstrap spawned, and a cutscene spawns more as it runs.
+    if (printModelReport_ && frameCount_ > 0)
+    {
+      std::cout << "(after " << frameCount_ << " frames)\n";
+      printEntityModelBindings();
     }
     if (printSoundReport_)
     {
@@ -1373,7 +1533,7 @@ namespace orphen::port
               << (store.bootBundleLoaded() ? "" : "  (no s00_e000 boot bundle)") << '\n';
 
     const auto describe = [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
-      const EntityModelBinding *binding = store.bindingForTypeId(entity.typeId00);
+      const EntityModelBinding *binding = store.bindingForTypeId(entity.effectiveTypeId());
       std::cout << "  slot=" << std::setw(3) << slot
                 << " type=0x" << std::hex << entity.typeId00 << std::dec;
       if (binding == nullptr)
@@ -1438,11 +1598,18 @@ namespace orphen::port
     };
 
     describe(0, entityPool_.leadPlayer());
+    // Every live slot, not just the script-spawned ones. A slot that is
+    // allocated but not initialised still draws and still animates, and hiding
+    // it here is how a cutscene stalled on an entity nobody could see.
     entityPool_.forEachActive(
         [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
-          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          if (entityPool_.status(slot) == orphen::ported::entity::SlotStatus::Free)
           {
             return;
+          }
+          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            std::cout << "  slot=" << std::setw(3) << slot << " (allocated, not script-spawned)";
           }
           describe(slot, entity);
         });
@@ -1874,7 +2041,7 @@ namespace orphen::port
       lead.animationA0 = 1;
       lead.previousSubstateA2 = 0xffff;
       lead.flags06 &= 0xff38;
-      lead.substateFrameA8 = 0;
+      lead.timelineCursorA8 = 0;
       std::cout << "[interact] chest slot=" << result.targetSlot
                 << " flag=0x" << std::hex << result.chestFlagId << std::dec
                 << " -> player state 0xC (chest cutscene)\n";
@@ -1977,6 +2144,11 @@ namespace orphen::port
     ++DAT_003555b4_frameCounter_;
     DAT_003555b8_tickCounter_ += frameTicks;
     soundEngine_.setFrame(frameCount_);
+    scriptTrace_.setFrame(static_cast<std::uint32_t>(frameCount_));
+    dialogueStream_.setFrame(static_cast<std::uint32_t>(frameCount_));
+    // FUN_00237de8's slot in the frame: the stream ages before the script runs,
+    // so a slot polling opcode 0x35 sees this frame's answer.
+    dialogueStream_.update(frameTicks, sceneScript_.state());
     // The viewer's free camera and the follow-yaw easing still think in seconds.
     // One simulation step is one nominal frame, so hand them that directly
     // rather than wall-clock time -- this is what makes --frames deterministic.

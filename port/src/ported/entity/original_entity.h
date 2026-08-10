@@ -81,11 +81,19 @@ namespace orphen::ported::entity
     // and FUN_0023a068 advances it by the frame tick while the entity is frozen
     // so a timed state does not lose the frozen frames.
     std::uint16_t stateResetA4 = 999;
-    std::uint16_t substateFrameA8 = 0;
     // +0xA6/+0xA8/+0xAA/+0xAC/+0xAE and +0x13C: FUN_00225c90's animation
     // cursor. +0xA8 steps by 2 per six-byte timeline entry, +0xAC is the pose
     // column every bone track is indexed by, +0xAE the column it came from,
     // and +0x13C the blend between them.
+    //
+    // **+0xA8 has exactly one owner.** It used to be modelled twice -- once here
+    // as the timeline cursor and once as a per-frame "substate frame" the player
+    // controller incremented -- and script object register 6, which is
+    // `param_1[0x54]` in FUN_0025c548, addresses this same halfword. A cutscene
+    // that sets an animation and then polls register 6 for a keyframe therefore
+    // watched a counter nothing was advancing, which is what stalled s01_e012's
+    // opening. FUN_002534d8's jump-startup tests read it too, as keyframes
+    // rather than frames.
     std::uint16_t keyframeTicksA6 = 0;
     std::uint16_t timelineCursorA8 = 0;
     std::uint16_t poseColumnAc = 0;
@@ -97,7 +105,9 @@ namespace orphen::ported::entity
 
     // +0xBE: damage taken since the last tick, drained by FUN_002cd0a0.
     std::uint16_t pendingDamageBe = 0;
-    std::int16_t recordId130 = -1;           // +0x130: the placement record's id byte.
+    // +0x130: the placement record's id byte for a spawned prop. Script opcode
+    // 0xB7 also writes it outright, which is how s01_e012's init tags its cast.
+    std::int16_t recordId130 = -1;
     std::uint16_t staggerTimer12a = 0;       // +0x12A: hit points the +0xBE drain eats into.
     // +0x192: the pool slot of the entity this one is *attached to*, -1 when it
     // stands on its own. FUN_00229c40 seeds it to 0xFFFF for everything it
@@ -136,6 +146,12 @@ namespace orphen::ported::entity
     // Type 0x62's own block, all written by FUN_002cd210 and read by its states.
     std::int32_t targetIndex19c = 0;         // +0x19C: pool index of the chase target.
     std::int32_t targetSlot1a0 = -1;         // +0x1A0: that target, resolved.
+    // +0x1A0 again, under the party reading: the type this entity had before
+    // opcode 0xAC made it a type 0x37 follower, which FUN_002589c0 restores when
+    // the slot is released. Held separately from targetSlot1a0 rather than
+    // aliased, the same way eventFlagId198 and interactTarget198 are -- an
+    // entity is never both a party follower and a type 0x62 enemy.
+    std::int16_t partyOriginalType1a0 = 0;
     std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
     float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
     float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.
@@ -150,6 +166,60 @@ namespace orphen::ported::entity
     std::int16_t alertState1c4 = 0;          // +0x1C4: 1 forces state 2, 2 selects the alternate target.
     std::uint16_t repathTimer1c6 = 0;        // +0x1C6: FUN_002cd0a0's FUN_002cde50 period.
     std::uint8_t enemyFlags1c8 = 0;          // +0x1C8: 0 halves state 3's repath period.
+
+    // The script-driven NPC block, type 0x38. It **overlaps** the type 0x62
+    // fields above -- +0x1C0, +0x1C4, +0x1C6 and +0x1C8 are the same bytes under
+    // both readings, and the fields here are only the offsets the enemy has no
+    // name for. Opcode 0x66 converts an entity to type 0x38 and clears all of
+    // them together, so a slot is never both things at once.
+    //
+    // +0x1BC is the step counter the choreography opcodes advance: 0xEE..0xF1
+    // increment it on arrival, 0xEC writes it and 0xED reads it. That counter is
+    // how a cutscene keeps its place across frames, because the VM has no yield
+    // and every script slot restarts from the top each frame.
+    std::uint8_t stepCounter1bc = 0;
+    // +0x1BE: which movement opcode ran last, so 0xEE..0xF1 can tell a fresh
+    // move from a continuing one and only stamp the animation once.
+    std::int16_t lastMoveOpcode1be = 0;
+    // +0x1C4 and +0x1C8 again, as the choreography opcodes read them: the turn
+    // rate in radians per frame and the angle being turned toward. Held apart
+    // from alertState1c4 / enemyFlags1c8 for the same reason the other unions
+    // are -- an entity is never both a script-driven actor and a type 0x62.
+    float npcTurnRate1c4 = 0.0f;
+    float npcTargetAngle1c8 = 0.0f;
+    std::uint16_t npcWord1ca = 0;            // +0x1CA
+    // +0x1CC: the "was just interacted with" byte. FUN_0025b978 sets it on a
+    // type 0x38 before running the interaction entry; opcode 0xE9 reads and
+    // clears it.
+    std::uint8_t interactPulse1cc = 0;
+    // +0x1CE: the type this entity had before 0x66 made it a 0x38. Opcode 0xF1
+    // and FUN_002298d0 read it to recover the real character class.
+    std::int16_t originalType1ce = 0;
+
+    // The type to resolve a model, descriptor or character class from.
+    //
+    // Type 0x38 is a *role*, not a character: opcode 0x66 stamps it over the
+    // entity's real type when a scene takes an actor over for choreography, and
+    // parks the real one at +0x1CE. Every original that needs the character
+    // behind the role does this same test -- FUN_002298d0 for the class,
+    // FUN_002658c0 for the walk animation. Looking a model up by the raw type
+    // after 0x66 finds nothing, which is what stopped s01_e012's cast animating
+    // and left the cutscene waiting on a frame counter that never advanced.
+    std::int16_t effectiveTypeId() const
+    {
+      if (typeId00 == 0x38)
+      {
+        return originalType1ce;
+      }
+      // 0x37 is the same idea one rung up: opcode 0xAC stamps it over a
+      // follower's real type and parks that at +0x1A0, which FUN_002589c0
+      // restores when the slot is released.
+      if (typeId00 == 0x37)
+      {
+        return partyOriginalType1a0;
+      }
+      return typeId00;
+    }
     // +0x14C: the entity's size scale, applied to the descriptor's radius and
     // height by FUN_00229ef0. 1.0 for a normally spawned actor; the type 0x62
     // leader gives its clones its own scale times 0.7.

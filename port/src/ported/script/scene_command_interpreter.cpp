@@ -19,6 +19,7 @@ namespace orphen::ported::script
     {
       halted_ = true;
       overran_ = true;
+      haltOffset_ = streamOffset_;
       return 0;
     }
     return blob_[streamOffset_++];
@@ -33,6 +34,7 @@ namespace orphen::ported::script
     {
       halted_ = true;
       overran_ = true;
+      haltOffset_ = streamOffset_;
       streamOffset_ = static_cast<std::uint32_t>(blob_.size());
       return 0;
     }
@@ -52,6 +54,7 @@ namespace orphen::ported::script
     {
       halted_ = true;
       overran_ = true;
+      haltOffset_ = streamOffset_;
       return;
     }
     const std::int32_t relative = static_cast<std::int32_t>(
@@ -65,6 +68,7 @@ namespace orphen::ported::script
     {
       halted_ = true;
       overran_ = true;
+      haltOffset_ = streamOffset_;
       return;
     }
     streamOffset_ = static_cast<std::uint32_t>(target);
@@ -102,6 +106,10 @@ namespace orphen::ported::script
       {
         halted_ = true;
         overran_ = true;
+        // Where it ran off matters as much as that it did: an overrun is always
+        // a decode desync, and the offset is the only clue to which operand
+        // width is wrong.
+        haltOffset_ = streamOffset_;
         break;
       }
 
@@ -117,17 +125,17 @@ namespace orphen::ported::script
           if (atTopLevel)
           {
             ++streamOffset_;
-            trace_.recordOpcode(opcode, opcodeOffset, true);
+            trace_.recordOpcode(opcode, opcodeOffset, OpcodeSupport::Modelled);
             return true;
           }
-          trace_.recordOpcode(opcode, opcodeOffset, true);
+          trace_.recordOpcode(opcode, opcodeOffset, OpcodeSupport::Modelled);
           streamOffset_ = callStack[--stackTop];
           continue;
         }
 
         ++streamOffset_;
         dispatchLow(opcode);
-        trace_.recordOpcode(opcode, opcodeOffset, true);
+        trace_.recordOpcode(opcode, opcodeOffset, OpcodeSupport::Modelled);
         continue;
       }
 
@@ -158,7 +166,7 @@ namespace orphen::ported::script
         callStack[stackTop++] = streamOffset_ + 5;
         --depth;
         ++streamOffset_;
-        trace_.recordOpcode(opcode, opcodeOffset, true);
+        trace_.recordOpcode(opcode, opcodeOffset, OpcodeSupport::Modelled);
         FUN_0025c220_relativeJump();
         continue;
       }
@@ -373,6 +381,7 @@ namespace orphen::ported::script
         {
           halted_ = true;
           overran_ = true;
+          haltOffset_ = streamOffset_;
           return 0;
         }
         second() = static_cast<std::uint32_t>(static_cast<std::int32_t>(second()) / static_cast<std::int32_t>(top()));
@@ -385,6 +394,7 @@ namespace orphen::ported::script
         {
           halted_ = true;
           overran_ = true;
+          haltOffset_ = streamOffset_;
           return 0;
         }
         second() = static_cast<std::uint32_t>(static_cast<std::int32_t>(second()) % static_cast<std::int32_t>(top()));
@@ -395,6 +405,7 @@ namespace orphen::ported::script
         // where the decoder thinks it is.
         halted_ = true;
         overran_ = true;
+        haltOffset_ = streamOffset_;
         return count ? operands[count - 1] : 0u;
       }
 
@@ -440,6 +451,7 @@ namespace orphen::ported::script
       {
         halted_ = true;
         overran_ = true;
+        haltOffset_ = streamOffset_;
       }
       break;
 

@@ -58,11 +58,86 @@ Header words 3 and 4 are *not* per-frame and are not driven by the tick. Word 3
 is the player's interaction probe (`FUN_00252828`) and word 4 is entity teardown
 (`FUN_00265ec0`); both are reachable through `runEntry` when those paths land.
 
-**Unimplemented opcodes halt rather than fall through.** An opcode whose operands
-go unconsumed desyncs everything after it, so one honest stop beats a cascade of
-invented instructions. `--scr-report` prints where it stopped, every opcode
-reached with hit counts and first offsets, the spawn list, and the map's
-placement table.
+**An opcode is reported at one of three support levels.** An opcode whose
+operands go unconsumed desyncs everything after it, so a genuinely unknown one
+still halts -- one honest stop beats a cascade of invented instructions. But a
+long cutscene chain reaches dozens of purely cosmetic opcodes, and halting on
+each in turn means never seeing the scene run at all. So:
+
+| level | meaning |
+|---|---|
+| `modelled` | operands consumed and the effect reproduced |
+| `operands-only` | operands consumed exactly as the original reads them, effect deliberately not reproduced |
+| `UNIMPLEMENTED` | not decoded -- the stream stops here |
+
+`consumeOnly(opcode, expressions, inlineBytes)` is the middle case, and **every
+count comes out of the matching `src/FUN_*.c`, never a guess** -- a wrong count
+desyncs the stream, which is exactly what the halt exists to prevent. Note the
+`analyzed/ops/` filenames are not reliable here: several encode hypotheses the
+dispatch table has since disproved, and `0xA4`/`0xA5`/`0xA6` are named
+"audio_submit" while actually mutating map primitive flags.
+
+`--scr-report` prints every opcode reached with its level, hit count and first
+offset, plus the spawn list and the map's placement table.
+
+### The cutscene sequencer
+
+`FUN_0025ce30`, in `SceneScript::FUN_0025ce30_run_event_scheduler`. **This is the
+mechanism a cutscene is actually built out of**, and without it no story scene
+can sequence no matter how many opcodes are ported.
+
+Because the VM has no yield, a scene cannot express "walk here, wait, then
+speak" as one routine. Instead opcode `0xA1` arms one of four channels with a
+stream of 8-byte records:
+
+```
+[u16 delayUnits][u16 gate][u32 targetOffset]
+```
+
+and the scheduler pays them out one at a time. The gate has three readings:
+zero fires immediately, bit 15 clear waits for that event flag, bit 15 set waits
+for those bits in `uGpffffb0f4`. A blocked channel does not advance its timer at
+all, so a delay is measured from when the gate opened rather than from when the
+stream was armed. The timer accumulates frame ticks and fires at
+`timer >> 5 >= delayUnits`, so `delayUnits` is a frame count.
+
+A target inside the dialogue pointer table's range goes straight to the message
+driver; anything else is queued into a free object-script slot. That window is
+`FUN_0025b288`, which walks header word 5's table and keeps its first and last
+non-zero entries -- and the top bound is genuinely exclusive, so the final entry
+reads as script rather than dialogue. Reproduced rather than fixed; the scene
+data was authored against it.
+
+`s01_e012`'s opening is stream `0xca30`, armed at `0x2122`. Its first records
+start two script bodies, then wait on flags those bodies set, then put dialogue
+up and wait for it to close.
+
+### Two bugs this turned up
+
+Both were silent, and both would have blocked every story scene:
+
+- **Opcodes `0x3D`..`0x40` are the event-flag query / set / clear / toggle**, not
+  resource queries. The port answered "not loaded" and wrote nothing, so no
+  script could ever latch its own progress and every gate saw a cleared flag.
+  The mode is the opcode byte itself, read back off the stream as a character:
+  `=` query, `>` set, `?` clear, `@` toggle. All four return the value the flag
+  had *before* the write, so a script can test and latch in one instruction.
+  (`FUN_002663a0` sets and `FUN_002663d8` clears -- the port had the clear one
+  carrying the setter's name.)
+- **`+0xA8` had two owners.** It was modelled twice: once as `FUN_00225c90`'s
+  animation timeline cursor and once as a per-frame "substate frame" the player
+  controller incremented. Script object register 6 is `param_1[0x54]` in
+  `FUN_0025c548`, which is that same halfword -- so a cutscene that sets an
+  animation and then polls register 6 for a keyframe was watching a counter
+  nothing advanced. `FUN_002534d8`'s jump-startup tests read it too, as
+  keyframes rather than frames; the animation pass is the only writer now.
+
+There is also a smaller one worth stating because it recurs: **type `0x38` is a
+role, not a character.** Opcode `0x66` stamps it over an actor's real type when a
+scene takes it over for choreography and parks the real one at `+0x1CE`. Looking
+a model up by the raw type after that finds nothing, which left a whole cast
+un-animated. `OriginalEntity::effectiveTypeId()` is the test every original makes
+in the same situation.
 
 ### Where scene objects actually come from
 
@@ -128,6 +203,109 @@ record's param byte plus `0x400`), not a pointer; flag clear means closed, set
 means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
 
 ### State of play
+
+`s01_e012`, the game's first scene, runs its init, start and per-frame entries
+with **zero unimplemented opcodes over 4000 frames** and spawns 77 entities. Its
+scene script is byte-identical to `scr/scr2.out`, so the whole existing scr2 body
+of work applies -- `docs/scr2_offset_tables_dialogue_voice_flow.md` most of all.
+
+The opening cutscene chain **runs to its end.** From `--scr-report`:
+
+```
+event records dispatched: 208     event flag changes: 60+
+  frame     1  -> 0x40b2 (slot)      frame   634  -> 0x2c (dialogue)
+  frame   544  -> 0x461f (slot)      frame 10354  -> 0xb63 (dialogue)
+  frame 10426  flag 0x515 set  at 0x6813
+0x6D player lock mode=-1  (state 10)   ...   mode=1  (release)
+```
+
+Forty-two lines of dialogue, a dozen camera shots, and characters walking
+between marks -- about **three minutes** of cutscene, with **zero unimplemented
+opcodes** and `--frames` byte-identical run to run.
+
+`0x515` is the handoff latch: `docs/scr2_offset_tables_dialogue_voice_flow.md`
+identifies it as what the opening sets when it gives the player control, and the
+matching `0x6D` release is in the report beside it. So the scene reaches its
+first interactive moment.
+
+### How a cutscene is actually built
+
+Three mechanisms, and none of them is a linear script:
+
+1. **The event scheduler** (`FUN_0025ce30`) pays out a stream of
+   `[delay][gate][target]` records, sending each either to the dialogue driver
+   or into a free object-script slot.
+2. **Event flags are the join.** A record gates on a flag; the body it started
+   sets that flag when it finishes. Flags `0x8FE`/`0x8FF` are the dialogue
+   driver's own, so "wait for the line to end" is just another gate -- and
+   dialogue records set story flags themselves through text control code `0x1B`,
+   which is the only one of the 31 that has to *run* rather than be skipped.
+3. **The choreography opcodes** (`0xE9`..`0xF5`) advance the focus entity's
+   `+0x1BC` step counter when they complete, so a body reads that counter and
+   switches on it. The counter is the choreography's program counter.
+
+None of it needs the absent non-player physics: `FUN_002658c0` computes its own
+per-frame displacement and writes straight into `+0x20`/`+0x24`.
+
+### The voice handshake
+
+`0xBD` method `0x70` starts a voice line and `0x72` polls it, and a cutscene
+**blocks on the pair**: it only installs its wait loop if the start reports
+success, then waits for the poll to report idle. `VOICE.BIN` is not in the disc
+root, so nothing can play -- and both obvious answers hang the scene, one
+retrying the start forever and one waiting forever. The port answers start =
+success, poll = idle, so an unvoiced run behaves like a voiced one that has
+already finished. (`FUN_002445c8`'s own no-audio path returns `-1`, which is
+neither.)
+
+**Six bugs came out of getting there**, all silent, and the first two would
+have blocked every story scene in the game:
+
+- **Opcodes `0x3D`..`0x40` are the event-flag query / set / clear / toggle**,
+  not resource queries. The port answered "not loaded" and wrote nothing, so no
+  script could latch its own progress and every gate saw a cleared flag. The
+  mode is the opcode byte read back as a character: `=` query, `>` set, `?`
+  clear, `@` toggle, all returning the value from *before* the write.
+  (`FUN_002663a0` sets and `FUN_002663d8` clears -- the port had the clear one
+  carrying the setter's name.)
+- **A handler must read its own opcode before evaluating any operand.** An
+  operand expression can contain another statement opcode -- work reads (`0x36`)
+  are everywhere -- and evaluating one overwrites `currentOpcode_`. Four
+  handlers read it afterwards, including `0x77`..`0x7C`, so *every* object
+  register write whose selector was an expression fell through its switch and
+  silently did nothing. That is why the cast never animated. Every original
+  saves the opcode in its first instruction; the port now does too.
+- **`+0xA8` had two owners.** It was modelled twice: once as `FUN_00225c90`'s
+  animation timeline cursor and once as a per-frame counter the player
+  controller incremented. Script object register 6 is `param_1[0x54]` in
+  `FUN_0025c548`, the same halfword -- so a cutscene that sets an animation and
+  polls register 6 for a keyframe watched a counter nothing advanced.
+  `FUN_002534d8`'s jump-startup tests read it as keyframes, not frames.
+- **Player state 10 was not honoured.** `PTR_FUN_0031e0e8[10]` is `jr ra; nop`
+  -- a real no-op, and the whole of how a cutscene takes the controller away.
+  The port fell through to the grounded field branch, handing control back to
+  the pad the moment a scene asked for it.
+- **Text control code `0x1B` has to execute.** The dialogue stub skipped every
+  control code, but `0x1B` sets an event flag, and the scheduler gates on those.
+  Flag `0x6A` is set from the tail of Volcan's line and by nothing in the script
+  at all, so skipping it stopped the chain dead. Its payload is two bytes, not
+  three.
+- **`0x7D`'s operands interleave**: an expression, an inline byte, then another
+  expression. `src/FUN_00260738.c` is hand-annotated with its statements
+  reordered and `analyzed/update_entity_timed_parameter.c` reads it as three
+  expressions; consuming three desyncs the stream. The disassembly at
+  `0x260754`..`0x260770` is the authority. It surfaced as an overrun nine
+  thousand frames in, which is what the halt discipline exists for -- and
+  `--scr-report` now prints where an overrun happened, not just that one did.
+
+Smaller, and it recurs: **type `0x38` is a role, not a character.** Opcode
+`0x66` stamps it over an actor's real type when a scene takes it over for
+choreography and parks the real one at `+0x1CE`. Looking a model up by the raw
+type after that finds nothing, which left a whole cast un-animated.
+`OriginalEntity::effectiveTypeId()` is the test every original makes here.
+
+The chain stops around frame 2190 with the scene still mid-sequence; it has not
+yet reached flag `0x515`, the handoff latch that ends the opening.
 
 `s01_e024` runs both load-time entries **and** its per-frame entry to a clean
 block end with **zero** unimplemented opcodes, and spawns 14 entities. Slot 4,

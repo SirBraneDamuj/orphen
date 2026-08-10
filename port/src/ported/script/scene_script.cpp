@@ -65,7 +65,69 @@ namespace orphen::ported::script
     }
 
     FUN_0025b600_read_scene_defaults();
+    FUN_0025b288_read_dialogue_window();
     return true;
+  }
+
+  // FUN_0025b288 (0x0025b288), called from FUN_0025b390 at scene load.
+  //
+  // Header word 5 points at the dialogue pointer table: ascending record
+  // offsets terminated by a zero. This keeps the first entry and the last
+  // non-zero one, and the pair becomes the window FUN_0025ce30 tests a
+  // scheduler target against to decide "is this a line of dialogue or a piece of
+  // script?".
+  //
+  // The bound is genuinely half-open at the top -- FUN_0025ce30 rejects a target
+  // that is `>=` the last entry, so the final record in the table is treated as
+  // script. That looks like an off-by-one and is reproduced rather than fixed,
+  // because the scene data was authored against it.
+  void SceneScript::FUN_0025b288_read_dialogue_window()
+  {
+    state_.DAT_00355ce0_dialogueWindowFirst = 0;
+    state_.DAT_00355ce4_dialogueWindowLast = 0;
+    dialogueRecordOffsets_.clear();
+
+    const std::uint32_t tableOffset = headerWords_[5];
+    if (tableOffset == 0 || tableOffset + 4 > blob_.size())
+    {
+      return;
+    }
+
+    for (std::size_t offset = tableOffset; offset + 4 <= blob_.size(); offset += 4)
+    {
+      const std::uint32_t entry = readU32(blob_, offset);
+      if (entry == 0)
+      {
+        break;
+      }
+      dialogueRecordOffsets_.push_back(entry);
+    }
+    if (dialogueRecordOffsets_.empty())
+    {
+      return;
+    }
+    state_.DAT_00355ce0_dialogueWindowFirst = dialogueRecordOffsets_.front();
+    state_.DAT_00355ce4_dialogueWindowLast = dialogueRecordOffsets_.back();
+  }
+
+  std::pair<std::uint32_t, std::uint32_t> SceneScript::dialogueRecordBounds(std::uint32_t offset) const
+  {
+    // The table is ascending, so the record containing `offset` is the last
+    // entry at or below it. Opcode 0x33's inline text is not in the table at
+    // all -- it points into the middle of the code -- so an offset past the
+    // last entry falls back to running to the end of the blob, and the
+    // printable-run scan stops at the first control code either way.
+    std::pair<std::uint32_t, std::uint32_t> bounds{offset, static_cast<std::uint32_t>(blob_.size())};
+    for (std::size_t index = 0; index < dialogueRecordOffsets_.size(); ++index)
+    {
+      if (dialogueRecordOffsets_[index] > offset)
+      {
+        bounds.second = dialogueRecordOffsets_[index];
+        break;
+      }
+      bounds.first = dialogueRecordOffsets_[index] <= offset ? offset : bounds.first;
+    }
+    return bounds;
   }
 
   // FUN_0025b600 (0x0025b600), called from FUN_0022a418 with the 0x325368
@@ -143,7 +205,12 @@ namespace orphen::ported::script
     // A halt is sticky across a tick: once any slot has stopped on an
     // unimplemented opcode, the run is not clean, and reporting only the last
     // slot's result would hide it.
-    lastRunOverran_ = lastRunOverran_ || interpreter.overran();
+    if (interpreter.overran() && !lastRunOverran_)
+    {
+      lastRunOverran_ = true;
+      lastHaltOffset_ = interpreter.haltOffset();
+      lastOverrunEntry_ = offset;
+    }
     if (interpreter.haltedOnUnimplemented() && !lastRunHaltedOnUnimplemented_)
     {
       lastRunHaltedOnUnimplemented_ = true;
@@ -217,7 +284,7 @@ namespace orphen::ported::script
     trace.recordTickRun();
     bool completed = runAtOffset(tickOffset, environment, trace, kNoSelectedEntity);
 
-    // FUN_0025ce30 would run here. Not modelled -- see the header.
+    FUN_0025ce30_run_event_scheduler(environment, trace);
 
     // The 62 general slots, in order, each with the current-slot global set so
     // opcode 0x9E can retire the slot it is running in.
@@ -243,6 +310,109 @@ namespace orphen::ported::script
 
     // FUN_0025cfb8 (letterbox) and the debug flag dump would follow.
     return completed;
+  }
+
+  // FUN_0025ce30 (0x0025ce30). See analyzed/process_entity_queue_system.c.
+  //
+  // Four channels, each a cursor into a stream of 8-byte records:
+  //
+  //     [u16 delayUnits][u16 gate][u32 targetOffset]
+  //
+  // Per frame, per channel: check the gate, then accumulate the frame tick into
+  // the channel timer until `timer >> 5` reaches delayUnits, then pay the record
+  // out and reset the timer. The `>> 5` is against the nominal 0x20 ticks a
+  // frame, so delayUnits is a frame count.
+  //
+  // The gate has three readings and the order matters:
+  //   gate == 0            -- no condition
+  //   bit 15 clear         -- wait for event flag `gate` to be set
+  //   bit 15 set           -- wait until `gate & (uGpffffb0f4 | 0x8000) == gate`
+  //
+  // A blocked channel does not advance its timer at all, so a delay is measured
+  // from when the gate opened rather than from when the stream was armed.
+  void SceneScript::FUN_0025ce30_run_event_scheduler(const ScriptEnvironment &environment,
+                                                     ScriptTrace &trace)
+  {
+    for (std::size_t index = 0; index < SceneScriptState::kEventChannelCount; ++index)
+    {
+      auto &channel = state_.DAT_00571e40_eventChannels[index];
+      if (channel.cursor == 0 ||
+          channel.cursor + SceneScriptState::kEventRecordSize > blob_.size())
+      {
+        continue;
+      }
+
+      const std::uint16_t delayUnits =
+          static_cast<std::uint16_t>(blob_[channel.cursor] | (blob_[channel.cursor + 1] << 8));
+      const std::uint16_t gate =
+          static_cast<std::uint16_t>(blob_[channel.cursor + 2] | (blob_[channel.cursor + 3] << 8));
+
+      if (gate != 0)
+      {
+        if ((gate & 0x8000u) == 0)
+        {
+          if (!state_.FUN_00266368_eventFlag(gate))
+          {
+            continue;
+          }
+        }
+        else if ((gate & (state_.uGpffffb0f4_gateMask | 0x8000u)) != gate)
+        {
+          continue;
+        }
+      }
+
+      if (((channel.timer >> 5) & 0xFFFFu) < delayUnits)
+      {
+        channel.timer += environment.frameTicks;
+        continue;
+      }
+
+      const std::uint32_t targetOffset = readU32(blob_, channel.cursor + 4);
+
+      ScriptTrace::EventDispatch dispatch;
+      dispatch.frame = trace.frame();
+      dispatch.channel = static_cast<std::uint8_t>(index);
+      dispatch.delayUnits = delayUnits;
+      dispatch.gate = gate;
+      dispatch.targetOffset = targetOffset;
+
+      // A target inside the dialogue pointer table's range is a line of text and
+      // starts immediately; anything else is a script body and is queued.
+      const bool toDialogue = targetOffset >= state_.DAT_00355ce0_dialogueWindowFirst &&
+                              targetOffset < state_.DAT_00355ce4_dialogueWindowLast;
+      dispatch.toDialogue = toDialogue;
+
+      if (toDialogue)
+      {
+        if (environment.FUN_00237b38_start_dialogue)
+        {
+          environment.FUN_00237b38_start_dialogue(targetOffset);
+        }
+      }
+      else
+      {
+        const std::int32_t slot = state_.findFreeObjectScriptSlot();
+        dispatch.slot = slot;
+        if (slot >= 0)
+        {
+          state_.DAT_00355cf4_objectScriptSlots[static_cast<std::size_t>(slot)] = targetOffset;
+        }
+      }
+      trace.recordEventDispatch(dispatch);
+
+      channel.cursor += SceneScriptState::kEventRecordSize;
+      ++channel.consumed;
+      channel.timer = 0;
+
+      // The stream ends where the *next* record's target offset is zero -- not
+      // on a zero delay or a zero gate, both of which are ordinary values.
+      if (channel.cursor + SceneScriptState::kEventRecordSize > blob_.size() ||
+          readU32(blob_, channel.cursor + 4) == 0)
+      {
+        channel.cursor = 0;
+      }
+    }
   }
 
   bool SceneScript::FUN_0025b918_run_late_slots(const ScriptEnvironment &environment, ScriptTrace &trace)
@@ -285,8 +455,13 @@ namespace orphen::ported::script
 
   bool SceneScript::FUN_0025b6d0_run_init(const ScriptEnvironment &environment, ScriptTrace &trace)
   {
-    // FUN_0025b6d0 also clears 0x30 bytes at 0x571E40 and resets DAT_0035504c,
-    // the 0x4E lookup counter, before running the entry.
+    // FUN_0025b6d0 clears 0x30 bytes at 0x571E40 -- which is exactly the four
+    // 12-byte scheduler channels -- and resets DAT_0035504c, the 0x4E lookup
+    // counter, before running the entry.
+    for (auto &channel : state_.DAT_00571e40_eventChannels)
+    {
+      channel = SceneScriptState::EventChannel{};
+    }
     state_.DAT_0035504c_lookupCount = 0;
     return runEntry(SceneScriptEntry::Init, environment, trace);
   }

@@ -129,6 +129,9 @@ namespace orphen::ported::camera
     float uGpffffb6dc_roll() const { return uGpffffb6dc_roll_; }
     float fGpffffb6e8_zoomLog2() const { return fGpffffb6e8_zoomLog2_; }
     void FUN_002241d8_reset_zoom();
+    // Script opcode 0x6C sets the zoom outright; 0x6A/0x6B ramp it. The value
+    // is already through FUN_00218230, so it is a log2 scale, not a distance.
+    void setZoomLog2(float zoomLog2) { fGpffffb6e8_zoomLog2_ = zoomLog2; }
 
     const CameraPose &pose() const { return pose_; }
 
