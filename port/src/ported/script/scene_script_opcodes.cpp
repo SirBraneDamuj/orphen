@@ -10,6 +10,7 @@
 
 #include "ported/camera/original_camera_path.h"
 #include "ported/entity/actor_frame_update.h"
+#include "ported/entity/original_entity_sound.h"
 #include "ported/script/object_registers.h"
 
 #include <cmath>
@@ -79,6 +80,57 @@ namespace orphen::ported::script
     // The opcode byte has already been consumed by the dispatch loop.
     haltOffset_ = streamOffset_ ? streamOffset_ - 1 : 0;
     return 0;
+  }
+
+  bool SceneCommandInterpreter::decodePathWaypoints(
+      std::uint32_t blobOffset, std::vector<orphen::ported::psm2::Vec3> &waypoints)
+  {
+    if (static_cast<std::size_t>(blobOffset) + 4 > blob_.size())
+    {
+      return false;
+    }
+    std::uint32_t count = 0;
+    std::memcpy(&count, blob_.data() + blobOffset, sizeof(count));
+    // FUN_00266a78 refuses more than 16 points, and a bad offset reads as a
+    // huge count, so this is a validity test as much as a clamp.
+    if (count == 0 || count > orphen::ported::camera::kMaxSplinePoints)
+    {
+      return false;
+    }
+
+    // FUN_0025d618 saves DAT_00355cd0, aims it just past the count, evaluates,
+    // and restores it. Same dance, with the interpreter's own cursor.
+    const std::uint32_t savedOffset = streamOffset_;
+    streamOffset_ = blobOffset + 4;
+
+    waypoints.clear();
+    waypoints.reserve(count);
+    bool ok = true;
+    for (std::uint32_t index = 0; index < count && ok; ++index)
+    {
+      float component[3] = {0.0f, 0.0f, 0.0f};
+      for (float &value : component)
+      {
+        const std::uint32_t raw = FUN_0025c258_evaluate();
+        if (halted_)
+        {
+          ok = false;
+          break;
+        }
+        // The evaluator already applies the 0x0F literal's *100. FUN_0025d618
+        // divides by 100 and FUN_002443f8 by 1000; doing it in one step keeps
+        // the integer truncation out, which the original only has because it
+        // stores through an int array in between.
+        value = static_cast<float>(static_cast<std::int32_t>(raw)) / kScriptCoordinateScale;
+      }
+      if (ok)
+      {
+        waypoints.push_back({component[0], component[1], component[2]});
+      }
+    }
+
+    streamOffset_ = savedOffset;
+    return ok;
   }
 
   orphen::ported::entity::OriginalEntity *SceneCommandInterpreter::resolveEntity(std::uint32_t index)
@@ -221,7 +273,13 @@ namespace orphen::ported::script
 
     if (environment_.terrainHeight)
     {
-      const auto height = environment_.terrainHeight(record.position.x, record.position.y);
+      // The record's own z is where this thing was authored to stand, so it is
+      // the band to look in. FUN_0025e7c0 does not sample terrain at all -- it
+      // just writes the record's z into +0x28 and +0x4C -- so this only exists
+      // to tell the report whether the placement landed on anything.
+      const auto height = environment_.terrainHeight(record.position.x, record.position.y,
+                                                     record.position.z,
+                                                     record.position.z + entity.height58);
       if (height.has_value())
       {
         entity.groundHeight4c = *height;
@@ -1636,8 +1694,11 @@ namespace orphen::ported::script
       {
         const auto *focus = focusEntity();
         // FUN_002298d0's type 0x38 alias: the class comes from the real type.
+        // The test is on the *class* the lookup returns, not on the type id --
+        // `lVar5 = FUN_002298d0(sVar7); iStack_80 = 0xe; if (6 < lVar5) ...`.
         const std::int16_t type = focus != nullptr ? focus->effectiveTypeId() : 0;
-        animation = (type > 6) ? 8 : 14;
+        const int characterClass = orphen::ported::entity::FUN_002298d0_character_class(type);
+        animation = (characterClass > 6) ? 8 : 14;
         step = ticks * 128.0f * kNpcPaceScale;
       }
     }
@@ -1691,8 +1752,16 @@ namespace orphen::ported::script
       focus->facingRadians5c = facing;
     }
 
-    focus->positionX20 += move * std::cos(facing);
-    focus->positionZ24 += move * std::sin(facing);
+    // **A request, not a teleport.** The original accumulates into +0x30/+0x34
+    // -- `psGpffffb0d8[0x18]` and `[0x1a]` over a short pointer -- and leaves it
+    // to the physics pass to spend. Writing +0x20/+0x24 here instead skips
+    // collision and the ground follow entirely, and it moves the actor a frame
+    // early relative to everything that reads its position.
+    //
+    // It also only works at all because FUN_00239ce0 leaves these alone: the
+    // scene tick runs before the actor loop, so the request has to survive it.
+    focus->desiredDeltaX30 += move * std::cos(facing);
+    focus->desiredDeltaZ34 += move * std::sin(facing);
     return arrived;
   }
 
@@ -2414,7 +2483,11 @@ namespace orphen::ported::script
     bool grounded = false;
     if (sampleTerrain && environment_.terrainHeight)
     {
-      const auto height = environment_.terrainHeight(x, y);
+      // FUN_00227070 is handed the entity, and reads +0x28 / +0x58 off it for
+      // the scan band. Those are the position just written and the body height,
+      // so the sample is the floor *under this entity*, not the nearest surface
+      // to sea level.
+      const auto height = environment_.terrainHeight(x, y, z, z + entity->height58);
       if (height.has_value())
       {
         entity->groundHeight4c = *height;
@@ -2718,8 +2791,7 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       const std::int32_t rawX = static_cast<std::int32_t>(FUN_0025c258_evaluate());
       const std::int32_t rawY = static_cast<std::int32_t>(FUN_0025c258_evaluate());
-      FUN_0025c258_evaluate(); // z, which FUN_00227798 takes but the port's
-                               // ground query does not need
+      const std::int32_t rawZ = static_cast<std::int32_t>(FUN_0025c258_evaluate());
       if (halted_)
       {
         return 0;
@@ -2727,8 +2799,15 @@ namespace orphen::ported::script
       float height = 0.0f;
       if (environment_.terrainHeight)
       {
+        // FUN_00227798 writes its z into *both* the feet (+0x2C) and the head
+        // (+0x30) of the scan workspace, so the answer is the highest surface
+        // at or below that z -- the script picks which storey it means by what
+        // it passes here. Dropping the z is what put this scene's cast on the
+        // upper deck.
+        const float probeZ = static_cast<float>(rawZ) / kScriptCoordinateScale;
         const auto hit = environment_.terrainHeight(static_cast<float>(rawX) / kScriptCoordinateScale,
-                                                    static_cast<float>(rawY) / kScriptCoordinateScale);
+                                                    static_cast<float>(rawY) / kScriptCoordinateScale,
+                                                    probeZ, probeZ);
         if (hit.has_value())
         {
           height = *hit;
@@ -2853,6 +2932,92 @@ namespace orphen::ported::script
     case 0x70:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00260038_angle_to_lead();
+
+    // 0x6E (FUN_0025fe98): the angle from (x2, y2) to (x1, y1). Four
+    // expressions in stream order x1, y1, x2, y2, and the subtraction runs
+    // first-minus-second, so this points *from* the later pair to the earlier
+    // one. FUN_00305408 is atan2f(y, x) -- the same order FUN_002658c0 calls it
+    // with -- and the result is wrapped before being scaled back.
+    case 0x6E:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::int32_t firstX = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t firstY = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t secondX = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t secondY = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      const float deltaY = (static_cast<float>(firstY) - static_cast<float>(secondY)) / kScriptCoordinateScale;
+      const float deltaX = (static_cast<float>(firstX) - static_cast<float>(secondX)) / kScriptCoordinateScale;
+      const float angle = FUN_00216690_wrapAngle(std::atan2(deltaY, deltaX));
+      return static_cast<std::uint32_t>(static_cast<std::int32_t>(angle * kScriptCoordinateScale));
+    }
+
+    // 0x72 (FUN_002600c8): ease an angle toward another, one frame's worth.
+    // Three expressions -- from, to, rate -- and the result is the *step* to
+    // apply, not the new angle: FUN_0023a320 returns the capped, dead-zoned
+    // difference. The rate is per-second-ish, scaled by the frame's tick count
+    // exactly the way the walk opcodes scale their pace.
+    case 0x72:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::int32_t fromRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t toRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t rateRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      const float from = FUN_00216690_wrapAngle(static_cast<float>(fromRaw) / kScriptCoordinateScale);
+      const float to = FUN_00216690_wrapAngle(static_cast<float>(toRaw) / kScriptCoordinateScale);
+      const float rate = (static_cast<float>(rateRaw) / kScriptCoordinateScale) * 0.03125f *
+                         static_cast<float>(environment_.frameTicks);
+      // FUN_0023a320, inline: the actor loop has the same four lines but keeps
+      // them in its own translation unit. DAT_003525f0 is the half-degree dead
+      // zone that stops a turn rather than letting it jitter around the target.
+      const float difference = FUN_00216690_wrapAngle(to - from);
+      float step = 0.0f;
+      if (difference > kTurnDeadzone)
+      {
+        step = std::min(difference, rate);
+      }
+      else if (difference < -kTurnDeadzone)
+      {
+        step = std::max(difference, -rate);
+      }
+      return static_cast<std::uint32_t>(static_cast<std::int32_t>(step * kScriptCoordinateScale));
+    }
+
+    // 0x73 (FUN_00260188): the shortest signed angle from a to b.
+    // FUN_002166e8 is `FUN_00216690(b - a)` and nothing more.
+    case 0x73:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::int32_t fromRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t toRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      const float delta = FUN_00216690_wrapAngle(static_cast<float>(toRaw) / kScriptCoordinateScale -
+                                                 static_cast<float>(fromRaw) / kScriptCoordinateScale);
+      return static_cast<std::uint32_t>(static_cast<std::int32_t>(delta * kScriptCoordinateScale));
+    }
+
+    // 0x94 (FUN_002612e0): two expressions into FUN_0022dcf0, audio
+    // positioning. Same story as 0xDE.
+    case 0x94:
+      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
+      return consumeOnly(opcode, 2);
+
+    // 0xDE (FUN_00264f50): two expressions -- a channel id and a level -- into
+    // FUN_0023bbd8, which sets audio channel state. The mixer does not model
+    // per-channel state, so the operands are consumed and the effect is not.
+    case 0xDE:
+      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
+      return consumeOnly(opcode, 2);
 
     case 0x85:
     case 0x87:
@@ -3048,8 +3213,8 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       const std::uint32_t selector = FUN_0025c258_evaluate();
       const std::uint32_t method = FUN_0025c258_evaluate();
-      FUN_0025c258_evaluate();
-      FUN_0025c258_evaluate();
+      const std::uint32_t arg3 = FUN_0025c258_evaluate();
+      const std::uint32_t arg4 = FUN_0025c258_evaluate();
       if (halted_)
       {
         return 0;
@@ -3060,21 +3225,57 @@ namespace orphen::ported::script
       }
       trace_.recordObjectMethod(method);
 
-      // FUN_00242a18's voice cases, and the pair is a handshake a cutscene
-      // blocks on: 0x70 starts a line and the script only installs its wait
-      // loop if that reports success, then polls 0x72 until it reports the line
-      // is no longer playing.
+      // FUN_00242a18 is a method table on the *selected entity* -- param_1 is
+      // uGpffffb0d4, not an audio handle. **Methods 0x70/0x72 are waypoint
+      // path-follow, not voice.** An earlier reading here called them voice and
+      // that was wrong; it is why s01_e012's Dortin never walks.
       //
-      // VOICE.BIN is not in the disc root, so nothing can be played. Answering
-      // "failed to start" would hang the scene retrying forever, and answering
-      // "still playing" would hang it waiting; the pair that lets an unvoiced
-      // run behave like a voiced one that has already finished is start =
-      // success, poll = idle. FUN_002445c8's own no-audio path returns -1,
-      // which is neither.
+      //   0x70 -> FUN_002443f8(entity, blobOffset, duration)
+      //           Allocates a follower slot, evaluates the expression list at
+      //           `blobOffset + DAT_00355058` -- a u32 count followed by
+      //           count * 3 VM expressions, x/y/z at 1000-scale -- and stores
+      //           them as the path. Third operand is the duration.
+      //   0x72 -> FUN_002445c8(entity)
+      //           Finds the entity's follower slot and returns its progress,
+      //           ((total - remaining) * 1000) / total + 1, so non-zero while
+      //           it is still walking and 0 once the slot is gone.
+      //
+      // The scene script's shape is: start with 0x70, and only if that succeeds
+      // install a subproc that polls 0x72 until it reads 0. Dortin's is subproc
+      // 0x53D at blob 0x4e71, started from 0x4e34 with path 0x366C over 400 --
+      // three waypoints walking him from (5.652, -3.472) to (5.084, -2.217),
+      // toward Volcan. Confirmed against a save state: he sits 77% along the
+      // first segment, 0.018 off the line.
+      //
       switch (method)
       {
-      case 0x70: return 1; // started
-      case 0x72: return 0; // nothing playing
+      case 0x70:
+      {
+        // FUN_002443f8. The path lives at `arg3 + DAT_00355058`: a u32 count,
+        // then count*3 VM expressions. FUN_0025d618 evaluates them with the
+        // stream pointer temporarily aimed there and divides each by 100;
+        // FUN_002443f8 then divides by 1000. Net /100000, which is the world
+        // scale the 0x0F literal already carries, so this reuses the ordinary
+        // evaluator rather than re-deriving it.
+        if (currentEntity_ == kNoEntity || !environment_.FUN_002443f8_start_path)
+        {
+          return -1;
+        }
+        std::vector<orphen::ported::psm2::Vec3> waypoints;
+        if (!decodePathWaypoints(arg3, waypoints) || waypoints.empty())
+        {
+          return -1;
+        }
+        return environment_.FUN_002443f8_start_path(currentEntity_, waypoints, arg4);
+      }
+      case 0x72:
+        // FUN_002445c8. Non-zero while walking; 0 once the follower slot is
+        // released, which is the value the script's wait subproc spins for.
+        if (currentEntity_ == kNoEntity || !environment_.FUN_002445c8_path_progress)
+        {
+          return 0;
+        }
+        return environment_.FUN_002445c8_path_progress(currentEntity_);
       default: return 0;
       }
     }
@@ -3210,6 +3411,21 @@ namespace orphen::ported::script
     case 0x142:
       note(OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 1);
+
+    // 0x10B (FUN_00262780): **ten** expressions into FUN_002198a0, a graphics
+    // submitter -- seven coordinates scaled by DAT_00352c74 and three raw
+    // parameters, interleaved in the original's stack frame but read in stream
+    // order. The count is the thing that matters here; getting it wrong
+    // desyncs everything after it.
+    case 0x10B:
+      note(OpcodeSupport::OperandsOnly);
+      return consumeOnly(opcode, 10);
+
+    // 0x10A (FUN_00262690): eight expressions into FUN_00219fc8, the sibling
+    // submitter to 0x10B's. Same reasoning -- the arity is what matters.
+    case 0x10A:
+      note(OpcodeSupport::OperandsOnly);
+      return consumeOnly(opcode, 8);
 
     case 0x129:
       note(OpcodeSupport::OperandsOnly);

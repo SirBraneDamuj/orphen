@@ -440,6 +440,27 @@ namespace orphen::ported::script
     return completed;
   }
 
+  bool SceneScript::FUN_0025bf20_run_npc_body(std::int16_t bodyOffset,
+                                              const ScriptEnvironment &environment,
+                                              ScriptTrace &trace,
+                                              std::size_t entitySlot)
+  {
+    // `jal FUN_0025b9c0` returns the blob base and the body offset is added to
+    // it, so a zero offset would run the blob's own header as code. The original
+    // is guarded by FUN_0025bc68's `param_1 != 0` test; the port needs the same
+    // guard plus a bounds check, because 0x66 will happily park any u32 here.
+    if (!loaded() || bodyOffset <= 0 || static_cast<std::size_t>(bodyOffset) >= blob_.size())
+    {
+      return true;
+    }
+
+    // FUN_0025bf20 stores the entity into iGpffffb0d4 *and* iGpffffb0d8 before
+    // running: an NPC body's choreography opcodes act on the NPC itself unless
+    // it explicitly refocuses with 0xEB.
+    state_.puGpffffb0d8_focusEntity = entitySlot;
+    return runAtOffset(static_cast<std::uint32_t>(bodyOffset), environment, trace, entitySlot);
+  }
+
   std::size_t SceneScript::occupiedObjectScriptSlots() const
   {
     std::size_t count = 0;

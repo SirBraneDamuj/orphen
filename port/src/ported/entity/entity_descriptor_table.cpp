@@ -1,5 +1,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 
+#include "ported/entity/map_prop_descriptor_table.h"
+
 namespace orphen::ported::entity
 {
 
@@ -41,12 +43,22 @@ namespace orphen::ported::entity
 
   std::optional<EntityDescriptor> EntityDescriptorTable::FUN_00229980_resolve(std::uint32_t typeId) const
   {
+    const DescriptorSource source = sourceForTypeId(typeId);
+
+    // Checked before `available()`: the streamed branch reads the map's prop
+    // banks, not the executable, and FUN_00229980 reaches it without touching a
+    // static table.
+    if (source == DescriptorSource::Streamed)
+    {
+      return mapProps_ != nullptr ? mapProps_->FUN_00229980_synthesizeDescriptor(typeId, stageBank_)
+                                  : std::nullopt;
+    }
+
     if (!available())
     {
       return std::nullopt;
     }
 
-    const DescriptorSource source = sourceForTypeId(typeId);
     std::uint32_t recordAddress = 0;
     std::uint32_t modelTableBase = 0;
     bool modelIsDirectlyIndexed = false;

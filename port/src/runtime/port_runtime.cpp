@@ -5,6 +5,8 @@
 #include "harness/flat_bin_archive.h"
 
 #include "runtime/psm2_ground_query.h"
+#include "ported/entity/entity_collision.h"
+#include "ported/entity/entity_path_follow.h"
 #include "ported/model/psc3_model.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/model/entity_animation.h"
@@ -152,6 +154,14 @@ namespace orphen::port
     }
     printScriptReport_ = config.printScriptReport;
     printModelReport_ = config.printModelReport;
+    hideSlots_ = config.hideSlots;
+    armStreamPending_ = config.hasArmStream;
+    armStreamOffset_ = config.armStreamOffset;
+    armStreamFrame_ = config.armStreamFrame;
+    if (config.hasScrTraceRange)
+    {
+      scriptTrace_.setTraceRange(config.scrTraceRangeLow, config.scrTraceRangeHigh);
+    }
     loadExecutable(config);
 
     if (!config.decodedPsm2Path.empty())
@@ -260,6 +270,16 @@ namespace orphen::port
     environment.descriptors = &descriptorTable_;
     environment.camera = &fieldCamera_;
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
+
+    // FUN_0025bf20, type 0x38. Re-entering the interpreter from inside the actor
+    // loop is safe because the scene tick has already finished by then --
+    // FUN_00239ce0 runs between FUN_0025b778 and FUN_0025b918, exactly as here.
+    environment.FUN_0025bf20_run_npc_body =
+        [this, frameTicks](std::size_t slot, std::int16_t bodyOffset)
+    {
+      sceneScript_.FUN_0025bf20_run_npc_body(bodyOffset, scriptEnvironment(frameTicks),
+                                             scriptTrace_, slot);
+    };
     environment.FUN_00267d38_playSound =
         [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
     { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
@@ -276,9 +296,11 @@ namespace orphen::port
     if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
     {
       environment.terrainSurface =
-          [loadedMap](float x, float y) -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
+          [loadedMap](float x, float y, float feetHeight, float headHeight)
+          -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
       {
-        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, 0.0f);
+        const Psm2TerrainQueryOptions options{0, false, Psm2ActorBody{feetHeight, headHeight}};
+        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, feetHeight, options);
         if (!hit.has_value())
         {
           return std::nullopt;
@@ -332,16 +354,29 @@ namespace orphen::port
     environment.state = &sceneScript_.state();
     environment.map = mapViewer_.loadedMap();
 
-    // FUN_00227070 stands in as the existing PSM2 ground query, the same one the
-    // camera uses. The lax overload is right here: script placements are
-    // authored, not walked to, so a strict walkability test would reject valid
-    // spots.
+    // Opcode 0xBD methods 0x70 / 0x72.
+    environment.FUN_002443f8_start_path =
+        [this](std::size_t entitySlot,
+               std::span<const orphen::ported::psm2::Vec3> waypoints,
+               std::uint32_t duration)
+    { return pathFollowers_->FUN_002443f8_start(entitySlot, waypoints, duration); };
+    environment.FUN_002445c8_path_progress = [this](std::size_t entitySlot)
+    { return pathFollowers_->FUN_002445c8_progress(entitySlot); };
+
+    // FUN_00227070 / FUN_00227798 stand in as the existing PSM2 ground query,
+    // the same one the camera uses. `requireOriginalTerrainSample` stays off:
+    // script placements are authored, not walked to, so a strict walkability
+    // test would reject valid spots. The body, on the other hand, is not
+    // optional -- it is the scan band the originals stage, and without it a
+    // stacked map answers with the wrong storey.
     const auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
     {
-      environment.terrainHeight = [loadedMap](float x, float y) -> std::optional<float>
+      environment.terrainHeight =
+          [loadedMap](float x, float y, float feetHeight, float headHeight) -> std::optional<float>
       {
-        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, 0.0f);
+        const Psm2TerrainQueryOptions options{0, false, Psm2ActorBody{feetHeight, headHeight}};
+        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, feetHeight, options);
         if (!hit.has_value())
         {
           return std::nullopt;
@@ -653,7 +688,12 @@ namespace orphen::port
     // the scene being entered -- s01_e024 is stage 1. That is the bank
     // FUN_00229980 uses for the 0x272 type range.
     const auto scene = mapViewer_.loadedDiscScene();
-    modelStore_.setMapPropTable(&mapPropTable_, scene.has_value() ? static_cast<int>(scene->section) : -1);
+    const int stageBank = scene.has_value() ? static_cast<int>(scene->section) : -1;
+    modelStore_.setMapPropTable(&mapPropTable_, stageBank);
+    // The same banks reach the descriptor path, which is what lets a streamed
+    // type id spawn from a real descriptor instead of struct defaults. Must be
+    // before the script runs: the scene bootstrap spawns props immediately.
+    descriptorTable_.setMapPropTable(&mapPropTable_, stageBank);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
     // FUN_00238c90, which the original runs inline in FUN_00221fd8 on the
@@ -1046,6 +1086,33 @@ namespace orphen::port
     }
   }
 
+  namespace
+  {
+    // FUN_0020c5a8's *first* pass, the one that decides which pool slots even
+    // become draw candidates:
+    //
+    //   if ((char)(&DAT_005a96b0)[slot] < 1)      -> 0xff, not drawn
+    //   else if ((puVar11[1] & 0x200) == 0)       -> enqueued
+    //   else                                      -> 0xff, not drawn
+    //
+    // `puVar11` walks the pool as `undefined2*` with a 0xEC-halfword stride, so
+    // `puVar11[1]` is the halfword at **+0x02** -- descriptorFlags02, seeded
+    // from type descriptor +0x04. Bit 0x200 means "never submit this entity's
+    // model".
+    //
+    // The port had only the second pass's +0x08 bit 0 test, so every slot the
+    // descriptors mark undrawable was being drawn. In s01_e012 that is a stack
+    // of effect and reserve entities parked at the world origin, which the
+    // Dortin/Volcan shot looks straight through.
+    //
+    // Unlike the +0x08 path this raises no bit: the skip happens before the
+    // pass that maintains +0x08, so a 0x200 slot simply never appears.
+    bool FUN_0020c5a8_isUndrawable(const orphen::ported::entity::OriginalEntity &entity)
+    {
+      return (entity.descriptorFlags02 & 0x0200u) != 0;
+    }
+  } // namespace
+
   void PortRuntime::publishSceneObjectViews(std::uint32_t frameTicks)
   {
     SceneObjectViewList views;
@@ -1081,7 +1148,12 @@ namespace orphen::port
       // find the neck, and FUN_0020c5a8's hidden test is a *draw* skip -- the
       // pose work has already happened by then.
       attachModel(view, lead, frameTicks);
-      if ((lead.halfword08 & 1) != 0)
+      if (FUN_0020c5a8_isUndrawable(lead))
+      {
+        // No +0x08 bit 0x10 here: the 0x200 skip happens in the first pass,
+        // before the pass that raises it. See FUN_0020c5a8_isUndrawable.
+      }
+      else if ((lead.halfword08 & 1) != 0)
       {
         lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 0x0010);
       }
@@ -1094,6 +1166,18 @@ namespace orphen::port
     entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
+          if (FUN_0020c5a8_isUndrawable(entity))
+          {
+            return;
+          }
+
+          if (!hideSlots_.empty() &&
+              std::find(hideSlots_.begin(), hideSlots_.end(), static_cast<int>(slot)) !=
+                  hideSlots_.end())
+          {
+            return;
+          }
+
           // FUN_0020c5a8:69. Entity +0x08 bit 0 is "hidden": the draw walk
           // skips the slot outright and raises bit 0x10 so the pose sampler
           // knows there is no previous frame to blend out of. The chest
@@ -1304,6 +1388,62 @@ namespace orphen::port
                   << " lastSeen=0x" << entry.second.observedWord << std::dec
                   << " tests=" << entry.second.tests
                   << " passes=" << entry.second.passes << '\n';
+      }
+
+      // Which panel bits the map actually carries, so a panel that never fires
+      // can be told apart from one the port cannot see. A `passes=0` line means
+      // nothing on its own -- the player has to be standing on the surface --
+      // but a mask with no matching triangle anywhere is a port bug.
+      if (const auto *map = mapViewer_.loadedMap(); map != nullptr)
+      {
+        std::map<std::uint32_t, std::size_t> wordCounts;
+        for (const auto &triangle : map->derivedTriangles)
+        {
+          if (triangle.primitiveIndex < map->DAT_003556b0_dRecords78.size())
+          {
+            ++wordCounts[map->DAT_003556b0_dRecords78[triangle.primitiveIndex].terrainFlags];
+          }
+        }
+        std::uint32_t unionWord = 0;
+        for (const auto &entry : wordCounts)
+        {
+          unionWord |= entry.first;
+        }
+        std::cout << "  map terrain words: " << wordCounts.size() << " distinct, union=0x"
+                  << std::hex << unionWord << std::dec << '\n';
+
+        // Where each panel bit lives, so a trigger can be walked onto on
+        // purpose. The centroid is enough: a panel is a handful of triangles.
+        for (std::uint32_t bit = 0x01; bit <= 0x80; bit <<= 1)
+        {
+          std::size_t count = 0;
+          float sumX = 0.0f;
+          float sumY = 0.0f;
+          for (const auto &triangle : map->derivedTriangles)
+          {
+            if (triangle.primitiveIndex >= map->DAT_003556b0_dRecords78.size() ||
+                (map->DAT_003556b0_dRecords78[triangle.primitiveIndex].terrainFlags & bit) == 0)
+            {
+              continue;
+            }
+            for (const auto vertexIndex : triangle.vertexIndices)
+            {
+              const auto &position = map->DAT_0035569c_sectionCRecords.at(vertexIndex).position;
+              sumX += position.x;
+              sumY += position.y;
+            }
+            count += triangle.vertexIndices.size();
+          }
+          if (count == 0)
+          {
+            continue;
+          }
+          std::cout << "    panel bit 0x" << std::hex << bit << std::dec
+                    << " centred near (" << std::fixed << std::setprecision(2)
+                    << sumX / static_cast<float>(count) << ", "
+                    << sumY / static_cast<float>(count) << ")"
+                    << std::defaultfloat << '\n';
+        }
       }
     }
 
@@ -1583,6 +1723,10 @@ namespace orphen::port
         std::cout << "  submeshes=" << model.submeshes.size()
                   << " verts=" << model.vertices.size()
                   << " anim=" << entity.animationA0 << " col=" << column
+                  // +0x06 bit 0x10 is FUN_00225c90's early return: this entity's
+                  // animation never advances. For map props it comes straight
+                  // from the prop record's 0x4000 bit.
+                  << ((entity.flags06 & 0x0010u) != 0 ? " HELD" : "")
                   << std::fixed << std::setprecision(2)
                   << "  posed=" << (posed.max.x - posed.min.x) << "x"
                   << (posed.max.y - posed.min.y) << "x" << (posed.max.z - posed.min.z)
@@ -1904,6 +2048,24 @@ namespace orphen::port
                    "Pass --elf <SLUS_200.11> or put it in the disc root.\n";
     }
 
+    // Slot 0 is not in the loop below -- FUN_00239ce0 starts at slot 2 -- but
+    // where the player is standing decides every floor-panel test, so the report
+    // is not usable for that question without it.
+    {
+      const auto &lead = entityPool_.leadPlayer();
+      std::cout << "  slot=0 LEAD pos=(" << std::fixed << std::setprecision(2)
+                << lead.positionX20 << "," << lead.positionZ24 << "," << lead.positionY28 << ")"
+                << " facing=" << std::setprecision(3) << lead.facingRadians5c << std::defaultfloat
+                << " state=" << lead.state60
+                // +0x04, the debug overlay's AF. Bit 0x100 turns FUN_002262c0
+                // off entirely, so it decides whether anything below is physics
+                // output or a scripted pose.
+                << " af=0x" << std::hex << std::setw(4) << std::setfill('0') << lead.halfword04
+                << std::setfill(' ') << std::dec
+                << " terrainWord=0x" << std::hex << lead.flagWord6c << std::dec
+                << " (panel bits 0x" << std::hex << (lead.flagWord6c & 0xF0u) << std::dec << ")\n";
+    }
+
     std::size_t live = 0;
     entityPool_.forEachActive(
         [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity)
@@ -1920,14 +2082,52 @@ namespace orphen::port
           const char *name = orphen::ported::entity::actorHandlerName(handler.address);
 
           std::cout << "  slot=" << slot
-                    << " type=0x" << std::hex << entity.typeId00 << std::dec
+                    << " type=0x" << std::hex << entity.typeId00 << std::dec;
+          // Type 0x38 is a role opcode 0x66 stamps over the real type, which it
+          // parks at +0x1CE. Printing the raw id alone makes fourteen different
+          // characters look like fourteen copies of one thing, and hides which
+          // script body each is running.
+          if (entity.typeId00 == 0x38)
+          {
+            std::cout << "(was 0x" << std::hex << entity.originalType1ce
+                      << " body 0x" << entity.recordId130 << std::dec << ")";
+          }
+          std::cout
                     << " state=" << entity.state60
                     << " anim=" << entity.animationA0
                     << " pos=(" << std::fixed << std::setprecision(2)
                     << entity.positionX20 << "," << entity.positionZ24 << "," << entity.positionY28 << ")"
-                    << " facing=" << std::setprecision(3) << entity.facingRadians5c
-                    << std::defaultfloat
-                    << " " << actorHandlerSourceName(handler.source);
+                    << " floor=" << entity.groundHeight4c;
+          // What the map says is under the entity right now, asked the way
+          // FUN_00227070 asks it -- within the entity's own feet-to-head band.
+          // Without the band a stacked map answers with the wrong storey, which
+          // is how s01_e012's cast ended up on the upper deck.
+          if (const auto *map = mapViewer_.loadedMap(); map != nullptr)
+          {
+            const Psm2TerrainQueryOptions options{
+                0, false, Psm2ActorBody{entity.positionY28, entity.positionY28 + entity.height58}};
+            const auto hit = queryPsm2GroundAt(*map, entity.positionX20, entity.positionZ24,
+                                               entity.positionY28, options);
+            std::cout << " terrain=";
+            if (hit.has_value())
+            {
+              std::cout << hit->height;
+            }
+            else
+            {
+              std::cout << "none";
+            }
+          }
+          std::cout << " facing=" << std::setprecision(3) << entity.facingRadians5c
+                    << std::defaultfloat;
+          // FUN_0020c5a8's first-pass skip. Worth printing: an entity that
+          // ticks but is never submitted looks identical to a missing one in
+          // every other column.
+          if ((entity.descriptorFlags02 & 0x0200u) != 0)
+          {
+            std::cout << " NODRAW";
+          }
+          std::cout << " " << actorHandlerSourceName(handler.source);
           if (handler.address != 0)
           {
             std::cout << " -> 0x" << std::hex << handler.address << std::dec;
@@ -2009,6 +2209,11 @@ namespace orphen::port
                 << " fading=" << actorTrace_.fadingCount() << '\n';
       std::cout << "unimplemented behaviors: " << actorTrace_.unimplementedTypeCount()
                 << " distinct types, " << actorTrace_.unimplementedEntityCount() << " entities\n";
+    }
+    {
+      const auto &collision = orphen::ported::entity::entityCollisionStats();
+      std::cout << "entity collision: sweeps=" << collision.sweeps
+                << " clamps=" << collision.clamps << " shoves=" << collision.shoves << '\n';
     }
     std::cout << "=== end actor report ===\n\n";
   }
@@ -2188,6 +2393,19 @@ namespace orphen::port
       // cutscene camera where FUN_00217d70 put it.
       const bool cutsceneFrame = DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeCutscene;
 
+      // --arm-stream, applied just before the tick that will first pay it out.
+      // This is what a floor panel's body does with opcode 0xA1: set channel
+      // 0's cursor and zero its timer.
+      if (armStreamPending_ && frameCount_ >= armStreamFrame_ && sceneScript_.loaded())
+      {
+        armStreamPending_ = false;
+        auto &channel = sceneScript_.state().DAT_00571e40_eventChannels[0];
+        channel.cursor = armStreamOffset_;
+        channel.timer = 0;
+        std::cout << "[arm-stream] channel 0 <- 0x" << std::hex << armStreamOffset_ << std::dec
+                  << " at frame " << frameCount_ << '\n';
+      }
+
       if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
@@ -2209,6 +2427,12 @@ namespace orphen::port
                          (input.rawPressedPad & kRawPadCross) != 0,
                          loadedMap,
                          [this] { return runInteractionProbe(); });
+
+      // FUN_002446e8 must land before the actor loop: it writes the movement
+      // request at +0x30/+0x34 and the physics inside that loop is what spends
+      // it. Run the other way round and every path-driven step is a frame late
+      // and gets cleared before it is applied.
+      pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 

@@ -32,11 +32,26 @@ namespace orphen::ported::entity
       std::memcpy(&out, data.data() + offset, sizeof(out));
       return true;
     }
+
+    // FUN_00229688 lines 22-24: `(float)*(int *)(src + n) / 1000.0`. Signed --
+    // the field is read as `int`, and a prop hanging below its origin needs the
+    // negative.
+    bool readMillimetres(std::span<const std::uint8_t> data, std::size_t offset, float &out)
+    {
+      std::uint32_t raw = 0;
+      if (!readU32(data, offset, raw))
+      {
+        return false;
+      }
+      out = static_cast<float>(static_cast<std::int32_t>(raw)) / 1000.0f;
+      return true;
+    }
   } // namespace
 
   void MapPropDescriptorTable::reset()
   {
     banks_.clear();
+    sourceBanks_.clear();
   }
 
   bool MapPropDescriptorTable::FUN_00228e28_build(std::span<const std::uint8_t> descriptorBlob)
@@ -78,7 +93,9 @@ namespace orphen::ported::entity
       }
 
       std::vector<EntityModelRecord> records;
+      std::vector<MapPropSourceRecord> sources;
       records.reserve(recordCount);
+      sources.reserve(recordCount);
       for (std::uint32_t index = 0; index < recordCount; ++index)
       {
         const std::size_t source = sourceOffset + static_cast<std::size_t>(index) * kSourceRecordStride;
@@ -92,9 +109,23 @@ namespace orphen::ported::entity
         // The rest of the 0x2C record is zeroed by FUN_00228e28:181 and filled
         // in later by the loader, so nothing here binds a texture statically.
         records.push_back(record);
+
+        // Kept alongside, for FUN_00229980's descriptor synthesis. Read from
+        // the same 0x28-byte record; FUN_00228e28 simply does not carry these
+        // across, because the model record has nowhere to put them.
+        MapPropSourceRecord sourceRecord;
+        if (!readU16(descriptorBlob, source + 0x00, sourceRecord.flags0x00) ||
+            !readMillimetres(descriptorBlob, source + 0x0C, sourceRecord.radius0x0c) ||
+            !readMillimetres(descriptorBlob, source + 0x10, sourceRecord.height0x10) ||
+            !readMillimetres(descriptorBlob, source + 0x14, sourceRecord.value0x14))
+        {
+          break;
+        }
+        sources.push_back(sourceRecord);
       }
 
       banks_.push_back(std::move(records));
+      sourceBanks_.push_back(std::move(sources));
     }
 
     return !banks_.empty();
@@ -112,8 +143,8 @@ namespace orphen::ported::entity
            (typeId - kMapPropRangeThird) < kMapPropRangeSize;
   }
 
-  std::optional<EntityModelRecord> MapPropDescriptorTable::FUN_00229980_resolve(std::uint32_t typeId,
-                                                                                int stageBank) const
+  std::optional<std::pair<std::size_t, std::size_t>> MapPropDescriptorTable::locate(
+      std::uint32_t typeId, int stageBank) const
   {
     // The original tests the ranges in this order and falls through to the
     // regular descriptor table when none matches.
@@ -143,12 +174,59 @@ namespace orphen::ported::entity
     {
       return std::nullopt;
     }
-    const auto &records = banks_[static_cast<std::size_t>(bank)];
-    if (index >= records.size())
+    return std::make_pair(static_cast<std::size_t>(bank), static_cast<std::size_t>(index));
+  }
+
+  std::optional<EntityModelRecord> MapPropDescriptorTable::FUN_00229980_resolve(std::uint32_t typeId,
+                                                                                int stageBank) const
+  {
+    const auto found = locate(typeId, stageBank);
+    if (!found.has_value())
     {
       return std::nullopt;
     }
-    return records[index];
+    const auto &records = banks_[found->first];
+    if (found->second >= records.size())
+    {
+      return std::nullopt;
+    }
+    return records[found->second];
+  }
+
+  std::optional<EntityDescriptor> MapPropDescriptorTable::FUN_00229980_synthesizeDescriptor(
+      std::uint32_t typeId, int stageBank) const
+  {
+    const auto found = locate(typeId, stageBank);
+    if (!found.has_value() || found->first >= sourceBanks_.size())
+    {
+      return std::nullopt;
+    }
+    const auto &sources = sourceBanks_[found->first];
+    if (found->second >= sources.size())
+    {
+      return std::nullopt;
+    }
+    const MapPropSourceRecord &source = sources[found->second];
+
+    EntityDescriptor descriptor;
+    descriptor.source = DescriptorSource::Streamed;
+    descriptor.typeId = typeId;
+    // DAT_0031c1d0 is scratch in the data segment, not a table entry, so there
+    // is no address to report.
+    descriptor.recordAddress = 0;
+    descriptor.modelIndex0x00 = static_cast<std::int16_t>(found->second);
+    descriptor.flags0x04 = 0x0080;
+    descriptor.radius0x08 = source.radius0x0c;
+    descriptor.height0x0c = source.height0x10;
+    descriptor.word0x10 = 0;
+    descriptor.byte0x14 = (source.flags0x00 & 0x4000u) != 0 ? 0 : 0x10;
+    descriptor.halfword0x16 = 0;
+    descriptor.halfword0x18 = (source.flags0x00 & 0x8000u) != 0 ? 0x00D0 : 0x00D8;
+    // descriptor +0x02 is FUN_0030bd20(record +0x14 / fGpffff8548), an angle
+    // quantisation whose destination -- entity byte +0x133 -- the port does not
+    // model, so it stays at its default rather than being half-ported.
+    descriptor.byte0x02 = 0;
+    return descriptor;
   }
 
 } // namespace orphen::ported::entity

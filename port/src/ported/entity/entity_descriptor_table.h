@@ -8,6 +8,7 @@
 
 namespace orphen::ported::entity
 {
+  class MapPropDescriptorTable;
 
   // Native counterpart of src/FUN_00229980.c (0x00229980) and its guarded
   // wrapper src/FUN_00229be8.c (0x00229be8): resolves an entity type id to the
@@ -113,7 +114,21 @@ namespace orphen::ported::entity
     //
     // The 0x38 indirection (which reads a halfword out of a context object) is
     // not reproduced; that id is rejected outright, matching FUN_00229be8.
+    //
+    // Streamed ids are answered too, once setMapPropTable has supplied the
+    // scene's prop banks -- FUN_00229980 is one function covering every range,
+    // and its streamed branch synthesises a descriptor rather than reading a
+    // table. Without the banks the answer stays nullopt, as it must with no map
+    // loaded.
     std::optional<EntityDescriptor> FUN_00229980_resolve(std::uint32_t typeId) const;
+
+    // iGpffffb298 / DAT_00355208, the scene's stage number, plus the banks
+    // FUN_00228e28 built. Both are needed before a streamed id can resolve.
+    void setMapPropTable(const MapPropDescriptorTable *table, int stageBank)
+    {
+      mapProps_ = table;
+      stageBank_ = stageBank;
+    }
 
     // Reads the 0x2C record a resolved descriptor points at. Separate from the
     // resolve above because the descriptor alone is enough for collision sizes,
@@ -132,6 +147,8 @@ namespace orphen::ported::entity
 
   private:
     const orphen::ported::resource::ElfDataReader *elf_ = nullptr;
+    const MapPropDescriptorTable *mapProps_ = nullptr;
+    int stageBank_ = 0;
   };
 
 } // namespace orphen::ported::entity

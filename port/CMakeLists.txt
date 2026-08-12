@@ -98,6 +98,8 @@ target_sources(orphen_port
     src/ported/entity/actor_dispatch_table.cpp
     src/ported/entity/actor_dispatch_table.h
     src/ported/entity/actor_frame_update.cpp
+    src/ported/entity/entity_collision.cpp
+    src/ported/entity/entity_path_follow.cpp
     src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h
     src/ported/entity/original_entity_sound.cpp

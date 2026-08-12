@@ -1,5 +1,7 @@
 #include "ported/script/script_trace.h"
 
+#include <iostream>
+
 namespace orphen::ported::script
 {
 
@@ -41,6 +43,12 @@ namespace orphen::ported::script
 
   void ScriptTrace::recordOpcode(std::uint16_t opcode, std::uint32_t offset, OpcodeSupport support)
   {
+    if (traceRangeSet_ && offset >= traceRangeLow_ && offset <= traceRangeHigh_)
+    {
+      std::cout << "[scr] f=" << frame_ << " @0x" << std::hex << offset << " op=0x" << opcode
+                << std::dec << ' ' << opcodeSupportName(support) << '\n';
+    }
+
     auto entry = opcodes_.find(opcode);
     if (entry == opcodes_.end())
     {

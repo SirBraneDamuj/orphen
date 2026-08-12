@@ -18,6 +18,7 @@
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
+#include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/player_bandana.h"
 #include "runtime/entity_model_store.h"
@@ -29,6 +30,7 @@
 #include "ported/render/original_view_projection.h"
 
 #include <array>
+#include <memory>
 #include <cstdint>
 #include <utility>
 #include <filesystem>
@@ -56,6 +58,33 @@ namespace orphen::port
     bool printSoundReport = false;
     // --model-report: parse every grp record in the bundle and print its counts.
     bool printModelReport = false;
+    // --scr-trace-range <lo>-<hi>: log every SCR opcode executed at a blob
+    // offset inside the range, with the frame it ran on.
+    //
+    // The aggregate report answers "was this opcode reached"; this answers "in
+    // what order, and did the branch go the way I think". It is the only way to
+    // read a body the port has no disassembler for -- feed it the offsets the
+    // report already prints. Off unless a range is given; `hasScrTraceRange`
+    // rather than a sentinel because offset 0 is a legal bound.
+    bool hasScrTraceRange = false;
+    std::uint32_t scrTraceRangeLow = 0;
+    std::uint32_t scrTraceRangeHigh = 0;
+    // --arm-stream <hex>[:<frame>]: arm scheduler channel 0 with a stream, the
+    // same way opcode 0xA1 does, at the given frame.
+    //
+    // Most of a scene's cutscenes are not in the opening chain -- they are armed
+    // by floor panels the player walks onto, and a panel is a two-triangle
+    // square that no constant stick input will reliably find. This reaches them
+    // without solving navigation, which is the only way to exercise the second
+    // half of a scene's choreography headlessly.
+    bool hasArmStream = false;
+    std::uint32_t armStreamOffset = 0;
+    std::uint32_t armStreamFrame = 1;
+    // --hide-slots: pool slots to drop from the published draw list. Triage
+    // only -- it answers "which entity is that" for on-screen geometry, which
+    // no report can, because a report names entities and a screenshot names
+    // pixels. Nothing else reads it, so it cannot affect simulation.
+    std::vector<int> hideSlots;
     // Lighting behaviours derived from VU1 this session. Off by default so the
     // port renders the last visually confirmed state; each can be enabled alone
     // so a regression is attributable. --gleam-report measures the specular
@@ -163,6 +192,14 @@ namespace orphen::port
     // bundle the same way initialize does.
     std::filesystem::path discRoot_;
     orphen::ported::entity::MapPropDescriptorTable mapPropTable_;
+    // Opcode 0xBD's path-follow slots. Ticked just before the actor loop.
+    //
+    // Heap-held on purpose: PortRuntime is a stack local in main() and already
+    // carries the 688 KB of bone-palette banks, so it sits close enough to the
+    // default 1 MB stack that even a couple of KB more kills the process before
+    // it prints anything.
+    std::unique_ptr<orphen::ported::entity::PathFollowerTable> pathFollowers_ =
+        std::make_unique<orphen::ported::entity::PathFollowerTable>();
     const char *spawnSourceLabel_ = "map centre";
     float previousStickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
@@ -214,6 +251,10 @@ namespace orphen::port
     orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;
     bool printModelReport_ = false;
+    bool armStreamPending_ = false;
+    std::uint32_t armStreamOffset_ = 0;
+    std::uint32_t armStreamFrame_ = 1;
+    std::vector<int> hideSlots_;
     bool printRenderReport_ = false;
     bool printGleamReport_ = false;
     std::vector<orphen::harness::GleamProbe> gleamProbes_;

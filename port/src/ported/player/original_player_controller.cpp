@@ -521,6 +521,23 @@ namespace orphen::ported::player
                                                                 const OriginalTerrainSampler &terrainSampler,
                                                                 const OriginalMovementBlocker &movementBlocker)
   {
+    // FUN_002262c0:0x00226304. The very first thing the original does is copy
+    // +0x04 into the workspace and bail on bit 0x100 -- before it clears +0x64,
+    // before gravity, before the terrain sample, before the epilogue that spends
+    // +0x30/+0x34/+0x38. The entity is simply left exactly where it was put.
+    //
+    // This is how a cutscene pins an actor to a scripted pose. s01_e012 opens on
+    // Orphen lying on a bed at z = -1.224 while the floor under him samples
+    // -1.300; eeMemory.bin captured at that moment reads +0x04 = 0x312C and
+    // +0x4C = -1.224, i.e. the ground height was never resampled. The same dump
+    // taken in the field reads 0x3024, so 0x100 really is toggled for the
+    // cutscene rather than being a property of the lead. Without this gate the
+    // port re-settled him onto the floor and he sank into the mattress.
+    if ((entity().halfword04 & 0x0100u) != 0)
+    {
+      return;
+    }
+
     std::uint32_t nextCollisionFlags = 0;
     const bool wasGrounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
     const float startX = entity().positionX20;

@@ -106,6 +106,18 @@ namespace orphen::ported::entity
     // animation, all read +0xA0 == 0.
     entity.animationA0 = 0;
     entity.previousSubstateA2 = 0xFFFF;
+
+    // FUN_00229c40's last three lines. Everything whose +0x02 clears 0x200 --
+    // which is every type this scene spawns -- starts with the keyframe blend
+    // saturated and "not drawn last frame" raised, so the very first pose it
+    // shows is the sampled one rather than something eased out of whatever the
+    // slot held before. The port had been leaning on the pose filter's own
+    // `seeded` flag for this; the original states it here.
+    if ((entity.descriptorFlags02 & 0x0200u) == 0)
+    {
+      entity.animationBlend13c = 1.0f;
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x0010u);
+    }
   }
 
   std::size_t EntityPool::FUN_00265e28_allocate_and_initialize(std::int32_t typeId,

@@ -51,17 +51,29 @@ namespace orphen::ported::entity
     // The floor under a world point. The shared non-player movement step uses
     // it both to keep an actor above the ground and to publish the terrain word
     // into +0x6C/+0x70, which is what a chase target is judged on.
+    //
+    // The band matters: FUN_00227070 stages the entity's +0x28 and
+    // +0x28 + +0x58 into the scan workspace, and FUN_00227840 will not settle
+    // on a surface above the head. Asked without it, a query on a map with
+    // stacked floors answers whichever storey happens to be nearest sea level.
     struct TerrainSurface
     {
       float height = 0.0f;
       std::uint32_t terrainFlags = 0;
     };
-    std::function<std::optional<TerrainSurface>(float x, float y)> terrainSurface;
+    std::function<std::optional<TerrainSurface>(float x, float y, float feetHeight, float headHeight)>
+        terrainSurface;
 
     // iGpffffb650, the slot FUN_00239ce0 is currently ticking. Behaviors deeper
     // in the tree read it; the clone loop needs it to point a clone back at its
     // leader.
     std::size_t currentSlot = 0;
+
+    // FUN_0025bf20, type 0x38. The behaviour is one call: run the scene script
+    // body at blob offset +0x130 with this entity selected and in focus. It
+    // arrives as a callback because the script interpreter lives a layer up --
+    // the same reason everything else here does.
+    std::function<void(std::size_t slot, std::int16_t bodyOffset)> FUN_0025bf20_run_npc_body;
 
     // DAT_004a7e00, indexed by pool slot. Behaviors that drive bones directly
     // rather than through the animation -- FUN_002cdb28 is the one this scene

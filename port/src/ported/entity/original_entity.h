@@ -53,6 +53,12 @@ namespace orphen::ported::entity
     float facingRadians5c = 0.0f;            // +0x5C: facing angle.
     std::uint16_t state60 = 0;               // +0x60: field/player movement state.
     std::uint16_t fadeRamp62 = 0;            // +0x62: FUN_0023a568's fade ramp position.
+    // +0x64: the entity this one's movement was blocked against this frame.
+    // FUN_002262c0 clears it at the top of every solve and the four clamp
+    // functions store the blocker's pool pointer here. Kept as a slot index
+    // with -1 for "none", matching interactTarget68 rather than the original's
+    // null pointer.
+    std::int32_t blockedBy64 = -1;
     // +0x68: the entity this one is currently holding as an interaction
     // target, as a pool slot rather than the original's pointer. -1 when none.
     std::int32_t interactTarget68 = -1;

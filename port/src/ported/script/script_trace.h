@@ -163,6 +163,17 @@ namespace orphen::ported::script
     void setFrame(std::uint32_t frame) { frame_ = frame; }
     std::uint32_t frame() const { return frame_; }
 
+    // --scr-trace-range. Every opcode executed inside [low, high] is printed as
+    // it runs, which is how a script body gets read: the aggregate report says
+    // an opcode was reached, this says in what order and which way a branch
+    // went. Feed it the offsets the report already prints.
+    void setTraceRange(std::uint32_t low, std::uint32_t high)
+    {
+      traceRangeLow_ = low;
+      traceRangeHigh_ = high;
+      traceRangeSet_ = true;
+    }
+
     // Every event-flag transition opcodes 0x3E..0x40 actually cause. The flags
     // are how a scene records that a beat finished -- s01_e012's opening latches
     // 0x515 when it hands control to the player -- and until they were listed
@@ -232,6 +243,9 @@ namespace orphen::ported::script
     std::vector<EventDispatch> eventDispatches_;
     std::vector<EventStreamArmed> eventStreamsArmed_;
     std::uint32_t frame_ = 0;
+    bool traceRangeSet_ = false;
+    std::uint32_t traceRangeLow_ = 0;
+    std::uint32_t traceRangeHigh_ = 0;
     std::vector<FadeArmed> fadesArmed_;
     std::map<std::int32_t, std::uint32_t> playerLocks_;
     std::uint32_t battleBootCount_ = 0;

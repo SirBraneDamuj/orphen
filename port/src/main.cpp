@@ -245,6 +245,65 @@ namespace
         config.printModelReport = true;
         continue;
       }
+      if (argument == "--hide-slots")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--hide-slots needs <slot>[,<slot>...]");
+        }
+        std::string value{argv[++argumentIndex]};
+        std::size_t start = 0;
+        while (start <= value.size())
+        {
+          const std::size_t comma = value.find(',', start);
+          const std::string token =
+              value.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+          if (!token.empty())
+          {
+            config.hideSlots.push_back(std::stoi(token));
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        continue;
+      }
+      if (argument == "--arm-stream")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--arm-stream needs <streamHex>[:<frame>]");
+        }
+        const std::string value{argv[++argumentIndex]};
+        const std::size_t colon = value.find(':');
+        config.armStreamOffset =
+            static_cast<std::uint32_t>(std::stoul(value.substr(0, colon), nullptr, 16));
+        config.armStreamFrame =
+            colon == std::string::npos
+                ? 1u
+                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
+        config.hasArmStream = true;
+        continue;
+      }
+      if (argument == "--scr-trace-range")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--scr-trace-range needs <lowHex>-<highHex>");
+        }
+        const std::string range{argv[++argumentIndex]};
+        const std::size_t dash = range.find('-');
+        if (dash == std::string::npos)
+        {
+          throw std::runtime_error("--scr-trace-range needs <lowHex>-<highHex>");
+        }
+        config.scrTraceRangeLow = static_cast<std::uint32_t>(std::stoul(range.substr(0, dash), nullptr, 16));
+        config.scrTraceRangeHigh = static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1), nullptr, 16));
+        config.hasScrTraceRange = true;
+        continue;
+      }
       if (argument == "--draw-distance")
       {
         if (argumentIndex + 1 >= argc)

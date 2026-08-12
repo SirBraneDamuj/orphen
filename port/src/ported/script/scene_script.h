@@ -127,6 +127,23 @@ namespace orphen::ported::script
     // after the entity updates rather than before them.
     bool FUN_0025b918_run_late_slots(const ScriptEnvironment &environment, ScriptTrace &trace);
 
+    // FUN_0025bf20: the whole of what a type 0x38 entity does per frame.
+    //
+    // A script-driven NPC carries its *own* program: opcode 0x66 parks a blob
+    // offset in +0x130 and the actor loop runs the body there every frame, with
+    // the entity installed as both the current selection (iGpffffb0d4) and the
+    // choreography focus (iGpffffb0d8). That is where the walking, turning and
+    // per-actor animation of a cutscene actually lives -- the scene-level tick
+    // only starts things off. Without it a cast converted by 0x66 stands still
+    // and plays whatever pose the init gave it.
+    //
+    // The offset is loaded with `lh` at 0x0025bf4c, so it is *signed*: a body
+    // has to sit in the low half of the blob, and a negative is not a body.
+    bool FUN_0025bf20_run_npc_body(std::int16_t bodyOffset,
+                                   const ScriptEnvironment &environment,
+                                   ScriptTrace &trace,
+                                   std::size_t entitySlot);
+
     // The two actor-state entries. Header word 3 is the player's interaction
     // hook (FUN_00252828) and word 4 is the entity teardown hook (FUN_00265ec0);
     // neither is per-frame, so neither is driven by the tick above. Reachable

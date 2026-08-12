@@ -1,5 +1,6 @@
 #include "ported/entity/actor_frame_update.h"
 
+#include "ported/entity/entity_collision.h"
 #include "ported/script/object_registers.h"
 
 #include <algorithm>
@@ -620,8 +621,27 @@ namespace orphen::ported::entity
   // fallback that the lead player's path does. Slot 0 still runs the real thing.
   // Porting FUN_002262c0 properly for slots 1..255 is the outstanding work, and
   // until then a non-player actor can pass through walls.
-  void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment)
+  void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment,
+                                  std::size_t slot)
   {
+    // FUN_002262c0:0x00226304 -- the same +0x04 bit 0x100 gate the lead's copy
+    // carries, and it comes before everything, including the clamps. An entity
+    // wearing it keeps its scripted position and its scripted +0x4C; nothing
+    // resamples the floor under it and its movement request is neither spent nor
+    // cleared.
+    if ((entity.halfword04 & 0x0100u) != 0)
+    {
+      return;
+    }
+
+    // FUN_002262c0's entity-vs-entity clamps, before the request is spent.
+    // They only narrow +0x30/+0x34, so an entity that asked for nothing is
+    // untouched and the pool sweep is skipped entirely.
+    if (environment.entityPool != nullptr)
+    {
+      FUN_002262c0_clamp_movement_against_entities(*environment.entityPool, slot);
+    }
+
     // +0x38 is *this frame's* vertical delta, not a velocity -- the player's path
     // zeroes it at the top of the update and again after applying it. Treating
     // it as a velocity is what sent these enemies into orbit: the hover nudge
@@ -638,13 +658,20 @@ namespace orphen::ported::entity
     // Which flag in FUN_002262c0 gates that is not identified yet. It matters
     // the moment a ground-walking non-player actor is ported; it does not matter
     // for a flyer, and inventing a gate would be worse than naming the gap.
+    // Whether the behavior asked to go anywhere this frame. It decides below
+    // whether a floor is allowed to lift this actor.
+    const bool moved = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f ||
+                       entity.desiredDeltaY38 != 0.0f;
+
     entity.positionX20 += entity.desiredDeltaX30;
     entity.positionZ24 += entity.desiredDeltaZ34;
     entity.positionY28 += entity.desiredDeltaY38;
 
     if (environment.terrainSurface)
     {
-      const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24);
+      const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24,
+                                                      entity.positionY28,
+                                                      entity.positionY28 + entity.height58);
       if (surface.has_value())
       {
         entity.previousGroundHeight50 = entity.groundHeight4c;
@@ -656,8 +683,19 @@ namespace orphen::ported::entity
         entity.flagWord6c = surface->terrainFlags;
         entity.flagWord70 = surface->terrainFlags;
 
-        // The floor is still a floor even for a flyer.
-        if (entity.positionY28 < surface->height)
+        // The floor is still a floor even for a flyer -- but only for an actor
+        // that moved onto it.
+        //
+        // FUN_002262c0 raises +0x28 in exactly one branch, and that branch is
+        // gated on the cached primitive at +0x0A being valid *and* carrying the
+        // same material as the one just sampled: an actor walks up a ramp it
+        // was already standing on, it does not get teleported onto whatever
+        // storey happens to be overhead. The port models neither +0x0A nor the
+        // material table, so it uses the nearest thing it has -- an actor whose
+        // behavior asked to move. A script-placed cutscene actor never does,
+        // and its authored height is left alone, which is the point: s01_e012
+        // writes its cast onto the deck and this was lifting them off it.
+        if (moved && entity.positionY28 < surface->height)
         {
           entity.positionY28 = surface->height;
           entity.verticalVelocity44 = 0.0f;
@@ -679,6 +717,7 @@ namespace orphen::ported::entity
     case 0x0025AB68u: // FUN_0025ab68, party members
     case 0x002CD0A0u: // FUN_002cd0a0, the type 0x62 enemy
     case 0x00213720u: // FUN_00213720, type 0x19, the player's bandana
+    case 0x0025BF20u: // FUN_0025bf20, type 0x38, the script-driven NPC
       return true;
     default:
       return false;
@@ -699,6 +738,8 @@ namespace orphen::ported::entity
       return "FUN_002cd0a0 (enemy)";
     case 0x00213720u:
       return "FUN_00213720 (player bandana)";
+    case 0x0025BF20u:
+      return "FUN_0025bf20 (script-driven NPC)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -760,13 +801,16 @@ namespace orphen::ported::entity
       ActorEnvironment slotEnvironment = environment;
       slotEnvironment.currentSlot = slot;
 
-      // FUN_00251ed8 clears these before running the player's state, and the
-      // behaviors accumulate into them the same way. They are per-frame
-      // requests, so they start at zero every frame.
-      entity.desiredDeltaX30 = 0.0f;
-      entity.desiredDeltaZ34 = 0.0f;
-      entity.desiredDeltaY38 = 0.0f;
-
+      // +0x30/+0x34/+0x38 are deliberately **not** cleared here.
+      //
+      // FUN_00239ce0 does not touch them: the physics pass owns the whole
+      // accumulate-then-spend cycle, and FUN_002262c0 zeroes them once it has
+      // applied them. `integrateNonPlayerMovement` does the same at its end, so
+      // clearing here as well was a second, invented reset -- and it landed in
+      // the worst possible place. The scene script's own tick runs *before* this
+      // loop, so a scripted walk (`0xEE`..`0xF1`, which accumulate into +0x30
+      // and +0x34 rather than writing position) had its request wiped on the
+      // same frame it was made. Every script-driven actor stood still.
       switch (handler.address)
       {
       case 0x002D1EA8u:
@@ -787,6 +831,20 @@ namespace orphen::ported::entity
                                environment.bandanaEnvironment(slot));
         }
         break;
+      case 0x0025BF20u:
+        // FUN_0025bf20: install this entity as the selection and the focus, run
+        // its own freeze gate, and on a clear frame run the body at +0x130.
+        //
+        // The original sets both globals *before* the gate, so a frozen NPC
+        // still leaves itself in focus. The port sets the focus inside the
+        // callback and so skips that on a frozen frame; nothing observes it,
+        // because every body re-establishes the focus on entry.
+        if (!FUN_0023a068_freeze_gate(entity, environment.frameTicks) &&
+            environment.FUN_0025bf20_run_npc_body)
+        {
+          environment.FUN_0025bf20_run_npc_body(slot, entity.recordId130);
+        }
+        break;
       case kFUN_00239e78_noOp:
       default:
         break;
@@ -798,7 +856,7 @@ namespace orphen::ported::entity
       // attachment point off the bone.
       if (entity.parentSlot192 < 0)
       {
-        integrateNonPlayerMovement(entity, environment);
+        integrateNonPlayerMovement(entity, environment, slot);
       }
     }
   }

@@ -95,6 +95,14 @@ namespace orphen::ported::script
     case 0x1D: entity.velocityZ40 = toField(value); return true;
     case 0x1E: entity.verticalVelocity44 = toField(value); return true;
 
+    // +0x154 / +0x158, the two extra model rotations the renderer already
+    // applies in FUN_0020cdc0_entity_root. Stored raw: 0x0D above is the only
+    // angle write that normalises. s01_e012 tilts a prop with these during the
+    // opening, and they were the last two unmodelled register writes in the
+    // scene.
+    case 0x1F: entity.rotationX154 = toField(value); return true;
+    case 0x20: entity.rotationY158 = toField(value); return true;
+
     case 0x22: entity.fadeLevel134 = byte; return true;
     case 0x23: entity.fadeColor138 = value; return true;
     case 0x26: entity.freezeTimerBd = static_cast<std::int8_t>(byte); return true;
@@ -151,6 +159,9 @@ namespace orphen::ported::script
     case 0x1C: value = fromField(entity.velocityX3c); return true;
     case 0x1D: value = fromField(entity.velocityZ40); return true;
     case 0x1E: value = fromField(entity.verticalVelocity44); return true;
+
+    case 0x1F: value = fromField(entity.rotationX154); return true;
+    case 0x20: value = fromField(entity.rotationY158); return true;
 
     case 0x22: value = entity.fadeLevel134; return true;
     case 0x23: value = entity.fadeColor138; return true;

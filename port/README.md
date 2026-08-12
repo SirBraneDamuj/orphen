@@ -243,9 +243,54 @@ Three mechanisms, and none of them is a linear script:
 3. **The choreography opcodes** (`0xE9`..`0xF5`) advance the focus entity's
    `+0x1BC` step counter when they complete, so a body reads that counter and
    switches on it. The counter is the choreography's program counter.
+4. **A script-driven NPC carries its own program.** Opcode `0x66` converts an
+   entity to type `0x38` and parks a blob offset in `+0x130`; `FUN_0025bf20`,
+   type `0x38`'s entire behaviour, runs the body there **every frame** with the
+   entity installed as both the selection (`iGpffffb0d4`) and the choreography
+   focus (`iGpffffb0d8`). `s01_e012` converts fourteen. The offset is loaded
+   with `lh`, so it is signed and a body must live in the low half of the blob.
 
-None of it needs the absent non-player physics: `FUN_002658c0` computes its own
-per-frame displacement and writes straight into `+0x20`/`+0x24`.
+   These bodies are uniformly `switch (step) { ... }` over `0xED`, usually with
+   `0xE9` in front of it — `0xE9` reads and clears `+0x1CC`, the interaction
+   pulse that `FUN_0025b978` sets when the player talks to the NPC.
+
+   `s01_e012` converts fourteen entities but only **five** are characters:
+   slots 18, 19, 21, 23 and 24, all really type `0x293`, each with its own body
+   (`0x39d9`, `0x3a52`, `0x3b42`, `0x3c32`, `0x3ca9`). The other nine are types
+   `0x281` and `0x2ca` sharing two bodies between them — scenery that happens to
+   want a script, not cast. `--actor-report` prints the real type and the body
+   offset behind the role, because fourteen lines reading `type=0x38` hide both.
+5. **Floor panels start the rest.** Opcode `0x61` tests the terrain word the
+   player is standing on, and the six panel groups at `0x3d40`..`0x400e` are
+   **exact four-bit pattern matches**, not "any of these":
+
+   ```
+   0x3d40   p10 && !p20 && !p40 && !p80      -> tile 0x10
+   0x3d94  !p10 &&  p20 && !p40 && !p80      -> tile 0x20
+   0x3e46  !p10 && !p20 && !p40 &&  p80      -> tile 0x80
+   0x3f68   p10 && !p20 &&  p40 && !p80      -> tile 0x50
+   ...
+   ```
+
+   (`0x18` is logical NOT and `0x1A` is AND in the expression evaluator.) Each
+   body ends in `0xA1`, arming a scheduler stream — stepping on tile `0x10` arms
+   `0xd0c0`. So the high nibble of the terrain word is a **tile id**, and the
+   map carries exactly six of them: `0x10`, `0x20`, `0x50`, `0x62`, `0x84`,
+   `0x9c`. `--scr-report` prints where each panel bit sits so a trigger can be
+   walked onto deliberately.
+
+   The panels only start being tested around frame 10400, when the opening hands
+   over control — which is the shape the scene is authored in: one automatic
+   opening chain, then player-driven cutscenes from there.
+
+   **Most of the scene's choreography lives behind them.** The blob has twelve
+   `0xEB` focus sites; the opening reaches three. The other nine sit in
+   `0x705d`..`0xa812`, and stream `0xca30` never targets anything above
+   `0x6526` — but `0xd0c0` targets exactly that range. Six opcodes had to be
+   ported before it would run: `0x6E`, `0x72`, `0x73` (angle helpers), and
+   `0x94`, `0xDE`, `0x10A`, `0x10B` (audio and graphics submitters, operands
+   only). Each halt named the next one, which is what the halt discipline is
+   for.
 
 ### The voice handshake
 
@@ -258,7 +303,7 @@ success, poll = idle, so an unvoiced run behaves like a voiced one that has
 already finished. (`FUN_002445c8`'s own no-audio path returns `-1`, which is
 neither.)
 
-**Six bugs came out of getting there**, all silent, and the first two would
+**Thirteen bugs came out of getting there**, all silent, and the first two would
 have blocked every story scene in the game:
 
 - **Opcodes `0x3D`..`0x40` are the event-flag query / set / clear / toggle**,
@@ -304,8 +349,91 @@ choreography and parks the real one at `+0x1CE`. Looking a model up by the raw
 type after that finds nothing, which left a whole cast un-animated.
 `OriginalEntity::effectiveTypeId()` is the test every original makes here.
 
-The chain stops around frame 2190 with the scene still mid-sequence; it has not
-yet reached flag `0x515`, the handoff latch that ends the opening.
+- **The movement request was cleared twice, and the invented clear won.**
+  `FUN_00239ce0` does not touch `+0x30`/`+0x34`/`+0x38` at all -- the physics
+  pass owns the whole accumulate-then-spend cycle and `FUN_002262c0` zeroes them
+  once it has applied them. The port zeroed them a second time, immediately
+  before dispatching each behaviour, and the scene script's tick runs *before*
+  the actor loop. So every movement a script asked for was destroyed on the
+  frame it was made.
+- **`0xEE`..`0xF1` request movement, they do not teleport.** `FUN_002658c0`
+  accumulates into `+0x30`/`+0x34` (`psGpffffb0d8[0x18]` and `[0x1a]` over a
+  short pointer) and lets physics spend it. Writing `+0x20`/`+0x24` directly, as
+  the port did, skips collision and the ground follow and moves the actor a
+  frame early relative to everything that reads its position. Its run animation
+  also keys off `FUN_002298d0`'s **character class**, not off the type id.
+- **A ground query with no body answers the wrong storey.** `FUN_00227070`
+  stages the entity's `+0x28` and `+0x28 + +0x58` into the scan workspace at
+  `+0x0B`/`+0x0C`, and `FUN_00227798` puts its `z` argument into both;
+  `FUN_00227840` then refuses to settle on anything above the head. The port
+  asked `queryPsm2GroundAt` with a reference of `0.0f` and no body from the
+  script and actor paths, so its "closest surface to the reference" tie-break
+  picked whichever floor was nearest sea level. On `s01_e012`, a ship with a
+  deck at `-1.50` and structure at `+0.25`, that put Volcan a metre and a half
+  in the air. Opcode `0x60` was also throwing its `z` away, which is the operand
+  that says *which* storey the script means.
+- **A map-streamed prop had no descriptor, so every prop animated forever.**
+  `FUN_00229980` is one function covering every type range, and its streamed
+  branch does not read a table -- it *synthesises* a descriptor into the scratch
+  block at `DAT_0031c1d0` from the prop's own 0x28-byte record (`FUN_00229688`
+  copies the fields; the three ints at `+0x0C`/`+0x10`/`+0x14` are millimetres).
+  The port returned `nullopt` for the whole streamed range, so every map prop
+  spawned on struct defaults: a uniform 0.15r/0.80h instead of its real
+  collision size, and -- the load-bearing one -- entity `+0x06` at zero.
+  `+0x06` bit `0x10` is `FUN_00225c90`'s early return, and the source record's
+  `0x4000` bit is what sets it. Nearly every prop in a scene is meant to be
+  *static*; the port advanced all of them every frame, driving the pose filter
+  into stretched geometry that grew without bound. In `s01_e012` that is the
+  blown-out white cluster over the Dortin/Volcan shot. The same synthesis also
+  supplies `+0x04` (`0xD0`/`0xD8` on the record's `0x8000` bit) and `+0x08`.
+- **`FUN_0020c5a8`'s first pass has a second skip.** The draw walk makes two
+  passes and the port had only the second. The first tests entity `+0x02` bit
+  `0x200` -- `puVar11[1]` over a `0xEC`-halfword stride -- and marks the slot
+  undrawable outright. It is the same bit that picks `FUN_00225c90`'s alternate
+  animation format, so it reads as "this is not a skinned entity". Nothing in
+  `s01_e012` sets it, so this one fixed no visible artefact, but the walk was
+  wrong.
+
+Two smaller ones from the same pass: `FUN_00229c40`'s last three lines start
+every entity with the keyframe blend saturated and `+0x08` bit `0x10` raised, so
+its first drawn pose is the sampled one rather than something eased out of the
+previous occupant of the slot -- the port had been leaning on the pose filter's
+own `seeded` flag for that. And object registers `0x1F`/`0x20` (`+0x154`,
+`+0x158`, the two extra model rotations the renderer already applies) had no
+setter, which was the last unmodelled register write in either scene.
+
+- **Opcode `0xBD` methods `0x70`/`0x72` are waypoint path-follow, not voice.**
+  `FUN_00263e80` passes `uGpffffb0d4` -- the *selected entity* -- as
+  `FUN_00242a18`'s first argument, so its cases are methods on an entity.
+  `0x70` (`FUN_002443f8`) takes a follower slot, reads `arg3 + DAT_00355058` as
+  a u32 count followed by `count*3` VM expressions, and builds a **cubic spline**
+  through them with the same `FUN_00266a78` the chest camera uses; `0x72`
+  (`FUN_002445c8`) reports progress and reads 0 only once the slot is freed. An
+  earlier reading here called the pair a voice handshake and stubbed it "started,
+  already finished", which made every path-driven actor stand still while its
+  wait subproc exited on its first frame. `FUN_002446e8` walks the spline and
+  writes the **movement request**, so it has to run before the actor loop -- the
+  physics in that loop is what spends it. In `s01_e012` this is what walks
+  Dortin: path `0x366C`, three points, duration 400 (`total = duration << 4`,
+  advanced 32 ticks a frame, so 200 frames), turning him toward Volcan as he
+  goes.
+- **Entity `+0x04` bit `0x100` turns physics off, and the port ignored it.**
+  It is the first thing `FUN_002262c0` tests (`0x00226304`): it copies `+0x04`
+  into the workspace and returns before clearing `+0x64`, before gravity, before
+  the terrain sample, before the epilogue that spends `+0x30`/`+0x34`/`+0x38`.
+  The entity keeps its scripted position *and* its scripted `+0x4C`, which is how
+  a cutscene pins an actor to a pose the floor disagrees with. `s01_e012` opens
+  on Orphen lying on a bed: the script's `0x54` at `0x4557` places him at
+  `z = -1.224` while the surface under him samples `-1.300`, so without the gate
+  the port re-settled him and he sank into the mattress by 7.6 cm. `eeMemory.bin`
+  captured on that frame reads `+0x04 = 0x312C` and `+0x4C = -1.224`; the same
+  dump taken in the field reads `0x3024`, so the bit really is toggled per
+  cutscene rather than being a property of the lead. The chest cutscene raises it
+  in state `0x0D` and clears it in `0x13`, one state before `0x14` polls the
+  grounded flag -- the original's own ordering, and it survives the gate intact.
+
+The chain runs to its end: **208 event records, 42 dialogue lines**, flag
+`0x515` set at frame 10426 and the player lock released beside it.
 
 `s01_e024` runs both load-time entries **and** its per-frame entry to a clean
 block end with **zero** unimplemented opcodes, and spawns 14 entities. Slot 4,
@@ -587,12 +715,18 @@ Checkable without a window, and `--press-confirm` now works under
 `--screenshot` too:
 
 ```
-orphen_port --disc-root . --scene s01_e024 --frames 460 \
-    --spawn -4.5,-10.5,0 --press-confirm 60 --actor-report
+orphen_port --disc-root . --scene s01_e024 --frames 620 \
+    --spawn -4.5,-10.5,0 --press-confirm 60,440 --actor-report
 ```
 
 That spawns beside chest slot 17, facing it, and the report ends with that
 chest on animation 6 and every other one still on 4.
+
+**Both presses matter.** The first opens the chest; the second dismisses the
+item caption, which state `0x12` waits on. With only the first, the cutscene
+parks at `0x12` forever and the last four state changes never happen — that
+looks exactly like a regression and is not one. The ten transitions land on
+frames 61, 89, 111, 365, 366, 399, 441, 469, 475 and 497.
 
 ### The bandana
 
@@ -666,6 +800,45 @@ unimplemented state. **Non-player physics is still absent**, which is why the
 enemy's chase state is not ported yet: it writes movement into `+0x30`/`+0x34`
 and a hover height into `+0x38`, and none of that is integrated for slots
 1..255, so porting it would look like nothing happened.
+
+`integrateNonPlayerMovement` stands in for the vertical part of it, and it will
+only *raise* an actor that asked to move this frame. `FUN_002262c0` raises
+`+0x28` in exactly one branch, gated on the cached primitive at `+0x0A` being
+valid and carrying the same material as the one just sampled — an actor walks up
+a ramp it was already standing on, it is not teleported onto whatever is
+overhead. The port models neither `+0x0A` nor the material table, and an actor
+whose behavior moved it is the nearest test it has. A script-placed cutscene
+actor never qualifies, so its authored height survives, which is the point:
+`s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
+
+`--arm-stream <hex>[:<frame>]` arms scheduler channel 0 with a stream at the
+given frame, exactly as opcode `0xA1` does. Most of a scene's cutscenes are not
+in the opening chain — they are armed by floor panels, and a panel is a
+two-triangle square that no constant `--hold-stick` angle reliably finds. This
+reaches them without solving navigation, which is the only way to exercise the
+second half of a scene's choreography headlessly:
+
+```
+orphen_port --disc-root . --scene s01_e012 --frames 20000 \
+    --arm-stream d0c0:11000 --scr-report
+```
+
+That takes `s01_e012` from 208 event records and 42 dialogue lines to **260 and
+54**, and runs a character walk at `0x705d`/`0x7067` that nothing else reaches.
+
+`--scr-trace-range <lo>-<hi>` prints every SCR opcode executed at a blob offset
+inside the range, with the frame it ran on. The aggregate report answers "was
+this opcode reached"; this answers "in what order, and did the branch go the way
+I think". It is the only way to read a script body — there is no disassembler —
+and the offsets to feed it are the ones the report already prints. It is how the
+floor-panel guards above were read.
+
+`--hide-slots <slot>[,<slot>...]` drops those pool slots from the published draw
+list and nothing else — the simulation is untouched. A report names entities and
+a screenshot names pixels; this is what connects them. Bisecting the slot range
+against `--screenshot` at a fixed frame, and comparing the `.ppm` bytes rather
+than eyeballing, identifies the entity behind any piece of on-screen geometry in
+about seven runs. That is how the map-prop descriptor bug above was cornered.
 
 `--press-confirm <frame>[,<frame>...]` fires Cross on each listed frame from
 `--frames` or `--screenshot`, so the interaction path is checkable without a

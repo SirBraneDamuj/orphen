@@ -360,6 +360,17 @@ namespace orphen::ported::script
   // same way the player controller takes its terrain sampler.
   struct ScriptEnvironment
   {
+    // Opcode 0xBD's entity methods 0x70 / 0x72, the waypoint path-follow pair
+    // (FUN_002443f8 / FUN_002445c8). The interpreter decodes the path out of the
+    // blob itself -- the points are VM expressions and only it can evaluate them
+    // -- and hands the finished world-space list over. Start returns 1 or -1;
+    // progress returns non-zero while the actor is still walking.
+    std::function<int(std::size_t entitySlot,
+                      std::span<const orphen::ported::psm2::Vec3> waypoints,
+                      std::uint32_t duration)>
+        FUN_002443f8_start_path;
+    std::function<int(std::size_t entitySlot)> FUN_002445c8_path_progress;
+
     orphen::ported::entity::EntityPool *entityPool = nullptr;
     const orphen::ported::entity::EntityDescriptorTable *descriptors = nullptr;
     SceneScriptState *state = nullptr;
@@ -368,8 +379,17 @@ namespace orphen::ported::script
     // is where scene objects actually stand.
     const orphen::ported::psm2::Psm2RuntimeState *map = nullptr;
 
-    // FUN_00227070: ground height under a world (x, y), or nullopt off-mesh.
-    std::function<std::optional<float>(float x, float y)> terrainHeight;
+    // FUN_00227070 / FUN_00227798: ground height under a world (x, y), or
+    // nullopt off-mesh.
+    //
+    // `feetHeight` and `headHeight` are the vertical band the query answers
+    // within, and they are not optional -- a ship deck stacks floors, so
+    // "the ground at (x, y)" has no answer without them. FUN_00227070 stages
+    // the entity's +0x28 and +0x28 + +0x58 into the scan workspace at +0x0B
+    // and +0x0C; FUN_00227798 puts its z argument into both. FUN_00227840 then
+    // refuses to settle on anything above the head.
+    std::function<std::optional<float>(float x, float y, float feetHeight, float headHeight)>
+        terrainHeight;
 
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
@@ -600,6 +620,12 @@ namespace orphen::ported::script
     std::uint32_t FUN_00263118_clear_lead_slot();   // 0xAA
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
+
+    // FUN_0025d618: point the stream at `blobOffset`, read a u32 count, then
+    // evaluate count*3 expressions as x/y/z, and put the cursor back. Returns
+    // false if the offset or the data runs off the end of the blob.
+    bool decodePathWaypoints(std::uint32_t blobOffset,
+                             std::vector<orphen::ported::psm2::Vec3> &waypoints);
     // puGpffffb0d8, or null when nothing is in focus.
     orphen::ported::entity::OriginalEntity *focusEntity();
     void alignStreamTo4();
