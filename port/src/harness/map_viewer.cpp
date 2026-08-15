@@ -118,6 +118,10 @@ namespace orphen::harness
     // not-taken branch rather than work.
     orphen::harness::RenderStats *g_renderStats = nullptr;
 
+    // --map-no-blend: force every map primitive back to the opaque path, so the
+    // ABE block can be A/B'd against the way this drew before it was ported.
+    bool g_mapBlendDisabled = false;
+
     // Wall-clock for one render phase, added to `sink` on scope exit. Coarse by
     // design -- see RenderStats.
     class PhaseTimer
@@ -1526,8 +1530,74 @@ namespace orphen::harness
     {
       unsigned int texture = 0;
       bool cullDisabled = false;
+      int blendMode = 0;
       bool valid = false;
     };
+
+    // FUN_00211230:143-158, the block that turns the PRIM word's ABE bit on. It
+    // reads the *base* material slot -- byte +0x0B for flags, +0x0A for alpha --
+    // and picks the same 0..3 mode number the PSC3 path uses:
+    //
+    //   flags & 0x70 == 0            -> 0, opaque, ABE never enabled
+    //   flags & 0x40                 -> 1, alpha blend; but alpha 0x80 is fully
+    //                                   opaque, so it folds back to 0
+    //   flags & 0x40 == 0, & 0x10    -> 3
+    //   flags & 0x40 == 0, & 0x10==0 -> 2, additive
+    //
+    // Line 160 then sets `plVar8[1] |= 0x40` -- PRIM bit 6, ABE -- and line 161
+    // records it on the primitive as 0x40, which is the flag
+    // `psm2_material_expansion` was already computing and nothing was reading.
+    //
+    // Slot 0 is the right slot to ask because slot 0 is the one this renderer
+    // draws: `baseSlotForPrimitive` supplies the texture page and the UVs too.
+    // The original emits a pass per slot and would blend on *any* slot's flags,
+    // so a primitive whose blend lives on slot 1 or later still comes out
+    // opaque here -- 158 of s01_e012's 841 flagged primitives, all of whose
+    // slot 0 is untextured filler.
+    int mapBlendMode(const orphen::ported::psm2::MaterialSlot &slot)
+    {
+      if (g_mapBlendDisabled || (slot.flags & 0x70) == 0)
+      {
+        return 0;
+      }
+      if ((slot.flags & 0x40) != 0)
+      {
+        return slot.alpha == 0x80 ? 0 : 1;
+      }
+      return (slot.flags & 0x10) != 0 ? 3 : 2;
+    }
+
+    // The same GS reading the PSC3 path uses, because both feed VU1 programs
+    // that select GS state by this mode number. See drawObjectModel's
+    // setBlendMode for the derivation of each case.
+    void setMapBlendMode(int mode)
+    {
+      switch (mode)
+      {
+      case 2:
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
+        break;
+      case 1:
+      case 3:
+        // Mode 3's reverse subtract needs glBlendEquation, which is not in the
+        // fixed-function entry points this harness links. It falls back to
+        // straight alpha so it reads as wrong rather than as missing.
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
+        break;
+      case 0:
+      default:
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+        break;
+      }
+    }
 
     // Flushes and clears the batch state, so whatever comes next starts clean.
     // Called before an entity is drawn: entities are interleaved into the map
@@ -1541,6 +1611,11 @@ namespace orphen::harness
       {
         glEnable(GL_CULL_FACE);
         state.cullDisabled = false;
+      }
+      if (state.blendMode != 0)
+      {
+        setMapBlendMode(0);
+        state.blendMode = 0;
       }
       state.valid = false;
     }
@@ -1561,12 +1636,30 @@ namespace orphen::harness
       const bool twoSided = (record80.primitiveFlags & kRecord80TwoSidedBit) != 0;
       const bool wantCullDisabled = cullingEnabled && twoSided;
 
+      // FUN_00211230:143-158. The slot's own alpha rides in the vertex colour
+      // alongside the occlusion fade, the way the GS gets it from the vertex
+      // rather than from a register.
+      const orphen::ported::psm2::MaterialSlot *baseSlot =
+          baseSlotForPrimitive(map, primitiveIndex);
+      const int blendMode = baseSlot != nullptr ? mapBlendMode(*baseSlot) : 0;
+      if (blendMode != 0 && baseSlot != nullptr)
+      {
+        // 0x80 is the GS's fully-opaque, so the divisor is 128 and not 255.
+        alpha *= static_cast<float>(baseSlot->alpha) / 128.0f;
+      }
+
       // The fade alpha rides in the vertex colour, so it is not part of the
-      // key -- only the two things that are actual GL state are.
+      // key -- only the three things that are actual GL state are.
       if (!state.valid || state.texture != texture ||
-          state.cullDisabled != wantCullDisabled)
+          state.cullDisabled != wantCullDisabled || state.blendMode != blendMode)
       {
         batchFlush();
+
+        if (state.blendMode != blendMode || !state.valid)
+        {
+          setMapBlendMode(blendMode);
+          state.blendMode = blendMode;
+        }
 
         if (texture != 0)
         {
@@ -2312,6 +2405,7 @@ namespace orphen::harness
     g_sceneLighting = &sceneLighting_;
     g_gleamProbes = gleamProbeSink_;
     g_renderStats = renderStatsSink_;
+    g_mapBlendDisabled = mapBlendDisabled_;
     if (g_gleamProbes != nullptr)
     {
       g_gleamProbes->clear();

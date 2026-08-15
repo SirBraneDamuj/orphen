@@ -100,6 +100,9 @@ namespace orphen::port
     // script's table exactly, so this is a confirmed path rather than a derived
     // one. --lighting-no-points is here to A/B it against the previous look.
     bool suppressPointLights = false;
+    // --map-no-blend: draw every map primitive opaque, the way the port did
+    // before FUN_00211230's ABE block was ported. Diagnostic only.
+    bool suppressMapBlend = false;
     bool printGleamReport = false;
     // --frame-stats: accumulate a per-phase render breakdown and print it
     // every kFrameStatsWindow frames. Windowed runs only -- headless never

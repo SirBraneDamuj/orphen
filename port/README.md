@@ -1303,6 +1303,48 @@ section E index, and w15 is the section B index whose entry is the primitive's
 those selectors and turns the colour index into real per-vertex colours out of
 the map's palette (PSM2 header word `0x10`), replacing the placeholder shading.
 
+### Map blending, and the black slabs around the lanterns
+
+`FUN_00211230` builds each map primitive's GS packet once at load, and part of
+that is deciding whether the PRIM word gets its ABE bit. Lines 143-158, reading
+the *base* material slot's byte +0x0B for flags and +0x0A for alpha:
+
+```
+flags & 0x70 == 0            -> mode 0, opaque, ABE never enabled
+flags & 0x40                 -> mode 1, alpha blend -- but alpha 0x80 is fully
+                                opaque, so it folds straight back to mode 0
+flags & 0x40 == 0, & 0x10    -> mode 3
+flags & 0x40 == 0, & 0x10==0 -> mode 2, additive
+```
+
+then `plVar8[1] |= 0x40` (PRIM bit 6, ABE) and `pfVar27[0x1c] |= 0x40` on the
+primitive. That last flag is the one `psm2_material_expansion` was already
+computing for `FUN_00209140`'s "already blended, never fade" gate.
+
+**The draw path never read it.** `drawPrimitive`'s batch key was texture and
+cull mode only, so all 841 of `s01_e012`'s flagged primitives -- 21% of the map
+-- drew opaque. The visible result was a black stair-stepped slab behind every
+hanging lantern: the glow quads are `flags=0x20, alpha=0x1F`, so mode 2 at 24%,
+and drawing an additive glow opaquely paints its black surround over the wall.
+The stair-stepping was the alpha test doing its job on a low-resolution texture
+while the surviving texels came out solid.
+
+The mode numbering is the same 0..3 the PSC3 path uses, and both feed VU1
+programs that select GS state by it, so `setMapBlendMode` mirrors
+`drawObjectModel`'s `setBlendMode` case for case. Ordering needs nothing new:
+map primitives and entities already merge into one shared far-to-near bucket
+table, which is how the original sorts them too.
+
+Slot 0 is the slot asked, because slot 0 is the one this renderer draws -- it
+supplies the texture page and the UVs as well. The original emits a pass per
+slot and would blend on *any* slot's flags, so 158 of the 841 still come out
+opaque here; all of them have an untextured slot 0.
+
+`--map-no-blend` restores the old look for an A/B. At `s01_e012` f3000 the two
+differ in 25.2% of pixels, at f6000 12.0%; `s01_e024` is **byte-identical**, so
+the room the port was developed against is untouched. Cost is 23 extra batches
+and 0.80 -> 0.92 ms of map time, entities unchanged.
+
 ## Timing Model
 
 The simulation runs on a fixed 60 Hz step, decoupled from the render rate. `main`

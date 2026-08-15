@@ -199,6 +199,11 @@ namespace
         config.suppressPointLights = true;
         continue;
       }
+      if (argument == "--map-no-blend")
+      {
+        config.suppressMapBlend = true;
+        continue;
+      }
       if (argument == "--lighting-unlit")
       {
         config.applyUnlitFlag = true;

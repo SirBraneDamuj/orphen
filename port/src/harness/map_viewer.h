@@ -136,6 +136,9 @@ namespace orphen::harness
     // the sink. Null -- the default -- costs one predicted branch per counted
     // event and nothing else.
     void setRenderStatsSink(RenderStats *sink) { renderStatsSink_ = sink; }
+    // --map-no-blend. Draws every map primitive opaque, the way the port did
+    // before FUN_00211230's ABE block was ported. Diagnostic only.
+    void setMapBlendDisabled(bool disabled) { mapBlendDisabled_ = disabled; }
     // Which of the derived-but-unconfirmed lighting behaviours are live.
     orphen::ported::render::SceneLighting &mutableSceneLighting() { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
@@ -249,6 +252,7 @@ namespace orphen::harness
     // reason.
     bool debugOverlayVisible_ = false;
     bool wireframe_ = false;
+    bool mapBlendDisabled_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);
     void setTexturePages(std::vector<LoadedDiscTexturePage> texturePages);

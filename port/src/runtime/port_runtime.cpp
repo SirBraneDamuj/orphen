@@ -139,6 +139,7 @@ namespace orphen::port
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
     suppressPointLights_ = config.suppressPointLights;
+    mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
