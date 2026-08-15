@@ -10,6 +10,7 @@
 #include "ported/player/original_chest_cutscene.h"
 #include "ported/player/original_item_window.h"
 #include "ported/sound/original_sound_engine.h"
+#include "ported/sound/original_voice_index.h"
 #include "ported/text/original_dialogue_text.h"
 #include "ported/text/original_dialogue_stream.h"
 #include "ported/resource/item_database.h"
@@ -46,6 +47,9 @@ namespace orphen::port
   {
     std::filesystem::path decodedPsm2Path;
     std::filesystem::path discRoot;
+    // --voice-index: VOICE.BIN, or an EE dump holding the boot-loaded copy of
+    // its table. Left empty, the disc root is searched for either.
+    std::filesystem::path voiceIndexPath;
     orphen::harness::McbSceneSelection discScene;
     bool hasDiscScene = false;
     bool exitAfterUsage = false;
@@ -341,6 +345,14 @@ namespace orphen::port
     orphen::ported::sound::SoundEngine soundEngine_;
     bool printSoundReport_ = false;
     void loadSoundData();
+
+    // VOICE.BIN's table of contents, which is what gives a line of dialogue its
+    // real length. Optional: without it every hold falls back to an estimate and
+    // the report says so.
+    orphen::ported::sound::VoiceIndex voiceIndex_;
+    void loadVoiceIndex(const PortRuntimeConfig &config);
+    // Only decode a clip when something will actually mix it.
+    bool voiceAudioEnabled_ = false;
     void FUN_0022a418_stamp_lead_player_flags();
     void printSoundReport() const;
 

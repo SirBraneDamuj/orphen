@@ -280,10 +280,56 @@ namespace orphen::ported::sound
     }
   }
 
+  void SoundEngine::FUN_00207010_play_voice_line(std::vector<std::int16_t> pcm, float sampleRate)
+  {
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    // FUN_00206d98 refuses to start while DAT_00356788 is set, so a line never
+    // overlaps the one before it. Here the caller has already waited out the
+    // hold, and cutting the old buffer off is what the original's single
+    // reserved voice does anyway.
+    voiceLinePcm_ = std::move(pcm);
+    voiceLinePosition_ = 0.0;
+    voiceLineStep_ = sampleRate > 0.0f ? sampleRate / kSpuBaseSampleRate : 1.0;
+    voiceLineActive_ = !voiceLinePcm_.empty();
+  }
+
+  void SoundEngine::FUN_00206a48_stop_voice_line()
+  {
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    voiceLineActive_ = false;
+    voiceLinePosition_ = 0.0;
+  }
+
   void SoundEngine::mix(float *interleavedStereo, std::size_t frames)
   {
     std::memset(interleavedStereo, 0, frames * 2 * sizeof(float));
     drainPendingKeyOns();
+
+    {
+      const std::lock_guard<std::mutex> guard(mixLock_);
+      if (voiceLineActive_)
+      {
+        for (std::size_t frame = 0; frame < frames; ++frame)
+        {
+          const auto index = static_cast<std::size_t>(voiceLinePosition_);
+          if (index + 1 >= voiceLinePcm_.size())
+          {
+            voiceLineActive_ = false;
+            break;
+          }
+          const float fraction =
+              static_cast<float>(voiceLinePosition_ - static_cast<double>(index));
+          const float sample = (static_cast<float>(voiceLinePcm_[index]) * (1.0f - fraction) +
+                                static_cast<float>(voiceLinePcm_[index + 1]) * fraction) /
+                               32768.0f;
+          // Dialogue is centred: FUN_00207010 programs both volumes from the
+          // same uGpffffac60.
+          interleavedStereo[frame * 2] += sample;
+          interleavedStereo[frame * 2 + 1] += sample;
+          voiceLinePosition_ += voiceLineStep_;
+        }
+      }
+    }
 
     for (Voice &voice : voices_)
     {

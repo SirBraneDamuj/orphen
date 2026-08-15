@@ -185,6 +185,7 @@ namespace orphen::port
     }
 
     loadSoundData();
+    loadVoiceIndex(config);
 
     if (mapViewer_.loadedMap() != nullptr)
     {
@@ -433,8 +434,25 @@ namespace orphen::port
       const auto bounds = sceneScript_.dialogueRecordBounds(blobOffset);
       dialogueStream_.FUN_00237b38_start(sceneScript_.blob(), bounds.first, bounds.second,
                                          sceneScript_.state());
+      const auto &entry = dialogueStream_.log().back();
       std::cout << "[dialogue] " << dialogueStream_.speaker() << ": \"" << dialogueStream_.line()
-                << "\"\n";
+                << "\"  (voice " << entry.voiceId << ", " << entry.holdFrames << 'f'
+                << (entry.measured ? "" : (entry.holdFrames == 0 ? ", empty" : ", estimated"))
+                << ")\n";
+
+      // What the record's 0x18 started. Only worth reading when something is
+      // going to mix it -- decoding is otherwise a megabyte of work per line
+      // thrown away, and a headless run does not want it.
+      if (voiceAudioEnabled_ && entry.voiceId != 0 && voiceIndex_.hasAudio())
+      {
+        const std::vector<std::uint8_t> adpcm = voiceIndex_.readClipAdpcm(entry.voiceId);
+        if (!adpcm.empty())
+        {
+          soundEngine_.FUN_00207010_play_voice_line(
+              orphen::ported::sound::decodePsAdpcm(adpcm),
+              static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
+        }
+      }
     };
 
     environment.FUN_00237c60_dialogue_busy = [this]() { return dialogueStream_.FUN_00237c60_busy(); };
@@ -1123,6 +1141,64 @@ namespace orphen::port
     }
   }
 
+  // FUN_00221b90's table, without which a line of dialogue has no length. Tried
+  // in the order the data is most trustworthy: the real file first, then an EE
+  // dump, which holds the same table because the game loads it at boot.
+  //
+  // VOICE.BIN is 142 MiB and is usually the archive people leave behind when
+  // they pull the disc apart; the table inside it is 13 KB. Falling back to a
+  // dump means a repo with no VOICE.BIN still gets exact cutscene timing, and
+  // only loses the audio -- which is not played yet in any case.
+  void PortRuntime::loadVoiceIndex(const PortRuntimeConfig &config)
+  {
+    std::vector<std::filesystem::path> candidates;
+    if (!config.voiceIndexPath.empty())
+    {
+      candidates.push_back(config.voiceIndexPath);
+    }
+    else if (!discRoot_.empty())
+    {
+      candidates.push_back(discRoot_ / "VOICE.BIN");
+      candidates.push_back(discRoot_ / "eeMemory.bin");
+      candidates.push_back(discRoot_ / "s01_e24.bin");
+    }
+
+    for (const std::filesystem::path &candidate : candidates)
+    {
+      if (!std::filesystem::exists(candidate))
+      {
+        continue;
+      }
+      const bool ok = voiceIndex_.loadFromVoiceBin(candidate) || voiceIndex_.loadFromEeDump(candidate);
+      if (!ok)
+      {
+        std::cout << "[voice] " << candidate.filename().string()
+                  << " holds no readable voice table\n";
+        continue;
+      }
+      std::cout << "[voice] " << voiceIndex_.FUN_00221c40_entryCount() << " clips from "
+                << voiceIndex_.source() << " at " << orphen::ported::sound::kVoiceSampleRate
+                << " Hz\n";
+      if (!voiceIndex_.diagnostic().empty())
+      {
+        std::cout << "[voice] " << voiceIndex_.diagnostic() << '\n';
+      }
+      break;
+    }
+
+    if (!voiceIndex_.valid())
+    {
+      std::cout << "[voice] no voice table found -- dialogue holds fall back to a "
+                   "per-character estimate\n";
+    }
+    else if (!voiceIndex_.hasAudio())
+    {
+      std::cout << "[voice] lengths only; VOICE.BIN itself is needed to hear a line\n";
+    }
+    dialogueStream_.setVoiceIndex(&voiceIndex_);
+    voiceAudioEnabled_ = config.audio || !config.soundDumpPath.empty();
+  }
+
   namespace
   {
     // FUN_0020c5a8's *first* pass, the one that decides which pool slots even
@@ -1329,6 +1405,29 @@ namespace orphen::port
         }
       }
       std::cout << (any ? "" : "  (all zero)") << '\n';
+    }
+
+    // Every line the scene put up, and what set its length. `estimated` lines
+    // are the ones with no clip behind them: their pacing is invented, so a
+    // scene that reports any is a scene whose cutscene timing is not faithful.
+    {
+      const auto &lines = dialogueStream_.log();
+      std::cout << "dialogue lines: " << lines.size() << "  (" << dialogueStream_.measuredLines()
+                << " timed by their voice clip, " << dialogueStream_.estimatedLines()
+                << " estimated, " << dialogueStream_.emptyLines() << " empty)\n";
+      std::uint32_t heldFrames = 0;
+      for (const auto &entry : lines)
+      {
+        heldFrames += entry.holdFrames;
+        std::cout << "  frame " << entry.frame << "  @0x" << std::hex << entry.recordOffset
+                  << std::dec << "  voice " << entry.voiceId << "  " << entry.holdFrames << 'f'
+                  << (entry.measured ? "" : " (estimated)") << "  " << entry.speaker << ": \""
+                  << entry.line << "\"\n";
+      }
+      if (!lines.empty())
+      {
+        std::cout << "  total hold " << heldFrames << " frames\n";
+      }
     }
 
     // The flags are the cutscene's own record of what it has finished. Listed in

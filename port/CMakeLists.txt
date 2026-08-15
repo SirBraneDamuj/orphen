@@ -67,6 +67,8 @@ target_sources(orphen_port
         src/ported/sound/original_sound_bank.h
         src/ported/sound/original_sound_engine.cpp
         src/ported/sound/original_sound_engine.h
+        src/ported/sound/original_voice_index.cpp
+        src/ported/sound/original_voice_index.h
         src/ported/text/original_dialogue_text.cpp
     src/ported/text/original_dialogue_stream.cpp
         src/ported/text/original_dialogue_text.h

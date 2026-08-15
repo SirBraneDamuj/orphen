@@ -9,24 +9,54 @@
 //
 // **This is not the dialogue system**, and it is not trying to be. It reproduces
 // the part a scene's *timing* depends on -- the two event flags a stream raises
-// and lowers, which is what the event scheduler's gates wait on -- and reads the
-// record's text well enough to print it. The 31-entry control-code table at
-// PTR_FUN_0031c640 is not walked: half its entries have no analysis yet, and
-// guessing their operand widths would be exactly the kind of invention the
-// opcode VM refuses to make.
+// and lowers, and how long a line stays up -- and reads the record's text well
+// enough to print it. What it does not do is render: no glyph pacing, no line
+// wrap, no page breaks, no player input.
 //
-// The consequence is that the window closes on a **timer** rather than on the
-// player pressing Cross. That is deliberate for an animatic pass: it lets the
-// whole opening chain play unattended. A real dialogue port replaces this file
-// and `original_item_window.*` together.
+// ## How a line keeps time
+//
+// A record's hold is the length of its voice clip, and the record says so
+// explicitly. The relevant control codes, with the cursor advance taken from
+// each handler's own stores to -0x5140(gp) rather than inferred from the data:
+//
+//   0x16 ch wait id32   (+7)  j FUN_00206ae0 -- cache clip `id` on channel `ch`
+//   0x17                (+1)  block until the load finishes
+//   0x18 ch             (+2)  j FUN_00206d98 -- *start* the clip cached on `ch`
+//   0x19 ch byte        (+3)  the same, and store a byte to gp-0x4999
+//   0x1A                (+1)  block until DAT_00356788 falls back to zero,
+//                             i.e. until the clip has played out
+//   0x02                (+1)  j FUN_00237b38(0) -- end the stream
+//
+// The handler for 0x18 was documented as a "conditional control byte set" that
+// consumed a byte and returned. It does consume the byte, but it then tail-calls
+// the voice player with it:
+//
+//   00239a64: j     0x00206d98
+//   00239a68: daddu a0, a2, zero      ; delay slot: a0 = the operand byte
+//
+// The stream double-buffers: a record's 0x16 arms the clip for the *next* line
+// into the other channel, so what a record plays was armed a record earlier.
+// That is not a guess -- s01_e012's opening sits on record 1 in `eeMemory.bin`,
+// and DAT_00356480 there reads {50, 79, 0}: channel 1 holds the clip record 1
+// plays, channel 0 the one record 2 will. Walking all 83 records of `scr2.out`
+// this way, every one has exactly one 0x18/0x19 and exactly one 0x1A, and the
+// channel it starts is always already armed.
+//
+// Clip lengths come from `VoiceIndex`. Without one the hold falls back to a
+// per-character estimate, which is what this file did for every line before --
+// it kept the chain moving but bore no relation to the original's pacing.
+//
+// The window still closes on that timer rather than on the player pressing
+// Cross. In a cutscene that is what the original does too, since 0x1A is the
+// only thing gating the record's end.
 //
 // Where the text comes from: the scheduler hands over a blob offset that is one
 // of the entries in header word 5's pointer table, and the *next* entry bounds
-// it. So a record's extent is known exactly without parsing a single control
-// code -- which is why the printed lines are trustworthy even though the walk is
-// not.
+// it. So a record's extent is known exactly, and a control code whose width is
+// still unknown can garble one printed line but cannot desync anything.
 
 #include "ported/script/scene_command_interpreter.h"
+#include "ported/sound/original_voice_index.h"
 
 #include <cstdint>
 #include <span>
@@ -39,10 +69,14 @@ namespace orphen::ported::text
   class DialogueStream
   {
   public:
-    // How long a line stays up, as a stand-in for the player's Cross press.
-    // Frame-driven so `--frames` stays deterministic.
+    // The stand-in used when no voice table is available. Frame-driven so
+    // `--frames` stays deterministic either way.
     static constexpr std::uint32_t kBaseHoldFrames = 60;
     static constexpr std::uint32_t kFramesPerCharacter = 2;
+
+    // Borrowed, not owned; may be null or invalid, in which case every line
+    // falls back to the estimate.
+    void setVoiceIndex(const orphen::ported::sound::VoiceIndex *index) { voiceIndex_ = index; }
 
     // FUN_00237b38 with a non-zero pointer. `recordEnd` is the next
     // pointer-table entry, or the blob end for the last record.
@@ -56,14 +90,16 @@ namespace orphen::ported::text
     void FUN_00237b38_terminate(orphen::ported::script::SceneScriptState &state);
 
     // FUN_00237c60 / FUN_00237c70. The original's completion test is "the mode
-    // is 8 and the cursor sits on a NUL"; here the timer stands in for the
-    // cursor reaching the end.
+    // is 8 and the cursor sits on a NUL"; here the hold stands in for the cursor
+    // reaching the end, and the hold is the clip.
     bool FUN_00237c60_busy() const { return active_; }
     bool FUN_00237c70_complete() const { return !active_; }
 
     // Burns the hold down and terminates when it runs out.
     void update(std::uint32_t frameTicks, orphen::ported::script::SceneScriptState &state);
 
+    // FUN_00223698 caches per channel and never clears, so this survives across
+    // records by design; only a scene load resets it.
     void reset();
 
     const std::string &speaker() const { return speaker_; }
@@ -73,21 +109,43 @@ namespace orphen::ported::text
     {
       std::uint32_t frame = 0;
       std::uint32_t recordOffset = 0;
+      std::uint32_t voiceId = 0;   // 0 when the record started nothing
+      std::uint32_t holdFrames = 0;
+      bool measured = false;       // false when the hold is the estimate
       std::string speaker;
       std::string line;
     };
     const std::vector<LoggedLine> &log() const { return log_; }
     void setFrame(std::uint32_t frame) { frame_ = frame; }
 
+    // Report totals: how many lines got a real clip length, and how many fell
+    // back. A scene where these disagree is a scene whose pacing is invented.
+    std::uint32_t measuredLines() const { return measuredLines_; }
+    std::uint32_t estimatedLines() const { return estimatedLines_; }
+    // Records with neither a clip nor any text -- a bare terminate. They hold
+    // for nothing, which is not the same as being invented.
+    std::uint32_t emptyLines() const { return emptyLines_; }
+
   private:
+    // The advance each control code applies to the cursor, opcode byte
+    // included. Recovered from the handlers themselves.
+    static std::size_t controlWidth(std::uint8_t code);
+
+    const orphen::ported::sound::VoiceIndex *voiceIndex_ = nullptr;
+
     bool active_ = false;
     std::uint32_t holdTicks_ = 0;
     std::uint32_t frame_ = 0;
     std::string speaker_;
     std::string line_;
+    // DAT_00356480: the clip cached on each of FUN_00206ae0's three channels.
+    std::uint32_t voiceCache_[3] = {0, 0, 0};
     // Event flags the record's 0x1B codes ask for, applied when it closes.
     std::vector<std::uint32_t> pendingFlags_;
     std::vector<LoggedLine> log_;
+    std::uint32_t measuredLines_ = 0;
+    std::uint32_t estimatedLines_ = 0;
+    std::uint32_t emptyLines_ = 0;
   };
 
 } // namespace orphen::ported::text

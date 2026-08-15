@@ -26,6 +26,10 @@ namespace
                  "  --elf           read static tables (entity descriptors, actor\n"
                  "                  behavior vtables) from the retail executable.\n"
                  "                  Defaults to SLUS_200.11 in the disc root.\n"
+                 "  --voice-index   VOICE.BIN, or an EE dump holding the copy of its\n"
+                 "                  table the game loads at boot. Sets how long each\n"
+                 "                  line of dialogue holds. Defaults to searching the\n"
+                 "                  disc root for either.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
                  "  --no-scr-tick   stop running the scene script's per-frame entry\n"
                  "                  and its object-script slots. On by default.\n"
@@ -77,6 +81,15 @@ namespace
           throw std::runtime_error("--disc-root requires a path");
         }
         config.discRoot = std::filesystem::path(argv[++argumentIndex]);
+        continue;
+      }
+      if (argument == "--voice-index")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--voice-index requires a path");
+        }
+        config.voiceIndexPath = std::filesystem::path(argv[++argumentIndex]);
         continue;
       }
       if (argument == "--scene")

@@ -129,6 +129,20 @@ namespace orphen::ported::sound
     // Runs on whichever thread the audio callback uses.
     void mix(float *interleavedStereo, std::size_t frames);
 
+    // == The voice line ==
+    //
+    // FUN_00206d98 hands the clip to FUN_00207010, which programs a *reserved*
+    // SPU2 voice and streams into it -- it never goes near FUN_002057c8's
+    // 22-voice effect pool, so a long line cannot be stolen by a footstep. The
+    // port keeps that separation: one dedicated slot, owning its own samples.
+    //
+    // Nothing here feeds back into the simulation. How long the line holds comes
+    // from `VoiceIndex`, not from how much of the buffer the mixer has consumed,
+    // so a run with no audio device keeps identical timing.
+    void FUN_00207010_play_voice_line(std::vector<std::int16_t> pcm, float sampleRate);
+    // FUN_00206a48, which drops DAT_00356788 back to zero.
+    void FUN_00206a48_stop_voice_line();
+
     // --sound-report. Cue numbers in the order they were asked for, with what
     // happened to each.
     struct CueLogEntry
@@ -172,6 +186,12 @@ namespace orphen::ported::sound
     std::vector<KeyOn> pending_;
     // 22 is the pool FUN_002057c8 polls before it starts a cue.
     std::array<Voice, 22> voices_{};
+    // The reserved streaming voice. Owns its samples, unlike the pool, whose
+    // waveforms belong to a bank that outlives them.
+    std::vector<std::int16_t> voiceLinePcm_;
+    double voiceLinePosition_ = 0.0;
+    double voiceLineStep_ = 1.0;
+    bool voiceLineActive_ = false;
     std::vector<CueLogEntry> cueLog_;
   };
 

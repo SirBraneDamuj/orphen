@@ -1,66 +1,92 @@
-// Text opcode 0x18 / 0x19 — LAB_00239a30 (shared handler)
-// Raw MIPS (abridged):
-//   a1 = *(gp-0x5140)          ; cursor
-//   a0 = 0x19                  ; constant for comparison
-//   v1 = *(int8_t*)a1          ; first byte
-//   a1 += 1; store back to gp-0x5140
-//   v0 = a1 + 1 (tentative new cursor)
-//   a2 = *(int8_t*)a1          ; second byte candidate
-//   if (v1 != 0x19) goto skip_store
-//     v1 = *(int8_t*)(a1+1)    ; read third byte
-//     v0 = a1 + 2
-//     gp-0x5140 = v0           ; advance by extra byte
-//     *(gp-0x4999) = v1        ; store control byte
-// skip_store:
-//   (falls through and returns; gp-0x5140 already advanced by 1 or 2 total)
+// Text opcodes 0x18 and 0x19 — LAB_00239a30 (shared handler)
 //
-// Behavior:
-//   Consumes at least one byte from the dialogue control stream. If that first byte equals 0x19, it treats the
-//   second byte as a control value destination and advances cursor by an additional byte while writing that
-//   value to a gp-relative byte global at gp-0x4999. If the first byte is anything else, it simply advances
-//   past the first parameter byte (cursor +1) and does not modify the gp-0x4999 global.
+// **START THE VOICE LINE.** An earlier reading of this handler called it a
+// "conditional control byte set" that consumed a byte and returned. It does
+// consume the byte — and then tail-calls the voice player with it. The last two
+// instructions were missing from that reading, and they are the whole point:
 //
-// Notes:
-//   - The opcode index (0x18 or 0x19) does not alter behavior; both entries point to the same label.
-//   - The internal sentinel constant 0x19 suggests that opcode 0x18 may sometimes carry an inline marker (0x19)
-//     indicating presence of a following value; otherwise it acts as a no-op / single-byte skip.
-//   - The destination byte at gp-0x4999 is presently unnamed; pending broader cross-reference to assign a
-//     semantic (likely a small mode flag or channel selector updated mid-stream).
+//   00239a30: 8f85aec0  lw    a1, -0x5140(gp)   ; a1 = stream cursor
+//   00239a34: 24040019  li    a0, 0x19
+//   00239a38: 80a30000  lb    v1, 0(a1)         ; v1 = the opcode byte itself
+//   00239a3c: 24a50001  addiu a1, a1, 1
+//   00239a40: af85aec0  sw    a1, -0x5140(gp)   ; cursor += 1
+//   00239a44: 24a20001  addiu v0, a1, 1
+//   00239a48: 80a60000  lb    a2, 0(a1)         ; a2 = the operand byte
+//   00239a4c: 14640005  bne   v1, a0, 00239a64  ; opcode 0x19?
+//   00239a50: af82aec0  sw    v0, -0x5140(gp)   ; delay slot: cursor += 1 again
+//   00239a54: 80a30001  lb    v1, 1(a1)
+//   00239a58: 24a20002  addiu v0, a1, 2
+//   00239a5c: af82aec0  sw    v0, -0x5140(gp)   ; 0x19 only: cursor += 1 more
+//   00239a60: a383b667  sb    v1, -0x4999(gp)
+//   00239a64: 08081b66  j     0x00206d98        ; FUN_00206d98(channel)
+//   00239a68: 00c0202d  daddu a0, a2, zero      ; delay slot: a0 = operand byte
+//
+// The store in the delay slot at 00239a50 runs whichever way the branch goes, so
+// both opcodes advance at least 2. Totals:
+//
+//   0x18 <channel>          cursor += 2
+//   0x19 <channel> <byte>   cursor += 3, and <byte> goes to gp-0x4999
+//
+// The operand is a channel index, 0..2, matching FUN_00206ae0's three cached
+// slots. FUN_00206d98 refuses the call unless DAT_00356788 is clear (nothing
+// already playing) and DAT_00356480[channel] is non-zero (a clip is cached
+// there); otherwise it programs the reserved streaming voice through
+// FUN_00207010, which sets DAT_00356788 to 1.
+//
+// == Why this is the pacing of every cutscene ==
+//
+// A dialogue record is built as:
+//
+//   13 <name> 00      speaker
+//   17                wait out the load the previous record started
+//   16 ch w id32      cache the clip for the NEXT record on the other channel
+//   18 ch             start the clip cached for THIS record
+//   <text>
+//   1a                block until DAT_00356788 falls back to zero
+//
+// so the stream double-buffers, and what a record plays was armed a record
+// earlier. Confirmed against eeMemory.bin, which was taken during s01_e012's
+// opening: DAT_00356480 reads {50, 79, 0} while record 1 is up — channel 1 holds
+// what record 1 is speaking, channel 0 what record 2 will speak.
+//
+// Walking all 83 records of scr2.out this way, every one has exactly one
+// 0x18/0x19 and exactly one 0x1A, and the channel it starts is always already
+// armed. The clip's length is therefore the record's hold, and it comes from
+// VOICE.BIN's table (FUN_00221c40) with no audio needed to read it.
 //
 // Side effects:
-//   - Advances dialogue cursor by 1 or 2 bytes.
-//   - Optionally updates one global byte (gp-0x4999).
-//   - No glyph slot creation or timing changes directly.
+//   - Advances the dialogue cursor by 2 (0x18) or 3 (0x19).
+//   - 0x19 only: stores one byte to gp-0x4999.
+//   - Tail-calls FUN_00206d98, which may start the reserved SPU2 voice.
 //
-// TODO:
-//   - Identify readers of the gp-0x4999 byte to characterize its effect.
-//   - Confirm whether sentinel 0x19 ever appears outside this opcode.
-//   - Introduce a helper for cursor manipulation once multiple opcodes share this pattern.
+// Open:
+//   - gp-0x4999's readers are still unidentified, so what distinguishes 0x19
+//     from 0x18 beyond that store is unknown. s01_e012 uses 0x19 once.
 
 #include <stdint.h>
 
-extern int GP_NEG_0x5140;           // dialogue control cursor (pending confirmed name)
-extern unsigned char GP_NEG_0x4999; // unknown control byte target (to be named)
+extern unsigned char *GP_NEG_0x5140; // dialogue control cursor
+extern unsigned char GP_NEG_0x4999;  // unknown; only 0x19 writes it
+extern long FUN_00206d98(int channel);
 
-void text_op_18_set_control_byte_conditional(void)
+void text_op_18_start_voice_line(void)
 {
-  int cursor = GP_NEG_0x5140;
-  unsigned char first = *(unsigned char *)cursor;
-  cursor += 1;
-  GP_NEG_0x5140 = cursor; // base advance
+  unsigned char *cursor = GP_NEG_0x5140;
+  const unsigned char opcode = cursor[0];
+  const unsigned char channel = cursor[1];
 
-  if (first == 0x19)
+  GP_NEG_0x5140 = cursor + 2;
+  if (opcode == 0x19)
   {
-    unsigned char value = *(unsigned char *)cursor; // second byte
-    cursor += 1;
-    GP_NEG_0x5140 = cursor; // extra advance
-    GP_NEG_0x4999 = value;  // update control byte
+    GP_NEG_0x4999 = cursor[2];
+    GP_NEG_0x5140 = cursor + 3;
   }
-  // else: only single-byte consumed
+
+  FUN_00206d98(channel);
 }
 
-// Alias wrapper for clarity if needed by dispatcher for opcode 0x19 (both map to same label originally)
-void text_op_19_set_control_byte_conditional(void)
+// 0x19 shares the label; the handler branches on the opcode byte it re-reads.
+void text_op_19_start_voice_line_with_byte(void)
 {
-  text_op_18_set_control_byte_conditional();
+  text_op_18_start_voice_line();
 }

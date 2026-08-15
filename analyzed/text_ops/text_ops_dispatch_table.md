@@ -34,13 +34,53 @@ Opcode entries (hex):
 - 15: FUN_00239848 — TODO
 - 16: LAB_00239990 — Trigger voice/audio load (parse 7-byte param block: channel, wait flag, 32-bit id -> FUN_00206ae0) (see text_op_16_trigger_voice_or_audio_playback)
 - 17: LAB_00239a00 — Wait/poll for async audio/resource load; advance cursor by 1 only when FUN_00206c28 returns 1 (see text_op_17_wait_for_audio_load_step)
-- 18: LAB_00239a30 — Conditional control byte set (consume 1 or 2 bytes; if first==0x19 store next to gp-0x4999) (see text_op_18_set_control_byte_conditional)
-- 19: LAB_00239a30 — Alias of 0x18 (same conditional control byte behavior)
+- 18: LAB_00239a30 — **Start the voice line** cached on the operand channel: cursor +2, then `j FUN_00206d98(channel)` (see text_op_18_start_voice_line)
+- 19: LAB_00239a30 — Same handler and same tail call; cursor +3, and the extra byte goes to gp-0x4999
 - 1A: LAB_00239a70 — Wait-until-clear on audio/system flag (advance cursor +1 only when FUN_00206a90 returns 0) (see text_op_1A_wait_on_audio_system_flag)
 - 1B: LAB_00239aa0 — Read 3 payload bytes; if first==0x1B set flag id formed from next two (LE 16-bit) via FUN_002663a0; always advance cursor +3 (see text_op_1B_set_flag_from_two_byte_id_if_prefixed)
 - 1C: LAB_00239aa0 — Alias of 1B (payload first byte likely sub-op selector; when 0x1C path causes no flag set)
 - 1D: FUN_00239b00 — TODO
 - 1E: LAB_00239c78 — TODO (last populated entry)
+
+## Cursor advances, read off the handlers
+
+Each handler moves the stream cursor by storing to `-0x5140(gp)`. Taking the
+largest store on a straight-line pass through each one (smaller stores are the
+partial advances on the way there), the advance *including* the opcode byte is:
+
+| advance | opcodes |
+|---|---|
+| 1 | 00, 02, 06, 07, 08, 09, 10, 12, 13 |
+| 2 | 0A, 0B, 0C, 0D, 0E, 14, **18**, 1D |
+| 3 | **19**, 1B, 1C, 1E |
+| 4 | 0F, 15 |
+| 7 | 11, **16** |
+
+0x01/03/04/05 (FUN_002391d0) and 0x09 could not be read off a single pass and
+are unresolved; in `scr2.out` they only ever appear at a record's tail, after
+the 0x1A, so nothing that keeps time depends on them.
+
+0x13's advance is 1 because it does not parse the speaker name — it emits it as
+ordinary glyphs through a recursive `FUN_00237de8` call, ended by a 0x00.
+
+## The voiced-line idiom
+
+Every one of `scr2.out`'s 83 records is built the same way, and it is what paces
+the cutscenes:
+
+```
+13 <name> 00      speaker
+17                wait out the load the previous record started
+16 ch w id32      cache the clip for the NEXT record, on the other channel
+18 ch             start the clip cached for THIS record
+<text>
+1a                block until DAT_00356788 clears, i.e. until the clip ends
+```
+
+The arm is a record ahead of the play, alternating channels 0 and 1. So a
+record's hold is the length of a clip named one record earlier, and that length
+is in VOICE.BIN's table — no audio needed to read it. See
+`text_op_18_start_voice_line.c` for the confirmation against `eeMemory.bin`.
 
 ## Conventions for Analysis
 
