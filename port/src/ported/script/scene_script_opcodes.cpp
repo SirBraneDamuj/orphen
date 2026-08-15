@@ -592,6 +592,76 @@ namespace orphen::ported::script
     }
   }
 
+  // 0x9A (FUN_00261b80): eight expressions in stream order -- track index, the
+  // three channels of the start colour, the three of the end colour, then the
+  // duration in frames. The original packs each triple as
+  // `c2 << 16 | c1 << 8 | c0` before handing it to FUN_0025d408, which splits
+  // it straight back apart; the packing is preserved here only because the
+  // channel *order* rides on it, and FUN_0025d590 indexes the bytes positionally.
+  void SceneCommandInterpreter::FUN_00261b80_arm_fade_track()
+  {
+    const std::uint32_t track = FUN_0025c258_evaluate();
+    std::uint32_t start[3]{};
+    std::uint32_t end[3]{};
+    for (std::uint32_t &channel : start)
+    {
+      channel = FUN_0025c258_evaluate() & 0xFFu;
+    }
+    for (std::uint32_t &channel : end)
+    {
+      channel = FUN_0025c258_evaluate() & 0xFFu;
+    }
+    const std::int32_t duration = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return;
+    }
+
+    // The original reports ER_PARAM above 15 and then indexes anyway.
+    environment_.state->DAT_00572078_fadeTracks.FUN_0025d408_arm(
+        track,
+        (start[2] << 16) | (start[1] << 8) | start[0],
+        (end[2] << 16) | (end[1] << 8) | end[0],
+        duration);
+
+    trace_.noteFadeTrackArmed(track, duration);
+  }
+
+  // 0xBF / 0xC0 (FUN_00263f28): r, g, b, radius. The opcode picks the
+  // allocator -- 0xC0 scans from slot 0, 0xBF from slot 3 -- and the shared
+  // body then writes the colour and the radius, but *only* if a slot was free.
+  // A full table returns -1 and drops the light silently, which is why the
+  // return value is the script's handle for every later 0xC2..0xC7.
+  std::int32_t SceneCommandInterpreter::FUN_00263f28_allocate_light()
+  {
+    // The opcode has to be captured before any operand is evaluated.
+    const std::uint16_t allocateOpcode = currentOpcode_;
+    const std::uint32_t red = FUN_0025c258_evaluate();
+    const std::uint32_t green = FUN_0025c258_evaluate();
+    const std::uint32_t blue = FUN_0025c258_evaluate();
+    const std::int32_t rawRadius = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return -1;
+    }
+
+    auto &table = environment_.state->DAT_00343888_lights;
+    const std::int32_t slot = allocateOpcode == 0xBF ? table.FUN_00266008_allocateFromThree()
+                                                     : table.FUN_00266050_allocateFromZero();
+    if (slot < 0)
+    {
+      return -1;
+    }
+
+    auto &light = table.slot(static_cast<std::uint32_t>(slot));
+    light.red = static_cast<std::uint8_t>(red);
+    light.green = static_cast<std::uint8_t>(green);
+    light.blue = static_cast<std::uint8_t>(blue);
+    light.radius = static_cast<float>(rawRadius) / kScriptCoordinateScale;
+    table.noteRadius(static_cast<std::uint32_t>(slot), light.radius);
+    return slot;
+  }
+
   // 0x36 / 0x38 (FUN_0025d768): read one word of the 128-entry work array, or
   // one byte of the flag array. The original range-checks and reports
   // ER_PARAM; the port clamps and returns zero instead of aborting the process.
@@ -1004,7 +1074,12 @@ namespace orphen::ported::script
     const std::uint32_t packedRgb = (green << 16) | (blue << 8) | red;
 
     const std::uint32_t bank = fadeOpcode == 0x85 ? 1u : 0u;
-    environment_.state->FUN_0025d1c0_arm_fade(bank, static_cast<std::uint16_t>(fadeRate), packedRgb);
+    if (environment_.DAT_00571dc0_screenFade != nullptr)
+    {
+      environment_.DAT_00571dc0_screenFade->FUN_0025d1c0_arm(bank != 0,
+                                                             static_cast<std::uint16_t>(fadeRate),
+                                                             packedRgb);
+    }
     trace_.recordFadeArmed(bank, fadeRate, packedRgb);
     return 0;
   }
@@ -1015,11 +1090,13 @@ namespace orphen::ported::script
   // stubbed it would loop forever on the panel.
   std::uint32_t SceneCommandInterpreter::FUN_00260ca0_advance_fade()
   {
-    if (halted_ || environment_.state == nullptr)
+    if (halted_ || environment_.DAT_00571dc0_screenFade == nullptr)
     {
       return 0;
     }
-    return environment_.state->FUN_0025d238_step_fade(environment_.frameTicks);
+    return environment_.DAT_00571dc0_screenFade->FUN_0025d238_step_fade_out(environment_.frameTicks)
+               ? 1u
+               : 0u;
   }
 
   // 0xBC (FUN_00263e30): increment a byte counter, capped at 99, and return
@@ -2900,7 +2977,11 @@ namespace orphen::ported::script
     // has bottomed out, which is the completion test s01_e012's handoff polls.
     case 0x88:
       noteOpcode(opcode, OpcodeSupport::Modelled);
-      return environment_.state->FUN_0025d2f8_step_fade_out(environment_.frameTicks);
+      return environment_.DAT_00571dc0_screenFade != nullptr &&
+                     environment_.DAT_00571dc0_screenFade->FUN_0025d2f8_step_fade_in(
+                         environment_.frameTicks)
+                 ? 1u
+                 : 0u;
 
     case 0x45:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -3087,12 +3168,12 @@ namespace orphen::ported::script
     // Each arity below is read out of the matching src/FUN_*.c, never guessed.
     // The scene keeps running past these and --scr-report names every one.
 
-    // 0x9A (FUN_00261b80): eight expressions -- a slot index and two RGB
-    // triples with a duration -- into FUN_0025d408, which arms one of sixteen
-    // indexed colour-ramp slots. Nothing consumes those slots in the port yet.
+    // 0x9A (FUN_00261b80): eight expressions -- a track index, two colour
+    // triples and a duration -- into FUN_0025d408.
     case 0x9A:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 8);
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_00261b80_arm_fade_track();
+      return 0;
 
     // 0xA4 / 0xA6 (FUN_00261f60): one expression, then one *inline* byte.
     //
@@ -3114,32 +3195,62 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 1, 1);
 
-    // 0x9B (FUN_00261c38): one expression into FUN_0025d480, which advances one
-    // of the indexed colour-ramp tracks 0x9C configures -- the same family as
-    // 0x9A. Not the fullscreen fade, which is 0x85/0x86/0x87 and is real.
+    // 0x9B (FUN_00261c38): one expression into FUN_0025d480. Ghidra types the
+    // handler `void`, but it ends on the call and never touches `v0`, so
+    // FUN_0025d480's "finished" reaches the script -- which branches on it.
     case 0x9B:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t track = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      return environment_.state->DAT_00572078_fadeTracks.FUN_0025d480_step(track,
+                                                                           environment_.frameTicks)
+                 ? 1u
+                 : 0u;
+    }
 
-    // 0xBF / 0xC0 (FUN_00263f28): four expressions -- r, g, b, intensity.
-    // Allocates a dynamic light slot and fills DAT_00343894. The port's
-    // renderer has fixed scene lighting and no dynamic light slots to fill.
+    // 0xBF / 0xC0 (FUN_00263f28): four expressions -- r, g, b, radius. Both go
+    // through the same body; only the allocator differs.
     case 0xBF:
     case 0xC0:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 4);
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return static_cast<std::uint32_t>(FUN_00263f28_allocate_light());
 
-    // 0x9C (FUN_00261c60): one expression, then one inline byte (a track index
-    // the original bounds-checks at 3). Configures a colour-ramp track for
-    // 0x9B to advance.
+    // 0x9C (FUN_00261c60): one expression (the track) then one inline byte (the
+    // channel, which the original diagnoses above 2). It *reads* the track's
+    // current colour -- FUN_0025d590 is a one-line load, not a configure, which
+    // the dispatch-table note calls "bind a track/mode combination". The script
+    // passes three of these straight into 0x97's or 0xC3's colour operands.
     case 0x9C:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t track = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      const std::uint8_t channel = readU8();
+      return environment_.state->DAT_00572078_fadeTracks.FUN_0025d590_channel(track, channel);
+    }
 
     // 0xC2 (FUN_00264148): two expressions -- a light slot and an alpha byte.
+    // Note the original does *not* range-check this one, unlike every other
+    // member of the family; the port clamps rather than writing past the table.
     case 0xC2:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 2);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      const std::uint32_t alpha = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->DAT_00343888_lights.slot(slot).alpha = static_cast<std::uint8_t>(alpha);
+      return 0;
+    }
 
     // The dynamic light slots, DAT_00343888..DAT_00343898, sixteen entries of
     // five words. The port's renderer takes its lighting from the scene
@@ -3152,23 +3263,105 @@ namespace orphen::ported::script
     //   0xC5 FUN_00264298  4  slot, x, y, z
     //   0xC6 FUN_00264360  2  slot, entity -- copy that entity's position
     //   0xC7 FUN_002643f0  1  slot -- intensity to zero
+    // 0xC1 stays operands-only. It is the one member of the family that is not
+    // a plain table write: it selects an entity, claims that entity's own light
+    // index at +0x195 if it has none, and runs the offset through FUN_0020dc88
+    // -- the attachment-chain matrix walk -- to place the light on a bone. The
+    // port has the bone palettes but not that walk on this path, and neither
+    // scene calls it, so modelling it would be untested code.
     case 0xC1:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 8);
 
     case 0xC3:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      const std::uint32_t red = FUN_0025c258_evaluate();
+      const std::uint32_t green = FUN_0025c258_evaluate();
+      const std::uint32_t blue = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      auto &light = environment_.state->DAT_00343888_lights.slot(slot);
+      light.red = static_cast<std::uint8_t>(red);
+      light.green = static_cast<std::uint8_t>(green);
+      light.blue = static_cast<std::uint8_t>(blue);
+      return 0;
+    }
+
     case 0xC5:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 4);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      const float x = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                      kScriptCoordinateScale;
+      const float y = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                      kScriptCoordinateScale;
+      const float z = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                      kScriptCoordinateScale;
+      if (halted_)
+      {
+        return 0;
+      }
+      auto &light = environment_.state->DAT_00343888_lights.slot(slot);
+      light.x = x;
+      light.y = y;
+      light.z = z;
+      return 0;
+    }
 
     case 0xC4:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      const float radius = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                           kScriptCoordinateScale;
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->DAT_00343888_lights.slot(slot).radius = radius;
+      environment_.state->DAT_00343888_lights.noteRadius(slot, radius);
+      return 0;
+    }
+
+    // 0xC6 (FUN_00264360): slot, then an entity selector. The original latches
+    // DAT_00355044 into a local *before* evaluating the operands and re-reads
+    // it after FUN_0025d6c0 -- the first read is only the fallback handed to the
+    // selector for the 0x100 "keep the current one" case, and the position
+    // copied is the newly selected entity's.
     case 0xC6:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 2);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (const orphen::ported::entity::OriginalEntity *source = resolveEntity(selector))
+      {
+        auto &light = environment_.state->DAT_00343888_lights.slot(slot);
+        light.x = source->positionX20;
+        light.y = source->positionZ24;
+        light.z = source->positionY28;
+      }
+      return 0;
+    }
 
     case 0xC7:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->DAT_00343888_lights.slot(slot).radius = 0.0f;
+      return 0;
+    }
 
     // Single-value stores into globals the port has no consumer for.
     //

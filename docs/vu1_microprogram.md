@@ -330,11 +330,41 @@ and everything beyond them is summed flat into the additive term. One mechanism,
 split by budget.
 
 `FUN_0020b430:44-68` is where the light list is manufactured for VU0 -- note
-lines 48-56 building exactly the `(r, r², 1/r²)` triple the loop reads. The
-precise packing into VU0 memory (it writes three parallel runs at quadword
-offsets 1, 0x11 and 0x21, which does not obviously match the stride-3 read) is
-the one thing here still to pin down, and it is the first thing to check if the
-dynamic lights are ever ported.
+lines 48-56 building exactly the `(r, r², 1/r²)` triple the loop reads.
+
+**The packing, resolved.** The three parallel runs at scratchpad quadword
+offsets 1, `0x11` and `0x21` are *staging*, not the layout VU0 reads. The
+`VSQI` loop at lines 83-92 walks them together -- `pauVar2[1]`, `pauVar2[0x11]`,
+`pauVar2[0x21]`, incrementing by one quadword per light -- and stores all three
+consecutively, which interleaves them into the stride-3 form. `_viaddi(vi00, 2)`
+sets the destination, so VU0 memory holds the count at quadword 2 and the list
+from quadword 3, matching `ILW.x vi13, 2(vi00)` / `IADDIU vi12, vi00, 0x3` at
+both entry points.
+
+Confirmed against `vu0Memory.bin` from a save state taken during s01_e012's
+Dortin scene, where the script has exactly one light live:
+
+```
+qw2  count = 1
+qw3  ( 5.498, -2.684, -0.468)     position
+qw4  ( 2, 4, 0.25)                (r, r², 1/r²)
+qw5  ( 0.502, 0.502, 0.502)       colour / 255
+```
+
+and the script's own table at `DAT_00343888` slot 3 reads position
+`(5.498, -2.684, -0.468)`, colour `(128,128,128)`, radius `2.0`. Producer,
+staging, VU0 memory and the script-level source all agree.
+
+**Which slots go where.** `FUN_0020eec0:66-93` walks table slots 0, 1 and 2 only
+-- `iVar17` counts 2 down to -1 and `pfVar7` steps by five floats -- so VU1's
+directional lights 1..3 are table slots 0..2, *not* the three nearest. Slots 3
+and up are summed flat into the tint by `_vcallms(0x220)`, which is told how many
+to skip by `_ctc2` of `(DAT_00343898 != 0) + (DAT_003438ac != 0) + (DAT_003438c0
+!= 0)` -- the live count among those same three. That is what the two script
+allocators are for: opcode `0xC0` allocates from slot 0 and can become a real
+directional light on a character, `0xBF` allocates from slot 3 and can only ever
+tint one. Map draws are unaffected by the split; `_vcallms(0xe0)` reads the whole
+list.
 
 ## `0x200`, the specular pass
 

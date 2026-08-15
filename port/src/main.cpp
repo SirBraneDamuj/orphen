@@ -181,6 +181,11 @@ namespace
         config.applyLightFloor = true;
         continue;
       }
+      if (argument == "--lighting-no-points")
+      {
+        config.suppressPointLights = true;
+        continue;
+      }
       if (argument == "--lighting-unlit")
       {
         config.applyUnlitFlag = true;

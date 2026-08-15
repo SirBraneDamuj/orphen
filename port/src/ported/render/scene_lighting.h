@@ -107,6 +107,7 @@
 #include "ported/psm2/psm2_runtime.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace orphen::ported::render
@@ -208,9 +209,172 @@ namespace orphen::ported::render
       return static_cast<float>(static_cast<std::uint8_t>(~sourceByte)) / 320.0f;
     }
 
+    // ---- The dynamic point lights -----------------------------------------
+    //
+    // `DAT_00343888`, sixteen slots, script opcodes 0xBF..0xC7. `FUN_0020b430`
+    // compacts the *live* ones -- radius non-zero -- into a VU0 list at
+    // quadword 3 with the count at quadword 2, each entry three quadwords:
+    // `{position, (r, r², 1/r²), colour/255}`. Read straight out of
+    // `vu0Memory.bin`, which for the Dortin save state holds count 1 and
+    // `(5.498, -2.684, -0.468) / (2, 4, 0.25) / (0.502, 0.502, 0.502)` --
+    // exactly the one live table slot. That also settles the packing question
+    // the doc had open: `FUN_0020b430` builds three *parallel* arrays in the
+    // scratchpad and the `VSQI` loop at its tail interleaves them.
+    //
+    // The list is consumed two different ways, and the split is what the two
+    // allocators are for. Table slots 0..2 become VU1's directional lights 1..3
+    // on entity draws (`FUN_0020eec0`, VU0 program 0x33); everything from slot 3
+    // up is summed flat into a per-entity tint (VU0 program 0x220). Map draws
+    // run the whole list per vertex (VU0 program 0x1c falling into the loop at
+    // 0x52). So opcode 0xC0, which allocates from slot 0, is the one that can
+    // become a real directional light on characters, and 0xBF, which allocates
+    // from slot 3, only ever tints them -- the reverse of what the dispatch
+    // table's `light_alloc_directional` / `light_alloc_point` names suggest.
+    struct PointLight
+    {
+      orphen::ported::psm2::Vec3 position{};
+      float radius = 0.0f;
+      float radiusSquared = 0.0f;
+      float inverseRadiusSquared = 0.0f;
+      float colour[3]{}; // byte / 255, the units FUN_0020b430 stores
+      int tableSlot = -1;
+    };
+    static constexpr int kPointLightCapacity = 16;
+    // Slots 0..2 of the table, the ones that reach VU1 as directional lights.
+    static constexpr int kDirectionalTableSlots = 3;
+
+    PointLight pointLights[kPointLightCapacity]{};
+    int pointLightCount = 0;
+    // How many of the compacted entries came from table slots 0..2. The list is
+    // built in table order, so these are always the prefix -- which is exactly
+    // what `_ctc2(uVar12)` tells VU0 program 0x220 to skip.
+    int directionalPointLights = 0;
+
+    // What a draw contributes on top of the scene block. Lights 1..3 are
+    // per-entity and `additive` is per-vertex on the map path and per-entity on
+    // the model path, so both live here and the caller decides how often to
+    // rebuild it.
+    struct DynamicContribution
+    {
+      float lightColour[3][3]{};
+      orphen::ported::psm2::Vec3 lightDirection[3]{};
+      float additive[3]{}; // 0..255, the byte triple VU1 divides by 128
+      bool active = false;
+    };
+
+    // VU0 0x52..0x79, the per-point loop, for one point and the list from
+    // `firstLight` on. Returns the byte triple VU1's second additive term reads.
+    //
+    //   reject unless |light - point| < r on every axis   (two SUBx, FMAND 0xE0)
+    //   reject unless |d|² < r²                           (SUBy.w, FMAND 0x10)
+    //   accumulate colour * clamp(1 - |d|²/r², 0, 1)
+    //   min the sum to 2.0, multiply by 127.5, truncate
+    //
+    // Both rejections are strict: a sign flag is set only for a negative
+    // result, so a point exactly on the boundary is rejected.
+    void FUN_0020b430_pointLightBytes(const orphen::ported::psm2::Vec3 &point, int firstLight,
+                                      float out[3]) const
+    {
+      float sum[3] = {0.0f, 0.0f, 0.0f};
+      for (int index = firstLight; index < pointLightCount; ++index)
+      {
+        const PointLight &light = pointLights[index];
+        const float deltaX = light.position.x - point.x;
+        const float deltaY = light.position.y - point.y;
+        const float deltaZ = light.position.z - point.z;
+        if (!(deltaX < light.radius) || !(-deltaX < light.radius) ||
+            !(deltaY < light.radius) || !(-deltaY < light.radius) ||
+            !(deltaZ < light.radius) || !(-deltaZ < light.radius))
+        {
+          continue;
+        }
+        const float distanceSquared = deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ;
+        if (!(distanceSquared < light.radiusSquared))
+        {
+          continue;
+        }
+        const float attenuation =
+            std::max(std::min(1.0f - distanceSquared * light.inverseRadiusSquared, 1.0f), 0.0f);
+        sum[0] += light.colour[0] * attenuation;
+        sum[1] += light.colour[1] * attenuation;
+        sum[2] += light.colour[2] * attenuation;
+      }
+
+      for (int channel = 0; channel < 3; ++channel)
+      {
+        // MINIi 2.0, MULi 127.5, FTOI0 -- truncation, not rounding.
+        out[channel] = std::trunc(std::min(sum[channel], 2.0f) * 127.5f);
+      }
+    }
+
+    // VU0 0x33 (`_vcallms(0x198)`), one light against one point. Note it has
+    // *no* rejection tests at all -- the clamp on `1 - |d|²/r²` is what turns a
+    // light the entity is standing outside of into black.
+    void FUN_0020eec0_resolveEntityLight(const PointLight &light,
+                                         const orphen::ported::psm2::Vec3 &point,
+                                         orphen::ported::psm2::Vec3 &direction,
+                                         float colourOut[3]) const
+    {
+      const float deltaX = light.position.x - point.x;
+      const float deltaY = light.position.y - point.y;
+      const float deltaZ = light.position.z - point.z;
+      const float distanceSquared = deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ;
+
+      const float attenuation =
+          std::max(std::min(1.0f - distanceSquared * light.inverseRadiusSquared, 1.0f), 0.0f);
+      for (int channel = 0; channel < 3; ++channel)
+      {
+        // MULi by the LOI 255 then FTOI0, so this lands back in the 0..255 byte
+        // units lightColour works in.
+        colourOut[channel] = std::trunc(light.colour[channel] * attenuation * 255.0f);
+      }
+
+      // RSQRT against vf00.w gives 1/|d|. The VU raises a divide flag on a zero
+      // denominator and carries on; the port leaves the direction at zero,
+      // which the half-Lambert reads as an intensity of exactly 0.5.
+      if (distanceSquared > 0.0f)
+      {
+        const float inverseLength = 1.0f / std::sqrt(distanceSquared);
+        direction = {deltaX * inverseLength, deltaY * inverseLength, deltaZ * inverseLength};
+      }
+      else
+      {
+        direction = {};
+      }
+    }
+
+    // Fills lights 1..3 and the flat tint for one entity, from its own position.
+    // FUN_0020eec0 walks table slots 0, 1 and 2 in order and zeroes the entry
+    // for a slot that is not live, so VU1 light k+1 is always table slot k.
+    void buildEntityContribution(const orphen::ported::psm2::Vec3 &entityPosition,
+                                 DynamicContribution &out) const
+    {
+      out = DynamicContribution{};
+      if (pointLightCount == 0)
+      {
+        return;
+      }
+      out.active = true;
+
+      for (int index = 0; index < directionalPointLights; ++index)
+      {
+        const PointLight &light = pointLights[index];
+        if (light.tableSlot < 0 || light.tableSlot >= kDirectionalTableSlots)
+        {
+          continue;
+        }
+        FUN_0020eec0_resolveEntityLight(light, entityPosition,
+                                        out.lightDirection[light.tableSlot],
+                                        out.lightColour[light.tableSlot]);
+      }
+
+      // FUN_0020eec0:44-64. Everything past the directional budget, flat.
+      FUN_0020b430_pointLightBytes(entityPosition, directionalPointLights, out.additive);
+    }
+
     // The factor the port's draw paths must multiply their `colour / 128` by.
     void modulator(const orphen::ported::psm2::Vec3 &normal, float intensityFloor,
-                   float out[3]) const
+                   float out[3], const DynamicContribution *dynamic = nullptr) const
     {
       out[0] = out[1] = out[2] = 1.0f;
       if (!active)
@@ -221,20 +385,33 @@ namespace orphen::ported::render
       float accumulated[3] = {ambient[0], ambient[1], ambient[2]};
       for (int light = 0; light < kLightCount; ++light)
       {
-        const orphen::ported::psm2::Vec3 &direction = lightDirection[light];
+        const orphen::ported::psm2::Vec3 &direction =
+            (light > 0 && dynamic != nullptr && dynamic->active) ? dynamic->lightDirection[light - 1]
+                                                                 : lightDirection[light];
+        const float *colour = (light > 0 && dynamic != nullptr && dynamic->active)
+                                  ? dynamic->lightColour[light - 1]
+                                  : lightColour[light];
         const float dot = normal.x * direction.x + normal.y * direction.y +
                           normal.z * direction.z;
         // ADDw then MULy vf01y: (N.L + 1) * 0.5, then the MAXz floor.
         const float intensity = std::max((dot + 1.0f) * 0.5f, intensityFloor);
         for (int channel = 0; channel < 3; ++channel)
         {
-          accumulated[channel] += lightColour[light][channel] * intensity;
+          accumulated[channel] += colour[channel] * intensity;
         }
       }
 
       for (int channel = 0; channel < 3; ++channel)
       {
+        // VU1 0x1da..0x1e0: `out += extra * colour / 128`, where the main term
+        // is `colour/256 * accumulated`. Factoring the shared `colour` out --
+        // which is what the port's draw paths have already done by dividing
+        // their vertex colour by 128 -- leaves `accumulated/256 + extra/128`.
         out[channel] = accumulated[channel] / 256.0f;
+        if (dynamic != nullptr && dynamic->active)
+        {
+          out[channel] += dynamic->additive[channel] / 128.0f;
+        }
       }
     }
 

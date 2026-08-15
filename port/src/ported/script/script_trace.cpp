@@ -116,6 +116,13 @@ namespace orphen::ported::script
     fadesArmed_.push_back({bank, rate, packedRgb, 1});
   }
 
+  void ScriptTrace::noteFadeTrackArmed(std::uint32_t track, std::int32_t durationFrames)
+  {
+    auto &entry = fadeTracksArmed_[track];
+    ++entry.arms;
+    entry.lastDurationFrames = durationFrames;
+  }
+
   void ScriptTrace::recordPlayerLock(std::int8_t mode)
   {
     ++playerLocks_[static_cast<std::int32_t>(mode)];

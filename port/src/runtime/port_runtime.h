@@ -91,6 +91,11 @@ namespace orphen::port
     // pass without drawing it.
     bool applyLightFloor = false;
     bool applyUnlitFlag = false;
+    // The dynamic point lights default ON, unlike the two above: the VU0 list
+    // they are built from was read back out of a save state and matched the
+    // script's table exactly, so this is a confirmed path rather than a derived
+    // one. --lighting-no-points is here to A/B it against the previous look.
+    bool suppressPointLights = false;
     bool printGleamReport = false;
     // --frame-stats: accumulate a per-phase render breakdown and print it
     // every kFrameStatsWindow frames. Windowed runs only -- headless never
@@ -238,6 +243,7 @@ namespace orphen::port
     std::uint32_t DAT_003555b8_tickCounter_ = 0;
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
+    bool suppressPointLights_ = false;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;
     // Rising-edge state for the live trigger log, so stepping on a panel says

@@ -303,7 +303,7 @@ success, poll = idle, so an unvoiced run behaves like a voiced one that has
 already finished. (`FUN_002445c8`'s own no-audio path returns `-1`, which is
 neither.)
 
-**Thirteen bugs came out of getting there**, all silent, and the first two would
+**Sixteen bugs came out of getting there**, all silent, and the first two would
 have blocked every story scene in the game:
 
 - **Opcodes `0x3D`..`0x40` are the event-flag query / set / clear / toggle**,
@@ -431,6 +431,41 @@ setter, which was the last unmodelled register write in either scene.
   cutscene rather than being a property of the lead. The chest cutscene raises it
   in state `0x0D` and clears it in `0x13`, one state before `0x14` polls the
   grounded flag -- the original's own ordering, and it survives the gate intact.
+
+Three more, all of which meant something correct was computed and then thrown
+away before it could reach a pixel:
+
+- **`0x9C` is a getter, not a configurator.** `FUN_0025d590` is a one-line load
+  of one byte of an interpolated colour; the dispatch-table note calls it "bind a
+  track/mode combination" and the port consumed it as operands-only, returning
+  zero. The three opcodes are a set: `0x9A` (`FUN_0025d408`) arms one of sixteen
+  colour ramps at `DAT_00572078` with a start colour, an end colour and a
+  duration; `0x9B` (`FUN_0025d480`) steps one and **returns whether it finished**
+  -- Ghidra types both wrapper handlers `void`, but each ends on the call and
+  never touches `v0`, so the value propagates and the script branches on it;
+  `0x9C` reads a channel back. `s01_e012` runs two of them permanently, each
+  re-armed in the opposite direction the frame it reports finished. One drives
+  the scene's directional light through `0x97` and one drives a light slot
+  through `0xC3`. That ping-pong is the slow brightening and darkening over the
+  whole opening, and with `0x9C` returning zero the directional light was
+  **black from frame two onward**.
+- **The scene environment was published only at scene load.** `FUN_00200e38`
+  rebuilds VU1's lighting VIF packets every frame from the script globals, so a
+  script that rewrites them per tick is rewriting what the next frame is lit by.
+  `applySceneEnvironment()` ran from the load path only, which discarded all
+  **13,002** of `s01_e012`'s per-frame `0x97` writes. Fixing `0x9C` alone changed
+  nothing on screen; the two together take the mean frame brightness from flat to
+  a 17.9 - 26.8 swing.
+- **`DAT_00571DC0` was modelled twice and the script's copy was never drawn.**
+  `SceneScriptState` carried its own pair of fade banks with its own arm and step
+  methods, and `PortRuntime` owned the `ScreenFade` the renderer actually reads.
+  The chest cutscene drove the one that renders; opcodes `0x85`/`0x86`/`0x87`/
+  `0x88` drove the one that does not. Every fade a *script* asked for stepped
+  correctly and was invisible -- ten of them in `s01_e012`, including the opening
+  fade-in and every shot transition. In the original these are literally the same
+  two banks of BSS, so the port has to share one object too. The opening now
+  starts near black and reaches full over ~128 frames, which is what rate 2 over
+  `0x1FE0` predicts.
 
 The chain runs to its end: **208 event records, 42 dialogue lines**, flag
 `0x515` set at frame 10426 and the player lock released beside it.
@@ -810,6 +845,85 @@ overhead. The port models neither `+0x0A` nor the material table, and an actor
 whose behavior moved it is the nearest test it has. A script-placed cutscene
 actor never qualifies, so its authored height survives, which is the point:
 `s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
+
+## The dynamic point lights
+
+The sixteen-slot table at `DAT_00343888` and the falloff that consumes it are
+both ported. Opcodes `0xBF`/`0xC0` allocate, `0xC2` alpha, `0xC3` colour, `0xC4`
+radius, `0xC5`/`0xC6` position, `0xC7` release. The *radius* field is
+simultaneously the light's extent and the allocator's free-list marker, which is
+why a memory dump shows plausible positions and colours in slots nothing is
+using.
+
+`FUN_0020b430` compacts the live slots into a VU0 list — count at quadword 2,
+then `{position, (r, r², 1/r²), colour/255}` per light — and two different
+consumers read it:
+
+- **Map draws** run the whole list per vertex (`_vcallms(0xe0)` falling into the
+  loop at VU0 `0x52`). The result reaches VU1 only through the second additive
+  term at `0x1da..0x1e0`, `extra * colour / 128`.
+- **Entity draws** resolve table slots **0..2** — not the three nearest — into
+  VU1's directional lights 1..3 (`FUN_0020eec0`, VU0 program `0x33`), and sum
+  everything from slot 3 up into a flat per-entity tint (`_vcallms(0x220)`).
+
+That split is what the two allocators are for, and it makes the dispatch table's
+names backwards: `0xC0` allocates from slot 0 and is the one that can become a
+real directional light on a character; `0xBF` allocates from slot 3 and can only
+ever tint one. Both still light the map per vertex.
+
+The loop itself, off VU0 `0x52..0x79`:
+
+```
+reject unless |light - point| < r on every axis   (two SUBx, FMAND 0xE0)
+reject unless |d|² < r²                           (SUBy.w, FMAND 0x10)
+accumulate colour * clamp(1 - |d|²/r², 0, 1)
+min the sum to 2.0, multiply by 127.5, truncate
+```
+
+Both rejections are strict — a sign flag is set only for a negative result.
+Program `0x33`, the per-entity one, has *no* rejection tests at all; the clamp is
+what turns a light the entity stands outside of into black.
+
+**Confirmed end to end against a save state**, not fitted. `vu0Memory.bin` taken
+during the Dortin scene holds count 1 and
+`(5.498, -2.684, -0.468) / (2, 4, 0.25) / (0.502, 0.502, 0.502)`, and the
+script's own table slot 3 reads position `(5.498, -2.684, -0.468)`, colour
+`(128,128,128)`, radius `2.0`. The port's `--scr-report` prints the same slot
+independently. That also resolved the packing question `docs/vu1_microprogram.md`
+had left open: the three parallel scratchpad runs are staging, and the `VSQI`
+loop at the tail of `FUN_0020b430` interleaves them into the stride-3 form.
+
+In `s01_e012` slot 3 is live from frame 1409 to 5440 — it is the lantern over the
+shop counter, and the counter, shelving and back wall visibly pick it up. Slot 0
+carries the second colour ramp in four ~60-frame bursts plus a window from 9477
+to 10426.
+
+Cost, measured with `--render-bench 6 --screenshot :2200` so both runs step the
+scene identically block for block:
+
+| | map | entities |
+|---|---|---|
+| no light live | 0.309 → 0.312 ms | 2.562 → 2.575 ms |
+| one light live | 0.687 → **0.762** ms | 3.111 → **3.202** ms |
+
+So ~0.17 ms/frame while a light is live, out of ~5 ms, and nothing measurable
+otherwise — the per-vertex path early-outs on the light count. `s01_e024` and
+`s01_e012` before frame 1409 render **byte-identically** with and without it.
+`--lighting-no-points` turns it off for A/B. Unlike `--lighting-floor` and
+`--lighting-unlit` this defaults **on**, because the VU0 list was read back out
+of a save state and matched the script's table exactly rather than being derived
+from the microprogram alone.
+
+`0xC1` stays operands-only. It is the one member of the family that is not a
+plain table write — it claims the entity's own light index at `+0x195` and runs
+the offset through `FUN_0020dc88`, the attachment-chain matrix walk, to place
+the light on a bone. Neither scene calls it.
+
+One assumption is left in this path: `FUN_0020eec0` reads the entity position it
+resolves against from the per-draw context at `+0xA0`, and the port uses the
+entity root instead. Nothing in either dump pins `+0xA0` down independently —
+the scratchpad region is rebuilt per draw and the save state caught it holding
+another draw's data.
 
 `--arm-stream <hex>[:<frame>]` arms scheduler channel 0 with a stream at the
 given frame, exactly as opcode `0xA1` does. Most of a scene's cutscenes are not

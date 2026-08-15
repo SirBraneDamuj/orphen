@@ -130,6 +130,20 @@ namespace orphen::ported::script
     void recordFadeArmed(std::uint32_t bank, std::uint32_t rate, std::uint32_t packedRgb);
     const std::vector<FadeArmed> &fadesArmed() const { return fadesArmed_; }
 
+    // Opcode 0x9A arming one of the sixteen colour ramps. Counted per track
+    // rather than listed: the ping-pong ones re-arm for the whole scene, so a
+    // list would be thousands of entries saying the same thing. What matters is
+    // *which* tracks a scene uses, how often each turns around, and the last
+    // duration -- a track that never re-arms is one whose 0x9B never reported
+    // finished, which is the failure this subsystem has.
+    struct FadeTrackArmed
+    {
+      std::uint32_t arms = 0;
+      std::int32_t lastDurationFrames = 0;
+    };
+    void noteFadeTrackArmed(std::uint32_t track, std::int32_t durationFrames);
+    const std::map<std::uint32_t, FadeTrackArmed> &fadeTracksArmed() const { return fadeTracksArmed_; }
+
     // FUN_0025ce30 paying out one record. Recorded rather than counted because
     // the order and the timing *are* the cutscene: a stream that fires its
     // records in the wrong order, or all on one frame, is the failure mode this
@@ -247,6 +261,7 @@ namespace orphen::ported::script
     std::uint32_t traceRangeLow_ = 0;
     std::uint32_t traceRangeHigh_ = 0;
     std::vector<FadeArmed> fadesArmed_;
+    std::map<std::uint32_t, FadeTrackArmed> fadeTracksArmed_;
     std::map<std::int32_t, std::uint32_t> playerLocks_;
     std::uint32_t battleBootCount_ = 0;
     std::uint32_t tickRunCount_ = 0;

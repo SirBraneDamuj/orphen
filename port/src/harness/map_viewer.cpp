@@ -743,6 +743,23 @@ namespace orphen::harness
         return;
       }
 
+      // FUN_0020eec0:67-94, once per model rather than per vertex: the entity's
+      // own position resolves table slots 0..2 into VU1's directional lights
+      // 1..3, and everything past them is summed flat into the additive tint at
+      // ctx+0x1BC. The original reads that position from the per-draw context at
+      // +0xA0; the port uses the entity root, which is what the context is built
+      // from. Nothing in the two dumps pins +0xA0 down independently, so that is
+      // the one assumption in this path.
+      orphen::ported::render::SceneLighting::DynamicContribution entityLights;
+      const orphen::ported::render::SceneLighting::DynamicContribution *entityLightsPointer =
+          nullptr;
+      if (g_sceneLighting != nullptr && g_sceneLighting->pointLightCount != 0)
+      {
+        g_sceneLighting->buildEntityContribution(
+            {object.position.x, object.position.y, object.position.z}, entityLights);
+        entityLightsPointer = &entityLights;
+      }
+
       // FUN_0020c810:140. A zero +0x134 is "not fading" and becomes 0x80.
       g_entityFadeAlpha = object.fadeLevel == 0
                               ? 1.0f
@@ -1001,7 +1018,7 @@ namespace orphen::harness
                       ? orphen::ported::render::SceneLighting::floorFromSourceByte(
                             primitive.alphaByte)
                       : 0.0f,
-                  light);
+                  light, entityLightsPointer);
             }
           }
 
@@ -1454,6 +1471,22 @@ namespace orphen::harness
                          (record80.primitiveFlags & kRecord80UnlitBit) != 0;
       if (g_sceneLighting != nullptr && g_sceneLighting->active && !unlit)
       {
+        // The map path runs the *whole* dynamic light list per vertex -- VU0
+        // program 0x1c reads the count at quadword 2 and the list at 3, then
+        // falls into the loop at 0x52. Unlike the model path there are no
+        // directional slots here; the point lights arrive only through VU1's
+        // second additive term.
+        orphen::ported::render::SceneLighting::DynamicContribution dynamic;
+        const orphen::ported::render::SceneLighting::DynamicContribution *dynamicPointer = nullptr;
+        if (g_sceneLighting->pointLightCount != 0)
+        {
+          const auto &world =
+              map.DAT_0035569c_sectionCRecords[triangle.vertexIndices[triangleCornerIndex]].position;
+          g_sceneLighting->FUN_0020b430_pointLightBytes(world, 0, dynamic.additive);
+          dynamic.active = true;
+          dynamicPointer = &dynamic;
+        }
+
         float light[3];
         g_sceneLighting->modulator(
             record80.normal,
@@ -1461,7 +1494,7 @@ namespace orphen::harness
                 ? orphen::ported::render::SceneLighting::floorFromSourceByte(
                       record80.staticAlpha)
                 : 0.0f,
-            light);
+            light, dynamicPointer);
         red *= light[0];
         green *= light[1];
         blue *= light[2];

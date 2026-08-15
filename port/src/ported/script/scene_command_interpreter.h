@@ -4,6 +4,9 @@
 #include "ported/entity/entity_pool.h"
 #include "ported/original_frame_timing.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_fade_track.h"
+#include "ported/render/original_light_table.h"
+#include "ported/render/original_screen_fade.h"
 #include "ported/script/script_trace.h"
 
 #include <cstdint>
@@ -68,6 +71,15 @@ namespace orphen::ported::script
     std::uint32_t uGpffffb6fc_globalRgb = 0;
     std::uint32_t uGpffffb700_vectorRgb = 0;
     float DAT_003439c8_vector[3]{};
+
+    // DAT_00572078: the sixteen colour-ramp tracks opcodes 0x9A/0x9B/0x9C drive.
+    // A global in the original, but nothing outside the script reads it and a
+    // scene load has to start clean, so it lives with the rest of the script's
+    // state.
+    orphen::ported::render::FadeTrackTable DAT_00572078_fadeTracks;
+
+    // DAT_00343888: the sixteen dynamic light slots, opcodes 0xBF..0xC7.
+    orphen::ported::render::LightTable DAT_00343888_lights;
 
     // Per-object register banks, read and written by opcodes 0x76..0x7C through
     // FUN_0025c548 / FUN_0025c8f8. 0x101 banks of 0x41 words: one per pool slot
@@ -221,88 +233,12 @@ namespace orphen::ported::script
     // asked for one.
     std::uint32_t DAT_00354d2c_battleState = 0;
 
-    // The fullscreen fade, DAT_00571dc0 (buffer 0) and DAT_00571dd0 (buffer 1).
-    // FUN_0025d1c0 arms one and FUN_0025d238 steps it; opcodes 0x85/0x87 and
-    // 0x86 are the script's handles on them, and the chest-opening player state
-    // 0xC drives the same pair. Both banks have the same shape:
-    //
-    //   +0x0  level, 0..0x1FE0
-    //   +0x2  rate per tick   <- FUN_0025d1c0's second argument
-    //   +0x4  packed colour   <- its third
-    //   +0x8  "finished" flag, the value FUN_0025d238 returns
-    //   +0xA  hold time after the level tops out, seeded to 0xA0
-    //
-    // Buffer 0 arms at 0x1FE0 (already full) and buffer 1 at 0 (fades up).
-    struct FullscreenFade
-    {
-      std::uint16_t level = 0;
-      std::uint16_t rate = 0;
-      std::uint32_t colour = 0;
-      std::uint16_t finished = 0;
-      std::int16_t hold = 0;
-    };
-    static constexpr std::size_t kFadeBankCount = 2;
-    FullscreenFade DAT_00571dc0_fades[kFadeBankCount]{};
-
-    // FUN_0025d1c0. The GS submit it ends with (FUN_0025d0e0) has no port.
-    void FUN_0025d1c0_arm_fade(std::uint32_t bank, std::uint16_t rate, std::uint32_t colour)
-    {
-      FullscreenFade &fade = DAT_00571dc0_fades[bank == 0 ? 0 : 1];
-      fade.level = bank == 0 ? 0x1FE0 : 0;
-      fade.hold = 0xA0;
-      fade.rate = rate;
-      fade.colour = colour;
-      fade.finished = 0;
-    }
-
-    // FUN_0025d238: step buffer 1 and report whether it has finished holding.
-    // Returns the flag the original returns, so a caller can wait on it.
-    std::uint16_t FUN_0025d238_step_fade(std::uint32_t frameTicks)
-    {
-      FullscreenFade &fade = DAT_00571dc0_fades[1];
-      fade.finished = 0;
-      if (static_cast<std::int16_t>(fade.level) < 0x1FE0)
-      {
-        const std::int32_t stepped =
-            static_cast<std::int32_t>(fade.level) + static_cast<std::int32_t>(fade.rate) * static_cast<std::int32_t>(frameTicks);
-        fade.level = static_cast<std::uint16_t>(stepped);
-        if (static_cast<std::int16_t>(fade.level) > 0x1FE0)
-        {
-          fade.level = 0x1FE0;
-        }
-      }
-      else if (fade.hold < 1)
-      {
-        fade.finished = 1;
-      }
-      else
-      {
-        fade.hold = static_cast<std::int16_t>(fade.hold - static_cast<std::int16_t>(frameTicks));
-      }
-      return fade.finished;
-    }
-
-    // FUN_0025d2f8: step buffer 0, which runs the other way -- it is armed full
-    // and ramps *down* to zero, so it uncovers the screen. Returns 1 on the
-    // frame it reaches the bottom, which is the value opcode 0x88 hands back and
-    // scripts poll.
-    std::uint16_t FUN_0025d2f8_step_fade_out(std::uint32_t frameTicks)
-    {
-      FullscreenFade &fade = DAT_00571dc0_fades[0];
-      const std::int32_t stepped =
-          static_cast<std::int32_t>(fade.level) -
-          static_cast<std::int32_t>(fade.rate) * static_cast<std::int32_t>(frameTicks);
-      // The original tests the low 16 bits as a signed value, so the "still
-      // running" condition is that the subtraction did not go negative.
-      const bool stillRunning = static_cast<std::int16_t>(static_cast<std::uint16_t>(stepped)) >= 0;
-      fade.level = static_cast<std::uint16_t>(stepped);
-      if (!stillRunning)
-      {
-        fade.level = 0;
-      }
-      fade.finished = stillRunning ? 0u : 1u;
-      return fade.finished;
-    }
+    // The fullscreen fade used to be modelled a second time right here, as a
+    // pair of banks with their own arm/step methods. It stepped correctly and
+    // was never drawn: PortRuntime owns the `ScreenFade` the renderer reads, and
+    // that one only ever saw the chest cutscene. Two copies of DAT_00571DC0
+    // meant every fade a *script* asked for was invisible. There is now one
+    // object, reached through ScriptEnvironment::DAT_00571dc0_screenFade.
 
     // FUN_002663d8: clear one bit of the flag bank. (This carried FUN_002663a0's
     // name, which is the *setter* below -- 0x2663a0 ORs the bit in and 0x2663d8
@@ -374,6 +310,13 @@ namespace orphen::ported::script
     orphen::ported::entity::EntityPool *entityPool = nullptr;
     const orphen::ported::entity::EntityDescriptorTable *descriptors = nullptr;
     SceneScriptState *state = nullptr;
+
+    // DAT_00571DC0/DAT_00571DD0, the one fullscreen fade. Opcodes 0x85/0x87 arm
+    // it and 0x86/0x88 step it, and the chest cutscene's player states drive the
+    // same object -- in the original they are literally the same two banks of
+    // BSS, so the port has to share one too or a script fade and a cutscene fade
+    // fight over a screen only one of them is drawn on.
+    orphen::ported::render::ScreenFade *DAT_00571dc0_screenFade = nullptr;
 
     // The loaded map. Opcode 0x51 spawns from its object placement table, which
     // is where scene objects actually stand.
@@ -548,6 +491,8 @@ namespace orphen::ported::script
     void FUN_0025e7c0_process_placements();  // 0x4F
     void FUN_002618c0_set_global_rgb();      // 0x96
     void FUN_00261910_set_vector_with_rgb(); // 0x97
+    void FUN_00261b80_arm_fade_track();      // 0x9A
+    std::int32_t FUN_00263f28_allocate_light(); // 0xBF / 0xC0
     std::uint32_t FUN_0025d768_read_work_or_flag(); // 0x36, 0x38
     std::uint32_t FUN_0025d818_write_work_or_flag(); // 0x37, 0x39
     std::uint32_t FUN_0025e560_event_flag();          // 0x3D..0x40

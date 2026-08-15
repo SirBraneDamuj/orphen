@@ -72,6 +72,10 @@ target_sources(orphen_port
         src/ported/text/original_dialogue_text.h
         src/ported/render/original_screen_fade.cpp
         src/ported/render/original_screen_fade.h
+        src/ported/render/original_fade_track.cpp
+        src/ported/render/original_fade_track.h
+        src/ported/render/original_light_table.cpp
+        src/ported/render/original_light_table.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp

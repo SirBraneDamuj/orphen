@@ -138,6 +138,7 @@ namespace orphen::port
     printGleamReport_ = config.printGleamReport;
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
+    suppressPointLights_ = config.suppressPointLights;
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
@@ -352,6 +353,7 @@ namespace orphen::port
     environment.entityPool = &entityPool_;
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
+    environment.DAT_00571dc0_screenFade = &DAT_00571dc0_screenFade_;
     environment.map = mapViewer_.loadedMap();
 
     // Opcode 0xBD methods 0x70 / 0x72.
@@ -636,6 +638,41 @@ namespace orphen::port
     orphen::ported::render::SceneLighting::unpack(state.uGpffffb700_vectorRgb,
                                                   lighting.gleamColour);
     lighting.gleamActive = true;
+
+    // FUN_0020b430, which compacts the live slots of DAT_00343888 into the VU0
+    // light list. Table order is preserved, so the entries from slots 0..2 --
+    // the ones that reach VU1 as directional lights 1..3 -- are always a prefix.
+    // The item scene replaces the scene's lighting wholesale, so it drops these
+    // too.
+    if (!itemSceneRenderState_ && !suppressPointLights_)
+    {
+      const auto &table = state.DAT_00343888_lights;
+      for (std::uint32_t index = 0;
+           index < orphen::ported::render::LightTable::kSlotCount &&
+           lighting.pointLightCount < orphen::ported::render::SceneLighting::kPointLightCapacity;
+           ++index)
+      {
+        const auto &source = table.slot(index);
+        if (source.radius == 0.0f)
+        {
+          continue;
+        }
+        auto &light = lighting.pointLights[lighting.pointLightCount++];
+        light.position = {source.x, source.y, source.z};
+        light.radius = source.radius;
+        light.radiusSquared = source.radius * source.radius;
+        light.inverseRadiusSquared = 1.0f / light.radiusSquared;
+        light.colour[0] = static_cast<float>(source.red) / 255.0f;
+        light.colour[1] = static_cast<float>(source.green) / 255.0f;
+        light.colour[2] = static_cast<float>(source.blue) / 255.0f;
+        light.tableSlot = static_cast<int>(index);
+        if (index < static_cast<std::uint32_t>(
+                        orphen::ported::render::SceneLighting::kDirectionalTableSlots))
+        {
+          ++lighting.directionalPointLights;
+        }
+      }
+    }
     // setSceneLighting replaces the block wholesale, so the toggles have to be
     // carried across or a scene change would silently turn them back off.
     lighting.applyLightFloor = mapViewer_.sceneLighting().applyLightFloor;
@@ -1456,7 +1493,10 @@ namespace orphen::port
         std::cout << "  0x85/0x87 fullscreen fade armed: bank=" << event.bank
                   << " rate=" << event.rate
                   << " rgb=0x" << std::hex << event.packedRgb << std::dec
-                  << " hits=" << event.hits << "  (0x86 steps it; no GS submit)\n";
+                  << " hits=" << event.hits
+                  << (event.bank == 0 ? "  (bank 0 uncovers; 0x88 steps it)"
+                                      : "  (bank 1 covers; 0x86 steps it)")
+                  << '\n';
       }
       for (const auto &entry : scriptTrace_.playerLocks())
       {
@@ -1468,6 +1508,58 @@ namespace orphen::port
       {
         std::cout << "  0xE1 save/menu mode hits=" << scriptTrace_.battleBootCount()
                   << "  (flag 0x8EE cleared, mode 0x10 raised; no menu to hand off to)\n";
+      }
+    }
+
+    {
+      // A slot with radius 0 is a free slot: FUN_00266050 allocates on it and
+      // FUN_0020b430 skips it, so a scene that never gives one a radius is a
+      // scene with no dynamic lighting at all. Both EE dumps read all sixteen
+      // radii as 0.0, so this line is how the port says whether the VU0 falloff
+      // is worth porting rather than assuming either way.
+      const auto &lights = sceneScript_.state().DAT_00343888_lights;
+      if (lights.everLiveMask() != 0)
+      {
+        std::cout << "dynamic lights (0xBF/0xC0 alloc, 0xC4 radius): peak radius "
+                  << lights.peakRadius() << '\n';
+        for (std::uint32_t index = 0; index < orphen::ported::render::LightTable::kSlotCount; ++index)
+        {
+          if ((lights.everLiveMask() & (1u << index)) == 0)
+          {
+            continue;
+          }
+          const auto &light = lights.slot(index);
+          std::cout << "  slot " << index
+                    << " pos=(" << std::fixed << std::setprecision(2) << light.x << ","
+                    << light.y << "," << light.z << ")" << std::defaultfloat
+                    << " rgb=(" << static_cast<int>(light.red) << ","
+                    << static_cast<int>(light.green) << "," << static_cast<int>(light.blue) << ")"
+                    << " radius=" << light.radius
+                    << (light.radius == 0.0f ? "  (released)" : "  (live)") << '\n';
+        }
+      }
+      else
+      {
+        std::cout << "dynamic lights: none ever given a radius"
+                     "  (the whole table stays free, as both EE dumps read it)\n";
+      }
+    }
+
+    if (!scriptTrace_.fadeTracksArmed().empty())
+    {
+      std::cout << "colour ramps (0x9A arm / 0x9B step / 0x9C read):\n";
+      for (const auto &entry : scriptTrace_.fadeTracksArmed())
+      {
+        const auto &state = sceneScript_.state().DAT_00572078_fadeTracks.track(entry.first);
+        std::cout << "  track " << entry.first
+                  << " arms=" << entry.second.arms
+                  << " lastDuration=" << entry.second.lastDurationFrames << "f"
+                  << " now=(" << static_cast<int>(state.current[0]) << ","
+                  << static_cast<int>(state.current[1]) << ","
+                  << static_cast<int>(state.current[2]) << ")"
+                  << " -> (" << static_cast<int>(state.end[0]) << ","
+                  << static_cast<int>(state.end[1]) << ","
+                  << static_cast<int>(state.end[2]) << ")\n";
       }
     }
 
@@ -1977,6 +2069,8 @@ namespace orphen::port
               << "[render] lighting toggles: floor="
               << (mapViewer_.sceneLighting().applyLightFloor ? "on" : "off")
               << " unlit=" << (mapViewer_.sceneLighting().applyUnlitFlag ? "on" : "off")
+              << " points=" << (suppressPointLights_ ? "off" : "on") << "/"
+              << mapViewer_.sceneLighting().pointLightCount
               << '\n'
               << "[render] primitives=" << visibilityReport_.primitiveCount
               << " drawn=" << visibilityReport_.drawn
@@ -2309,9 +2403,9 @@ namespace orphen::port
     {
       reportedFadeArms_ = static_cast<std::uint32_t>(scriptTrace_.fadesArmed().size());
       const auto &fade = scriptTrace_.fadesArmed().back();
-      std::cout << "[panel] scene transition: fullscreen fade armed, rate=" << fade.rate
-                << " rgb=0x" << std::hex << fade.packedRgb << std::dec
-                << " (no GS submit, so nothing is drawn)\n";
+      std::cout << "[panel] scene transition: fullscreen fade armed, bank=" << fade.bank
+                << " rate=" << fade.rate
+                << " rgb=0x" << std::hex << fade.packedRgb << std::dec << '\n';
     }
     if (scriptTrace_.battleBootCount() != 0 && reportedBattleBoots_ == 0)
     {
@@ -2442,6 +2536,14 @@ namespace orphen::port
         reportTickHalt("late slots");
         reportPanelActivity();
       }
+
+      // The scene's lighting and fog are script globals, and FUN_00200e38
+      // rebuilds VU1's lighting VIF packets from them on *every* frame -- so a
+      // script that rewrites them per tick is rewriting what the next frame is
+      // lit by. This used to run only at scene load, which threw away all
+      // 13,002 of s01_e012's per-frame 0x97 writes and left the scene lit by
+      // whatever the load-time entry happened to leave behind.
+      applySceneEnvironment();
 
       // Behaviors can move and turn entities, so the render views are rebuilt
       // every frame now rather than only at load.
