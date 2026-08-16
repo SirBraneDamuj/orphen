@@ -175,6 +175,8 @@ namespace orphen::ported::psm2
         record78.planeNormal[slot] = planeNormalFor(first, second, third);
         record78.unitNormal[slot] = unitNormalFor(first, second, third);
         record78.slopeAngle[slot] = slopeAngleFor(record78.unitNormal[slot]);
+        // FUN_0022caf8 anchors the plane at the middle corner, not the first.
+        record78.planeOriginCorner[slot] = b;
       };
 
       if (isTriangle)
@@ -183,6 +185,7 @@ namespace orphen::ported::psm2
         record78.planeNormal[1] = record78.planeNormal[0];
         record78.unitNormal[1] = record78.unitNormal[0];
         record78.slopeAngle[1] = record78.slopeAngle[0];
+        record78.planeOriginCorner[1] = record78.planeOriginCorner[0];
 
         appendTriangle(state, primitiveIndex, indices[0], indices[1], indices[2], 0, 1, 2);
       }

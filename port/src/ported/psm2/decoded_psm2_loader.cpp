@@ -3,6 +3,7 @@
 #include "ported/psm2/psm2_geometry_builder.h"
 #include "ported/psm2/psm2_material_expansion.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -175,6 +176,142 @@ namespace orphen::ported::psm2
     // into entities. Note the section is only 2-byte aligned in practice, which
     // is why the original reads it a dword at a time through FUN_0022b4e0
     // rather than casting.
+    // FUN_0022b5a8:305-325. PSM2 header word 6: 0x1000 int16 cell heads copied
+    // straight into DAT_00343a18, then a length at +0x2000, then that many
+    // int16 primitive indices copied to DAT_003556f0. The two shorts at +0x2002
+    // are skipped -- the original advances its cursor by 3 after the grid.
+    //
+    // Verified byte for byte against eeMemory.bin: out/mapbin/0001.psm2 gives
+    // 4096/4096 grid entries and 1022/1022 list entries identical to the live
+    // arrays in the dump.
+    void loadCollisionGrid(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
+    {
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+
+      const std::size_t gridBytes = kCollisionGridCells * 2;
+      requireRange(decodedPsm2, sectionOffset, gridBytes + 4, "PSM2 collision grid");
+
+      state.DAT_00343a18_collisionGrid.resize(kCollisionGridCells);
+      for (std::size_t cellIndex = 0; cellIndex < kCollisionGridCells; ++cellIndex)
+      {
+        state.DAT_00343a18_collisionGrid[cellIndex] = readS16(decodedPsm2, sectionOffset + cellIndex * 2);
+      }
+
+      const std::size_t listLength = positiveCount(readS16(decodedPsm2, sectionOffset + gridBytes));
+      const std::size_t listBase = sectionOffset + gridBytes + 4;
+      requireRange(decodedPsm2, listBase, listLength * 2, "PSM2 collision cell list");
+
+      state.DAT_003556f0_collisionCellList.resize(listLength);
+      for (std::size_t entryIndex = 0; entryIndex < listLength; ++entryIndex)
+      {
+        state.DAT_003556f0_collisionCellList[entryIndex] = readS16(decodedPsm2, listBase + entryIndex * 2);
+      }
+
+      state.stats.collisionCellListLength = listLength;
+      state.stats.occupiedCollisionCells = static_cast<std::size_t>(
+          std::count_if(state.DAT_00343a18_collisionGrid.begin(),
+                        state.DAT_00343a18_collisionGrid.end(),
+                        [](std::int16_t head) { return head >= 0; }));
+    }
+
+    // FUN_0022b5a8:56-89. Header word 1. The file packs 24 bytes per record; the
+    // original blits them into a 0x20-stride slot and zeroes the tail, so only
+    // the first 24 bytes are file data. `4 + count * 24` lands exactly on the
+    // next section, which is how the stride is confirmed.
+    void loadCollisionDescriptors(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
+    {
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+      requireRange(decodedPsm2, sectionOffset, 4, "PSM2 collision descriptor header");
+      const std::size_t count = positiveCount(readS16(decodedPsm2, sectionOffset));
+      const std::size_t base = sectionOffset + 4;
+      requireRange(decodedPsm2, base, count * 24, "PSM2 collision descriptors");
+
+      state.DAT_003556d8_collisionDescriptors.resize(count);
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        CollisionDescriptor descriptor;
+        descriptor.firstPrimitive = readU16(decodedPsm2, base + index * 24 + 4);
+        descriptor.primitiveCount = readU16(decodedPsm2, base + index * 24 + 6);
+        state.DAT_003556d8_collisionDescriptors[index] = descriptor;
+      }
+    }
+
+    // FUN_0022b5a8:443-517. Header word 7: an int16 count then 14 int16 per
+    // group. Only the first two matter to the terrain scan; the rest is the
+    // group's pivot and extents, which drive the render-side update the port
+    // does not have.
+    void loadCollisionGroups(std::span<const std::uint8_t> decodedPsm2, std::uint32_t sectionOffset, Psm2RuntimeState &state)
+    {
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+      requireRange(decodedPsm2, sectionOffset, 2, "PSM2 collision group header");
+      const std::size_t count = positiveCount(readS16(decodedPsm2, sectionOffset));
+      const std::size_t base = sectionOffset + 2;
+      requireRange(decodedPsm2, base, count * 28, "PSM2 collision groups");
+
+      state.DAT_003556e0_collisionGroups.resize(count);
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        CollisionGroup group;
+        group.descriptorIndex = readU16(decodedPsm2, base + index * 28);
+        group.type = readS16(decodedPsm2, base + index * 28 + 2);
+        state.DAT_003556e0_collisionGroups[index] = group;
+      }
+    }
+
+    // FUN_00227840 rejects a group on the XY box the original recomputes every
+    // frame. For a group that never moves that box is the union of its own
+    // primitives' bounds, so it can be resolved once at load. Must run after the
+    // geometry pass, which is what fills those bounds.
+    void resolveCollisionGroupBounds(Psm2RuntimeState &state)
+    {
+      for (auto &group : state.DAT_003556e0_collisionGroups)
+      {
+        if (group.descriptorIndex >= state.DAT_003556d8_collisionDescriptors.size())
+        {
+          continue;
+        }
+        const auto &descriptor = state.DAT_003556d8_collisionDescriptors[group.descriptorIndex];
+        group.firstPrimitive = descriptor.firstPrimitive;
+        group.primitiveCount = descriptor.primitiveCount;
+
+        for (std::size_t offset = 0; offset < group.primitiveCount; ++offset)
+        {
+          const std::size_t primitiveIndex = static_cast<std::size_t>(group.firstPrimitive) + offset;
+          if (primitiveIndex >= state.DAT_003556b0_dRecords78.size())
+          {
+            break;
+          }
+          const auto &bounds = state.DAT_003556b0_dRecords78[primitiveIndex].bounds;
+          if (!bounds.valid)
+          {
+            continue;
+          }
+          if (!group.boundsValid)
+          {
+            group.minX = bounds.min.x;
+            group.maxX = bounds.max.x;
+            group.minY = bounds.min.y;
+            group.maxY = bounds.max.y;
+            group.boundsValid = true;
+            continue;
+          }
+          group.minX = std::min(group.minX, bounds.min.x);
+          group.maxX = std::max(group.maxX, bounds.max.x);
+          group.minY = std::min(group.minY, bounds.min.y);
+          group.maxY = std::max(group.maxY, bounds.max.y);
+        }
+      }
+    }
+
     void loadObjectPlacements(std::span<const std::uint8_t> decodedPsm2,
                               std::uint32_t sectionOffset,
                               Psm2RuntimeState &state)
@@ -268,11 +405,17 @@ namespace orphen::ported::psm2
     loadSectionD(decodedPsm2, readU32(decodedPsm2, 0x0c), state);
     loadSectionE(decodedPsm2, readU32(decodedPsm2, 0x14), state);
     loadPalette(decodedPsm2, readU32(decodedPsm2, 0x10), state);
+    loadCollisionGrid(decodedPsm2, readU32(decodedPsm2, 0x18), state);
+    loadCollisionDescriptors(decodedPsm2, readU32(decodedPsm2, 0x04), state);
+    loadCollisionGroups(decodedPsm2, readU32(decodedPsm2, 0x1c), state);
     loadObjectPlacements(decodedPsm2, readU32(decodedPsm2, 0x34), state);
 
     // FUN_0022b5a8's tail order: FUN_0022c3d8 then FUN_0022c6e8.
     expandPsm2Materials(state);
     buildPsm2DerivedGeometry(state);
+
+    // Needs the bounds the geometry pass just filled in.
+    resolveCollisionGroupBounds(state);
 
     state.stats.positionRecordCount = state.DAT_0035569c_sectionCRecords.size();
     state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();

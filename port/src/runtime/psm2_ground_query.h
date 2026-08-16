@@ -15,6 +15,12 @@ namespace orphen::port
   {
     std::size_t triangleIndex = 0;
     std::size_t primitiveIndex = 0;
+
+    // Which half of a quad answered, FUN_00227d28's +0xD0. The original packs
+    // it into entity +0x0A as `primitive | (subTriangle << 14)`, so a dump's
+    // +0x0A reads back as e.g. 0x4009 for "primitive 9, second half".
+    std::size_t subTriangle = 0;
+
     float height = 0.0f;
     std::uint32_t leadingWord = 0;
     std::uint32_t terrainFlags = 0;
@@ -52,6 +58,45 @@ namespace orphen::port
     // with no head limit and no ceiling test.
     std::optional<Psm2ActorBody> body;
   };
+
+  // FUN_00227070's "no ground" sentinel. The scan seeds workspace +0x50 with it
+  // and FUN_002262c0:52 tests `128.0 <= result` to mean nothing was found.
+  inline constexpr float kNoGroundHeight = 128.0f;
+
+  // What FUN_00227070 writes back onto the entity.
+  struct Psm2GroundSample
+  {
+    float height = kNoGroundHeight;      // the return value, and entity +0x4C
+    bool found = false;                  // height < kNoGroundHeight
+
+    // entity +0x0A, as the original packs it: `primitive | (half << 14)`, or -1.
+    std::int32_t packedPrimitive = -1;
+    std::int32_t primitiveIndex = -1;
+    std::size_t subTriangle = 0;
+
+    std::uint32_t terrainFlagsWinning = 0;  // entity +0x6C
+    std::uint32_t terrainFlagsAll = 0;      // entity +0x70, ANDed over the samples
+
+    // entity +0x84..+0x90, written only on the four-corner path.
+    std::array<float, 4> cornerHeights{};
+    bool sampledFourCorners = false;
+  };
+
+  // FUN_00227070. `entityFlags04 & 2` selects a single sample at (x, y);
+  // otherwise the scan runs at all four corners of a `radius`-sized square and
+  // the **highest** answer wins. Ties OR their terrain flags together, and the
+  // AND across every sample goes to entity +0x70.
+  //
+  // Not modelled: the FUN_00228cf0 pass the original runs afterwards, which can
+  // raise the result and sets entity +0x0C bit 0x100 when it does.
+  Psm2GroundSample FUN_00227070_sample_ground(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                              float x,
+                                              float y,
+                                              float feetHeight,
+                                              float bodyHeight,
+                                              float radius,
+                                              std::uint16_t entityFlags04,
+                                              std::uint32_t rejectTerrainMask);
 
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                  float x,

@@ -662,48 +662,67 @@ namespace orphen::ported::entity
     entity.positionZ24 += entity.desiredDeltaZ34;
     entity.positionY28 += entity.desiredDeltaY38;
 
-    if (environment.terrainSurface)
+    // FUN_002262c0:482. +0x50 takes the previous +0x4C every frame, whether or
+    // not the ground was resampled.
+    entity.previousGroundHeight50 = entity.groundHeight4c;
+
+    // A non-player actor resamples the ground **only when it is moving**.
+    //
+    // FUN_002262c0 reaches FUN_00227390 from exactly two places: the velocity
+    // loop at :230-450, which runs only when +0x30 / +0x34 are non-zero, and the
+    // stationary branch at :112-122, which is gated on `DAT_003555d0 != 0 &&
+    // (entity +0x08 & 0x20)`. DAT_003555d0 is **0** in eeMemory.bin, so the
+    // stationary branch never runs for anybody and only the player gets the
+    // periodic refresh at :114.
+    //
+    // So a script-placed actor that never moves keeps the +0x4C its placement
+    // opcode gave it, for the whole scene. That is directly visible in the dump:
+    // slots 82 and 84 have +0x0A = -1 and +0x6C = 0 -- never ground-queried at
+    // all -- and sit at the heights their 0x54 authored, one of them 0.30 above
+    // a floor a query would have found. Sampling them every frame is what put
+    // Volcan at -1.00 instead of -1.20.
+    //
+    // (The one other resample, FUN_002262c0:41-85's lift block, additionally
+    // requires the cached primitive's +0x13 to be non-zero. It is 0 for every
+    // primitive in s01_e012, so that block never fires here either.)
+    const bool movedHorizontally = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f;
+    if (movedHorizontally && environment.terrainSurface)
     {
-      const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24,
-                                                      entity.positionY28,
-                                                      entity.positionY28 + entity.height58);
+      const auto surface = environment.terrainSurface(
+          entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
+          entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
       if (surface.has_value())
       {
-        entity.previousGroundHeight50 = entity.groundHeight4c;
         entity.groundHeight4c = surface->height;
         // The same publish FUN_002262c0 does for the player. Non-player actors
         // need it too: a type 0x62 clone's target is its *leader*, and the chase
         // state gates on the target's +0x6C, so without this the clones sat
         // still. The EE dump has all six enemies reading 0x30010000 here.
         entity.flagWord6c = surface->terrainFlags;
-        entity.flagWord70 = surface->terrainFlags;
+        entity.flagWord70 = surface->terrainFlagsAll;
+        entity.groundPrimitive0a = static_cast<std::int16_t>(surface->primitiveIndex);
 
-        // FUN_002262c0:41-85 raises +0x28 in exactly one branch, and that branch
-        // is gated on the cached primitive at +0x0A being valid *and* carrying
-        // the same material as the one just sampled: an actor is lifted onto a
-        // surface it is already standing on, not onto whatever storey happens to
-        // be overhead. `FUN_00227070` is what refreshes +0x0A, so the comparison
-        // is previous-sample against this-sample.
-        //
-        // The port has no material table, so it compares the **primitive index**
-        // instead. That is narrower than the original -- crossing between two
-        // primitives of the same material costs a frame of lag where the
-        // original would lift immediately -- but it needs nothing the port does
-        // not already have, and it is far closer than the `moved` stand-in it
-        // replaces. `moved` could never lift a script-placed actor at all,
-        // because a cutscene actor never asks to move: s01_e012 drops Magnus at
-        // z = -1.500 with opcode 0x55 and leaves the actor loop to lift him the
-        // 0.30 onto the bed, which is why he was sitting inside it.
-        const std::int32_t sampled = surface->primitiveIndex;
-        const bool sameSurfaceAsLastSample =
-            sampled >= 0 && sampled == static_cast<std::int32_t>(entity.groundPrimitive0a);
-        if (sameSurfaceAsLastSample && entity.positionY28 < surface->height)
+        // FUN_00227070:133-138 only publishes the corner heights on the
+        // four-corner path, so the single-point case leaves them alone.
+        if (surface->sampledFourCorners)
         {
-          entity.positionY28 = surface->height;
-          entity.verticalVelocity44 = 0.0f;
+          entity.cornerHeight84 = surface->cornerHeights[0];
+          entity.cornerHeight88 = surface->cornerHeights[1];
+          entity.cornerHeight8c = surface->cornerHeights[2];
+          entity.cornerHeight90 = surface->cornerHeights[3];
         }
-        entity.groundPrimitive0a = static_cast<std::int16_t>(sampled);
       }
+    }
+
+    // FUN_002262c0:502-520. The landing snap, and the only thing that raises
+    // +0x28 for a stationary actor: falling to or through the cached ground
+    // pins the actor to it and kills the vertical velocity. This is what lifts
+    // Magnus onto the bed -- his 0x55 wrote -1.200 into +0x4C while leaving him
+    // at the -1.500 the script authored, and the next frame snaps him up.
+    if (entity.positionY28 <= entity.groundHeight4c)
+    {
+      entity.positionY28 = entity.groundHeight4c;
+      entity.verticalVelocity44 = 0.0f;
     }
 
     entity.desiredDeltaX30 = 0.0f;

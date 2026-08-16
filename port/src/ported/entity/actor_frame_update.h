@@ -59,13 +59,33 @@ namespace orphen::ported::entity
     struct TerrainSurface
     {
       float height = 0.0f;
-      std::uint32_t terrainFlags = 0;
-      // Which map primitive answered. FUN_00227070 caches this on the entity at
-      // +0x0A and FUN_002262c0 gates its lift on it -- see the floor block in
-      // actor_frame_update.cpp. -1 when the caller could not supply one.
+
+      // FUN_00227070 writes two different flag words. +0x6C is the winning
+      // sample's, +0x70 is the AND across all four corners -- they are not
+      // interchangeable, and opcode 0x61 reads them as separate registers.
+      std::uint32_t terrainFlags = 0;     // entity +0x6C
+      std::uint32_t terrainFlagsAll = 0;  // entity +0x70
+
+      // Which map primitive answered, packed as the original packs entity +0x0A:
+      // `primitive | (half << 14)`. -1 when nothing was found.
       std::int32_t primitiveIndex = -1;
+
+      // entity +0x84..+0x90, written only when the four-corner path ran.
+      std::array<float, 4> cornerHeights{};
+      bool sampledFourCorners = false;
     };
-    std::function<std::optional<TerrainSurface>(float x, float y, float feetHeight, float headHeight)>
+
+    // The arguments FUN_00227070 reads off the entity: the sample centre, the
+    // feet, the body height (+0x58), the collision radius (+0x54), the flag
+    // halfword (+0x04, whose bit 1 selects single-point sampling) and the reject
+    // mask (+0x74).
+    std::function<std::optional<TerrainSurface>(float x,
+                                                float y,
+                                                float feetHeight,
+                                                float bodyHeight,
+                                                float radius,
+                                                std::uint16_t entityFlags04,
+                                                std::uint32_t rejectTerrainMask)>
         terrainSurface;
 
     // iGpffffb650, the slot FUN_00239ce0 is currently ticking. Behaviors deeper

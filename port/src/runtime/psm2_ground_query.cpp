@@ -10,41 +10,37 @@ namespace orphen::port
   {
 
     constexpr float kBarycentricEpsilon = -0.0005f;
+
+    // FUN_00227840:44. Only a primitive carrying this is offered to the overlap
+    // test at all; everything else in the cell is skipped before any geometry
+    // work. It is the "participates in collision" bit, not a hint.
     constexpr std::uint32_t kOriginalTerrainSampleBit = 0x800;
+
+    // FUN_00228090:12. The height of a primitive carrying this is the constant
+    // at record78 +0x2C -- which FUN_0022c6e8:100 fills with the **maximum** z of
+    // the primitive's corners -- and the plane equation is never evaluated. Most
+    // of a room's floor is flat and takes this path.
+    constexpr std::uint32_t kFlatHeightBit = 0x200;
+
+    // FUN_00228090:11. Dynamic primitives resolve their plane through
+    // FUN_002281a0 against a live transform. The port has no moving collision,
+    // so these fall back to the flat height rather than reading a stale plane.
+    constexpr std::uint32_t kDynamicPrimitiveBit = 0x10000;
 
     // FUN_00227840 splits the sampled primitives on this bit: it sets the
     // workspace's +0x22 winding selector to 0xFF for them, and FUN_00227d28
     // then reverses every edge test (`0.0 < cross` rejects instead of
     // `cross < 0.0`). Reversed winding in the XY projection means the surface
-    // faces down -- these are the ceilings. In s01_e024, 427 of the 435
-    // primitives carrying it point straight down and not one up-facing
-    // primitive has it.
+    // faces down -- these are the ceilings.
     //
-    // The original never records a ceiling's height as ground: the 0x100 branch
-    // at 0x0022799c clears the "have recorded" flag instead of writing +0x50.
-    // A ceiling at or below the head only *stops* the scan, so the query falls
-    // out holding 128.0 -- no ground -- which is what makes FUN_00227390 fail
-    // and bumps the actor's head.
+    // What the original does with a ceiling hit is *not* "reject". At
+    // 0x0022799c it clears the have-recorded latch at +0x23 and falls through
+    // without writing +0x50, so the ceiling itself is never the answer but the
+    // next front-facing hit below it overwrites whatever was latched above.
+    // That is the whole mechanism -- see the scan loop below.
     constexpr std::uint32_t kCeilingBit = 0x100;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
 
-    // record78 +0x04 bit 0x100 -- **not** the same field as kCeilingBit, which
-    // is bit 0x100 of +0x00. A surface above an actor's feet is a step-up, and
-    // this is the bit that says the actor may be stood up onto it.
-    //
-    // Derived, not read out of the decompilation: FUN_00227840's scan takes the
-    // first cell-list candidate at or below the head and the port has no cell
-    // list, so it needs some rule to choose. s01_e012 supplies both halves of
-    // the answer. Two hidden collision quads sit at z = -1.20 over two beds,
-    // identical in every field (`lead=0xa20`, no material slot) except this
-    // bit: #9 over Magnus's bed has 0x50620100, #339 over the other has
-    // 0x50620000. `eeMemory.bin` puts slot 81 on the first at -1.200 and leaves
-    // slot 82 on the deck at -1.500 under the second.
-    //
-    // Supporting evidence: all 99 primitives in s01_e012 carrying it sit
-    // between -1.40 and -0.05, above the -1.50 deck -- the profile of low
-    // step-up surfaces. s01_e024 has none, so this cannot move it.
-    constexpr std::uint32_t kStepUpBit = 0x100;
     constexpr float kSteepBlockerMaxAbsNormalZ = 0.5f;
     constexpr float kBlockerHeightPadding = 0.05f;
     constexpr float kGeometryEpsilon = 0.000001f;
@@ -75,34 +71,6 @@ namespace orphen::port
         return {};
       }
       return {value.x / length, value.y / length, value.z / length};
-    }
-
-    // FUN_00227840:115-171 walks the cell's primitive list and takes the **first**
-    // candidate whose height is at or below the head (`+0x30 < fVar16` bails to
-    // the next one, anything else ends the scan). The port has no cell list, so
-    // it cannot reproduce that order and has to choose a rule.
-    //
-    // For a caller with a body, that rule is **the highest eligible surface**,
-    // where a surface above the feet is only eligible if it carries kStepUpBit.
-    // Nearest-to-the-reference -- what this used to do -- can never reach a
-    // surface an actor is meant to be standing on top of while its own height
-    // still reads as the floor below it: s01_e012's script drops Magnus at
-    // z = -1.500 with opcode 0x55 and leaves the engine to put him the 0.30 up
-    // onto the bed, and `eeMemory.bin` has him at -1.200.
-    //
-    // Callers with no body -- the viewer, the camera clamp, spawn selection --
-    // are not standing anywhere, so they keep the nearest-height answer.
-    float candidateScore(float height,
-                         float referenceHeight,
-                         bool sampledByOriginalTerrain,
-                         const std::optional<Psm2ActorBody> &body)
-    {
-      const float terrainPenalty = sampledByOriginalTerrain ? 0.0f : 100000.0f;
-      if (body.has_value())
-      {
-        return terrainPenalty + (body->headHeight - height);
-      }
-      return terrainPenalty + std::abs(height - referenceHeight);
     }
 
     float squaredDistance(const Vec2 &left, const Vec2 &right)
@@ -219,6 +187,127 @@ namespace orphen::port
              squaredDistanceSegmentSegment2d(start, end, third, first) <= radiusSquared;
     }
 
+    // FUN_00227d28. The bbox reject at +0x18..+0x24 followed by a winding test
+    // per half. A triangle (corner 2 == corner 3) is one half over corners
+    // (0,1,2); a quad is split on the 1--3 diagonal into (3,0,1) and (1,2,3),
+    // and which half was hit is what the original stashes in +0xD0 and folds
+    // into entity +0x0A as `primitive | (half << 14)`.
+    //
+    // The original's edge tests are winding-sensitive, and it flips their sense
+    // for kCeilingBit primitives via the +0x22 selector. The port uses a
+    // winding-agnostic point-in-triangle instead: the two are equivalent
+    // wherever a primitive's authored winding agrees with its kCeilingBit,
+    // which is what the +0x22 selector exists to assume, and this way a
+    // primitive whose winding disagrees still reports the containment its flag
+    // claims rather than silently vanishing from collision.
+    bool overlapsPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                           const orphen::ported::psm2::DRecord78 &record78,
+                           float x,
+                           float y,
+                           std::size_t &halfOut)
+    {
+      if (!record78.bounds.valid)
+      {
+        return false;
+      }
+      if (x < record78.bounds.min.x || x > record78.bounds.max.x ||
+          y < record78.bounds.min.y || y > record78.bounds.max.y)
+      {
+        return false;
+      }
+
+      const auto corner = [&](std::size_t index) {
+        const auto &position = positionForIndex(map, record78.vertexIndices[index]);
+        return Vec2{position.x, position.y};
+      };
+
+      const Vec2 point{x, y};
+      const bool isTriangle = record78.vertexIndices[2] == record78.vertexIndices[3];
+      if (isTriangle)
+      {
+        halfOut = 0;
+        return pointInsideTriangle2d(point, corner(0), corner(1), corner(2));
+      }
+
+      if (pointInsideTriangle2d(point, corner(3), corner(0), corner(1)))
+      {
+        halfOut = 0;
+        return true;
+      }
+      if (pointInsideTriangle2d(point, corner(1), corner(2), corner(3)))
+      {
+        halfOut = 1;
+        return true;
+      }
+      return false;
+    }
+
+    // FUN_00228090. A flat or dynamic primitive answers with the constant at
+    // record78 +0x2C, which FUN_0022c6e8 fills with the maximum corner z.
+    // Everything else evaluates its half's plane, anchored at the corner
+    // FUN_0022caf8 recorded.
+    float heightOnPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                            const orphen::ported::psm2::DRecord78 &record78,
+                            std::size_t half,
+                            float x,
+                            float y)
+    {
+      const float flatHeight = record78.bounds.valid ? record78.bounds.max.z : 0.0f;
+      if ((record78.leadingWord & (kFlatHeightBit | kDynamicPrimitiveBit)) != 0)
+      {
+        return flatHeight;
+      }
+
+      const auto &normal = record78.planeNormal[half];
+      if (normal.z == 0.0f)
+      {
+        return flatHeight;
+      }
+
+      const std::size_t originCorner = record78.planeOriginCorner[half] & 3u;
+      const auto &origin = positionForIndex(map, record78.vertexIndices[originCorner]);
+      return origin.z - ((x - origin.x) * normal.x + (y - origin.y) * normal.y) / normal.z;
+    }
+
+    Psm2GroundHit makeHit(const orphen::ported::psm2::Psm2RuntimeState &map,
+                          const orphen::ported::psm2::DRecord78 &record78,
+                          std::size_t primitiveIndex,
+                          std::size_t half,
+                          float height)
+    {
+      const bool isTriangle = record78.vertexIndices[2] == record78.vertexIndices[3];
+      const std::array<std::uint8_t, 3> corners =
+          isTriangle ? std::array<std::uint8_t, 3>{0, 1, 2}
+                     : (half == 0 ? std::array<std::uint8_t, 3>{3, 0, 1}
+                                  : std::array<std::uint8_t, 3>{1, 2, 3});
+
+      const auto first = positionForIndex(map, record78.vertexIndices[corners[0]]);
+      const auto second = positionForIndex(map, record78.vertexIndices[corners[1]]);
+      const auto third = positionForIndex(map, record78.vertexIndices[corners[2]]);
+      const auto firstEdge = orphen::ported::psm2::subtract(second, first);
+      const auto secondEdge = orphen::ported::psm2::subtract(third, first);
+
+      Psm2GroundHit hit;
+      hit.primitiveIndex = primitiveIndex;
+      hit.subTriangle = half;
+      hit.height = height;
+      hit.leadingWord = record78.leadingWord;
+      hit.terrainFlags = record78.terrainFlags;
+      hit.sampledByOriginalTerrain = true;
+      hit.vertices = {first, second, third};
+      hit.normal = normalize(cross(firstEdge, secondEdge));
+
+      const auto &record80Triangles = map.DAT_003556ac_dRecords80;
+      if (primitiveIndex < record80Triangles.size())
+      {
+        hit.triangleIndex = record80Triangles[primitiveIndex].firstTriangle +
+                            std::min<std::size_t>(half, record80Triangles[primitiveIndex].triangleCount > 0
+                                                            ? record80Triangles[primitiveIndex].triangleCount - 1
+                                                            : 0);
+      }
+      return hit;
+    }
+
   } // namespace
 
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
@@ -229,12 +318,208 @@ namespace orphen::port
     return queryPsm2GroundAt(map, x, y, referenceHeight, {});
   }
 
+  // FUN_00227840's first loop, which is the whole of the static terrain answer.
+  //
+  // The scan is *ordered*, not scored. It walks the run the map file authored
+  // for this cell and stops at the first hit at or below the head; the latch at
+  // +0x23 means only the first front-facing hit since the last ceiling is kept.
+  // Every heuristic the port used before this -- nearest height, highest
+  // eligible, a step-up bit invented to break the tie -- was an attempt to guess
+  // an order that the map ships explicitly.
+  //
+  // Not modelled: FUN_00227840's *second* loop over the 0x74-stride collision
+  // groups at DAT_003556e0, which is where movable collision (doors, lifts)
+  // lives. In s01_e012 every entity position that came from a ground query
+  // matches using loop one alone.
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                  float x,
                                                  float y,
                                                  float referenceHeight,
                                                  const Psm2TerrainQueryOptions &options)
   {
+    if (map.hasCollisionGrid())
+    {
+      namespace psm2 = orphen::ported::psm2;
+
+      const int cellX = static_cast<int>((x + psm2::kCollisionGridOrigin) * psm2::kCollisionGridScale);
+      const int cellY = static_cast<int>((y + psm2::kCollisionGridOrigin) * psm2::kCollisionGridScale);
+      const int gridSide = static_cast<int>(psm2::kCollisionGridSide);
+      if (cellX < 0 || cellX >= gridSide || cellY < 0 || cellY >= gridSide)
+      {
+        return std::nullopt;
+      }
+
+      // FUN_00227840:23 / 61 / 72. The scan settles at the first candidate at or
+      // below the top of the head; a body-less caller (FUN_00227798) passes its
+      // own height as that limit.
+      const float headLimit = options.body.has_value() ? options.body->headHeight : referenceHeight;
+
+      std::optional<Psm2GroundHit> latchedHit;
+      bool latched = false;
+      // FUN_00227840's +0x5E: every overlap this loop saw, ceilings included.
+      int cellHitCount = 0;
+
+      // An empty cell skips the walk but still falls through to the group loop:
+      // FUN_00227840's `if (-1 < head)` guards only the first loop, and
+      // LAB_00227a70 runs either way. Only an out-of-grid query returns early.
+      const std::int16_t cellHead =
+          map.DAT_00343a18_collisionGrid[static_cast<std::size_t>(cellX) +
+                                         static_cast<std::size_t>(cellY) * psm2::kCollisionGridSide];
+      std::size_t cursor = cellHead < 0 ? map.DAT_003556f0_collisionCellList.size()
+                                        : static_cast<std::size_t>(cellHead);
+
+      while (cursor < map.DAT_003556f0_collisionCellList.size())
+      {
+        const std::int16_t entry = map.DAT_003556f0_collisionCellList[cursor];
+        ++cursor;
+        if (entry < 0)
+        {
+          break;
+        }
+
+        const std::size_t primitiveIndex = static_cast<std::size_t>(entry);
+        if (primitiveIndex >= map.DAT_003556b0_dRecords78.size())
+        {
+          continue;
+        }
+        const auto &record78 = map.DAT_003556b0_dRecords78[primitiveIndex];
+
+        // FUN_00227840:41. The reject mask is entity +0x74, not a constant.
+        if ((record78.terrainFlags & options.rejectTerrainMask) != 0)
+        {
+          continue;
+        }
+        if ((record78.leadingWord & kOriginalTerrainSampleBit) == 0)
+        {
+          continue;
+        }
+
+        std::size_t half = 0;
+        if (!overlapsPrimitive(map, record78, x, y, half))
+        {
+          continue;
+        }
+
+        const float height = heightOnPrimitive(map, record78, half, x, y);
+        ++cellHitCount;
+
+        if ((record78.leadingWord & kCeilingBit) != 0)
+        {
+          // A ceiling clears the latch without recording. Whatever was latched
+          // above it stays in place unless a later front face replaces it.
+          latched = false;
+        }
+        else if (!latched)
+        {
+          latched = true;
+          latchedHit = makeHit(map, record78, primitiveIndex, half, height);
+        }
+
+        if (height <= headLimit)
+        {
+          break;
+        }
+      }
+
+      // Loop one's hit count, FUN_00227840's +0x5E. It counts ceilings too, and
+      // the group merge below reads it, so it is not the same as "latched".
+      const bool loopOneHitAnything = cellHitCount != 0;
+
+      // ---- FUN_00227840's second loop, LAB_00227a70 ----------------------
+      //
+      // The collision groups. Their primitives live in a block the cell grid
+      // never indexes, so this is the only thing that reaches them.
+      for (const auto &group : map.DAT_003556e0_collisionGroups)
+      {
+        if (group.type == psm2::kCollisionGroupTypeSkipped)
+        {
+          continue;
+        }
+        if (!group.boundsValid || x < group.minX || x > group.maxX || y < group.minY || y > group.maxY)
+        {
+          continue;
+        }
+
+        std::optional<Psm2GroundHit> groupHit;
+        bool groupLatched = false;
+        int groupHitCount = 0;
+        float groupHeight = kNoGroundHeight;
+
+        for (std::size_t offset = 0; offset < group.primitiveCount; ++offset)
+        {
+          const std::size_t primitiveIndex = static_cast<std::size_t>(group.firstPrimitive) + offset;
+          if (primitiveIndex >= map.DAT_003556b0_dRecords78.size())
+          {
+            break;
+          }
+          const auto &record78 = map.DAT_003556b0_dRecords78[primitiveIndex];
+
+          if ((record78.terrainFlags & options.rejectTerrainMask) != 0)
+          {
+            continue;
+          }
+          if ((record78.leadingWord & kOriginalTerrainSampleBit) == 0)
+          {
+            continue;
+          }
+
+          std::size_t half = 0;
+          if (!overlapsPrimitive(map, record78, x, y, half))
+          {
+            continue;
+          }
+
+          const float height = heightOnPrimitive(map, record78, half, x, y);
+
+          if ((record78.leadingWord & kCeilingBit) != 0)
+          {
+            groupLatched = false;
+            ++groupHitCount;
+            if (height > headLimit)
+            {
+              // FUN_00227840:161. A ceiling above the head does not just fail to
+              // record -- it wipes the group's hit count, which is what the
+              // merge below gates on.
+              groupHitCount = 0;
+              continue;
+            }
+            break;
+          }
+
+          ++groupHitCount;
+          if (!groupLatched)
+          {
+            groupLatched = true;
+            groupHeight = height;
+            groupHit = makeHit(map, record78, primitiveIndex, half, height);
+          }
+          if (height > headLimit)
+          {
+            continue;
+          }
+          break;
+        }
+
+        if (groupHitCount == 0 || !groupHit.has_value())
+        {
+          continue;
+        }
+
+        // FUN_00227840:178-192. A group wins if it is strictly higher than what
+        // is held, or if loop one never hit anything at all.
+        const float held = latchedHit.has_value() ? latchedHit->height : kNoGroundHeight;
+        if (groupHeight <= held && loopOneHitAnything)
+        {
+          continue;
+        }
+        latchedHit = groupHit;
+      }
+
+      return latchedHit;
+    }
+
+    // No grid in this map: fall back to the old unordered scan so a map the
+    // loader could not read still reports something walkable.
     std::optional<Psm2GroundHit> bestHit;
     float bestScore = std::numeric_limits<float>::max();
 
@@ -289,8 +574,8 @@ namespace orphen::port
         // kills the sample outright, which is the port's stand-in for the
         // original's scan aborting at it. The original's literal test is only
         // `height <= head`; requiring it to also be above the feet is what
-        // keeps the underside of the floor being stood on out of it, since the
-        // port has no cell list whose order would have found that floor first.
+        // keeps the underside of the floor being stood on out of it, since this
+        // path has no cell list whose order would have found that floor first.
         if (options.body.has_value() && height > options.body->feetHeight && height <= options.body->headHeight)
         {
           return std::nullopt;
@@ -300,20 +585,14 @@ namespace orphen::port
 
       // FUN_00227840 will not settle on a surface above the head, so an upper
       // storey cannot be mistaken for the ground under the actor's feet.
-      if (options.body.has_value() && height > options.body->headHeight)
+      const float headLimit = options.body.has_value() ? options.body->headHeight : referenceHeight;
+      if (options.body.has_value() && height > headLimit)
       {
         continue;
       }
 
-      // Nor onto a step-up the map has not marked as one. See kStepUpBit.
-      if (options.body.has_value() && height > options.body->feetHeight &&
-          (record78.terrainFlags & kStepUpBit) == 0)
-      {
-        continue;
-      }
-
-      const float score =
-          candidateScore(height, referenceHeight, sampledByOriginalTerrain, options.body);
+      const float terrainPenalty = sampledByOriginalTerrain ? 0.0f : 100000.0f;
+      const float score = terrainPenalty + std::abs(height - referenceHeight);
       if (score >= bestScore)
       {
         continue;
@@ -322,17 +601,127 @@ namespace orphen::port
       const auto firstEdge = orphen::ported::psm2::subtract(second, first);
       const auto secondEdge = orphen::ported::psm2::subtract(third, first);
       bestScore = score;
-      bestHit = Psm2GroundHit{triangleIndex,
-                              triangle.primitiveIndex,
-                              height,
-                              record78.leadingWord,
-                              record78.terrainFlags,
-                              sampledByOriginalTerrain,
-                              {first, second, third},
-                              normalize(cross(firstEdge, secondEdge))};
+      Psm2GroundHit fallbackHit;
+      fallbackHit.triangleIndex = triangleIndex;
+      fallbackHit.primitiveIndex = triangle.primitiveIndex;
+      fallbackHit.height = height;
+      fallbackHit.leadingWord = record78.leadingWord;
+      fallbackHit.terrainFlags = record78.terrainFlags;
+      fallbackHit.sampledByOriginalTerrain = sampledByOriginalTerrain;
+      fallbackHit.vertices = {first, second, third};
+      fallbackHit.normal = normalize(cross(firstEdge, secondEdge));
+      bestHit = fallbackHit;
     }
 
     return bestHit;
+  }
+
+  // FUN_00227070. The single-point path is the `entity +0x04 & 2` case; the rest
+  // of the function is the four-corner sample, which is what nearly every prop
+  // and NPC in the game actually uses (0xD8 / 0xD0 flags, and the player's
+  // 0x312C). Sampling one point instead is why an actor would not stand on the
+  // edge of anything: the original asks at (x-r,y-r), (x+r,y-r), (x+r,y+r),
+  // (x-r,y+r) and keeps the highest.
+  Psm2GroundSample FUN_00227070_sample_ground(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                              float x,
+                                              float y,
+                                              float feetHeight,
+                                              float bodyHeight,
+                                              float radius,
+                                              std::uint16_t entityFlags04,
+                                              std::uint32_t rejectTerrainMask)
+  {
+    // FUN_00227070:32. The head limit is staged once and shared by every sample.
+    const Psm2TerrainQueryOptions options{rejectTerrainMask, false,
+                                          Psm2ActorBody{feetHeight, feetHeight + bodyHeight}};
+
+    const auto runScan = [&](float sampleX, float sampleY) {
+      return queryPsm2GroundAt(map, sampleX, sampleY, feetHeight, options);
+    };
+
+    Psm2GroundSample sample;
+
+    // FUN_00227070:37-40 and :47-49 adopt the first sample's primitive and flags
+    // unconditionally, even when it found nothing.
+    const auto adopt = [&sample](const std::optional<Psm2GroundHit> &hit, bool onlyIfFound) {
+      if (hit.has_value())
+      {
+        sample.primitiveIndex = static_cast<std::int32_t>(hit->primitiveIndex);
+        sample.subTriangle = hit->subTriangle;
+        sample.packedPrimitive = static_cast<std::int32_t>(hit->primitiveIndex) |
+                                 (static_cast<std::int32_t>(hit->subTriangle) << 14);
+      }
+      else if (!onlyIfFound)
+      {
+        sample.primitiveIndex = -1;
+        sample.subTriangle = 0;
+        sample.packedPrimitive = -1;
+      }
+    };
+
+    const auto heightOf = [](const std::optional<Psm2GroundHit> &hit) {
+      return hit.has_value() ? hit->height : kNoGroundHeight;
+    };
+    const auto flagsOf = [](const std::optional<Psm2GroundHit> &hit) -> std::uint32_t {
+      return hit.has_value() ? hit->terrainFlags : 0u;
+    };
+
+    if ((entityFlags04 & 2u) != 0)
+    {
+      const auto hit = runScan(x, y);
+      adopt(hit, false);
+      sample.height = heightOf(hit);
+      sample.terrainFlagsWinning = flagsOf(hit);
+      sample.terrainFlagsAll = flagsOf(hit);
+      sample.found = sample.height < kNoGroundHeight;
+      return sample;
+    }
+
+    // FUN_00227070:43-116. Corner order matters only for which primitive wins a
+    // tie, but it is cheap to keep faithful.
+    const std::array<std::pair<float, float>, 4> corners{{{x - radius, y - radius},
+                                                          {x + radius, y - radius},
+                                                          {x + radius, y + radius},
+                                                          {x - radius, y + radius}}};
+
+    float running = kNoGroundHeight;
+    for (std::size_t cornerIndex = 0; cornerIndex < corners.size(); ++cornerIndex)
+    {
+      const auto hit = runScan(corners[cornerIndex].first, corners[cornerIndex].second);
+      const float height = heightOf(hit);
+      sample.cornerHeights[cornerIndex] = height;
+
+      if (cornerIndex == 0)
+      {
+        adopt(hit, false);
+        running = height;
+        sample.terrainFlagsWinning = flagsOf(hit);
+        sample.terrainFlagsAll = flagsOf(hit);
+        continue;
+      }
+
+      // FUN_00227070:55 -- +0x70 is the AND across every sample, taken before
+      // the comparison and regardless of which one wins.
+      sample.terrainFlagsAll &= flagsOf(hit);
+
+      if (running < height)
+      {
+        // A strictly higher corner takes over, but only hands over its primitive
+        // if it actually found one (`-1 < (short)puVar4[0x17]`).
+        adopt(hit, true);
+        sample.terrainFlagsWinning = flagsOf(hit);
+        running = height;
+      }
+      else if (height == running)
+      {
+        sample.terrainFlagsWinning |= flagsOf(hit);
+      }
+    }
+
+    sample.height = running;
+    sample.found = running < kNoGroundHeight;
+    sample.sampledFourCorners = true;
+    return sample;
   }
 
   std::optional<Psm2BlockerHit> queryPsm2ActiveBlockerAlong(const orphen::ported::psm2::Psm2RuntimeState &map,

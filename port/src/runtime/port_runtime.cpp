@@ -215,6 +215,13 @@ namespace orphen::port
                 << " triangles=" << stats.triangleCount
                 << " skipped=" << stats.skippedPrimitiveCount
                 << " textures=" << mapViewer_.loadedTexturePageCount() << '\n';
+      // The collision broadphase, so a map that silently failed to supply one
+      // is visible rather than quietly falling back to the unordered scan.
+      std::cout << "[psm2] collision cells=" << stats.occupiedCollisionCells
+                << "/" << orphen::ported::psm2::kCollisionGridCells
+                << " cellList=" << stats.collisionCellListLength
+                << " descriptors=" << mapViewer_.loadedMap()->DAT_003556d8_collisionDescriptors.size()
+                << " groups=" << mapViewer_.loadedMap()->DAT_003556e0_collisionGroups.size() << '\n';
 
       if (!config.dumpMapTexturesPath.empty())
       {
@@ -308,17 +315,25 @@ namespace orphen::port
     if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
     {
       environment.terrainSurface =
-          [loadedMap](float x, float y, float feetHeight, float headHeight)
+          [loadedMap](float x, float y, float feetHeight, float bodyHeight, float radius,
+                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask)
           -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
       {
-        const Psm2TerrainQueryOptions options{0, false, Psm2ActorBody{feetHeight, headHeight}};
-        const auto hit = queryPsm2GroundAt(*loadedMap, x, y, feetHeight, options);
-        if (!hit.has_value())
+        const auto sample = FUN_00227070_sample_ground(*loadedMap, x, y, feetHeight, bodyHeight,
+                                                       radius, entityFlags04, rejectTerrainMask);
+        if (!sample.found)
         {
           return std::nullopt;
         }
-        return orphen::ported::entity::ActorEnvironment::TerrainSurface{
-            hit->height, hit->terrainFlags, static_cast<std::int32_t>(hit->primitiveIndex)};
+
+        orphen::ported::entity::ActorEnvironment::TerrainSurface surface;
+        surface.height = sample.height;
+        surface.terrainFlags = sample.terrainFlagsWinning;
+        surface.terrainFlagsAll = sample.terrainFlagsAll;
+        surface.primitiveIndex = sample.packedPrimitive;
+        surface.cornerHeights = sample.cornerHeights;
+        surface.sampledFourCorners = sample.sampledFourCorners;
+        return surface;
       };
     }
 
@@ -396,6 +411,19 @@ namespace orphen::port
           return std::nullopt;
         }
         return hit->height;
+      };
+
+      environment.FUN_00227070_sample_ground =
+          [loadedMap](float x, float y, float feetHeight, float bodyHeight, float radius,
+                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask) -> std::optional<float>
+      {
+        const auto sample = orphen::port::FUN_00227070_sample_ground(
+            *loadedMap, x, y, feetHeight, bodyHeight, radius, entityFlags04, rejectTerrainMask);
+        if (!sample.found)
+        {
+          return std::nullopt;
+        }
+        return sample.height;
       };
     }
 

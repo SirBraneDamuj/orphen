@@ -75,6 +75,15 @@ namespace orphen::ported::entity
     std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
     float maxStepHeight80 = 0.75f;           // +0x80: maximum step-up height accepted by FUN_002262c0.
 
+    // +0x84..+0x90: the four corner heights FUN_00227070:133-138 publishes after
+    // a four-corner sample, in its own order -- (-r,-r), (+r,-r), (+r,+r),
+    // (-r,+r). FUN_002262c0:130-159 reads them back to decide which way an actor
+    // is overhanging, so they are state, not diagnostics.
+    float cornerHeight84 = 0.0f;
+    float cornerHeight88 = 0.0f;
+    float cornerHeight8c = 0.0f;
+    float cornerHeight90 = 0.0f;
+
     // +0x94: FUN_00266240's last argument, a spawn parameter whose meaning is
     // per-type. Type 0x3A repurposes it as "this entity has ticked once".
     std::uint8_t spawnParam94 = 0;

@@ -334,6 +334,19 @@ namespace orphen::ported::script
     std::function<std::optional<float>(float x, float y, float feetHeight, float headHeight)>
         terrainHeight;
 
+    // FUN_00227070 proper, for the callers that really invoke it -- opcode 0x55
+    // is one. Unlike `terrainHeight` above (which is FUN_00227798's body-less
+    // point query) this samples four corners of the entity's collision radius
+    // and keeps the highest, unless entity +0x04 bit 1 says otherwise.
+    std::function<std::optional<float>(float x,
+                                       float y,
+                                       float feetHeight,
+                                       float bodyHeight,
+                                       float radius,
+                                       std::uint16_t entityFlags04,
+                                       std::uint32_t rejectTerrainMask)>
+        FUN_00227070_sample_ground;
+
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
 

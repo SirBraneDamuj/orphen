@@ -1257,58 +1257,119 @@ decides which of them to call and in what order (`FUN_00209140`).
   depth sort. It runs on the fixed simulation step, not in `render()`, because
   the fade byte is per-frame state.
 
-### Standing on things: the step-up bit
+### Standing on things: the map ships the answer
 
-s01_e012 sits Magnus on a bed. The port had him sunk into it with only his head
-showing, and the pink collision box in the right place — which is the shape of a
-*height* bug, not a pose one.
+An earlier pass here invented a "step-up bit" — `record78 +0x04` bit `0x100` —
+to decide which of two candidate surfaces an actor stands on. **It does not
+exist.** It was a rule fitted to two data points because the port had no way to
+break the tie. The engine does not break ties at all, and the reason is that the
+map file tells it the order outright. `analyzed/terrain_ground_query.c` is the
+full reading; the short version:
 
-The script is not the problem. All three of its `0x55` calls place him at exactly
-`(-8.000, -3.150, -1.500)`, the deck. `eeMemory.bin` has him at `-1.200` with
-`+0x4C` and `+0x50` both `-1.200`, so the engine put him the 0.30 up, and there
-is a **hidden collision quad at z = -1.200** over the bed to put him on:
-primitive #9, `flags=0xa20`, no material slot, invisible.
+**`FUN_00227840` is an ordered walk, not a search.** PSM2 header word 6 holds a
+64×64 grid of `int16` cell heads and a shared run list, and `FUN_0022b5a8`
+copies both out of the file computing nothing. The scan walks one cell's run in
+the authored order, keeps the first front-facing hit, and stops at the first hit
+at or below the head. That order *is* the tie-break. The port now loads the
+section (`loadCollisionGrid`) and walks it; every scoring heuristic it used
+before — nearest height, highest eligible, the step-up bit — is gone.
 
-Two things had to change.
+Verified byte for byte rather than by eye: `out/mapbin/0001.psm2` reproduces the
+dump's grid 4096/4096 and its cell list 1022/1022. All 165 PSM2 maps carry the
+section, so the old unordered scan survives only as a fallback for a map that
+fails to parse.
 
-**The ground query has to be able to answer above the feet.** `FUN_00227840`
-walks the cell's primitive list and takes the *first* candidate at or below the
-head; the port has no cell list, so it scored candidates by distance from the
-reference height, which can never reach a surface an actor is meant to be
-standing on top of. It now takes the **highest eligible** surface, where a
-surface above the feet is eligible only if `record78 +0x04` carries bit `0x100`.
+Three flags on `leadingWord` drive it, all read rather than guessed: `0x800`
+"participates in collision", `0x200` "flat, height is the constant at `+0x2C`"
+(which is the primitive's *maximum* corner z), and `0x100` "ceiling". A ceiling
+does **not** reject — on a hit it clears the have-recorded latch without writing
+a height, so a later front face below it replaces whatever was latched above.
+The reject mask is entity `+0x74`, per entity, not a constant.
 
-That bit is derived, not read out of the decompilation, and s01_e012 supplies
-both halves of the evidence: two hidden quads sit at `-1.200` over two beds,
-identical in every field *except* this bit — #9 over Magnus's bed has
-`0x50620100`, #339 over the other has `0x50620000` — and the dump puts slot 81
-on the first at `-1.200` while leaving slot 82 on the deck at `-1.500` under the
-second. All 99 primitives in the scene carrying it sit between `-1.40` and
-`-0.05`, above the `-1.50` deck, which is the profile of low step-up surfaces.
-`s01_e024` has none at all, so it cannot be moved by this.
+**And the lift is a landing snap, not a material gate.** `FUN_002262c0:41-85`'s
+resample block needs the cached primitive's `+0x13` to be non-zero, and that is
+`0` for every primitive in s01_e012 — it never fires there. What raises `+0x28`
+is `:502-520`: `pos <= +0x4C → pos = +0x4C`.
 
-**And the lift gate had to stop being `moved`.** `FUN_002262c0:41-85` raises
-`+0x28` in one branch, gated on the cached ground primitive at `+0x0A` being
-valid and carrying the same material as the one just sampled. The port modelled
-neither, and used "the behavior asked to move this frame" instead — which can
-never lift a script-placed cutscene actor, because one never asks to move. It
-now caches the sampled primitive index on the entity (`groundPrimitive0a`) and
-lifts when two consecutive samples agree. Narrower than material equality:
-crossing between two primitives of the same material costs one frame of lag
-where the original lifts immediately.
+The other half of that: **a stationary non-player actor never resamples the
+ground.** `FUN_00227390` is reached only from the velocity loop or from a branch
+gated on `DAT_003555d0 != 0`, and that global is `0` in the dump. Such an actor
+keeps the `+0x4C` its placement opcode gave it for the whole scene — `0x55`
+calls the query and gets a real height, `0x54` just mirrors the authored z. So
+Magnus's `0x55` writes `-1.200` (hidden flat quad #9 over the bed) while leaving
+him at the authored `-1.500`, and the snap lifts him. Slots 82 and 84 have
+`+0x0A = -1` and `+0x6C = 0` — never queried — and sampling them every frame is
+exactly what put them at the wrong height.
 
-**Checked against the dump, entity by entity: 65 of 67 positions match.** The
-two that do not are both older than this change — Volcan reads `-1.00` against
-the dump's `-1.20` and did so before it too, and Dortin is mid-walk at a
-different point of his path than the dump caught him. `s01_e024` is untouched:
-frame 300 and the chest cutscene's frame 470 are both byte-identical, all ten
-chest states still run, and s01_e012 stays deterministic with `0x515` at 13122.
+**Checked against the dump, entity by entity: 80 of 82 positions match.** The
+two that do not are Volcan, whom the port moves when the original does not (his
+`+0x04` reads `0x21` against the dump's `0x23`), and one NPC mid-walk. Both
+predate this. `s01_e024` still runs all ten chest states with zero unimplemented
+opcodes, and s01_e012 stays deterministic over 20,000 frames with `0x515` at
+13122.
+
+**The collision groups, and four-corner sampling.** Two things this pass first
+listed as gaps and then closed, because a gap between the port and the
+decompilation is a bug, not a design choice.
+
+`FUN_00227840` has a **second loop** over the `0x74`-stride collision groups at
+`DAT_003556e0`. Those groups own a block of primitives at the top of the
+record78 array that the cell grid never indexes — in s01_e012 the grid stops
+near 2500 and the groups run 3131..3948 — so without the loop roughly 800
+primitives did not collide at all. It needs two more map sections: header word 1
+(descriptors, **file stride 24**, which is what makes `4 + count * 24` land
+exactly on the next section) and header word 7 (groups). The group's XY box is
+not in the file — `FUN_00208450` recomputes it per frame — but for a group that
+never moves it is exactly the union of its primitives' bounds, verified **20/20**
+against the dump. A group the port ever animates will need the live recompute.
+
+`FUN_00227070` samples **four corners**, at ±`entity+0x54`, and takes the
+maximum, unless `entity+0x04 & 2` selects a single point. Party members read
+`0xAF` (single); props, NPCs and the player (`0x312C`) are all four-corner, so
+the port's single point was wrong for nearly everything — that is why an actor
+would not stand on the edge of anything. The bookkeeping is not just a max:
+`+0x6C` takes the winning sample's flags and ORs in any that tie, `+0x70` takes
+the AND across all four, `+0x0A` only updates when the new sample found
+something, and `+0x84..+0x90` publish the four heights.
+
+Still missing, and named: `FUN_00228cf0` (riding another entity),
+`FUN_002281a0` (the dynamic `0x10000` plane resolve), and `FUN_00208450` itself.
+
+### Volcan is not a terrain bug — the cutscene runs ahead
+
+Worth writing down because it cost time and will recur. Slot 84 reads z = `-1.00`
+against the dump's `-1.20`, next to a pile of genuine terrain fixes, so it looks
+like one more. It is not.
+
+The opening cutscene is scheduler stream `0xca30`, and its records are paced by
+**event-flag waits**, not by their `limit` field, which is 0 on most of them. The
+port satisfies those gates far too early: flag `0x66` at frame 1543, `0x65` at
+2018, and then record [27] (`0xcb08` → `0x4a87`) fires at ~2050. That block
+re-places Volcan with `0x55` at `-1.000`. In the real game it has not run at all
+by the bed shot, roughly 7500 frames later.
+
+Three fields say so together, which is why this is safe to conclude: the `0x54`
+at `0x42ce` sets position `-1.200` **and** animation 48 **and** leaves `flags06`
+bit 0 set, and the dump has all three. The `0x4a87` block would set animation 24
+and clear that bit.
+
+The lesson for the next one of these: never diagnose from position alone. Find
+every script site that writes the entity, read what each one *also* sets, and
+match all of it against the dump — the block that agrees on every field is the
+one that last ran. One trap while doing it: `currentOpcode_` is clobbered by the
+nested opcodes operand evaluation dispatches, so a trace printed after the
+operand reads names the wrong opcode. `FUN_0025eeb0` captures it at entry for
+exactly that reason.
+
+Separately, entity `+0x04` bit `0x2` (the single-point sampling selector) is
+correct until about frame 3000 and cleared afterwards — the script's
+`or_register(work[4], reg 3, 2)` at `0x430f` does apply. That is its own thread.
 
 `--probe x,y,z[,r]` prints `lead=` (record78 `+0x00`) beside `terrain=`
-(`+0x04`) now; the ground scan gates on the first and the step-up rule on the
-second, and telling them apart matters — both have a meaningful bit `0x100` and
-they are different fields. `--actor-report` prints `af=` (entity `+0x04`) so a
-run can be diffed straight against a dump's entity block.
+(`+0x04`); the scan gates on the first and the reject mask on the second, and
+both have a meaningful bit `0x100`, so telling them apart matters.
+`--actor-report` prints `af=` (entity `+0x04`) so a run can be diffed straight
+against a dump's entity block.
 
 ### Why walls go see-through
 

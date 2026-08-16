@@ -2558,13 +2558,16 @@ namespace orphen::ported::script
     entity->groundHeight4c = z;
 
     bool grounded = false;
-    if (sampleTerrain && environment_.terrainHeight)
+    if (sampleTerrain && environment_.FUN_00227070_sample_ground)
     {
       // FUN_00227070 is handed the entity, and reads +0x28 / +0x58 off it for
-      // the scan band. Those are the position just written and the body height,
-      // so the sample is the floor *under this entity*, not the nearest surface
-      // to sea level.
-      const auto height = environment_.terrainHeight(x, y, z, z + entity->height58);
+      // the scan band -- plus +0x54 and +0x04, which decide whether it samples
+      // one point or the four corners of the collision radius. Those are the
+      // position just written and the entity's own body, so the sample is the
+      // floor *under this entity*, not the nearest surface to sea level.
+      const auto height = environment_.FUN_00227070_sample_ground(
+          x, y, z, entity->height58, entity->radius54, entity->halfword04,
+          entity->rejectTerrainMask74);
       if (height.has_value())
       {
         entity->groundHeight4c = *height;

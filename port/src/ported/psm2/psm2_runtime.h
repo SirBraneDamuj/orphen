@@ -79,6 +79,15 @@ namespace orphen::ported::psm2
     std::array<Vec3, 2> planeNormal{};
     std::array<Vec3, 2> unitNormal{};
     std::array<float, 2> slopeAngle{};
+
+    // The 4th word of each plane record at +0x3C / +0x4C. FUN_0022caf8 stores
+    // the **middle** corner of the triple it was handed -- a triangle (0,1,2)
+    // gives 1, a quad's halves (3,0,1) and (1,2,3) give 0 and 2 -- as a raw
+    // int, which the decompiler shows as a float because the surrounding
+    // fields are floats. FUN_00228090 reads it back as the vertex the plane
+    // equation is anchored at. Confirmed against eeMemory.bin: every quad in
+    // s01_e012 reads 0 and 2.
+    std::array<std::uint8_t, 2> planeOriginCorner{};
   };
 
   // One of the four material slots a primitive can carry: 0x80-record
@@ -177,6 +186,62 @@ namespace orphen::ported::psm2
     std::uint8_t param = 0;     // +0x0F
   };
 
+  // The collision broadphase, PSM2 header word 6. FUN_0022b5a8:305-325 copies it
+  // out of the file verbatim -- nothing is computed -- so the port can hold the
+  // identical structure: a 64x64 grid of int16 offsets into a shared index list,
+  // each run terminated by a negative entry.
+  //
+  // This is what makes FUN_00227840 answerable. Its scan is not "pick the best
+  // candidate", it is "walk this cell's run in order and take the first hit at
+  // or below the head", so the run's authored order *is* the tie-break. Without
+  // it the port had to invent a scoring rule, and every scoring rule it tried
+  // was wrong somewhere.
+  inline constexpr std::size_t kCollisionGridSide = 64;
+  inline constexpr std::size_t kCollisionGridCells = kCollisionGridSide * kCollisionGridSide;
+
+  // FUN_00227840:25-28. Cell = (world + 64) * 0.5, and a query outside the grid
+  // returns "no ground" rather than clamping.
+  inline constexpr float kCollisionGridOrigin = 64.0f;
+  inline constexpr float kCollisionGridScale = 0.5f;
+
+  // PSM2 header word 1. FUN_0022b5a8:56-89 copies 24 bytes per record out of the
+  // file into a 0x20 stride in memory, so the file stride is **24** -- which is
+  // what makes `4 + count * 24` land exactly on the next section.
+  struct CollisionDescriptor
+  {
+    std::uint16_t firstPrimitive = 0;  // memory +0x04
+    std::uint16_t primitiveCount = 0;  // memory +0x06
+  };
+
+  // PSM2 header word 7, FUN_0022b5a8:443-517: an int16 count then 14 int16 per
+  // group (file stride 28) expanded into a 0x74 stride.
+  //
+  // These own a **disjoint** block of primitives at the top of the record78
+  // array that the cell grid never references -- in s01_e012 the grid stops
+  // around 2500 and the groups run 3131..3948. FUN_00227840's second loop is the
+  // only thing that reaches them, so without it those primitives do not collide
+  // at all.
+  struct CollisionGroup
+  {
+    std::uint16_t descriptorIndex = 0;  // +0x00
+    std::int16_t type = 0;              // +0x02; the terrain scan skips type 4
+    std::uint16_t firstPrimitive = 0;   // resolved through the descriptor
+    std::uint16_t primitiveCount = 0;
+
+    // +0x24/+0x28/+0x2C/+0x30, the XY box FUN_00227840:99-102 rejects against.
+    // The original computes it at runtime, but for a group that never moves it
+    // is exactly the union of its primitives' bounds -- verified 20/20 against
+    // eeMemory.bin. A group the port made move would need the live recompute.
+    float minX = 0.0f;
+    float maxX = 0.0f;
+    float minY = 0.0f;
+    float maxY = 0.0f;
+    bool boundsValid = false;
+  };
+
+  // FUN_00227840:94. A group of this type is skipped by the terrain scan.
+  inline constexpr std::int16_t kCollisionGroupTypeSkipped = 4;
+
   struct Psm2Stats
   {
     std::size_t positionRecordCount = 0;
@@ -186,6 +251,8 @@ namespace orphen::ported::psm2
     std::size_t triangleCount = 0;
     std::size_t skippedPrimitiveCount = 0;
     std::size_t objectPlacementCount = 0;
+    std::size_t collisionCellListLength = 0;
+    std::size_t occupiedCollisionCells = 0;
   };
 
   struct Psm2RuntimeState
@@ -198,6 +265,17 @@ namespace orphen::ported::psm2
     std::vector<PaletteColour> DAT_00355bdc_palette;
     std::vector<ObjectPlacementRecord> DAT_003556e8_objectPlacements;
     std::vector<TriangleRecord> derivedTriangles;
+
+    // DAT_00343a18 and DAT_003556f0 / DAT_003556ec.
+    std::vector<std::int16_t> DAT_00343a18_collisionGrid;
+    std::vector<std::int16_t> DAT_003556f0_collisionCellList;
+
+    // DAT_003556d8 / DAT_003556d4 and DAT_003556e0 / DAT_003556dc.
+    std::vector<CollisionDescriptor> DAT_003556d8_collisionDescriptors;
+    std::vector<CollisionGroup> DAT_003556e0_collisionGroups;
+
+    bool hasCollisionGrid() const { return DAT_00343a18_collisionGrid.size() == kCollisionGridCells; }
+
     Bounds3 bounds;
     Psm2Stats stats;
   };
