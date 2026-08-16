@@ -199,6 +199,16 @@ namespace
         config.suppressPointLights = true;
         continue;
       }
+      if (argument == "--pose-report")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--pose-report requires a pool slot");
+        }
+        config.poseReportSlot = std::stoi(argv[++argumentIndex]);
+        config.printModelReport = true;
+        continue;
+      }
       if (argument == "--map-no-blend")
       {
         config.suppressMapBlend = true;

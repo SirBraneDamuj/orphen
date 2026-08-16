@@ -132,10 +132,45 @@ namespace orphen::port
     // ships in category 2 alongside the map geometry instead -- s01_e024 carries
     // its type 0x272 chest as category 2 id 0x009F, and nothing in category 0.
     // Both decode to a plain PSC3, so the only difference is where to look.
-    std::vector<std::uint8_t> bytes = decodeResource(orphen::harness::kGrpCategory, meshId);
-    if (bytes.empty())
+    //
+    // **The bundle has to be exhausted before the category.** This used to ask
+    // for category 0 across both bundles and only then try category 2, on the
+    // reasoning that ids are scene-private in practice. They are not: s01_e012
+    // wants six models that live in its own category 2 -- 0x00A6, 0x00A8,
+    // 0x00A9, 0x00AC, 0x00AD, 0x00AE -- and the boot bundle answers for those
+    // ids first out of category 0. Two of those answers are some other model,
+    // which parsed and drew as a plausible but wrong mesh; two are not models at
+    // all and failed the magic check. `eeMemory.bin` settles which is right:
+    // entity +0x15C is the model base FUN_00229c40:28 stored, and its bone count
+    // matches the scene bundle's copy, not the boot bundle's.
+    std::vector<std::uint8_t> bytes;
+    const std::array<const orphen::harness::SceneResourceProvider *, 2> providers{
+        sceneResources_, bootResources_.has_value() ? &*bootResources_ : nullptr};
+    const std::array<std::uint16_t, 2> categories{orphen::harness::kGrpCategory,
+                                                  orphen::harness::kMapCategory};
+    for (const orphen::harness::SceneResourceProvider *provider : providers)
     {
-      bytes = decodeResource(orphen::harness::kMapCategory, meshId);
+      if (provider == nullptr)
+      {
+        continue;
+      }
+      for (const std::uint16_t category : categories)
+      {
+        const orphen::harness::SceneResourceRecord *record = provider->find(category, meshId);
+        if (record == nullptr)
+        {
+          continue;
+        }
+        bytes = provider->decodeRecord(*record);
+        if (!bytes.empty())
+        {
+          break;
+        }
+      }
+      if (!bytes.empty())
+      {
+        break;
+      }
     }
     if (bytes.empty() && itmArchive_.valid())
     {

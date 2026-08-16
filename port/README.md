@@ -1345,6 +1345,107 @@ differ in 25.2% of pixels, at f6000 12.0%; `s01_e024` is **byte-identical**, so
 the room the port was developed against is untouched. Cost is 23 extra batches
 and 0.80 -> 0.92 ms of map time, entities unchanged.
 
+### The shop's additive props: a bundle-lookup order bug
+
+s01_e012 drew white/pink sheets and a rope swirl above the shop counter that the
+original does not show. **Fixed** — `EntityModelStore::loadModel` was asking the
+wrong bundle.
+
+Bisecting pool slots against an all-entities-hidden render at f3000 — which by
+itself matches the emulator frame, so this is entirely entity draws:
+
+| slot | type | model | share of upper frame |
+|---|---|---|---|
+| **14** | 0x27b | grp_00a8 | **34.6%** |
+| 28-32 | 0x27c-0x280 | grp_00a9..00ad | 10.7% |
+| 11 | 0x27d | grp_00aa | 0.2% |
+
+`--pose-report <slot>` prints one entity's bone palette beside an unfiltered
+rebuild of it, plus the subdraw blend histogram. It says grp_00a8 is **158
+subdraws, every one blend mode 2 (additive), mean alpha 105/128**. These are
+effect models, not props.
+
+Six leads are ruled out, and are recorded so they are not re-derived:
+
+- **Not the model parser.** This entry used to describe these as "stretched
+  shards from a model-parser bug". The parse is fine.
+- **Not the pose filter.** live palette == unfiltered rebuild on every bone,
+  gap 0.000; +0x13C is 1.0, so the filter is a no-op here regardless.
+- **Not the pose column.** The renderer uses entity +0xAC = 0 and `eeMemory.bin`
+  reads +0xAC = 0 too. An earlier "live=2.44 vs posed=0.83" was a diagnostic
+  comparing different columns: `--model-report`'s bbox uses
+  `firstPoseColumnForAnimation`, the renderer uses +0xAC.
+- **Not entity visibility.** `DAT_005a96b0[14] = 1` and +0x04 = 0x00D8, so both
+  of FUN_0020c5a8's first-pass tests pass in the original.
+- **Not the fade byte.** +0x134 is 0.0 on every entity in the dump, player
+  included; 0 means "not fading" and the port already maps it to 1.0.
+- **The zero bone matrices are an artefact.** 9 of 19 matrices at
+  `0x357E00 + 14*0xA80` read zero, but the dump is the bed shot and slot 14 has
+  never been drawn there, so that bank is untouched BSS.
+
+**Root cause: the port binds the wrong mesh.** `FUN_00229c40:28` stores the
+bound model's base pointer at entity **+0x15C**, and a loaded PSC3 keeps its
+magic, so an EE dump names the mesh the original actually drew and its bone
+count at +0x04:
+
+| type | port binds | port bones | real bones | |
+|---|---|---|---|---|
+| 0x275 | grp_00a2 | 31 | 31 | ok |
+| 0x279 | grp_00a6 | *parse fails* | 30 | **wrong** |
+| 0x27b | grp_00a8 | 19 | 2 | **wrong** |
+| 0x27c | grp_00a9 | 18 | 2 | **wrong** |
+| 0x27d | grp_00aa | 10 | 10 | ok |
+| 0x27e | grp_00ab | 2 | 2 | ok |
+| 0x27f | grp_00ac | 41 | 2 | **wrong** |
+| 0x280 | grp_00ad | 11 | 2 | **wrong** |
+| 0x281 | grp_00ae | *parse fails* | 17 | **wrong** |
+| 0x299 | grp_00c6 | 4 | 4 | ok |
+| 0x2c0 | grp_01cb | 31 | 31 | ok |
+
+The wrong ones are exactly the slots a hide-slot bisect had found. The **type ->
+mesh id mapping is fine** (`id = type - 0x1D3` across this band, confirmed by the
+five that match), and so is the descriptor table (contiguous at 0x00F467xx,
+stride 0x2C, ordered by type).
+
+The fault was **lookup order**. `loadModel` asked for category 0 across *both*
+bundles and only then tried category 2:
+
+```cpp
+bytes = decodeResource(kGrpCategory, meshId);   // scene cat 0, then BOOT cat 0
+if (bytes.empty())
+  bytes = decodeResource(kMapCategory, meshId); // scene cat 2
+```
+
+That rested on ids being scene-private, which the old comment admitted was only
+"in practice". s01_e012 breaks it: the six models it wants live in its own
+category 2, and the boot bundle answers for those same ids out of category 0
+first. Two of those answers are a different model — which parsed and drew as a
+plausible but wrong mesh — and two are not models at all, which is why the
+"missing PSC3 magic" failures always sat right next to the "shards". One bug,
+two symptoms.
+
+The fix exhausts the **bundle** before the category: for each provider, scene
+then boot, try category 0 then category 2. After it, all eleven types in the
+band match the dump's bone counts, and `s01_e012`'s model failures go from 16 to
+**0** — grp_00a6 (30 bones) and grp_00ae (17) load for the first time and put
+the shop's crates and side counter on screen.
+
+The real props are 2-bone meshes. The port had been drawing 19- and 41-bone ones
+whose subdraws are 100% additive, which is why they read as translucent sheets
+rather than as obviously broken geometry.
+
+`s01_e024` renders **byte-identical**, `s01_e012` stays deterministic, flag
+`0x515` still lands at 13122, and the chest cutscene still runs its ten states.
+
+### Notes on GS dumps
+
+`tools/gs_dump_parse.py` drops VSync boundaries, so re-walk the packets if you
+need per-frame draw lists. The field is **640x224** with XYOFFSET
+(2048-320, 2048-112) — the measured vertex y span of 226.6 settles it. ABE is
+not a useful discriminator in this game: most of the scene is blended, and
+nearly every texture shows opaque ~= abe because each primitive gets a second
+packet.
+
 ## Timing Model
 
 The simulation runs on a fixed 60 Hz step, decoupled from the render rate. `main`

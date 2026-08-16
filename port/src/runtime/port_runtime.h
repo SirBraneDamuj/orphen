@@ -103,6 +103,9 @@ namespace orphen::port
     // --map-no-blend: draw every map primitive opaque, the way the port did
     // before FUN_00211230's ABE block was ported. Diagnostic only.
     bool suppressMapBlend = false;
+    // --pose-report <slot>: dump one entity's bone palette next to an
+    // unfiltered rebuild of it, bone by bone, and name the first divergence.
+    int poseReportSlot = -1;
     bool printGleamReport = false;
     // --frame-stats: accumulate a per-phase render breakdown and print it
     // every kFrameStatsWindow frames. Windowed runs only -- headless never
@@ -251,6 +254,8 @@ namespace orphen::port
     bool runScriptTick_ = false;
     bool drawDistanceOverridden_ = false;
     bool suppressPointLights_ = false;
+    int poseReportSlot_ = -1;
+    void printPoseReport(std::size_t slot) const;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;
     // Rising-edge state for the live trigger log, so stepping on a panel says

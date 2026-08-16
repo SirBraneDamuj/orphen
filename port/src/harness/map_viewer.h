@@ -100,6 +100,9 @@ namespace orphen::harness
     bool cycleDiscScene(int direction);
     void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
     void setSceneObjectViews(orphen::port::SceneObjectViewList objects);
+    // What the renderer will actually pose with, as opposed to a palette a
+    // report rebuilds for itself.
+    const orphen::port::SceneObjectViewList &sceneObjectViews() const { return sceneObjectViews_; }
     // The entity texture slots, owned by the model store. Uploaded lazily on
     // the same schedule as the map's pages so headless runs never touch GL.
     void setTextureSlotCache(const orphen::ported::resource::TextureSlotCache *slots);

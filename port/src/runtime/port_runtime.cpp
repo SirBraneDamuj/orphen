@@ -139,6 +139,7 @@ namespace orphen::port
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
     suppressPointLights_ = config.suppressPointLights;
+    poseReportSlot_ = config.poseReportSlot;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
     if (printGleamReport_)
     {
@@ -1847,6 +1848,146 @@ namespace orphen::port
     std::cout << "[models] parsed=" << parsed << " failed=" << failed << '\n';
 
     printEntityModelBindings();
+    if (poseReportSlot_ >= 0)
+    {
+      printPoseReport(static_cast<std::size_t>(poseReportSlot_));
+    }
+  }
+
+  // One entity's palette, bone by bone, against an unfiltered rebuild of it.
+  //
+  // Three palettes are in play and only one of them is drawn:
+  //
+  //   live        SceneObjectView::bonePalette, built by attachModel through
+  //               FUN_0020d188's stateful filter at entity +0xAC. This is what
+  //               the renderer poses with.
+  //   unfiltered  the same pose column, composed straight from the sampled
+  //               keys with no filter and no override.
+  //   first       the column FUN_00225c90 would pick for the entity's *animation
+  //               id*, which is what --model-report's bbox uses.
+  //
+  // live vs unfiltered isolates the filter. unfiltered vs first isolates the
+  // column. Reporting both separately is the point -- a divergence that shows up
+  // in one and not the other says which half to go and read.
+  void PortRuntime::printPoseReport(std::size_t slot) const
+  {
+    const auto &entity = entityPool_.slot(slot);
+    EntityModelStore &store = const_cast<EntityModelStore &>(modelStore_);
+    const EntityModelBinding *binding = store.bindingForTypeId(entity.effectiveTypeId());
+    if (binding == nullptr || binding->model == nullptr)
+    {
+      std::cout << "[pose] slot " << slot << " has no model\n";
+      return;
+    }
+    const auto &model = *binding->model;
+
+    const orphen::port::SceneObjectView *view = nullptr;
+    for (const auto &candidate : mapViewer_.sceneObjectViews())
+    {
+      if (candidate.slot == slot)
+      {
+        view = &candidate;
+        break;
+      }
+    }
+    if (view == nullptr || view->bonePalette.empty())
+    {
+      std::cout << "[pose] slot " << slot << " is not in the published view list\n";
+      return;
+    }
+
+    const std::uint16_t firstColumn = orphen::ported::model::firstPoseColumnForAnimation(
+        model, model.blob, entity.animationA0);
+    std::cout << "[pose] slot " << slot << " type=0x" << std::hex << entity.typeId00 << std::dec
+              << " grp_" << std::hex << std::setw(4) << std::setfill('0') << binding->meshId
+              << std::dec << std::setfill(' ') << "  bones=" << model.submeshes.size()
+              << "  anim=" << entity.animationA0 << " poseColumn(+0xAC)=" << entity.poseColumnAc
+              << " prev(+0xAE)=" << entity.previousPoseColumnAe
+              << " firstColumnForAnim=" << firstColumn
+              << "  blend(+0x13C)=" << entity.animationBlend13c
+              << "  flags08=0x" << std::hex << entity.halfword08 << std::dec << '\n';
+
+    const auto root = orphen::ported::model::FUN_0020cdc0_entity_root(
+        {view->position.x, view->position.y, view->position.z}, view->facingRadians,
+        view->rotationX154, view->rotationY158, view->scale, view->scaleZ150);
+    const auto unfiltered =
+        orphen::ported::model::FUN_0020d618_build_palette(model, model.blob, entity.poseColumnAc, root);
+    const auto atFirstColumn =
+        orphen::ported::model::FUN_0020d618_build_palette(model, model.blob, firstColumn, root);
+
+    const auto rowLength = [](const orphen::ported::model::Matrix4 &m, int row) {
+      return std::sqrt(m[row * 4] * m[row * 4] + m[row * 4 + 1] * m[row * 4 + 1] +
+                       m[row * 4 + 2] * m[row * 4 + 2]);
+    };
+    const auto originGap = [](const orphen::ported::model::Matrix4 &a,
+                              const orphen::ported::model::Matrix4 &b) {
+      const float dx = a[12] - b[12];
+      const float dy = a[13] - b[13];
+      const float dz = a[14] - b[14];
+      return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    int firstFilterDivergence = -1;
+    int firstColumnDivergence = -1;
+    constexpr float kTolerance = 1e-3f;
+
+    std::cout << "  bone  parent  live-origin                    scale   "
+                 "gap(live-unfiltered)  gap(unfiltered-firstColumn)\n";
+    for (std::size_t bone = 0; bone < model.submeshes.size() && bone < view->bonePalette.size();
+         ++bone)
+    {
+      const auto &live = view->bonePalette[bone];
+      const auto &plain = unfiltered[bone];
+      const auto &first = atFirstColumn[bone];
+      const float filterGap = originGap(live, plain);
+      const float columnGap = originGap(plain, first);
+      if (firstFilterDivergence < 0 && filterGap > kTolerance)
+      {
+        firstFilterDivergence = static_cast<int>(bone);
+      }
+      if (firstColumnDivergence < 0 && columnGap > kTolerance)
+      {
+        firstColumnDivergence = static_cast<int>(bone);
+      }
+      std::cout << "  " << std::setw(4) << bone << "  " << std::setw(6)
+                << model.submeshes[bone].parentIndex << std::fixed << std::setprecision(3)
+                << "  (" << std::setw(8) << live[12] << "," << std::setw(8) << live[13] << ","
+                << std::setw(8) << live[14] << ")  " << std::setw(6) << rowLength(live, 0)
+                << "  " << std::setw(18) << filterGap << "  " << std::setw(24) << columnGap
+                << '\n';
+    }
+    std::cout << std::defaultfloat;
+
+    // What the passes ask the rasteriser for. A model that poses correctly but
+    // looks wrong is being drawn wrong, and this is the next place to look:
+    // FUN_00212058:137-141's mode nibble and alpha, per subdraw.
+    {
+      std::array<std::size_t, 4> modeCounts{};
+      std::array<std::size_t, 4> modeAlphaSum{};
+      for (const auto &subdraw : model.subdraws)
+      {
+        const std::size_t mode = subdraw.blendMode() & 3u;
+        ++modeCounts[mode];
+        modeAlphaSum[mode] += subdraw.alpha();
+      }
+      std::cout << "  subdraw blend modes (0 opaque / 1 alpha / 2 additive / 3 subtract):";
+      for (std::size_t mode = 0; mode < 4; ++mode)
+      {
+        if (modeCounts[mode] == 0)
+        {
+          continue;
+        }
+        std::cout << "  " << mode << "=" << modeCounts[mode] << " (mean alpha "
+                  << modeAlphaSum[mode] / modeCounts[mode] << ")";
+      }
+      std::cout << '\n';
+    }
+
+    std::cout << "  first bone where the filter diverges: "
+              << (firstFilterDivergence < 0 ? std::string("none") : std::to_string(firstFilterDivergence))
+              << "\n  first bone where the column diverges: "
+              << (firstColumnDivergence < 0 ? std::string("none") : std::to_string(firstColumnDivergence))
+              << '\n';
   }
 
   // The entity half: which model and texture each live entity resolved to, and
@@ -1863,6 +2004,44 @@ namespace orphen::port
 
     std::cout << "[models] entity bindings"
               << (store.bootBundleLoaded() ? "" : "  (no s00_e000 boot bundle)") << '\n';
+
+    // The bbox beside it is rebuilt from a *fresh* palette. The renderer does
+    // not use that one -- it uses `SceneObjectView::bonePalette`, which
+    // PortRuntime::attachModel builds through FUN_0020d188's filter, and that
+    // filter carries state across frames. When the two disagree, the model is
+    // parsed fine and the pose is what is wrong, which is a completely
+    // different bug from the one a garbled model implies.
+    const auto livePaletteExtent = [&](std::size_t slot,
+                                       const orphen::ported::model::Psc3Model &model) {
+      std::ostringstream text;
+      for (const auto &view : mapViewer_.sceneObjectViews())
+      {
+        if (view.slot != slot || view.bonePalette.empty())
+        {
+          continue;
+        }
+        orphen::ported::psm2::Bounds3 live;
+        for (const auto &vertex : model.vertices)
+        {
+          const std::size_t bone =
+              vertex.boneIndex < view.bonePalette.size() ? vertex.boneIndex : 0u;
+          orphen::ported::psm2::includePoint(
+              live, orphen::ported::model::transformPoint(vertex.position,
+                                                          view.bonePalette[bone]));
+        }
+        const float span = std::max({live.max.x - live.min.x, live.max.y - live.min.y,
+                                     live.max.z - live.min.z});
+        text << std::fixed << std::setprecision(2) << "  live=" << span;
+        // An order of magnitude past the fresh pose is not an animation, it is
+        // a palette that has diverged.
+        if (span > 8.0f)
+        {
+          text << " EXPLODED";
+        }
+        break;
+      }
+      return text.str();
+    };
 
     const auto describe = [&](std::size_t slot, const orphen::ported::entity::OriginalEntity &entity) {
       const EntityModelBinding *binding = store.bindingForTypeId(entity.effectiveTypeId());
@@ -1922,6 +2101,7 @@ namespace orphen::port
                   << std::fixed << std::setprecision(2)
                   << "  posed=" << (posed.max.x - posed.min.x) << "x"
                   << (posed.max.y - posed.min.y) << "x" << (posed.max.z - posed.min.z)
+                  << livePaletteExtent(slot, model)
                   << "  at=(" << (posed.min.x + posed.max.x) * 0.5f << ","
                   << (posed.min.y + posed.max.y) * 0.5f << "," << posed.min.z << ".."
                   << posed.max.z << ")"
