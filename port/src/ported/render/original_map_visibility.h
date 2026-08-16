@@ -89,6 +89,12 @@ namespace orphen::ported::render
     // True when the primitive straddles the near plane and the original would
     // have taken the FUN_00209ca0 clip path.
     bool nearClipped = false;
+    // True when `fade` came from DAT_00355700 rather than from the primitive's
+    // own occlusion ramp -- FUN_00209140:344, the branch that overwrites the
+    // emitted byte with the cap. The draw path has to force blending for these:
+    // the cap is how a cutscene blacks the room out, and a fade of 3 against an
+    // opaque primitive is a number nothing ever reads.
+    bool globalFadeCapped = false;
   };
 
   struct MapVisibilityReport

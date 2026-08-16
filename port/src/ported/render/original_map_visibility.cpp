@@ -287,9 +287,11 @@ namespace orphen::ported::render
       }
 
       // DAT_00355700 caps everything, and also changes the sort key.
+      bool globalFadeCapped = false;
       if (input.globalFadeCap != 0 && input.globalFadeCap < record80.dynamicFade)
       {
         emittedFade = input.globalFadeCap;
+        globalFadeCapped = true;
       }
 
       // FUN_00209140:351-377. The bucket key is the projected screen depth,
@@ -329,7 +331,8 @@ namespace orphen::ported::render
         }
       }
 
-      buckets[static_cast<std::size_t>(bucket)].push_back({primitiveIndex, emittedFade, bucket, nearClipped});
+      buckets[static_cast<std::size_t>(bucket)].push_back(
+          {primitiveIndex, emittedFade, bucket, nearClipped, globalFadeCapped});
       ++drawCount;
     }
 

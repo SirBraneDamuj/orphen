@@ -1257,6 +1257,59 @@ decides which of them to call and in what order (`FUN_00209140`).
   depth sort. It runs on the fixed simulation step, not in `render()`, because
   the fade byte is per-frame state.
 
+### Standing on things: the step-up bit
+
+s01_e012 sits Magnus on a bed. The port had him sunk into it with only his head
+showing, and the pink collision box in the right place — which is the shape of a
+*height* bug, not a pose one.
+
+The script is not the problem. All three of its `0x55` calls place him at exactly
+`(-8.000, -3.150, -1.500)`, the deck. `eeMemory.bin` has him at `-1.200` with
+`+0x4C` and `+0x50` both `-1.200`, so the engine put him the 0.30 up, and there
+is a **hidden collision quad at z = -1.200** over the bed to put him on:
+primitive #9, `flags=0xa20`, no material slot, invisible.
+
+Two things had to change.
+
+**The ground query has to be able to answer above the feet.** `FUN_00227840`
+walks the cell's primitive list and takes the *first* candidate at or below the
+head; the port has no cell list, so it scored candidates by distance from the
+reference height, which can never reach a surface an actor is meant to be
+standing on top of. It now takes the **highest eligible** surface, where a
+surface above the feet is eligible only if `record78 +0x04` carries bit `0x100`.
+
+That bit is derived, not read out of the decompilation, and s01_e012 supplies
+both halves of the evidence: two hidden quads sit at `-1.200` over two beds,
+identical in every field *except* this bit — #9 over Magnus's bed has
+`0x50620100`, #339 over the other has `0x50620000` — and the dump puts slot 81
+on the first at `-1.200` while leaving slot 82 on the deck at `-1.500` under the
+second. All 99 primitives in the scene carrying it sit between `-1.40` and
+`-0.05`, above the `-1.50` deck, which is the profile of low step-up surfaces.
+`s01_e024` has none at all, so it cannot be moved by this.
+
+**And the lift gate had to stop being `moved`.** `FUN_002262c0:41-85` raises
+`+0x28` in one branch, gated on the cached ground primitive at `+0x0A` being
+valid and carrying the same material as the one just sampled. The port modelled
+neither, and used "the behavior asked to move this frame" instead — which can
+never lift a script-placed cutscene actor, because one never asks to move. It
+now caches the sampled primitive index on the entity (`groundPrimitive0a`) and
+lifts when two consecutive samples agree. Narrower than material equality:
+crossing between two primitives of the same material costs one frame of lag
+where the original lifts immediately.
+
+**Checked against the dump, entity by entity: 65 of 67 positions match.** The
+two that do not are both older than this change — Volcan reads `-1.00` against
+the dump's `-1.20` and did so before it too, and Dortin is mid-walk at a
+different point of his path than the dump caught him. `s01_e024` is untouched:
+frame 300 and the chest cutscene's frame 470 are both byte-identical, all ten
+chest states still run, and s01_e012 stays deterministic with `0x515` at 13122.
+
+`--probe x,y,z[,r]` prints `lead=` (record78 `+0x00`) beside `terrain=`
+(`+0x04`) now; the ground scan gates on the first and the step-up rule on the
+second, and telling them apart matters — both have a meaningful bit `0x100` and
+they are different fields. `--actor-report` prints `af=` (entity `+0x04`) so a
+run can be diffed straight against a dump's entity block.
+
 ### Why walls go see-through
 
 Two things together, and the port has both now. **Backface culling** makes a
@@ -1284,6 +1337,43 @@ they are exactly 16 coincident perpendicular pairs -- the hanging chains, built
 as crossed planes. Culling those makes each plane vanish from one side, so
 `drawPrimitive` skips culling for them. `--probe x,y,z[,r]` dumps the records
 around a world point with their flags, which is how that was pinned down.
+
+### The cutscene fade cap, and the room that would not go dark
+
+`DAT_00355700` is a global cap on that same `+0x2E` fade. `FUN_002340e0:32`
+leaves it at **3** for the chest cutscene, and `FUN_00209140:344` overwrites the
+emitted fade byte with it — a fade of 3 against a `0x80` = x1.0 scale is the
+black room the item reveal happens in. `FUN_002342c0` does the rest: it hides
+every entity from pool slot 2 up, zeroes the fog colour and drops both light
+colours, so what shows through the near-transparent map is the fog-colour clear.
+
+All of that was ported and none of it reached the screen. The cap was computed,
+emitted, folded into the vertex colour — **and then discarded, because a map
+primitive only blends when its material slot says so, and an opaque primitive
+never reads its vertex alpha.** So the chest cutscene played out over a fully lit
+room, the item reveal showed the floor behind it, and the scene read as suddenly
+"warmer" because `FUN_002342c0`'s neutral 0x808080 light had replaced the room's
+own without the room going away.
+
+The entity path had already hit this and solved it — "a fading entity has to
+blend whatever its passes say", `drawObjectModel`'s `mode == 0 && fade < 1`. The
+map path now does the same, scoped to the capped case: `MapDrawItem` carries
+`globalFadeCapped`, set only on the `FUN_00209140:344` branch, and
+`drawPrimitiveSlot` promotes blend mode 0 to 1 for those. The ordinary occlusion
+fade is untouched, so nothing outside a cutscene moves — `s01_e024` at frame 300
+and `s01_e012` at frame 1500 are both byte-identical across the change.
+
+The full cycle checks out: black room from state `0x0D`, item reveal on black,
+and the room, the other six chests and the scene's own lighting all back after
+`0x15`. Reproduce it with
+
+```
+orphen_port --disc-root . --scene s01_e024 --spawn -4.5,-10.5,0 \
+            --press-confirm 60,500 --screenshot out/c.ppm:680
+```
+
+Two frames matter: the second confirm is what dismisses the caption, and without
+it the run stops at state `0x12` and the last four states never run.
 
 ### Draw distance and fog
 

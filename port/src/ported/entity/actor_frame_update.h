@@ -60,6 +60,10 @@ namespace orphen::ported::entity
     {
       float height = 0.0f;
       std::uint32_t terrainFlags = 0;
+      // Which map primitive answered. FUN_00227070 caches this on the entity at
+      // +0x0A and FUN_002262c0 gates its lift on it -- see the floor block in
+      // actor_frame_update.cpp. -1 when the caller could not supply one.
+      std::int32_t primitiveIndex = -1;
     };
     std::function<std::optional<TerrainSurface>(float x, float y, float feetHeight, float headHeight)>
         terrainSurface;

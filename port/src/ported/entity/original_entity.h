@@ -27,6 +27,13 @@ namespace orphen::ported::entity
     std::uint16_t halfword04 = 0;            // +0x04: descriptor +0x18.
     std::uint16_t flags06 = 0;               // +0x06: animation/contact flags used by FUN_002534d8.
     std::uint16_t halfword08 = 0;            // +0x08: descriptor +0x16, OR 0x20 when typeId < 0x272.
+    // +0x0A: the map primitive the last ground sample landed on, written by
+    // FUN_00227070 and read back by FUN_002262c0:41-85 -- negative means "no
+    // cached surface". The original compares the *material* byte of the cached
+    // primitive against the newly sampled one and only lifts the actor when
+    // they agree; the port compares the primitive index, which is narrower but
+    // needs no material table. See actor_frame_update's floor block.
+    std::int16_t groundPrimitive0a = -1;
 
     std::uint32_t collisionFlags0c = 0;      // +0x0C: physics result flags from FUN_002262c0; bit 0 is grounded.
     float positionX20 = 0.0f;                // +0x20: world X.

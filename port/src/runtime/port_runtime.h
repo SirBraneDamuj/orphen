@@ -106,6 +106,8 @@ namespace orphen::port
     // --map-base-slot: draw only material slot 0, the way the port did before
     // FUN_00211230's slot loop was ported. Diagnostic only.
     bool mapBaseSlotOnly = false;
+    // --entity-bound-texture: ignore each PSC3 subdraw's texture selector.
+    bool entityBoundTextureOnly = false;
     // --dump-map-textures <dir>: write the decoded map texture pages out as PAM
     // and stop caring about them. Empty means no dump.
     std::string dumpMapTexturesPath;

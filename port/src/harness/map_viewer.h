@@ -145,6 +145,10 @@ namespace orphen::harness
     // --map-base-slot. Draws only material slot 0, the way the port did before
     // FUN_00211230's slot loop was ported. Diagnostic only.
     void setMapBaseSlotOnly(bool baseOnly) { mapBaseSlotOnly_ = baseOnly; }
+    // --entity-bound-texture. Ignores each PSC3 subdraw's own texture
+    // selector, the way the port did before FUN_00212058's byte-6 block was
+    // ported. Diagnostic only.
+    void setEntityBoundTextureOnly(bool boundOnly) { entityBoundTextureOnly_ = boundOnly; }
     // Which of the derived-but-unconfirmed lighting behaviours are live.
     orphen::ported::render::SceneLighting &mutableSceneLighting() { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
@@ -266,6 +270,7 @@ namespace orphen::harness
     bool wireframe_ = false;
     bool mapBlendDisabled_ = false;
     bool mapBaseSlotOnly_ = false;
+    bool entityBoundTextureOnly_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);
     void setTexturePages(std::vector<LoadedDiscTexturePage> texturePages);

@@ -143,6 +143,7 @@ namespace orphen::port
     poseReportSlot_ = config.poseReportSlot;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
     mapViewer_.setMapBaseSlotOnly(config.mapBaseSlotOnly);
+    mapViewer_.setEntityBoundTextureOnly(config.entityBoundTextureOnly);
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
@@ -316,7 +317,8 @@ namespace orphen::port
         {
           return std::nullopt;
         }
-        return orphen::ported::entity::ActorEnvironment::TerrainSurface{hit->height, hit->terrainFlags};
+        return orphen::ported::entity::ActorEnvironment::TerrainSurface{
+            hit->height, hit->terrainFlags, static_cast<std::int32_t>(hit->primitiveIndex)};
       };
     }
 
@@ -2264,6 +2266,11 @@ namespace orphen::port
 
       std::cout << "  #" << index
                 << " flags=0x" << std::hex << record80.primitiveFlags
+                // record78 +0x00. FUN_00227840:126-131 gates its ground scan on
+                // bits 0x800 and 0x100 of this, not on terrainFlags, so a probe
+                // that omits it cannot explain why a surface was or was not
+                // stood on.
+                << " lead=0x" << record78.leadingWord
                 << " terrain=0x" << record78.terrainFlags << std::dec
                 << " centre=(" << formatNumber(record80.center.x) << "," << formatNumber(record80.center.y)
                 << "," << formatNumber(record80.center.z) << ")"
@@ -2558,6 +2565,11 @@ namespace orphen::port
           std::cout
                     << " state=" << entity.state60
                     << " anim=" << entity.animationA0
+                    // +0x04, so a report can be diffed straight against an EE
+                    // dump's entity block. Bit 3 in particular decides whether a
+                    // waypoint path is allowed to move an actor vertically.
+                    << " af=0x" << std::hex << std::setw(4) << std::setfill('0')
+                    << entity.halfword04 << std::dec << std::setfill(' ')
                     << " pos=(" << std::fixed << std::setprecision(2)
                     << entity.positionX20 << "," << entity.positionZ24 << "," << entity.positionY28 << ")"
                     << " floor=" << entity.groundHeight4c;

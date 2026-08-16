@@ -128,6 +128,11 @@ namespace orphen::harness
     // FUN_00211230's slot loop was ported. The same A/B handle as above.
     bool g_mapBaseSlotOnly = false;
 
+    // --entity-bound-texture: draw every textured PSC3 pass with the entity's
+    // bound slot, ignoring the subdraw's own selector, the way this drew before
+    // FUN_00212058's byte-6 block was ported.
+    bool g_entityBoundTextureOnly = false;
+
     // Wall-clock for one render phase, added to `sink` on scope exit. Coarse by
     // design -- see RenderStats.
     class PhaseTimer
@@ -1138,7 +1143,8 @@ namespace orphen::harness
           // is bound to slot 22 (tex_0133). The window frames, the lantern
           // flames and the barrels were all reaching past their bound slot too.
           unsigned int passTexture = texture;
-          if (!untexturedPass && subdraw != nullptr && (primitive.flags & 0x0800u) == 0)
+          if (!g_entityBoundTextureOnly && !untexturedPass && subdraw != nullptr &&
+              (primitive.flags & 0x0800u) == 0)
           {
             const std::uint16_t selector = subdraw->textureSlot();
             if (selector != 0 && selector != 0xF)
@@ -1671,6 +1677,7 @@ namespace orphen::harness
                            std::size_t primitiveIndex,
                            std::size_t slotIndex,
                            float alpha,
+                           bool forceBlend,
                            bool cullingEnabled,
                            MapBatchState &state)
     {
@@ -1689,11 +1696,22 @@ namespace orphen::harness
       // rather than from a register.
       const orphen::ported::psm2::MaterialSlot *slot =
           materialSlotForPrimitive(map, primitiveIndex, slotIndex);
-      const int blendMode = slot != nullptr ? mapBlendMode(*slot) : 0;
+      int blendMode = slot != nullptr ? mapBlendMode(*slot) : 0;
       if (blendMode != 0 && slot != nullptr)
       {
         // 0x80 is the GS's fully-opaque, so the divisor is 128 and not 255.
         alpha *= static_cast<float>(slot->alpha) / 128.0f;
+      }
+      // A map primitive held down by DAT_00355700 has to blend whatever its
+      // material slot says, exactly the way a fading entity does two hundred
+      // lines up -- and for the same reason: the fade rides in the vertex alpha
+      // here, and an opaque primitive never reads it. Without this the chest
+      // cutscene's fade cap of 3 was computed, emitted, folded into the vertex
+      // colour and then thrown away, so the room the cutscene means to black
+      // out stayed fully lit behind the item.
+      if (blendMode == 0 && forceBlend)
+      {
+        blendMode = 1;
       }
 
       // The fade alpha rides in the vertex colour, so it is not part of the
@@ -1771,6 +1789,7 @@ namespace orphen::harness
                        const std::vector<unsigned int> &textureIds,
                        std::size_t primitiveIndex,
                        float alpha,
+                       bool forceBlend,
                        bool cullingEnabled,
                        MapBatchState &state)
     {
@@ -1786,7 +1805,8 @@ namespace orphen::harness
         {
           continue;
         }
-        drawPrimitiveSlot(map, textureIds, primitiveIndex, slotIndex, alpha, cullingEnabled, state);
+        drawPrimitiveSlot(map, textureIds, primitiveIndex, slotIndex, alpha, forceBlend,
+                          cullingEnabled, state);
         if (g_mapBaseSlotOnly)
         {
           break;
@@ -1830,8 +1850,8 @@ namespace orphen::harness
       for (const auto &item : drawList)
       {
         drawEntitiesUpTo(item.depthBucket);
-        drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade), cullingEnabled,
-                      batchState);
+        drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade),
+                      item.globalFadeCapped, cullingEnabled, batchState);
       }
       // Anything nearer than the last map primitive, plus the blended bucket.
       drawEntitiesUpTo(orphen::ported::render::entityDraw::kBlendedBucket);
@@ -1852,7 +1872,7 @@ namespace orphen::harness
         {
           continue;
         }
-        drawPrimitive(map, textureIds, primitiveIndex, 1.0f, false, batchState);
+        drawPrimitive(map, textureIds, primitiveIndex, 1.0f, false, false, batchState);
       }
       flushMapBatch(batchState);
 
@@ -2560,6 +2580,7 @@ namespace orphen::harness
     g_renderStats = renderStatsSink_;
     g_mapBlendDisabled = mapBlendDisabled_;
     g_mapBaseSlotOnly = mapBaseSlotOnly_;
+    g_entityBoundTextureOnly = entityBoundTextureOnly_;
     if (g_gleamProbes != nullptr)
     {
       g_gleamProbes->clear();

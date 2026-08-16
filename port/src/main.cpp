@@ -224,6 +224,11 @@ namespace
         config.mapBaseSlotOnly = true;
         continue;
       }
+      if (argument == "--entity-bound-texture")
+      {
+        config.entityBoundTextureOnly = true;
+        continue;
+      }
       if (argument == "--dump-map-textures")
       {
         if (argumentIndex + 1 >= argc)

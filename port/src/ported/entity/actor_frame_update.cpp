@@ -658,11 +658,6 @@ namespace orphen::ported::entity
     // Which flag in FUN_002262c0 gates that is not identified yet. It matters
     // the moment a ground-walking non-player actor is ported; it does not matter
     // for a flyer, and inventing a gate would be worse than naming the gap.
-    // Whether the behavior asked to go anywhere this frame. It decides below
-    // whether a floor is allowed to lift this actor.
-    const bool moved = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f ||
-                       entity.desiredDeltaY38 != 0.0f;
-
     entity.positionX20 += entity.desiredDeltaX30;
     entity.positionZ24 += entity.desiredDeltaZ34;
     entity.positionY28 += entity.desiredDeltaY38;
@@ -683,23 +678,31 @@ namespace orphen::ported::entity
         entity.flagWord6c = surface->terrainFlags;
         entity.flagWord70 = surface->terrainFlags;
 
-        // The floor is still a floor even for a flyer -- but only for an actor
-        // that moved onto it.
+        // FUN_002262c0:41-85 raises +0x28 in exactly one branch, and that branch
+        // is gated on the cached primitive at +0x0A being valid *and* carrying
+        // the same material as the one just sampled: an actor is lifted onto a
+        // surface it is already standing on, not onto whatever storey happens to
+        // be overhead. `FUN_00227070` is what refreshes +0x0A, so the comparison
+        // is previous-sample against this-sample.
         //
-        // FUN_002262c0 raises +0x28 in exactly one branch, and that branch is
-        // gated on the cached primitive at +0x0A being valid *and* carrying the
-        // same material as the one just sampled: an actor walks up a ramp it
-        // was already standing on, it does not get teleported onto whatever
-        // storey happens to be overhead. The port models neither +0x0A nor the
-        // material table, so it uses the nearest thing it has -- an actor whose
-        // behavior asked to move. A script-placed cutscene actor never does,
-        // and its authored height is left alone, which is the point: s01_e012
-        // writes its cast onto the deck and this was lifting them off it.
-        if (moved && entity.positionY28 < surface->height)
+        // The port has no material table, so it compares the **primitive index**
+        // instead. That is narrower than the original -- crossing between two
+        // primitives of the same material costs a frame of lag where the
+        // original would lift immediately -- but it needs nothing the port does
+        // not already have, and it is far closer than the `moved` stand-in it
+        // replaces. `moved` could never lift a script-placed actor at all,
+        // because a cutscene actor never asks to move: s01_e012 drops Magnus at
+        // z = -1.500 with opcode 0x55 and leaves the actor loop to lift him the
+        // 0.30 onto the bed, which is why he was sitting inside it.
+        const std::int32_t sampled = surface->primitiveIndex;
+        const bool sameSurfaceAsLastSample =
+            sampled >= 0 && sampled == static_cast<std::int32_t>(entity.groundPrimitive0a);
+        if (sameSurfaceAsLastSample && entity.positionY28 < surface->height)
         {
           entity.positionY28 = surface->height;
           entity.verticalVelocity44 = 0.0f;
         }
+        entity.groundPrimitive0a = static_cast<std::int16_t>(sampled);
       }
     }
 

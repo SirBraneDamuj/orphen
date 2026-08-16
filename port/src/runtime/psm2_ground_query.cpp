@@ -27,6 +27,24 @@ namespace orphen::port
     // and bumps the actor's head.
     constexpr std::uint32_t kCeilingBit = 0x100;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
+
+    // record78 +0x04 bit 0x100 -- **not** the same field as kCeilingBit, which
+    // is bit 0x100 of +0x00. A surface above an actor's feet is a step-up, and
+    // this is the bit that says the actor may be stood up onto it.
+    //
+    // Derived, not read out of the decompilation: FUN_00227840's scan takes the
+    // first cell-list candidate at or below the head and the port has no cell
+    // list, so it needs some rule to choose. s01_e012 supplies both halves of
+    // the answer. Two hidden collision quads sit at z = -1.20 over two beds,
+    // identical in every field (`lead=0xa20`, no material slot) except this
+    // bit: #9 over Magnus's bed has 0x50620100, #339 over the other has
+    // 0x50620000. `eeMemory.bin` puts slot 81 on the first at -1.200 and leaves
+    // slot 82 on the deck at -1.500 under the second.
+    //
+    // Supporting evidence: all 99 primitives in s01_e012 carrying it sit
+    // between -1.40 and -0.05, above the -1.50 deck -- the profile of low
+    // step-up surfaces. s01_e024 has none, so this cannot move it.
+    constexpr std::uint32_t kStepUpBit = 0x100;
     constexpr float kSteepBlockerMaxAbsNormalZ = 0.5f;
     constexpr float kBlockerHeightPadding = 0.05f;
     constexpr float kGeometryEpsilon = 0.000001f;
@@ -59,9 +77,31 @@ namespace orphen::port
       return {value.x / length, value.y / length, value.z / length};
     }
 
-    float candidateScore(float height, float referenceHeight, bool sampledByOriginalTerrain)
+    // FUN_00227840:115-171 walks the cell's primitive list and takes the **first**
+    // candidate whose height is at or below the head (`+0x30 < fVar16` bails to
+    // the next one, anything else ends the scan). The port has no cell list, so
+    // it cannot reproduce that order and has to choose a rule.
+    //
+    // For a caller with a body, that rule is **the highest eligible surface**,
+    // where a surface above the feet is only eligible if it carries kStepUpBit.
+    // Nearest-to-the-reference -- what this used to do -- can never reach a
+    // surface an actor is meant to be standing on top of while its own height
+    // still reads as the floor below it: s01_e012's script drops Magnus at
+    // z = -1.500 with opcode 0x55 and leaves the engine to put him the 0.30 up
+    // onto the bed, and `eeMemory.bin` has him at -1.200.
+    //
+    // Callers with no body -- the viewer, the camera clamp, spawn selection --
+    // are not standing anywhere, so they keep the nearest-height answer.
+    float candidateScore(float height,
+                         float referenceHeight,
+                         bool sampledByOriginalTerrain,
+                         const std::optional<Psm2ActorBody> &body)
     {
       const float terrainPenalty = sampledByOriginalTerrain ? 0.0f : 100000.0f;
+      if (body.has_value())
+      {
+        return terrainPenalty + (body->headHeight - height);
+      }
       return terrainPenalty + std::abs(height - referenceHeight);
     }
 
@@ -265,7 +305,15 @@ namespace orphen::port
         continue;
       }
 
-      const float score = candidateScore(height, referenceHeight, sampledByOriginalTerrain);
+      // Nor onto a step-up the map has not marked as one. See kStepUpBit.
+      if (options.body.has_value() && height > options.body->feetHeight &&
+          (record78.terrainFlags & kStepUpBit) == 0)
+      {
+        continue;
+      }
+
+      const float score =
+          candidateScore(height, referenceHeight, sampledByOriginalTerrain, options.body);
       if (score >= bestScore)
       {
         continue;
