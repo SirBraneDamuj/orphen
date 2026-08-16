@@ -47,6 +47,11 @@ namespace
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
                  "                  be compared pixel for pixel.\n"
+                 "  --map-base-slot draw only material slot 0 of each map primitive,\n"
+                 "                  the way the port did before FUN_00211230's slot\n"
+                 "                  loop was ported. Diagnostic A/B.\n"
+                 "  --dump-map-textures <dir>\n"
+                 "                  write the decoded map texture pages out as PAM.\n"
                  "  --cycle-map-every <frames>\n"
                  "                  headless only: advance to the next scene every\n"
                  "                  N frames, exercising the map-cycle reload.\n";
@@ -212,6 +217,20 @@ namespace
       if (argument == "--map-no-blend")
       {
         config.suppressMapBlend = true;
+        continue;
+      }
+      if (argument == "--map-base-slot")
+      {
+        config.mapBaseSlotOnly = true;
+        continue;
+      }
+      if (argument == "--dump-map-textures")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--dump-map-textures needs a directory");
+        }
+        config.dumpMapTexturesPath = argv[++argumentIndex];
         continue;
       }
       if (argument == "--lighting-unlit")

@@ -142,6 +142,9 @@ namespace orphen::harness
     // --map-no-blend. Draws every map primitive opaque, the way the port did
     // before FUN_00211230's ABE block was ported. Diagnostic only.
     void setMapBlendDisabled(bool disabled) { mapBlendDisabled_ = disabled; }
+    // --map-base-slot. Draws only material slot 0, the way the port did before
+    // FUN_00211230's slot loop was ported. Diagnostic only.
+    void setMapBaseSlotOnly(bool baseOnly) { mapBaseSlotOnly_ = baseOnly; }
     // Which of the derived-but-unconfirmed lighting behaviours are live.
     orphen::ported::render::SceneLighting &mutableSceneLighting() { return sceneLighting_; }
     std::uint32_t fogColour() const { return fogColourPacked_; }
@@ -193,7 +196,13 @@ namespace orphen::harness
       return discScenes_[currentDiscSceneIndex_];
     }
     std::size_t loadedTexturePageCount() const { return texturePages_.size(); }
+    const std::vector<LoadedDiscTexturePage> &loadedTexturePages() const { return texturePages_; }
     std::uint64_t loadedMapGeneration() const { return loadedMapGeneration_; }
+    // --dump-map-textures. One binary PAM (P7, RGB_ALPHA) per decoded page,
+    // named page<N>_tex_<id>.pam. Needs no GL context, so it works under
+    // --load-only. The alpha channel is the point: a page read as RGB alone
+    // says nothing about which parts of it a blended pass will actually show.
+    std::size_t dumpTexturePages(const std::filesystem::path &directory) const;
 
   private:
     std::optional<orphen::ported::psm2::Psm2RuntimeState> map_;
@@ -256,6 +265,7 @@ namespace orphen::harness
     bool debugOverlayVisible_ = false;
     bool wireframe_ = false;
     bool mapBlendDisabled_ = false;
+    bool mapBaseSlotOnly_ = false;
 
     void loadDiscSceneAtIndex(std::size_t sceneIndex);
     void setTexturePages(std::vector<LoadedDiscTexturePage> texturePages);

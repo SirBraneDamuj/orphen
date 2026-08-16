@@ -1437,6 +1437,71 @@ rather than as obviously broken geometry.
 `s01_e024` renders **byte-identical**, `s01_e012` stays deterministic, flag
 `0x515` still lands at 13122, and the chest cutscene still runs its ten states.
 
+### Texture slots are global, and a pass picks its own
+
+The window curtains in `s01_e012` drew as the shop's gold medallion instead of
+white sheer fabric. Neither the model nor the texture binding was wrong —
+`eeMemory.bin` agrees with the port on both, entity by entity. What was wrong is
+that **the port drew every textured pass with the entity's one bound texture**.
+
+Two facts, and the second follows from the first.
+
+**`DAT_003429a8` is one global array of 64 texture slots.** Entity models take
+slots 10..23 and 24..39 through `FUN_00266118`'s two banks, the boot binds take
+32..48 — and the *map's own texture pages* take slots 0..9, loaded by
+`FUN_0022a178` from a ten-entry table at `DAT_00325394`. The dump confirms both:
+`DAT_00325394` = `{0286, 0002, 02c8, 0253, 000d, 02c9, 000f}` and
+`DAT_003429a8[0..6]` holds the same ids in the same order, which is exactly the
+port's map page list. So a PSM2 material slot's `type` byte was never a page
+index — it is a slot index that happens to start at 0. `FUN_0022a178_bind_map_textures`
+now loads them, which is what makes the rest of this resolvable.
+
+**Every PSC3 subdraw names its own texture.** `FUN_00212058:180-208` reads
+`texFlags` bits 10..7 and writes packet byte 6 from it:
+
+| selector | primitive flag 0x800 | byte 6 | means |
+|---|---|---|---|
+| 0 | either | 0x3F | the entity's bound slot |
+| 0xF | either | 0x3E, byte 5 = 0x11 | the special mode the map path reaches through its own type 9 |
+| 1..0xE | clear | the selector | **global slot `selector - 1`** |
+| 1..0xE | set | 0x3F, selector rides in byte 5 | the bound slot still wins |
+
+Byte 6 is `globalSlot + 1` on the map path too (`FUN_00211230:186`), which is what
+pins the arithmetic down.
+
+`--model-report` prints the histogram per entity as `passes={…}`. For `s01_e012`:
+
+| model | passes | drew with | should draw with |
+|---|---|---|---|
+| grp_01d5 window curtain | `gslot3:48` | tex_0133, the gold medallion | tex_0253, the white sheer curtain |
+| grp_00ae window frame | `gslot3:96` | tex_0130 | tex_0253 |
+| grp_01d6 window surround | `gslot0:30` | tex_0133 | tex_0286, the sea |
+| grp_00c6 lantern | `bound:49 gslot1:4` | all tex_012f | four passes on tex_0002, the flame sheet |
+| grp_0172 chest | `bound+4/6/8` | tex_0179 | tex_0179 — the 0x800 form, already right |
+
+The frames looked plausible before because tex_0130 and tex_0253 share their top
+half; only the bottom differs, and the curtain lives there. The lanterns were
+unlit for the same reason — their flame pass was being drawn with the lantern's
+own sheet.
+
+`s01_e024` renders **byte-identical** (nothing in it uses a selector),
+`s01_e012` stays deterministic, flag `0x515` still lands at 13122, and the chest
+cutscene still runs its ten states.
+
+### The map draws a pass per material slot
+
+`FUN_00211230:104-360` loops material slots 0..3 and emits a GS packet for every
+slot whose `type` is `>= -1`, each with its own texture page, UVs, flat colour,
+alpha and blend mode. The port drew slot 0 only. `s01_e012` has 202 primitives
+with two slots and 68 with three; drawing them all takes the shot at frame 200
+from 437 to 518 map triangles for the same 226 primitives, at no measurable cost.
+
+Honest caveat: this is faithful to the decompilation and the extra passes are
+demonstrably emitted, but **no shot checked so far looks different with them on**
+(`--map-base-slot` renders identically at f1500 and f3600, and `s01_e024` is
+byte-identical). The layers are there in the data; what they are for has not been
+seen yet.
+
 ### Notes on GS dumps
 
 `tools/gs_dump_parse.py` drops VSync boundaries, so re-walk the packets if you

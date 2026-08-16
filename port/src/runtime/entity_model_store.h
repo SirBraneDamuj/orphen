@@ -87,6 +87,9 @@ namespace orphen::port
     int stageBank() const { return stageBank_; }
 
     const orphen::ported::resource::TextureSlotCache &textureSlots() const { return textureSlots_; }
+    // For FUN_0022a178, which loads the map's pages into slots 0..9 from
+    // outside this class.
+    orphen::ported::resource::TextureSlotCache &mutableTextureSlots() { return textureSlots_; }
     std::size_t loadedModelCount() const { return models_.size(); }
     bool bootBundleLoaded() const { return bootResources_.has_value(); }
 

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 
 namespace orphen::port
 {
@@ -141,6 +142,7 @@ namespace orphen::port
     suppressPointLights_ = config.suppressPointLights;
     poseReportSlot_ = config.poseReportSlot;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
+    mapViewer_.setMapBaseSlotOnly(config.mapBaseSlotOnly);
     if (printGleamReport_)
     {
       mapViewer_.setGleamProbeSink(&gleamProbes_);
@@ -212,6 +214,11 @@ namespace orphen::port
                 << " triangles=" << stats.triangleCount
                 << " skipped=" << stats.skippedPrimitiveCount
                 << " textures=" << mapViewer_.loadedTexturePageCount() << '\n';
+
+      if (!config.dumpMapTexturesPath.empty())
+      {
+        mapViewer_.dumpTexturePages(config.dumpMapTexturesPath);
+      }
 
       if (config.probeCentre.has_value())
       {
@@ -735,6 +742,27 @@ namespace orphen::port
               << mapPropTable_.bankCount() << " banks\n";
   }
 
+  // FUN_0022a178. The map's own texture pages are not a private list -- they go
+  // into the *global* texture slots 0..9, from a ten-entry table at
+  // DAT_00325394, and every slot index in the game refers to that one array.
+  // That is what makes a PSC3 subdraw able to name a map page (see
+  // drawObjectModel's passTexture) and what makes a PSM2 material slot's type
+  // byte a slot index rather than a page index.
+  //
+  // eeMemory.bin confirms both the table and the result for s01_e012:
+  // DAT_00325394 = {0286, 0002, 02c8, 0253, 000d, 02c9, 000f} and
+  // DAT_003429a8[0..6] holds the same ids in the same order. The port's own
+  // page list is the same sequence, so it stands in for the table.
+  void PortRuntime::FUN_0022a178_bind_map_textures()
+  {
+    const auto &pages = mapViewer_.loadedTexturePages();
+    for (std::size_t index = 0; index < pages.size() && index < kMapTextureSlotCount; ++index)
+    {
+      modelStore_.mutableTextureSlots().FUN_00210280_load_into_slot(
+          static_cast<int>(index), pages[index].resourceId);
+    }
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // Models bind before the script runs, so the spawn path can report a
@@ -753,6 +781,7 @@ namespace orphen::port
     descriptorTable_.setMapPropTable(&mapPropTable_, stageBank);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
+    FUN_0022a178_bind_map_textures();
     // FUN_00238c90, which the original runs inline in FUN_00221fd8 on the
     // decoded buffer before it hands it to the slot. Same measurement, one
     // step later.
@@ -2109,6 +2138,66 @@ namespace orphen::port
                   << entity.positionY28 << ")"
                   << "  descriptor=" << entity.radius54 << "r/" << entity.height58 << "h"
                   << std::defaultfloat;
+
+        // FUN_00212058:180-208, per *pass*, because the selector's meaning
+        // depends on the owning primitive's flags. texFlags bits 10..7 are a
+        // texture selector; primitive flag 0x800 decides how the original reads
+        // it. With 0x800 clear the packet's byte 6 becomes the selector itself,
+        // which on the map path (FUN_00211230:186) is `globalSlot + 1` -- so
+        // selector N means global texture slot N-1, not the entity's bound one.
+        // With 0x800 set, byte 6 goes to 0x3F (the bound slot) and the selector
+        // rides in byte 5 instead. Selector 0 is the plain bound-slot case and
+        // 0xF is the untextured/special mode.
+        //
+        // The port draws every textured pass with the entity's one bound
+        // texture, so a `sel` entry below is a pass reaching for a sheet the
+        // port never gives it.
+        std::map<std::string, std::size_t> selectors;
+        for (const auto &primitive : model.primitives)
+        {
+          if (primitive.skipped())
+          {
+            continue;
+          }
+          const bool boundSlotForm = (primitive.flags & 0x0800u) != 0;
+          for (const std::int16_t index : primitive.subdrawIndices)
+          {
+            if (index < 0 || static_cast<std::size_t>(index) >= model.subdraws.size())
+            {
+              continue;
+            }
+            const std::uint16_t selector = model.subdraws[index].textureSlot();
+            std::ostringstream key;
+            if (selector == 0)
+            {
+              key << "bound";
+            }
+            else if (selector == 0xF)
+            {
+              key << "none";
+            }
+            else if (boundSlotForm)
+            {
+              key << "bound+" << selector;
+            }
+            else
+            {
+              key << "gslot" << (selector - 1);
+            }
+            ++selectors[key.str()];
+          }
+        }
+        if (selectors.size() > 1 || (!selectors.empty() && selectors.begin()->first != "bound"))
+        {
+          std::cout << "  passes={";
+          bool first = true;
+          for (const auto &entry : selectors)
+          {
+            std::cout << (first ? "" : " ") << entry.first << ":" << entry.second;
+            first = false;
+          }
+          std::cout << "}";
+        }
       }
       std::cout << '\n';
     };

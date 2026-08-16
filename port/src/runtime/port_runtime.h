@@ -103,6 +103,12 @@ namespace orphen::port
     // --map-no-blend: draw every map primitive opaque, the way the port did
     // before FUN_00211230's ABE block was ported. Diagnostic only.
     bool suppressMapBlend = false;
+    // --map-base-slot: draw only material slot 0, the way the port did before
+    // FUN_00211230's slot loop was ported. Diagnostic only.
+    bool mapBaseSlotOnly = false;
+    // --dump-map-textures <dir>: write the decoded map texture pages out as PAM
+    // and stop caring about them. Empty means no dump.
+    std::string dumpMapTexturesPath;
     // --pose-report <slot>: dump one entity's bone palette next to an
     // unfiltered rebuild of it, bone by bone, and name the first divergence.
     int poseReportSlot = -1;
@@ -286,6 +292,9 @@ namespace orphen::port
     // The whole per-scene load: model bindings, player reset, scene script.
     // Shared by initialize and the map-cycle path so they cannot drift.
     void loadSceneForCurrentMap();
+    // FUN_0022a178's ten-entry table at DAT_00325394; the loop runs slots 0..9.
+    static constexpr std::size_t kMapTextureSlotCount = 10;
+    void FUN_0022a178_bind_map_textures();
     // FUN_00228e28: the map-streamed prop banks, built once from SCR.BIN.
     void loadMapPropDescriptors();
     void runSceneScript();

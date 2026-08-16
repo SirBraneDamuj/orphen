@@ -19,7 +19,9 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -121,6 +123,10 @@ namespace orphen::harness
     // --map-no-blend: force every map primitive back to the opaque path, so the
     // ABE block can be A/B'd against the way this drew before it was ported.
     bool g_mapBlendDisabled = false;
+
+    // --map-base-slot: draw only material slot 0, the way this drew before
+    // FUN_00211230's slot loop was ported. The same A/B handle as above.
+    bool g_mapBaseSlotOnly = false;
 
     // Wall-clock for one render phase, added to `sink` on scope exit. Coarse by
     // design -- see RenderStats.
@@ -839,25 +845,27 @@ namespace orphen::harness
       batchReset(texture != 0);
 
       // Texturing is per *pass*, not per model: a model with a bound texture can
-      // still carry bit-15 passes that draw flat colour. Switching it closes the
-      // batch, the same way a blend-mode change does.
-      int activeTextured = texture != 0 ? 1 : 0;
-      const auto setTextured = [&activeTextured](bool textured) {
-        if (activeTextured == (textured ? 1 : 0))
+      // still carry bit-15 passes that draw flat colour, and a pass can name a
+      // different sheet entirely (see passTextureFor below). Switching it closes
+      // the batch, the same way a blend-mode change does.
+      unsigned int activeTexture = texture;
+      const auto setTexture = [&activeTexture](unsigned int id) {
+        if (activeTexture == id)
         {
           return;
         }
         batchFlush();
-        activeTextured = textured ? 1 : 0;
-        if (textured)
+        activeTexture = id;
+        if (id != 0)
         {
           glEnable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, id);
         }
         else
         {
           glDisable(GL_TEXTURE_2D);
         }
-        g_batchTextured = textured;
+        g_batchTextured = id != 0;
       };
 
       int activeBlendMode = -1;
@@ -1108,10 +1116,41 @@ namespace orphen::harness
             }
           }
           setBlendMode(mode);
+
+          // **A pass picks its own sheet.** FUN_00212058:180-208 reads the
+          // subdraw's texFlags bits 10..7 and writes packet byte 6 from it:
+          //
+          //   selector 0     -> 0x3F, the entity's own bound slot
+          //   selector 0xF   -> 0x3E with byte 5 = 0x11, the special mode the
+          //                     map path reaches through its own type 9
+          //   selector 1..0xE, primitive flag 0x800 clear
+          //                  -> byte 6 = the selector itself, and on the map
+          //                     path (FUN_00211230:186) byte 6 is
+          //                     `globalTextureSlot + 1` -- so this names global
+          //                     slot `selector - 1`, not the bound one
+          //   selector 1..0xE, primitive flag 0x800 set
+          //                  -> byte 6 goes back to 0x3F and the selector rides
+          //                     in byte 5 instead, so the bound slot still wins
+          //
+          // Drawing every pass with the bound slot is what put the shop's gold
+          // medallion on the window curtains: grp_01d5's 48 passes all ask for
+          // global slot 3 (tex_0253, the white sheer curtain) while the entity
+          // is bound to slot 22 (tex_0133). The window frames, the lantern
+          // flames and the barrels were all reaching past their bound slot too.
+          unsigned int passTexture = texture;
+          if (!untexturedPass && subdraw != nullptr && (primitive.flags & 0x0800u) == 0)
+          {
+            const std::uint16_t selector = subdraw->textureSlot();
+            if (selector != 0 && selector != 0xF)
+            {
+              const std::size_t globalSlot = static_cast<std::size_t>(selector) - 1u;
+              passTexture = globalSlot < slotTextures.size() ? slotTextures[globalSlot] : 0u;
+            }
+          }
           // The bit-15 branch never reaches FUN_00212058's alpha/ABE block, so
           // it draws opaque -- FUN_002129b8 plants 0xFF in the alpha byte
           // outright -- and through FUN_00212cf0, the untextured colour path.
-          setTextured(!untexturedPass && texture != 0);
+          setTexture(untexturedPass ? 0u : passTexture);
 
           emit(0, subdraw, passAlpha, colourOverride);
           emit(1, subdraw, passAlpha, colourOverride);
@@ -1394,22 +1433,25 @@ namespace orphen::harness
       glVertex3f(viewerPosition.x, viewerPosition.y, viewerPosition.z);
     }
 
-    // Material slot 0 is the base pass. FUN_0022c3d8 has already resolved the
-    // selector, so the type byte here is the texture page and a negative type
-    // means the primitive is untextured rather than missing.
-    const orphen::ported::psm2::MaterialSlot *baseSlotForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
-                                                                   std::size_t primitiveIndex)
+    // FUN_0022c3d8 has already resolved the selector, so the type byte here is
+    // the texture page and a negative type means the primitive is untextured
+    // rather than missing.
+    const orphen::ported::psm2::MaterialSlot *materialSlotForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                                        std::size_t primitiveIndex,
+                                                                        std::size_t slotIndex)
     {
       if (primitiveIndex >= map.DAT_003556ac_dRecords80.size())
       {
         return nullptr;
       }
-      return &map.DAT_003556ac_dRecords80[primitiveIndex].materialSlots[0];
+      return &map.DAT_003556ac_dRecords80[primitiveIndex].materialSlots[slotIndex];
     }
 
-    std::optional<std::size_t> texturePageForPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map, std::size_t primitiveIndex)
+    std::optional<std::size_t> texturePageForSlot(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                                  std::size_t primitiveIndex,
+                                                  std::size_t slotIndex)
     {
-      const auto *slot = baseSlotForPrimitive(map, primitiveIndex);
+      const auto *slot = materialSlotForPrimitive(map, primitiveIndex, slotIndex);
       if (slot == nullptr || !slot->textured())
       {
         return std::nullopt;
@@ -1420,9 +1462,10 @@ namespace orphen::harness
 
     std::pair<float, float> textureCoordinateForCorner(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                        const orphen::ported::psm2::TriangleRecord &triangle,
-                                                       std::size_t triangleCornerIndex)
+                                                       std::size_t triangleCornerIndex,
+                                                       std::size_t slotIndex)
     {
-      const auto *slot = baseSlotForPrimitive(map, triangle.primitiveIndex);
+      const auto *slot = materialSlotForPrimitive(map, triangle.primitiveIndex, slotIndex);
       if (slot == nullptr || !slot->textured())
       {
         return {0.0f, 0.0f};
@@ -1448,6 +1491,7 @@ namespace orphen::harness
     void emitTexturedVertex(const orphen::ported::psm2::Psm2RuntimeState &map,
                             const orphen::ported::psm2::TriangleRecord &triangle,
                             std::size_t triangleCornerIndex,
+                            std::size_t slotIndex,
                             float alpha,
                             bool modulateByFlatColour)
     {
@@ -1506,7 +1550,7 @@ namespace orphen::harness
 
       if (modulateByFlatColour)
       {
-        const std::uint32_t flat = record80.materialSlots[0].flatColour();
+        const std::uint32_t flat = record80.materialSlots[slotIndex].flatColour();
         red *= static_cast<float>(flat & 0xff) / 64.0f;
         green *= static_cast<float>((flat >> 8) & 0xff) / 64.0f;
         blue *= static_cast<float>((flat >> 16) & 0xff) / 64.0f;
@@ -1515,7 +1559,7 @@ namespace orphen::harness
       const float vertexColour[4] = {std::min(red, 1.0f), std::min(green, 1.0f),
                                      std::min(blue, 1.0f), alpha};
 
-      const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex);
+      const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex, slotIndex);
       const auto position = viewerVertex(map, triangle.vertexIndices[triangleCornerIndex]);
       batchPush(position, u, v, vertexColour,
                 fogAmountAt(position.x, position.y, position.z));
@@ -1548,15 +1592,14 @@ namespace orphen::harness
     // records it on the primitive as 0x40, which is the flag
     // `psm2_material_expansion` was already computing and nothing was reading.
     //
-    // Slot 0 is the right slot to ask because slot 0 is the one this renderer
-    // draws: `baseSlotForPrimitive` supplies the texture page and the UVs too.
-    // The original emits a pass per slot and would blend on *any* slot's flags,
-    // so a primitive whose blend lives on slot 1 or later still comes out
-    // opaque here -- 158 of s01_e012's 841 flagged primitives, all of whose
-    // slot 0 is untextured filler.
+    // Asked per slot, because the block sits inside FUN_00211230's slot loop and
+    // each pass carries its own flags, alpha and UVs. The `& 0x70` block is also
+    // inside the `type >= 0` arm, so an untextured slot never blends however its
+    // flag byte reads -- true of every untextured slot in s01_e012 and s01_e024
+    // anyway, but the original is what decides it.
     int mapBlendMode(const orphen::ported::psm2::MaterialSlot &slot)
     {
-      if (g_mapBlendDisabled || (slot.flags & 0x70) == 0)
+      if (g_mapBlendDisabled || !slot.textured() || (slot.flags & 0x70) == 0)
       {
         return 0;
       }
@@ -1620,14 +1663,19 @@ namespace orphen::harness
       state.valid = false;
     }
 
-    void drawPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
-                       const std::vector<unsigned int> &textureIds,
-                       std::size_t primitiveIndex,
-                       float alpha,
-                       bool cullingEnabled,
-                       MapBatchState &state)
+    // One material slot of one primitive: the same geometry, this slot's texture
+    // page, UVs, flat colour, alpha and blend mode. FUN_00211230's inner loop
+    // builds exactly one GS packet per call of this.
+    void drawPrimitiveSlot(const orphen::ported::psm2::Psm2RuntimeState &map,
+                           const std::vector<unsigned int> &textureIds,
+                           std::size_t primitiveIndex,
+                           std::size_t slotIndex,
+                           float alpha,
+                           bool cullingEnabled,
+                           MapBatchState &state)
     {
-      const std::optional<std::size_t> texturePage = texturePageForPrimitive(map, primitiveIndex);
+      const std::optional<std::size_t> texturePage =
+          texturePageForSlot(map, primitiveIndex, slotIndex);
       const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
       const unsigned int texture = hasTexture ? textureIds[*texturePage] : 0u;
 
@@ -1639,13 +1687,13 @@ namespace orphen::harness
       // FUN_00211230:143-158. The slot's own alpha rides in the vertex colour
       // alongside the occlusion fade, the way the GS gets it from the vertex
       // rather than from a register.
-      const orphen::ported::psm2::MaterialSlot *baseSlot =
-          baseSlotForPrimitive(map, primitiveIndex);
-      const int blendMode = baseSlot != nullptr ? mapBlendMode(*baseSlot) : 0;
-      if (blendMode != 0 && baseSlot != nullptr)
+      const orphen::ported::psm2::MaterialSlot *slot =
+          materialSlotForPrimitive(map, primitiveIndex, slotIndex);
+      const int blendMode = slot != nullptr ? mapBlendMode(*slot) : 0;
+      if (blendMode != 0 && slot != nullptr)
       {
         // 0x80 is the GS's fully-opaque, so the divisor is 128 and not 255.
-        alpha *= static_cast<float>(baseSlot->alpha) / 128.0f;
+        alpha *= static_cast<float>(slot->alpha) / 128.0f;
       }
 
       // The fade alpha rides in the vertex colour, so it is not part of the
@@ -1697,16 +1745,52 @@ namespace orphen::harness
 
       if (g_renderStats != nullptr)
       {
-        ++g_renderStats->mapPrimitives;
         g_renderStats->mapTriangles += record80.triangleCount;
       }
 
       for (std::size_t offset = 0; offset < record80.triangleCount; ++offset)
       {
         const auto &triangle = map.derivedTriangles[record80.firstTriangle + offset];
-        emitTexturedVertex(map, triangle, 0, alpha, modulate);
-        emitTexturedVertex(map, triangle, 1, alpha, modulate);
-        emitTexturedVertex(map, triangle, 2, alpha, modulate);
+        emitTexturedVertex(map, triangle, 0, slotIndex, alpha, modulate);
+        emitTexturedVertex(map, triangle, 1, slotIndex, alpha, modulate);
+        emitTexturedVertex(map, triangle, 2, slotIndex, alpha, modulate);
+      }
+    }
+
+    // FUN_00211230:104-360. The slot loop, and the reason a curtain that should
+    // read as sheer white read as the pattern printed on its base layer: the
+    // original draws **a pass per present material slot**, not just slot 0.
+    // `-2 < type` (line 111) is the same test as MaterialSlot::present(), so an
+    // untextured slot still gets its pass -- it just carries a flat colour
+    // instead of a page.
+    //
+    // s01_e012 leans on this: 202 of its 3948 primitives carry two slots and 68
+    // carry three. Drawing only the first left the second and third layers --
+    // most of them additive at f=0x20 -- off the screen entirely.
+    void drawPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
+                       const std::vector<unsigned int> &textureIds,
+                       std::size_t primitiveIndex,
+                       float alpha,
+                       bool cullingEnabled,
+                       MapBatchState &state)
+    {
+      const auto &record80 = map.DAT_003556ac_dRecords80[primitiveIndex];
+      if (g_renderStats != nullptr)
+      {
+        ++g_renderStats->mapPrimitives;
+      }
+
+      for (std::size_t slotIndex = 0; slotIndex < record80.materialSlots.size(); ++slotIndex)
+      {
+        if (!record80.materialSlots[slotIndex].present())
+        {
+          continue;
+        }
+        drawPrimitiveSlot(map, textureIds, primitiveIndex, slotIndex, alpha, cullingEnabled, state);
+        if (g_mapBaseSlotOnly)
+        {
+          break;
+        }
       }
     }
 
@@ -2196,6 +2280,75 @@ namespace orphen::harness
     textureUploadDirty_ = true;
   }
 
+  std::size_t MapViewer::dumpTexturePages(const std::filesystem::path &directory) const
+  {
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+
+    std::size_t written = 0;
+    for (std::size_t pageIndex = 0; pageIndex < texturePages_.size(); ++pageIndex)
+    {
+      const auto &page = texturePages_[pageIndex];
+      const auto &texture = page.texture;
+      if (texture.rgbaPixels.empty())
+      {
+        continue;
+      }
+
+      std::filesystem::path path =
+          directory / ("page" + std::to_string(pageIndex) + "_tex_" + page.resourceIdHex + ".pam");
+      std::ofstream output(path, std::ios::binary);
+      if (!output)
+      {
+        continue;
+      }
+      output << "P7\nWIDTH " << texture.width << "\nHEIGHT " << texture.height
+             << "\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n";
+      output.write(reinterpret_cast<const char *>(texture.rgbaPixels.data()),
+                   static_cast<std::streamsize>(texture.rgbaPixels.size()));
+      if (output.good())
+      {
+        ++written;
+        std::cout << "[textures] page " << pageIndex << " tex_" << page.resourceIdHex << " "
+                  << texture.width << "x" << texture.height << " -> " << path.string() << '\n';
+      }
+    }
+
+    // The entity side of the same question. Map pages are indexed by a material
+    // slot's type byte; entity models go through the resident slot cache
+    // instead, so a texture can be present in one and absent from the other.
+    if (textureSlots_ != nullptr)
+    {
+      for (std::size_t slot = 0; slot < orphen::ported::resource::kTextureSlotCount; ++slot)
+      {
+        const auto &state = textureSlots_->slot(slot);
+        if (state.texture.rgbaPixels.empty())
+        {
+          continue;
+        }
+        std::ostringstream name;
+        name << "slot" << std::setw(2) << std::setfill('0') << slot << "_tex_" << std::hex
+             << std::setw(4) << std::setfill('0') << state.DAT_003429a8_residentId << ".pam";
+        std::filesystem::path path = directory / name.str();
+        std::ofstream output(path, std::ios::binary);
+        if (!output)
+        {
+          continue;
+        }
+        output << "P7\nWIDTH " << state.texture.width << "\nHEIGHT " << state.texture.height
+               << "\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n";
+        output.write(reinterpret_cast<const char *>(state.texture.rgbaPixels.data()),
+                     static_cast<std::streamsize>(state.texture.rgbaPixels.size()));
+        if (output.good())
+        {
+          ++written;
+          std::cout << "[textures] slot " << slot << " " << name.str() << '\n';
+        }
+      }
+    }
+    return written;
+  }
+
   void MapViewer::releaseUploadedTextures() const
   {
     if (!uploadedTextureIds_.empty())
@@ -2406,6 +2559,7 @@ namespace orphen::harness
     g_gleamProbes = gleamProbeSink_;
     g_renderStats = renderStatsSink_;
     g_mapBlendDisabled = mapBlendDisabled_;
+    g_mapBaseSlotOnly = mapBaseSlotOnly_;
     if (g_gleamProbes != nullptr)
     {
       g_gleamProbes->clear();
