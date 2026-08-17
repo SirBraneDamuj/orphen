@@ -1274,6 +1274,11 @@ namespace orphen::port
       log.index = index;
       log.autoPlayed = autoPlay;
 
+      // DAT_00356a18. FUN_00205778 searches these to resolve a cue's
+      // alternate bank, so it has to be recorded even for a slot that fails to
+      // load -- and before that failure can `continue` past it.
+      soundEngine_.setSlotRequestIndex(slot, index);
+
       const auto *record = soundEngine_.musicRecord(category, index);
       if (record == nullptr)
       {
@@ -1970,6 +1975,13 @@ namespace orphen::port
                 << " -> bank " << static_cast<int>(entry.bank)
                 << " program " << static_cast<int>(entry.program)
                 << " note " << static_cast<int>(entry.note)
+                << (entry.distance >= 0.0f
+                        ? " dist " + std::to_string(entry.distance) + " src(" +
+                              std::to_string(entry.sourceX) + "," + std::to_string(entry.sourceY) +
+                              "," + std::to_string(entry.sourceZ) + ") ear(" +
+                              std::to_string(entry.listenerX) + "," + std::to_string(entry.listenerY) +
+                              "," + std::to_string(entry.listenerZ) + ")"
+                        : std::string())
                 << " vol " << static_cast<int>(entry.volumeLeft) << '/'
                 << static_cast<int>(entry.volumeRight)
                 << " -> waveform " << entry.waveform << ", " << entry.samples
@@ -3163,6 +3175,22 @@ namespace orphen::port
 
     // FUN_00267a80 measures against DAT_0058C0A8 and uGpffffb6d4 -- the camera,
     // not the player. Published after the camera has run for the frame.
+    //
+    // DAT_0058C0A8 is not a standalone global: it is **pool slot 1's +0x20**,
+    // the camera entity FUN_00228e28 builds at boot. Writing the eye there is
+    // what lets a script cue aimed at selector 1 play at the listener -- the
+    // engine's "not positional" idiom, which s01_e012 uses for the storm's
+    // thunder and Volcan's sword.
+    {
+      auto &camera = entityPool_.slot(orphen::ported::entity::kCameraSlot);
+      camera.typeId00 = orphen::ported::entity::kCameraSlotType;
+      camera.positionX20 = fieldCamera_.pose().eye.x;
+      camera.positionZ24 = fieldCamera_.pose().eye.y;
+      camera.positionY28 = fieldCamera_.pose().eye.z;
+      camera.groundHeight4c = orphen::ported::entity::kCameraSlotGroundHeight;
+      camera.previousGroundHeight50 = orphen::ported::entity::kCameraSlotGroundHeight;
+    }
+
     soundEngine_.setListener({fieldCamera_.pose().eye.x, fieldCamera_.pose().eye.y,
                               fieldCamera_.pose().eye.z, fieldCamera_.yawRadians()});
 

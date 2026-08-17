@@ -1087,8 +1087,6 @@ bursts in that WAV start at frames 166 and 391, matching the cue log.
 
 ### What is not ported
 
-- **Scene-streamed banks.** A cue whose record byte +7 is non-zero picks its
-  bank through `FUN_00205778`; the report says `alternate bank not ported`.
 - **Absolute loudness.** The chain reproduces the game's relative volumes, but
   nothing models the IOP's own master, so the overall level is a guess.
 - **Reverb.** `FUN_00205938:90-113` sets an SPU2 reverb type and depth per music
@@ -1173,6 +1171,49 @@ a fader of 1000 means "this slot's authored volume" -- which is the 1000 that
 both `FUN_00206840` and opcode 0x129 pass. `FUN_002063c8` (0x12A, up) and
 `FUN_00206260` (0x12B, down) ramp it, over a frame count worked out from the
 0..127 delta rather than the fader delta.
+
+### Scene-streamed sound effects live in the music banks
+
+A cue record's byte +7 is **not** a bank id. `FUN_002057c8:56` hands it to
+`FUN_00205778`, which searches the *music slot requests* (`DAT_00356a18`,
+**indices 2..7**) for the one whose low 15 bits match, and returns `slot + 3` —
+the bank index. So a "scene-streamed" effect is not a separate system: it plays
+out of a music slot's VAB.
+
+In `s01_e012` cues 677..680 carry `+7 = 127`, slot 6 requests category-2 index
+127, and that is SND resource 213 — the same bank whose *sequence* is the cue
+under Sephy's scene. Its **program 4** holds Volcan's sword: draw, sheathe and
+flourish on notes 60/61/62, plus a hard-panned stereo pair on 63. They come out
+at 22057 Hz, which is 22050 to within a cent — a good check on the pitch maths.
+
+### Pool slot 1 is the camera, and that is how a sound plays non-positionally
+
+`FUN_00228e28:203-210` builds slot 1 at boot: type `0xFFFF`, position zeroed,
+`+0x4C`/`+0x50` pinned to `-60` so the floor never touches it. Those writes are
+spelled as `DAT_0058c088`, `DAT_0058c0a8..b0` and `DAT_0058c0d4/d8`, which are
+that slot's `+0x00`, `+0x20..+0x28` and `+0x4C`/`+0x50`.
+
+So **`DAT_0058c0a8` — the listener `FUN_00267a80` measures against — is slot 1's
+position.** A script cue aimed at selector 1 plays *at the listener*: distance
+zero, full volume, dead centre. That is the engine's idiom for "this sound is
+not positional", and `s01_e012` uses it for the storm's thunder (cues 586/587)
+and for Volcan's sword (677/678/679).
+
+Leave that slot empty and every one of those cues is measured from the world
+origin instead. The sword still happens to play, because the Dortin/Volcan
+camera sits ~5 units from the origin — but panned wrongly (`62/13` instead of
+`60/60`). The thunder does not, because the establishing shot puts the camera at
+`(0, 60, 0.5)`, 60 units out, past `FUN_00267a80`'s 14-unit cutoff.
+
+**The pool stride is `0x1D8`, not `0xEC`.** `FUN_0025d6c0` reads
+`&DAT_0058beb0 + selector * 0xEC` where the pointer is `undefined2 *` — 0xEC
+*halfwords*. `analyzed/entity_pool_and_descriptors.c` has always said so; this
+section exists because an ad-hoc dump script here used 236 instead of 472 and
+made slot 1 look empty in a save state where it plainly is not. Read that file
+before indexing the pool by hand.
+
+`--sound-report` prints the source and listener positions for exactly this
+reason: `src(0,0,0)` on a cue that should be centred is the signature.
 
 ### A VAB program layers, and getting that wrong sounds like a stuck note
 

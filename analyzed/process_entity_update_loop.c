@@ -9,7 +9,9 @@
  *
  * Key behaviors:
  * - Allocates 0x170 (368) bytes on PS2 scratchpad stack for temporary data
- * - Loops through 256 entities starting at 0x58beb0, each 0xec (236) bytes in size
+ * - Loops through 256 entities starting at 0x58beb0. **The stride is 0x1D8
+ *   (472) bytes, not 0xec.** Ghidra prints `+ n * 0xec` on an `undefined2 *`,
+ *   which is 0xec halfwords; see analyzed/entity_pool_and_descriptors.c.
  * - Checks entity activation flags and status before processing
  * - Calls entity-specific update functions for active entities
  * - Restores scratchpad stack pointer when finished
@@ -79,7 +81,7 @@ void process_entity_update_loop(void)
     }
 
     entity_index++;
-    current_entity = (char *)current_entity + 0xec; // Move to next entity (236 bytes each)
+    current_entity = (char *)current_entity + 0x1D8; // next entity (472 bytes)
 
   } while (entity_index < 0x100); // Process all 256 entities
 

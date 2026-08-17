@@ -5,7 +5,9 @@
 //  - Mirrors the raw decompiled switch in src/FUN_0025c548.c but with descriptive names and comments.
 //  - Returns 64-bit unsigned for uniformity (engine often treats register values as scalar ints).
 //  - Float cases are scaled by constants (DAT_00352adc..DAT_00352b18) and quantized via FUN_0030bd20.
-//  - Some ids return indices derived from pointers by dividing (ptr - DAT_0058beb0) by 0xEC (frame stride).
+//  - Some ids return indices derived from pointers by dividing (ptr - DAT_0058beb0)
+//    by the entity stride. That stride is **0x1D8 bytes**, not 0xEC -- Ghidra's
+//    `* 0xEC` is on an `undefined2 *`. See analyzed/entity_pool_and_descriptors.c.
 //  - If a pointer field is null in those cases, returns -1.
 //  - Keep original FUN_* name in this header for traceability.
 //

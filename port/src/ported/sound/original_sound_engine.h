@@ -127,6 +127,9 @@ namespace orphen::ported::sound
     std::uint8_t note = 60;
     std::uint8_t volumeLeft = 0;
     std::uint8_t volumeRight = 0;
+    // FUN_00205778's answer: when >= 0 the waveform comes from that music
+    // slot's bank rather than from one of the three boot banks.
+    std::int8_t musicSlot = -1;
   };
 
   class SoundEngine
@@ -195,6 +198,25 @@ namespace orphen::ported::sound
     void FUN_00205d90_play_slot(std::size_t slot, int fader);
     void FUN_002063c8_ramp_up_slot(std::size_t slot, int speed, int targetFader);
     void FUN_00206260_ramp_down_slot(std::size_t slot, int speed, int targetFader);
+    // == The scene-streamed sound effects ==
+    //
+    // A cue whose record byte +7 is non-zero does not name one of the three
+    // boot banks. FUN_00205778 takes that byte and searches the *music slot
+    // requests* -- DAT_00356a18, the shadow of the scene's own eight, indices 2
+    // through 7 -- for the one whose index matches, and returns `slot + 3`,
+    // which is that slot's bank. So these effects live in the same SND.BIN
+    // resource as a piece of music: in s01_e012 cues 677..680 carry +7 = 127,
+    // slot 6 requests category-2 index 127, and that is SND resource 213 --
+    // the bank whose sequence is the cue under Sephy's scene and whose program
+    // 4 holds Volcan's sword.
+    //
+    // Returns the slot, or -1 when the scene has not loaded a matching one --
+    // where the original calls FUN_002683a8 and gives up.
+    std::int8_t FUN_00205778_resolve_alternate_bank(std::uint8_t alternateId) const;
+    // DAT_00356a18. FUN_00206840 copies the scene's requests here after acting
+    // on them; the port records each slot's index as it loads it.
+    void setSlotRequestIndex(std::size_t slot, std::uint16_t index);
+
     bool slotPlaying(std::size_t slot) const;
     bool slotHasSequence(std::size_t slot) const;
     const SequencePlayer &musicSlot(std::size_t slot) const { return musicSlots_[slot]; }
@@ -239,6 +261,10 @@ namespace orphen::ported::sound
       std::int16_t waveform = 0;
       std::size_t samples = 0;
       float sampleRate = 0.0f;
+      // FUN_00267a80's two points, for the cues it drops as too far.
+      float distance = -1.0f;
+      float sourceX = 0.0f, sourceY = 0.0f, sourceZ = 0.0f;
+      float listenerX = 0.0f, listenerY = 0.0f, listenerZ = 0.0f;
       const char *outcome = "";
     };
     const std::vector<CueLogEntry> &cueLog() const { return cueLog_; }
@@ -257,12 +283,16 @@ namespace orphen::ported::sound
 
     void FUN_002057c8_key_on(std::uint16_t cue, int volumeLeft, int volumeRight);
     void startVoice(const KeyOn &request);
+    const SoundBank *bankFor(const KeyOn &request) const;
 
     std::vector<SoundCue> cues_;
     std::array<SoundBank, kBankCount> banks_;
     Listener listener_;
     std::string diagnostic_;
     std::uint32_t frame_ = 0;
+    float lastDistance_ = -1.0f;
+    std::array<float, 3> lastSource_{};
+    std::array<float, 3> lastListener_{};
 
     std::mutex mixLock_;
     std::vector<KeyOn> pending_;
@@ -281,6 +311,8 @@ namespace orphen::ported::sound
     std::array<SequencePlayer, kMusicSlotCount> musicSlots_;
     std::array<std::vector<MusicRecord>, kMusicCategoryCount> musicTables_;
     std::array<std::uint16_t, kMusicSlotCount> slotResource_{};
+    // DAT_00356a18, the shadow of the scene's eight music requests.
+    std::array<std::uint16_t, kMusicSlotCount> DAT_00356a18_slotRequestIndex_{};
     bool musicSolo_ = false;
     std::vector<MusicSlotLog> musicLog_;
     std::vector<MusicEventLog> musicEventLog_;

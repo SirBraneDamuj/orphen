@@ -93,7 +93,7 @@
  * terrain height as landing at entity+0x26. The decompiled write is
  * `*(undefined4 *)(puGpffffb0d4 + 0x26)` where puGpffffb0d4 is `undefined2 *`,
  * so the byte offset is 0x4C -- the same halfword-versus-byte confusion as the
- * pool stride above. That file also states stride 0xEC; both need fixing.
+ * pool stride above. (Both of those were corrected 2026-08-17.)
  *
  * PS2 notes
  * - FUN_00266240 sets +0x74 |= 0x4000000 on every spawn, so that bit marks

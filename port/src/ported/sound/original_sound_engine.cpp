@@ -202,6 +202,46 @@ namespace orphen::ported::sound
     musicEventLog_.push_back({frame_, slot, "ramp down", slotResource_[slot], speed, targetFader});
   }
 
+  void SoundEngine::setSlotRequestIndex(std::size_t slot, std::uint16_t index)
+  {
+    if (slot < kMusicSlotCount)
+    {
+      DAT_00356a18_slotRequestIndex_[slot] = index;
+    }
+  }
+
+  std::int8_t SoundEngine::FUN_00205778_resolve_alternate_bank(std::uint8_t alternateId) const
+  {
+    // FUN_00205778 starts at DAT_00356a1c -- slot 2, not slot 0 -- and compares
+    // the low 15 bits, because bit 15 of a request is the "play it" flag.
+    for (std::size_t slot = 2; slot < kMusicSlotCount; ++slot)
+    {
+      if ((DAT_00356a18_slotRequestIndex_[slot] & 0x7FFFu) == alternateId)
+      {
+        return static_cast<std::int8_t>(slot);
+      }
+    }
+    return -1;
+  }
+
+  const SoundBank *SoundEngine::bankFor(const KeyOn &request) const
+  {
+    if (request.musicSlot >= 0)
+    {
+      const auto slot = static_cast<std::size_t>(request.musicSlot);
+      if (slot >= kMusicSlotCount || !musicSlots_[slot].bank().valid())
+      {
+        return nullptr;
+      }
+      return &musicSlots_[slot].bank();
+    }
+    if (request.bank >= kBankCount || !banks_[request.bank].valid())
+    {
+      return nullptr;
+    }
+    return &banks_[request.bank];
+  }
+
   bool SoundEngine::slotPlaying(std::size_t slot) const
   {
     return slot < kMusicSlotCount && musicSlots_[slot].playing();
@@ -230,6 +270,7 @@ namespace orphen::ported::sound
   {
     // FUN_00267d38's null-entity branch reaches FUN_002057c8 with both channels
     // wide open.
+    lastDistance_ = -1.0f;
     FUN_002057c8_key_on(cue, 0x7F, 0x7F);
   }
 
@@ -243,9 +284,14 @@ namespace orphen::ported::sound
     const float toZ = z - listener_.z;
 
     const float distance = std::sqrt(toX * toX + toY * toY + toZ * toZ);
+    lastDistance_ = distance;
+    lastSource_ = {x, y, z};
+    lastListener_ = {listener_.x, listener_.y, listener_.z};
     if (distance >= kAudibleRange)
     {
-      cueLog_.push_back({cue, frame_, 0, 0, 0, 0, 0, 0, 0, 0.0f, "out of range"});
+      cueLog_.push_back({cue, frame_, 0, 0, 0, 0, 0, 0, 0, 0.0f, distance,
+                         lastSource_[0], lastSource_[1], lastSource_[2],
+                         lastListener_[0], lastListener_[1], lastListener_[2], "out of range"});
       return;
     }
 
@@ -295,18 +341,10 @@ namespace orphen::ported::sound
   {
     if (cue >= cues_.size())
     {
-      cueLog_.push_back({cue, frame_, 0, 0, 0, 0, 0, 0, 0, 0.0f, "no such cue"});
+      cueLog_.push_back({cue, frame_, 0, 0, 0, 0, 0, 0, 0, 0.0f, -1.0f, 0,0,0, 0,0,0, "no such cue"});
       return;
     }
     const SoundCue &record = cues_[cue];
-
-    if (record.alternateBank != 0)
-    {
-      // FUN_00205778's scene-streamed banks. Not ported.
-      cueLog_.push_back({cue, frame_, record.alternateBank, record.program, record.note, 0, 0, 0, 0,
-                         0.0f, "alternate bank not ported"});
-      return;
-    }
 
     // The scaling, with the compiler's truncate-toward-zero divide by 0x4000.
     const auto scale = [&](int channel) {
@@ -326,24 +364,38 @@ namespace orphen::ported::sound
     request.volumeLeft = scale(volumeLeft);
     request.volumeRight = scale(volumeRight);
 
+    // FUN_002057c8:56. Byte +7 replaces the bank rather than adding to it.
     const char *outcome = "played";
+    if (record.alternateBank != 0)
+    {
+      request.musicSlot = FUN_00205778_resolve_alternate_bank(record.alternateBank);
+      if (request.musicSlot < 0)
+      {
+        // Where the original calls FUN_002683a8 and gives up: the scene did not
+        // load a slot carrying this bank.
+        cueLog_.push_back({cue, frame_, record.alternateBank, record.program, record.note, 0, 0, 0,
+                           0, 0.0f, -1.0f, 0,0,0, 0,0,0, "no scene slot holds that bank"});
+        return;
+      }
+    }
+
     std::int16_t waveform = 0;
     std::size_t samples = 0;
     float rate = 0.0f;
-    if (record.bank >= kBankCount || !banks_[record.bank].valid())
+    const SoundBank *bank = bankFor(request);
+    if (bank == nullptr)
     {
       outcome = "bank not loaded";
     }
-    else if (const VabTone *tone = banks_[record.bank].tone(record.program, record.note);
-             tone == nullptr)
+    else if (const VabTone *tone = bank->tone(request.program, request.note); tone == nullptr)
     {
       outcome = "no tone for that note";
     }
     else
     {
       waveform = tone->waveform;
-      rate = SoundBank::FUN_00205e50_sample_rate(*tone, record.note);
-      if (const WaveformPcm *pcm = banks_[record.bank].waveform(tone->waveform); pcm != nullptr)
+      rate = SoundBank::FUN_00205e50_sample_rate(*tone, request.note);
+      if (const WaveformPcm *pcm = bank->waveform(tone->waveform); pcm != nullptr)
       {
         samples = pcm->samples.size();
       }
@@ -351,13 +403,21 @@ namespace orphen::ported::sound
       pending_.push_back(request);
     }
 
-    cueLog_.push_back({cue, frame_, request.bank, request.program, request.note, request.volumeLeft,
-                       request.volumeRight, waveform, samples, rate, outcome});
+    cueLog_.push_back({cue, frame_,
+                       request.musicSlot >= 0 ? record.alternateBank : request.bank, request.program,
+                       request.note, request.volumeLeft, request.volumeRight, waveform, samples,
+                       rate, lastDistance_, lastSource_[0], lastSource_[1], lastSource_[2],
+                       lastListener_[0], lastListener_[1], lastListener_[2], outcome});
   }
 
   void SoundEngine::startVoice(const KeyOn &request)
   {
-    const SoundBank &bank = banks_[request.bank];
+    const SoundBank *resolved = bankFor(request);
+    if (resolved == nullptr)
+    {
+      return;
+    }
+    const SoundBank &bank = *resolved;
     // A program layers -- see SoundBank::tones. Bank 0 is key split so this is
     // always one tone there, but banks 1 and 2 both hold programs whose tones
     // overlap, and those are two-waveform sounds that were playing at half
@@ -410,11 +470,12 @@ namespace orphen::ported::sound
 
   void SoundEngine::drainPendingKeyOns()
   {
+    // The lock covers startVoice too, not just the swap: a cue can now take its
+    // waveform from a music slot's bank, and a scene load rewrites those from
+    // the simulation thread.
+    const std::lock_guard<std::mutex> guard(mixLock_);
     std::vector<KeyOn> requests;
-    {
-      const std::lock_guard<std::mutex> guard(mixLock_);
-      requests.swap(pending_);
-    }
+    requests.swap(pending_);
     for (const KeyOn &request : requests)
     {
       startVoice(request);

@@ -189,7 +189,52 @@
  * left and a hard-right tone over identical ranges unless both play.
  *
  * ============================================================================
- * 7. What is not transcribed
+ * 7. The scene-streamed sound effects share the music banks
+ * ============================================================================
+ *
+ * A cue record's byte +7 is not a bank id. When it is non-zero FUN_002057c8:56
+ * hands it to FUN_00205778, which searches the *music slot requests* --
+ * DAT_00356a18, the shadow of the scene's own eight, **indices 2 through 7** --
+ * for the one whose low 15 bits match, and returns `slot + 3`. That is the
+ * bank array index, so the effect plays out of a music slot's VAB.
+ *
+ * So these are not a separate streaming system at all: a scene-streamed sound
+ * effect lives in the same SND.BIN resource as one of the scene's pieces of
+ * music. In s01_e012, cues 677..680 carry +7 = 127; slot 6 requests category-2
+ * index 127; that is SND resource 213 -- the bank whose *sequence* is the cue
+ * under Sephy's scene and whose **program 4** holds Volcan's sword draw, sheathe
+ * and flourish on notes 60, 61, 62, plus a hard-panned stereo pair on 63.
+ *
+ * FUN_00205778 falls through to FUN_002683a8 (an error) when no loaded slot
+ * matches, so a cue whose bank the scene did not stream is simply not playable.
+ *
+ * ============================================================================
+ * 8. Pool slot 1 is the camera, and that is how a cue plays non-positionally
+ * ============================================================================
+ *
+ * FUN_00267d38(cue, entity) branches on the entity pointer: non-zero plays
+ * positionally through FUN_00267a80, zero plays flat at 0x7F/0x7F. The script
+ * path never produces a null -- FUN_0025d6c0 always yields a pool address --
+ * so "flat" is not how a script plays a non-positional sound.
+ *
+ * It aims at **slot 1** instead. FUN_00228e28:203-210 builds that slot at boot
+ * as the camera entity: type 0xFFFF, position zeroed, +0x4C/+0x50 pinned to -60
+ * so the floor never touches it. Those writes appear as DAT_0058c088,
+ * DAT_0058c0a8..b0 and DAT_0058c0d4/d8 -- that slot's +0x00, +0x20..+0x28 and
+ * +0x4C/+0x50.
+ *
+ * So DAT_0058c0a8, the listener FUN_00267a80 measures against, *is* slot 1's
+ * position, and a cue on selector 1 plays at zero distance and full volume.
+ * s01_e012 uses it for the storm's thunder (586/587) and Volcan's sword
+ * (677/678/679). A save state taken during the establishing shot has slot 1 at
+ * (0, 60, 0.5), exactly equal to DAT_0058c0a8 and to the on-screen cPOS.
+ *
+ * **The pool stride is 0x1D8, not 0xEC** -- FUN_0025d6c0's `* 0xEC` is on an
+ * `undefined2 *`, so it counts halfwords. See
+ * analyzed/entity_pool_and_descriptors.c, which has always said so.
+ *
+ * ============================================================================
+ * 9. What is not transcribed
  * ============================================================================
  *
  * - FUN_0023baf8, which opcodes 0xDC and 0xDD reach, is an **empty stub** in the
@@ -199,6 +244,4 @@
  *   four-channel timer over DAT_00571b50, parallel to the event scheduler.
  * - Reverb. FUN_00205938:90-113 sets an SPU2 reverb type and depth per slot
  *   through commands 0x7314 and 0x0A. Not ported; the sequences play dry.
- * - FUN_00205778's alternate-bank sound effects, which is a separate gap in the
- *   one-shot path (cues 677..679 in s01_e012 report it).
  */

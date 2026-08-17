@@ -20,6 +20,25 @@ namespace orphen::ported::entity
   constexpr std::size_t kFirstScriptSlot = 10;
   constexpr std::size_t kScriptSlotCount = 0xF6;
 
+  // **Slot 1 is the camera.** FUN_00228e28:203-210 builds it at boot: type
+  // 0xFFFF, position zeroed, and +0x4C/+0x50 pinned to -60 so the floor never
+  // touches it. Those writes are spelled as the globals DAT_0058c088,
+  // DAT_0058c0a8..b0 and DAT_0058c0d4/d8, which are exactly this slot's +0x00,
+  // +0x20..+0x28 and +0x4C/+0x50.
+  //
+  // That matters well beyond the camera: **DAT_0058c0a8 is the sound
+  // listener** FUN_00267a80 measures against, so it *is* slot 1's position. A
+  // script cue aimed at selector 1 therefore plays at the listener -- distance
+  // zero, full volume, dead centre. That is the engine's idiom for "this sound
+  // is not positional", and s01_e012 uses it for the storm's thunder and for
+  // Volcan's sword. Leave the slot empty and every one of those cues is
+  // measured from the world origin instead, and the thunder is dropped as out
+  // of range the moment the camera pulls back for the establishing shot.
+  constexpr std::size_t kCameraSlot = 1;
+  // The type FUN_00228e28 stamps on it, and the floor it pins.
+  constexpr std::uint16_t kCameraSlotType = 0xFFFF;
+  constexpr float kCameraSlotGroundHeight = -60.0f;
+
   // Script opcodes use this index to mean "the entity most recently selected or
   // spawned" (puGpffffb0d4) rather than a real slot.
   constexpr std::uint32_t kCurrentEntityIndex = 0x100;
