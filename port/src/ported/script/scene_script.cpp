@@ -295,6 +295,16 @@ namespace orphen::ported::script
       {
         continue;
       }
+      // FUN_0025b778:22-24. The line goes out *before* the slot runs, so a slot
+      // that retires itself this frame is still listed. The id is the dword
+      // immediately in front of the body -- the original reads the slot as an
+      // absolute pointer and indexes [-4]; here the slot holds a blob offset.
+      if ((environment.DAT_003555dd_debugDisplay & ScriptEnvironment::kSubprocDisplayBit) != 0 &&
+          environment.FUN_002681c0_subprocLine)
+      {
+        environment.FUN_002681c0_subprocLine(static_cast<int>(slot), subprocIdAt(offset));
+      }
+
       state_.DAT_00355cf8_currentSlot = static_cast<std::int32_t>(slot);
       trace.recordSlotRun();
       completed = runAtOffset(offset, environment, trace, kNoSelectedEntity) && completed;
@@ -308,8 +318,51 @@ namespace orphen::ported::script
       completed = runAtOffset(leadOffset, environment, trace, 0) && completed;
     }
 
-    // FUN_0025cfb8 (letterbox) and the debug flag dump would follow.
+    // FUN_0025b778:38-58, after FUN_0025cfb8. Four words of display mask at
+    // DAT_0031e770, one bit per work word; every set bit prints its work value
+    // twice, once decimal and once hex. Nothing in the game writes the mask --
+    // only FUN_0026a508, the SCEN WORK DISP submenu -- so this is inert until
+    // that menu turns a slot on.
+    if (environment.FUN_002681c0_sceneWorkLine)
+    {
+      for (std::size_t word = 0; word < SceneScriptState::kSceneWorkDisplayWords; ++word)
+      {
+        const std::uint32_t mask = state_.DAT_0031e770_sceneWorkDisplayMask[word];
+        if (mask == 0)
+        {
+          continue;
+        }
+        for (std::size_t bit = 0; bit < 32; ++bit)
+        {
+          if ((mask & (1u << bit)) == 0)
+          {
+            continue;
+          }
+          const std::size_t index = word * 32 + bit;
+          environment.FUN_002681c0_sceneWorkLine(static_cast<int>(index),
+                                                 state_.DAT_00355060_work[index]);
+        }
+      }
+    }
+
     return completed;
+  }
+
+  // FUN_0025b778:23's `*(u32 *)(body - 4)`. The scheduler and opcode 0x9D both
+  // install a body offset; the dword in front of it is the authored subproc id
+  // the debug overlay names. Returns -1 when there is no room for one, so a
+  // body at the very start of the blob reads as "no id" rather than as garbage.
+  std::int32_t SceneScript::subprocIdAt(std::uint32_t bodyOffset) const
+  {
+    if (bodyOffset < 4 || bodyOffset > blob_.size())
+    {
+      return -1;
+    }
+    const std::size_t at = static_cast<std::size_t>(bodyOffset) - 4;
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(blob_[at]) |
+                                     (static_cast<std::uint32_t>(blob_[at + 1]) << 8) |
+                                     (static_cast<std::uint32_t>(blob_[at + 2]) << 16) |
+                                     (static_cast<std::uint32_t>(blob_[at + 3]) << 24));
   }
 
   // FUN_0025ce30 (0x0025ce30). See analyzed/process_entity_queue_system.c.

@@ -55,6 +55,10 @@ namespace orphen::ported::script
     bool loaded() const { return !blob_.empty(); }
     std::span<const std::uint8_t> blob() const { return blob_; }
     std::uint32_t headerWord(std::size_t index) const;
+
+    // FUN_0025b778:23. The authored subproc id in front of a slot body, which
+    // is what the SCR SUBPROC DISP overlay names. -1 when there is no room.
+    std::int32_t subprocIdAt(std::uint32_t bodyOffset) const;
     std::uint32_t entryOffset(SceneScriptEntry entry) const;
 
     // The scene's texture page ids, from header word 6: a zero-terminated list

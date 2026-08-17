@@ -135,6 +135,10 @@ namespace orphen::port
     // --music-solo: mute the effect pool and voice line in the mixer, so a
     // --sound-dump holds only the sequence slots. Diagnostic only.
     bool musicSolo = false;
+    // --no-scr-subproc-disp: clear DAT_003555dd bit 7, which the port otherwise
+    // holds set so the subproc lines ride along with the position readout the
+    // same overlay already draws. 'P' toggles it at runtime.
+    bool noSubprocDisplay = false;
     // --screenshot <path>[:<frame>]. Runs the window on a fixed one-simulation-
     // step-per-frame schedule so the captured frame is reproducible, writes a
     // PPM and exits. Read by main().
@@ -394,6 +398,28 @@ namespace orphen::port
     // original defaults it off and FUN_00268d30 turns it on; the port holds it
     // on because there is no debug menu to reach it through yet.
     bool DAT_00355098_positionDisplay_ = true;
+    // DAT_003555dd, the debug display byte. Bit 7 is SCR SUBPROC DISP.
+    //
+    // Held set by default, the same way DAT_00355098_positionDisplay_ is: the
+    // debug menu that writes this byte in the original has no way in here, and
+    // these lines belong to the same readout as the position display.
+    std::uint8_t DAT_003555dd_debugDisplay_ =
+        orphen::ported::script::ScriptEnvironment::kSubprocDisplayBit;
+
+  public:
+    void setDAT_003555dd_debugDisplay(std::uint8_t value) { DAT_003555dd_debugDisplay_ = value; }
+    std::uint8_t DAT_003555dd_debugDisplay() const { return DAT_003555dd_debugDisplay_; }
+    void toggleSubprocDisplay()
+    {
+      DAT_003555dd_debugDisplay_ ^= orphen::ported::script::ScriptEnvironment::kSubprocDisplayBit;
+    }
+    bool subprocDisplayEnabled() const
+    {
+      return (DAT_003555dd_debugDisplay_ &
+              orphen::ported::script::ScriptEnvironment::kSubprocDisplayBit) != 0;
+    }
+
+  private:
   };
 
 } // namespace orphen::port

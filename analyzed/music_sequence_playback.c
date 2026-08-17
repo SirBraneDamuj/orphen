@@ -113,7 +113,26 @@
  * 5. The sequence format
  * ============================================================================
  *
- * Standard Sony SEQp. Fifteen-byte big-endian header, then one MIDI track:
+ * **The meta encoding is not standard MIDI's.** A tempo change is
+ *
+ *     FF 51 <u24 microseconds-per-quarter>          -- no length byte
+ *
+ * where a .mid file would write `FF 51 03 <u24>`. Reading the first tempo byte
+ * as a length desynchronises everything after it. Across all 283 sequences in
+ * the game only two meta types occur at all -- `FF 2F` in 282 of them and
+ * `FF 51` four times, **all four in SND resource 117** -- so anything else is a
+ * parse failure rather than a meta to skip over.
+ *
+ * That single track is the one this was found on. Resource 117 is the cue under
+ * Sephy's scene, 34.1 s long with a ritardando ending (50, 49, 46, 44, 42 BPM).
+ * Its first tempo change sits at tick 875, about 21.9 s in, and the scene plays
+ * the piece for 26.9 s -- so a standard-MIDI reading plays four fifths of it
+ * correctly and then falls apart, which is exactly how it presents: the music
+ * "stops early" and a note hangs, because the garbage that follows keys notes
+ * on that never get their note-off.
+ *
+ * Standard Sony SEQp otherwise. Fifteen-byte big-endian header, then one MIDI
+ * track:
  *
  *   +0x00  'SEQp'   (reads "pQES" byte by byte)
  *   +0x04  u32  version

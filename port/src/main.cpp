@@ -128,6 +128,11 @@ namespace
         config.printSoundReport = true;
         continue;
       }
+      if (argument == "--no-scr-subproc-disp")
+      {
+        config.noSubprocDisplay = true;
+        continue;
+      }
       if (argument == "--music-solo")
       {
         config.musicSolo = true;

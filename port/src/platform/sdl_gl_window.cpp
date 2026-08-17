@@ -205,6 +205,10 @@ namespace orphen::port
         {
           input.toggleDebugOverlayRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_p)
+        {
+          input.toggleSubprocDisplayRequested = true;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
         {
           input.previousMapRequested = true;

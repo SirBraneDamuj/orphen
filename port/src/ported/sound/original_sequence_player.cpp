@@ -106,6 +106,7 @@ namespace orphen::ported::sound
     loopForever_ = false;
     loopsTaken_ = 0;
     reachedEndOfTrack_ = false;
+    desynced_ = false;
     fader_ = kFaderFull;
     targetFader_ = kFaderFull;
     faderStep_ = 0.0;
@@ -165,6 +166,15 @@ namespace orphen::ported::sound
       }
       else
       {
+        // FUN_00206260 returns here (its `state < 2` test), because on the real
+        // machine the IOP owns the voices and has already silenced them. Here
+        // the voices are ours, and a track that ran to its end left them in
+        // release -- a slow release then rings on with nothing able to stop it.
+        // A script asking for silence gets silence.
+        if (!rampUp && targetFader == 0)
+        {
+          stop();
+        }
         return;
       }
     }
@@ -581,45 +591,65 @@ namespace orphen::ported::sound
             return;
           }
           const std::uint8_t meta = events_[cursor_++];
-          const std::uint32_t length = readVariableLength();
-          if (meta == 0x2F) // end of track
+
+          // **Sony's meta encoding is not standard MIDI's.** A tempo change is
+          // `FF 51 <u24>` with *no* length byte in front of it, where a .mid
+          // would write `FF 51 03 <u24>`. Reading the first tempo byte as a
+          // length desynchronises the rest of the track: SND resource 117's
+          // first tempo is 0x12AF29, so the parser skipped 18 bytes and spent
+          // the remainder of the piece interpreting note data as status bytes.
+          //
+          // Only two meta types exist across all 283 sequences in the game --
+          // FF 2F in 282 of them and FF 51 four times, all four in resource
+          // 117 -- so anything else is a desync rather than a meta to skip.
+          if (meta == 0x51)
           {
-            // A sequence with a loop pair that reached the end without hitting
-            // the end marker still repeats -- the ambient beds are written that
-            // way. Otherwise it stops.
-            if (haveLoopPoint_ && (loopForever_ || loopsRemaining_ > 0))
+            if (!need(3))
             {
-              if (!loopForever_)
-              {
-                --loopsRemaining_;
-              }
-              cursor_ = loopCursor_;
-              runningStatus_ = loopRunningStatus_;
-              ++loopsTaken_;
-              break;
+              stop();
+              return;
             }
-            reachedEndOfTrack_ = true;
-            allNotesOff();
-            playing_ = false;
-            return;
-          }
-          if (meta == 0x51 && length == 3 && need(3)) // tempo
-          {
             usPerQuarter_ = (static_cast<std::uint32_t>(events_[cursor_]) << 16) |
                             (static_cast<std::uint32_t>(events_[cursor_ + 1]) << 8) |
                             events_[cursor_ + 2];
+            cursor_ += 3;
             if (usPerQuarter_ == 0)
             {
               usPerQuarter_ = 500000;
             }
+            break;
           }
-          cursor_ += length;
-          if (cursor_ > events_.size())
+
+          if (meta != 0x2F)
           {
+            // Not a meta this format uses: the stream is out of step, and
+            // guessing a length would only carry the damage further.
+            desynced_ = true;
             stop();
             return;
           }
-          break;
+
+          // FF 2F 00 -- the trailing byte reads the same as a length.
+          readVariableLength();
+
+          // A sequence with a loop pair that reached the end without hitting
+          // the end marker still repeats -- the ambient beds are written that
+          // way. Otherwise it stops.
+          if (haveLoopPoint_ && (loopForever_ || loopsRemaining_ > 0))
+          {
+            if (!loopForever_)
+            {
+              --loopsRemaining_;
+            }
+            cursor_ = loopCursor_;
+            runningStatus_ = loopRunningStatus_;
+            ++loopsTaken_;
+            break;
+          }
+          reachedEndOfTrack_ = true;
+          allNotesOff();
+          playing_ = false;
+          return;
         }
         // Any other system message: nothing in these files uses one.
         stop();

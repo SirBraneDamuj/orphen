@@ -47,6 +47,13 @@ namespace orphen::ported::script
     static constexpr std::size_t kWorkWordCount = 128;
     std::uint32_t DAT_00355060_work[kWorkWordCount]{};
 
+    // DAT_0031e770: which of those 128 work words the SCEN WORK DISP submenu
+    // has switched on, as four 32-bit words. FUN_0026a508 XORs a bit per menu
+    // entry; nothing in the game itself writes it, so it stays zero and
+    // FUN_0025b778's second loop prints nothing until the menu turns a slot on.
+    static constexpr std::size_t kSceneWorkDisplayWords = 4;
+    std::uint32_t DAT_0031e770_sceneWorkDisplayMask[kSceneWorkDisplayWords]{};
+
     // DAT_00342b70: the game-wide flag array. Opcodes 0x36..0x39 address it by a
     // bit index that must be a multiple of 8 and below 0x47F8, then use
     // index >> 3 as a byte index -- so despite the naming it is a byte array,
@@ -386,6 +393,21 @@ namespace orphen::ported::script
     // FUN_00267d38: play a sound cue positioned on a pool entity. Extended
     // opcodes 0x125 / 0x126.
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
+
+    // == FUN_0025b778's own debug output ==
+    //
+    // DAT_003555dd, the debug display byte the menu writes. Bit 7 is the
+    // "SCR SUBPROC DISP" entry (`bGpffffb66d & 0x80` in the menu handler, and
+    // gp 0xffffb66d resolves to 0x003555dd against the 0x00359F70 base).
+    std::uint8_t DAT_003555dd_debugDisplay = 0;
+    static constexpr std::uint8_t kSubprocDisplayBit = 0x80;
+
+    // The two FUN_002681c0 call sites in FUN_0025b778, one callback each so the
+    // format strings stay where the original keeps them.
+    //   0x0034CA60  "Subproc:%3d [%5d]\n"   slot, the dword at (body - 4)
+    std::function<void(int slot, std::int32_t subprocId)> FUN_002681c0_subprocLine;
+    //   0x0034CA78  " %02d:%d(%X)\n"        work index, its value twice
+    std::function<void(int index, std::uint32_t value)> FUN_002681c0_sceneWorkLine;
 
     // The music slots. 0x129 starts a slot the scene preloaded, 0x12A ramps one
     // up and 0x12B ramps one down -- see FUN_00205d90 / FUN_002063c8 /

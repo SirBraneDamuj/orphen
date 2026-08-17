@@ -126,6 +126,9 @@ namespace orphen::ported::sound
     // should repeat shows up here as loopsTaken 0 with reachedEndOfTrack set.
     std::uint32_t loopsTaken() const { return loopsTaken_; }
     bool reachedEndOfTrack() const { return reachedEndOfTrack_; }
+    // True when the event stream stopped making sense. Should never happen on
+    // retail data; if it does, the parser and the format have diverged.
+    bool desynced() const { return desynced_; }
     int fader() const { return static_cast<int>(fader_); }
     // Still making sound: either running, or holding voices through a release
     // after the last event. Rendering only while `playing_` would cut the tail
@@ -171,6 +174,7 @@ namespace orphen::ported::sound
     bool loopForever_ = false;
     std::uint32_t loopsTaken_ = 0;
     bool reachedEndOfTrack_ = false;
+    bool desynced_ = false;
 
     std::uint8_t baseVolume_ = 127; // +0xB6 / +0xB7
     double fader_ = kFaderFull;     // +0xB4

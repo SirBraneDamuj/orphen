@@ -17,6 +17,8 @@ namespace orphen::port
     bool toggleHudRequested = false;
     // In-world debug drawing: collision boxes, entity labels, origin axes.
     bool toggleDebugOverlayRequested = false;
+    // 'P': DAT_003555dd bit 7, the debug menu's SCR SUBPROC DISP entry.
+    bool toggleSubprocDisplayRequested = false;
     bool previousMapRequested = false;
     bool nextMapRequested = false;
 

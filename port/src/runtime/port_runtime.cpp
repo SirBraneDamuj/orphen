@@ -522,6 +522,17 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
     };
 
+    // FUN_0025b778's two debug lines. The gate byte travels with the
+    // environment so the check stays where the original makes it.
+    environment.DAT_003555dd_debugDisplay = DAT_003555dd_debugDisplay_;
+    environment.FUN_002681c0_subprocLine = [this](int slot, std::int32_t subprocId)
+    { DAT_00572c38_debugText_.FUN_002681c0_printf("Subproc:%3d [%5d]\n", slot, subprocId); };
+    environment.FUN_002681c0_sceneWorkLine = [this](int index, std::uint32_t value)
+    {
+      DAT_00572c38_debugText_.FUN_002681c0_printf(" %02d:%d(%X)\n", index,
+                                                  static_cast<int>(value), value);
+    };
+
     environment.FUN_00205d90_play_music_slot = [this](std::size_t slot, int fader)
     { soundEngine_.FUN_00205d90_play_slot(slot, fader); };
     environment.FUN_002063c8_ramp_music_up = [this](std::size_t slot, int speed, int fader)
@@ -1372,6 +1383,11 @@ namespace orphen::port
     dialogueStream_.setVoiceIndex(&voiceIndex_);
     voiceAudioEnabled_ = config.audio || !config.soundDumpPath.empty();
     soundEngine_.setMusicSolo(config.musicSolo);
+    if (config.noSubprocDisplay)
+    {
+      DAT_003555dd_debugDisplay_ &=
+          static_cast<std::uint8_t>(~orphen::ported::script::ScriptEnvironment::kSubprocDisplayBit);
+    }
   }
 
   namespace
@@ -1933,6 +1949,7 @@ namespace orphen::port
       }
       std::cout << "slot " << slot << " track: loops taken " << player.loopsTaken()
                 << ", end of track " << (player.reachedEndOfTrack() ? "reached" : "not reached")
+                << (player.desynced() ? ", DESYNCED" : "")
                 << ", fader " << player.fader() << ", "
                 << (player.playing() ? "playing" : "stopped") << '\n';
     }
@@ -3011,6 +3028,12 @@ namespace orphen::port
     const float stepSeconds = orphen::ported::kNominalFrameSeconds *
                               (static_cast<float>(frameTicks) / static_cast<float>(orphen::ported::kNominalFrameTicks));
     mapViewer_.update(stepSeconds, input);
+
+    if (input.toggleSubprocDisplayRequested)
+    {
+      toggleSubprocDisplay();
+      std::cout << "[debug] SCR SUBPROC DISP " << (subprocDisplayEnabled() ? "ON" : "OFF") << '\n';
+    }
 
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {

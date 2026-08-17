@@ -1199,7 +1199,40 @@ orphen_port --disc-root . --scene s01_e012 --frames 600 --music-solo \
 sequence slots — dialogue is centred and full-scale and buries the music in any
 measurement of the whole mix.
 
-### Sephy's cue is five seconds by design
+### The meta encoding is not standard MIDI's
+
+A tempo change is **`FF 51 <u24>` with no length byte**, where a .mid writes
+`FF 51 03 <u24>`. Read the first tempo byte as a length and everything after it
+desynchronises.
+
+Across all 283 sequences in the game only two meta types occur: `FF 2F` in 282
+of them, and `FF 51` **four times, all four in SND resource 117**. So anything
+else is a parse failure, not a meta to skip — the port now stops the slot and
+flags `DESYNCED` in `--sound-report` rather than carrying the damage forward.
+
+Resource 117 is the cue under Sephy's scene: 34.1 s, with a ritardando ending
+(50, 49, 46, 44, 42 BPM). Its first tempo change is at tick 875 ≈ 21.9 s, and
+the scene plays it for 26.9 s — so the wrong reading plays four fifths of the
+piece correctly and then falls apart. That is exactly how it presented: "stops a
+few seconds early, then holds a note", because the garbage after the desync keys
+notes on that never receive a note-off.
+
+A second bug kept that note ringing. `FUN_00206260` returns early when the slot
+state is below 2, because on the real machine the IOP owns the voices and has
+already silenced them. The port's voices are its own, and a track that ran to its
+end left them in *release* — with a slow release rate they ring on, and the
+ramp-down that should have stopped them returned early too. A script asking for
+silence now gets silence.
+
+### Sephy's cue: slot 7, not slot 6
+
+Two different pieces play near each other and it is easy to chase the wrong one:
+
+- **slot 7 / SND 117** — frames 6805..8420, stopped by **subproc 1495** at blob
+  offset `0x534d`. This is the piece under Sephy's scene.
+- **slot 6 / SND 213** — frames 11564..11873, a five-second sting later on.
+
+### Slot 6's five seconds are by design
 
 Worth recording so it is not re-investigated. Opcode `0x129` starts slot 6 at
 frame 11564 and `0x12B` fades it at 11873 — 309 frames. The gap is script, not
@@ -1214,6 +1247,33 @@ at 5 s. `--sound-report` says so directly: `loops taken 0, end of track not
 reached`. The tail after that loop end exists for the case where the loop count
 expires: it holds the note-off for the ch0 drone that was keyed at tick 5 and
 swelled in over the intro.
+
+### SCR SUBPROC DISP
+
+`FUN_0025b778:22-24` prints one line per occupied object-script slot, before
+that slot runs, gated on `DAT_003555dd` bit 7 — the debug menu's
+"SCR SUBPROC DISP" entry (`bGpffffb66d & 0x80`; gp `0xffffb66d` resolves to
+`0x003555dd` against the `0x00359F70` base):
+
+```
+Subproc:%3d [%5d]        0x0034CA60 — slot, then the dword at (body - 4)
+```
+
+That dword is the authored subproc id, stored as the `0B 04 <id16> 00 00`
+marker in front of every body — the same pattern
+`docs/scr_script_assembly.md` scans for. s01_e012 has 292 of them.
+
+The port holds the bit set by default, the same way it holds
+`DAT_00355098_positionDisplay_` set: the menu that writes the byte has no way in
+here, and these lines belong to the same readout as the position display. `P`
+toggles it, `--no-scr-subproc-disp` starts it off.
+
+`FUN_0025b778:38-58` has a second loop behind the same printf — the
+"SCEN WORK DISP" submenu. Four words of mask at `DAT_0031e770`, one bit per work
+word, each set bit printing ` %02d:%d(%X)` (`0x0034CA78`) for
+`DAT_00355060[index]`. Only `FUN_0026a508`, the submenu itself, ever writes that
+mask, so it stays zero and the loop prints nothing until a slot is turned on.
+Ported and inert, which is what the original does.
 
 ### Two names in the dispatch tables that are wrong
 
