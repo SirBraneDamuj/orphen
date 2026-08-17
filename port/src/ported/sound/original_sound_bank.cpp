@@ -1,5 +1,6 @@
 #include "ported/sound/original_sound_bank.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -38,13 +39,15 @@ namespace orphen::ported::sound
     }
   } // namespace
 
-  std::vector<std::int16_t> decodePsAdpcm(std::span<const std::uint8_t> blocks)
+  WaveformPcm decodePsAdpcm(std::span<const std::uint8_t> blocks)
   {
-    std::vector<std::int16_t> pcm;
+    WaveformPcm result;
+    std::vector<std::int16_t> &pcm = result.samples;
     pcm.reserve(blocks.size() / 16 * 28);
 
     float previous = 0.0f;
     float beforeThat = 0.0f;
+    bool sawLoopStart = false;
 
     for (std::size_t at = 0; at + 16 <= blocks.size(); at += 16)
     {
@@ -56,6 +59,14 @@ namespace orphen::ported::sound
         filter = 0;
       }
       const auto [first, second] = kPredictors[filter];
+
+      // Bit 2 marks the block a repeat returns to. Recorded before the samples
+      // so the loop point is this block's first sample, not its last.
+      if ((flags & 4) != 0 && !sawLoopStart)
+      {
+        result.loopStart = pcm.size();
+        sawLoopStart = true;
+      }
 
       for (int index = 0; index < 28; ++index)
       {
@@ -75,15 +86,148 @@ namespace orphen::ported::sound
         pcm.push_back(static_cast<std::int16_t>(std::lround(clamped)));
       }
 
-      // Bit 0 of the flag byte is the end of the waveform. A one-shot's last
-      // block is 0x07 -- end, repeat and loop-start together.
+      // Bit 0 of the flag byte is the end of the waveform.
       if ((flags & 1) != 0)
       {
+        // Bit 1 says the end block repeats. A one-shot's terminator is 0x07,
+        // which sets bit 1 *and* points the loop at its own final block -- the
+        // hardware's way of spelling "stop", so a loop that starts inside the
+        // last block is not a loop.
+        const bool repeats = (flags & 2) != 0;
+        result.loops = repeats && sawLoopStart && result.loopStart + 28 < pcm.size();
         break;
       }
     }
 
-    return pcm;
+    if (!result.loops)
+    {
+      result.loopStart = 0;
+    }
+    return result;
+  }
+
+  void AdsrEnvelope::keyOn(std::uint16_t adsr1, std::uint16_t adsr2)
+  {
+    sustainLevel_ = static_cast<std::int32_t>(((adsr1 & 0x000Fu) + 1u) * 0x800u);
+    if (sustainLevel_ > 0x7FFF)
+    {
+      sustainLevel_ = 0x7FFF;
+    }
+    // The decay rate is stored in four bits but indexes the same table as the
+    // seven-bit rates, at four times the step.
+    decayRate_ = static_cast<std::uint8_t>(((adsr1 >> 4) & 0x0Fu) * 4u);
+    attackRate_ = static_cast<std::uint8_t>((adsr1 >> 8) & 0x7Fu);
+    attackExponential_ = (adsr1 & 0x8000u) != 0;
+
+    releaseRate_ = static_cast<std::uint8_t>((adsr2 & 0x1Fu) * 4u);
+    releaseExponential_ = (adsr2 & 0x0020u) != 0;
+    sustainRate_ = static_cast<std::uint8_t>((adsr2 >> 6) & 0x7Fu);
+    sustainDecreasing_ = (adsr2 & 0x4000u) != 0;
+    sustainExponential_ = (adsr2 & 0x8000u) != 0;
+
+    level_ = 0;
+    counter_ = 0;
+    phase_ = EnvelopePhase::Attack;
+  }
+
+  void AdsrEnvelope::keyOff()
+  {
+    if (phase_ != EnvelopePhase::Off)
+    {
+      phase_ = EnvelopePhase::Release;
+      counter_ = 0;
+    }
+  }
+
+  float AdsrEnvelope::step()
+  {
+    if (phase_ == EnvelopePhase::Off)
+    {
+      return 0.0f;
+    }
+
+    std::uint8_t rate = 0;
+    bool increasing = false;
+    bool exponential = false;
+    switch (phase_)
+    {
+    case EnvelopePhase::Attack:
+      rate = attackRate_;
+      increasing = true;
+      exponential = attackExponential_;
+      break;
+    case EnvelopePhase::Decay:
+      rate = decayRate_;
+      exponential = true; // decay is always exponential on the SPU
+      break;
+    case EnvelopePhase::Sustain:
+      rate = sustainRate_;
+      increasing = !sustainDecreasing_;
+      exponential = sustainExponential_;
+      break;
+    case EnvelopePhase::Release:
+      rate = releaseRate_;
+      exponential = releaseExponential_;
+      break;
+    case EnvelopePhase::Off:
+      return 0.0f;
+    }
+
+    const std::int32_t shift = static_cast<std::int32_t>(rate >> 2);
+    std::int32_t step = increasing ? (7 - static_cast<std::int32_t>(rate & 3))
+                                   : (-8 + static_cast<std::int32_t>(rate & 3));
+    std::int32_t cycles = 1 << std::max(0, shift - 11);
+    step <<= std::max(0, 11 - shift);
+
+    if (exponential)
+    {
+      if (increasing && level_ > 0x6000)
+      {
+        cycles *= 4;
+      }
+      if (!increasing)
+      {
+        step = static_cast<std::int32_t>(static_cast<std::int64_t>(step) * level_ / 0x8000);
+        if (step == 0)
+        {
+          step = -1; // never stall a falling exponential
+        }
+      }
+    }
+
+    if (++counter_ >= cycles)
+    {
+      counter_ = 0;
+      level_ = std::clamp(level_ + step, 0, 0x7FFF);
+    }
+
+    switch (phase_)
+    {
+    case EnvelopePhase::Attack:
+      if (level_ >= 0x7FFF)
+      {
+        phase_ = EnvelopePhase::Decay;
+        counter_ = 0;
+      }
+      break;
+    case EnvelopePhase::Decay:
+      if (level_ <= sustainLevel_)
+      {
+        phase_ = EnvelopePhase::Sustain;
+        counter_ = 0;
+      }
+      break;
+    case EnvelopePhase::Release:
+      if (level_ <= 0)
+      {
+        phase_ = EnvelopePhase::Off;
+      }
+      break;
+    default:
+      break;
+    }
+
+    return static_cast<float>(level_) / 32767.0f;
   }
 
   bool SoundBank::load(std::span<const std::uint8_t> resource)
@@ -227,24 +371,36 @@ namespace orphen::ported::sound
     return index < programs_.size() ? &programs_[index] : nullptr;
   }
 
-  const VabTone *SoundBank::tone(std::size_t program, std::uint8_t note) const
+  std::size_t SoundBank::tones(std::size_t program, std::uint8_t note, const VabTone **out,
+                               std::size_t max) const
   {
     const VabProgram *entry = this->program(program);
-    if (entry == nullptr)
+    if (entry == nullptr || out == nullptr)
     {
-      return nullptr;
+      return 0;
     }
+    std::size_t found = 0;
     for (const VabTone &tone : entry->tones)
     {
       if (note >= tone.noteLow && note <= tone.noteHigh)
       {
-        return &tone;
+        if (found >= max)
+        {
+          break;
+        }
+        out[found++] = &tone;
       }
     }
-    return nullptr;
+    return found;
   }
 
-  const std::vector<std::int16_t> *SoundBank::waveform(std::int16_t index) const
+  const VabTone *SoundBank::tone(std::size_t program, std::uint8_t note) const
+  {
+    const VabTone *first = nullptr;
+    return tones(program, note, &first, 1) == 1 ? first : nullptr;
+  }
+
+  const WaveformPcm *SoundBank::waveform(std::int16_t index) const
   {
     const auto slot = static_cast<std::size_t>(index);
     if (index <= 0 || slot >= waveformSize_.size() || waveformSize_[slot] == 0)
@@ -283,6 +439,11 @@ namespace orphen::ported::sound
     const int distance = (static_cast<int>(note) - static_cast<int>(tone.centreNote)) * 128 +
                          static_cast<int>(tone.fineShift);
     return kSpuBaseSampleRate * std::pow(2.0f, static_cast<float>(distance) / (12.0f * 128.0f));
+  }
+
+  float SoundBank::sampleRateWithBend(const VabTone &tone, std::uint8_t note, float cents)
+  {
+    return FUN_00205e50_sample_rate(tone, note) * std::pow(2.0f, cents / 1200.0f);
   }
 
 } // namespace orphen::ported::sound

@@ -1087,15 +1087,156 @@ bursts in that WAV start at frames 166 and 391, matching the cue log.
 
 ### What is not ported
 
-- **ADSR.** The tones carry SPU envelopes and the mixer ignores them. These are
-  one-shots whose decay is in the waveform, so it is close, but a sustained cue
-  would hold forever.
-- **Sequences.** Section 2 of a bank is `SEQp` data and `FUN_00206128` is the
-  negative-cue path that plays it. No music.
 - **Scene-streamed banks.** A cue whose record byte +7 is non-zero picks its
   bank through `FUN_00205778`; the report says `alternate bank not ported`.
 - **Absolute loudness.** The chain reproduces the game's relative volumes, but
   nothing models the IOP's own master, so the overall level is a guess.
+- **Reverb.** `FUN_00205938:90-113` sets an SPU2 reverb type and depth per music
+  slot. Not ported, so sequences play dry.
+
+## Music, and where every note of it was hiding
+
+The port played sound effects and no music, and the reason was one section of
+one file.
+
+A SND.BIN bank resource has three sections (`FUN_00205548`). The port read
+section 0 (the waveforms) and section 1 (the VAB header). **Section 2 is either
+the literal bytes `NSEQ` -- the marker for "no sequence here" -- or a real Sony
+`SEQp` chunk.** The three banks `FUN_00205118` loads at boot are exactly the
+three that are `NSEQ`, so a sound-effect-only implementation reads every bank
+that has no music in it and none of the banks that do.
+
+### A scene asks for its own music
+
+`FUN_0025b2f0` copies 16 bytes -- eight `u16` requests -- out of **scene script
+header word 10**, and `FUN_00206840` acts on them. Slot *i* draws from music
+category `min(i, 2)`, the low 15 bits index that category's table, and **bit 15
+means "start it now"**. Everything else is loaded ready for a later opcode.
+
+The tables themselves come from SCR.BIN resource 199 -- the same resource the
+sound-effect cue table comes from, built in the same pass by `FUN_00228e28`.
+Header word 7 points at three offsets, one per category; each is a run of
+eight-byte records ending at the first with a zero resource id. Retail has 51,
+33 and 201 records, which is exactly what `DAT_00354c00`'s bounds check expects.
+
+For `s01_e012`:
+
+```
+slot 2  0x801a  cat 2 index  26  -> SND resource 112  vol 70   PLAY
+slot 6  0x007f  cat 2 index 127  -> SND resource 213  vol 80
+```
+
+Slot 2 is the only one with bit 15 set, and it is the wind that runs under the
+whole scene. Slot 6 is started later by the script: opcode **0x129** at blob
+offset `0x5e56`, `(slot 6, fader 1000)` -- the piece under Sephy's scene.
+
+### The wind is four notes long
+
+SND resource 112's whole sequence, decoded by hand:
+
+```
+02  c0 00       program change ch0 -> program 0
+02  b0 07 7f    CC7  volume 127
+02     0a 40    CC10 pan 64
+02     0b 7f    CC11 expression 127
+02  90 3c 64    note on ch0, note 60, velocity 100
+81 3e (Δ190)   b0 63 14   CC99 = 20    loop start
+01              06 7f     CC6  = 127   forever
+86 01 (Δ769)    63 1e     CC99 = 30    loop end
+00  ff 2f 00    end of track
+```
+
+One held note. Looping is Sony's controller convention (CC99 = 20/30 around the
+loop, CC6 for the count) rather than anything in the header.
+
+The *sustain* is not in the sequence at all -- it is in the PS-ADPCM flag byte,
+which the decoder had been discarding. Bit 2 marks the block a repeat returns to
+and bit 1 says the end block repeats. **The trap:** a one-shot's terminator is
+`0x07`, which sets bit 1 *and* points the loop at its own final block. That is
+the hardware spelling "stop", so a loop that starts inside the last block is not
+a loop, and treating it as one makes every sound effect stutter forever.
+
+### ADSR stopped being optional
+
+One-shots never needed an envelope: they run a waveform to its end block and
+stop. A held sequencer note has no end block to reach, so the envelope is the
+only thing that ever ends it. `AdsrEnvelope` runs the SPU's own algorithm --
+`1 << max(0, (rate >> 2) - 11)` samples between steps of
+`step << max(0, 11 - (rate >> 2))`, exponential rise slowing 4x above `0x6000`,
+exponential fall scaling by the current level.
+
+### The fader is 0..1000, not 0..127
+
+`FUN_00206048` keeps two numbers per slot: the record's volume byte (0..127) and
+a fader running 0..1000. What reaches the sequencer is `fader * base / 1000`, so
+a fader of 1000 means "this slot's authored volume" -- which is the 1000 that
+both `FUN_00206840` and opcode 0x129 pass. `FUN_002063c8` (0x12A, up) and
+`FUN_00206260` (0x12B, down) ramp it, over a frame count worked out from the
+0..127 delta rather than the fader delta.
+
+### A VAB program layers, and getting that wrong sounds like a stuck note
+
+A program is a *set* of tones, and keying a note sounds **every** tone whose
+range covers it. Returning the first match is silently wrong, and this data
+layers constantly — SND resource 2 has 631 overlapping tone pairs.
+
+The one that gives itself away is the wind. SND resource 112's program 0 holds
+**two** tones over the same 0..120 range, at **pan 0 and pan 127**: a stereo
+recording split into two mono waveforms. Play only the first and the ambient bed
+is mono and hard left — right-channel RMS measures exactly `0.0`. It stops
+sounding like wind and starts sounding like a held note.
+
+That is worth knowing as a symptom: *"a note hangs until the scene ends"* was
+this, not a sequencer fault. The loop machinery was working the whole time (the
+wind takes 27 loops in a 13,000-frame run). Confirm with:
+
+```
+orphen_port --disc-root . --scene s01_e012 --frames 600 --music-solo \
+    --sound-dump out/audio/wind.wav
+```
+
+`--music-solo` mutes the effect pool and the voice line so a dump holds only the
+sequence slots — dialogue is centred and full-scale and buries the music in any
+measurement of the whole mix.
+
+### Sephy's cue is five seconds by design
+
+Worth recording so it is not re-investigated. Opcode `0x129` starts slot 6 at
+frame 11564 and `0x12B` fades it at 11873 — 309 frames. The gap is script, not
+drift: a `0x90` at `0x5e1d` arms ramp 1 with `current 126, target 0, step 1`, the
+`0x91`/`0x01` pair at `0x5e7e` polls it for exactly 126 frames to frame 11690,
+then dialogue runs and the fade follows 183 frames later. Every operand checks
+out against all five `0x12B` sites (`0x671d` gives slot 2 → fader 500, matching
+the frame-13122 scene handover).
+
+So the track never reaches its own loop end at tick 2309 (24 s) — it is stopped
+at 5 s. `--sound-report` says so directly: `loops taken 0, end of track not
+reached`. The tail after that loop end exists for the case where the loop count
+expires: it holds the note-off for the ch0 drone that was keyed at tick 5 and
+swelled in over the intro.
+
+### Two names in the dispatch tables that are wrong
+
+`analyzed/opcode_dispatch_tables.md` calls opcodes **0xDC** and **0xDD**
+"audio_dispatch". They reach `FUN_0023baf8`, which is an **empty stub in the
+retail build** -- they do nothing at all. **0xDE** is not audio either: it is a
+four-channel timer over `DAT_00571b50`, parallel to the event scheduler.
+
+### Checking it
+
+```
+orphen_port --disc-root . --scene s01_e012 --frames 20000 --sound-report
+orphen_port --disc-root . --scene s01_e012 --frames 600 --sound-dump out/audio/wind.wav
+```
+
+The report's music section names every slot, what it resolved to, and every
+play/ramp with its frame. For `s01_e012` that is slot 2 at frame 0, slot 7 up at
+6805 and down at 8420, slot 6 (Sephy) at 11564, and the wind ramping down at
+13122 as the scene hands over.
+
+The sequencer runs on the mixer's clock, like the voice line, so none of it can
+reach the simulation: `--frames 20000` is byte-identical across runs with and
+without it.
 
 ## Voice, and why cutscenes now keep time
 
@@ -1335,35 +1476,42 @@ something, and `+0x84..+0x90` publish the four heights.
 Still missing, and named: `FUN_00228cf0` (riding another entity),
 `FUN_002281a0` (the dynamic `0x10000` plane resolve), and `FUN_00208450` itself.
 
-### Volcan is not a terrain bug — the cutscene runs ahead
+### `eeMemory.bin` is frame ~1091, and Volcan was never a bug
 
-Worth writing down because it cost time and will recur. Slot 84 reads z = `-1.00`
-against the dump's `-1.20`, next to a pile of genuine terrain fixes, so it looks
-like one more. It is not.
+The single most expensive mistake in this area, recorded so it is not repeated:
+**the dump had been dated by eyeballing the camera, which put it at frame ~9600.
+It is actually frame ~1091.** Every "remaining mismatch" chased against frame
+9600 — Volcan's height, a walking NPC's position, an entity `+0x04` bit, and a
+whole theory that the cutscene scheduler ran ahead — was an artifact of comparing
+two different moments. At frame ~1091 the port matches the dump **83 of 83 on
+position**, and on animation counters, `+0x04` and `+0x4C` too.
 
-The opening cutscene is scheduler stream `0xca30`, and its records are paced by
-**event-flag waits**, not by their `limit` field, which is 0 on most of them. The
-port satisfies those gates far too early: flag `0x66` at frame 1543, `0x65` at
-2018, and then record [27] (`0xcb08` → `0x4a87`) fires at ~2050. That block
-re-places Volcan with `0x55` at `-1.000`. In the real game it has not run at all
-by the bed shot, roughly 7500 frames later.
+Two pieces of state date a dump exactly. Use them before comparing anything:
 
-Three fields say so together, which is why this is safe to conclude: the `0x54`
-at `0x42ce` sets position `-1.200` **and** animation 48 **and** leaves `flags06`
-bit 0 set, and the dump has all three. The `0x4a87` block would set animation 24
-and clear that bit.
+1. **Event scheduler channel 0**, `DAT_00571e40` = `{cursor, timer, count}`,
+   12-byte stride. The cursor is a pointer — subtract the script base at
+   `iGpffffb0e8` (`0x355058`). Here `0x01c564b0 - 0x01c49a00 = 0xCAB0`, record
+   [16] of stream `0xca30`, `count = 16`. That record is gated on event flag
+   `0x04`, so the game is *blocked* there.
+2. **The fullscreen fade**, `DAT_00571dd0` = `0x0d00` of `0x1fe0` at speed 2. It
+   advances `speed * DAT_003555bc` = 64 a frame, so it is 52 frames into a fade
+   the port starts at 1039 → ~1091.
 
-The lesson for the next one of these: never diagnose from position alone. Find
-every script site that writes the entity, read what each one *also* sets, and
-match all of it against the dump — the block that agrees on every field is the
-one that last ran. One trap while doing it: `currentOpcode_` is clobbered by the
-nested opcodes operand evaluation dispatches, so a trace printed after the
-operand reads names the wrong opcode. `FUN_0025eeb0` captures it at entry for
-exactly that reason.
+Animation counters are the confirmation: they tick every frame, and slots 84, 85,
+81 and 82 read 48, 38, 138 and 96 in both.
 
-Separately, entity `+0x04` bit `0x2` (the single-point sampling selector) is
-correct until about frame 3000 and cleared afterwards — the script's
-`or_register(work[4], reg 3, 2)` at `0x430f` does apply. That is its own thread.
+Worth keeping from the investigation itself: `0x86` is `FUN_00260ca0`, which
+Ghidra types `void` but which tail-calls `FUN_0025d238` so the completion flag
+arrives in `$v0`. That fade has **two** phases — ramp to `0x1fe0`, then hold
+`DAT_00571dda` (160) ticks — and the port models both. And while tracing, note
+that `currentOpcode_` is clobbered by the nested opcodes operand evaluation
+dispatches, so a print placed after the operand reads names the wrong opcode;
+`FUN_0025eeb0` captures it at entry for exactly that reason.
+
+One real residual remains: Magnus (slot 81) sits at `-1.19x` where the dump has
+exactly `-1.200`, stable across frames. Primitive 9 is flat, so the scan should
+return its `+0x2C` of `-1.200` outright — the port is landing somewhere else.
+Small, but it is a genuine divergence and belongs on the fix list.
 
 `--probe x,y,z[,r]` prints `lead=` (record78 `+0x00`) beside `terrain=`
 (`+0x04`); the scan gates on the first and the reject mask on the second, and

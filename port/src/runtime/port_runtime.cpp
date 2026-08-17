@@ -488,7 +488,7 @@ namespace orphen::port
         if (!adpcm.empty())
         {
           soundEngine_.FUN_00207010_play_voice_line(
-              orphen::ported::sound::decodePsAdpcm(adpcm),
+              orphen::ported::sound::decodePsAdpcm(adpcm).samples,
               static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
         }
       }
@@ -521,6 +521,13 @@ namespace orphen::port
       const auto &entity = entityPool_.slot(slot);
       soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
     };
+
+    environment.FUN_00205d90_play_music_slot = [this](std::size_t slot, int fader)
+    { soundEngine_.FUN_00205d90_play_slot(slot, fader); };
+    environment.FUN_002063c8_ramp_music_up = [this](std::size_t slot, int speed, int fader)
+    { soundEngine_.FUN_002063c8_ramp_up_slot(slot, speed, fader); };
+    environment.FUN_00206260_ramp_music_down = [this](std::size_t slot, int speed, int fader)
+    { soundEngine_.FUN_00206260_ramp_down_slot(slot, speed, fader); };
 
     environment.FUN_00213640_set_bandana = [this](std::int32_t mode)
     {
@@ -936,6 +943,11 @@ namespace orphen::port
     }
     seedSceneEnvironmentDefaults();
 
+    // FUN_0025b2f0 copies the scene's eight music requests out of header word
+    // 10, and FUN_0022a418 reaches FUN_00206840 to act on them. Both run before
+    // either script entry.
+    startSceneMusic();
+
     // FUN_0022a418 runs header word 0 and word 1 at load, from different points
     // in the bootstrap. The per-frame entry and the actor-state entries exist
     // but are not driven yet.
@@ -1180,6 +1192,12 @@ namespace orphen::port
         std::cout << "[snd] SCR.BIN resource " << kScrSoundCueResource
                   << " unreadable: " << soundEngine_.diagnostic() << '\n';
       }
+      // The same resource carries the three music category tables; FUN_00228e28
+      // builds both out of it in one pass.
+      else if (!soundEngine_.loadMusicTables(resource))
+      {
+        std::cout << "[snd] music tables unreadable: " << soundEngine_.diagnostic() << '\n';
+      }
     }
 
     orphen::harness::FlatBinArchive snd;
@@ -1199,6 +1217,101 @@ namespace orphen::port
                   << orphen::ported::sound::kBootBankResources[bank]
                   << ") did not load: " << soundEngine_.diagnostic() << '\n';
       }
+    }
+  }
+
+  // FUN_0025b2f0 and FUN_00206840 together: the scene's own music.
+  //
+  // FUN_0025b2f0 copies 16 bytes -- eight u16 requests -- from the scene script
+  // header's word 10 into DAT_0031e678. FUN_00206840 then walks them: slot i
+  // draws from music category min(i, 2), the low 15 bits index that category's
+  // table, and bit 15 means "and start it now". Everything else is loaded ready
+  // for a later opcode 0x129 to play.
+  //
+  // In s01_e012 slot 2 is 0x801A: category 2, index 26, play -- SND.BIN resource
+  // 112, whose sequence is a single held note between a pair of loop markers.
+  // That is the wind that runs under the whole scene.
+  void PortRuntime::startSceneMusic()
+  {
+    if (discRoot_.empty() || !sceneScript_.loaded())
+    {
+      return;
+    }
+
+    const std::uint32_t table = sceneScript_.headerWord(10);
+    const std::span<const std::uint8_t> blob = sceneScript_.blob();
+    if (table == 0 || table + kSceneMusicRequests * 2 > blob.size())
+    {
+      return;
+    }
+
+    orphen::harness::FlatBinArchive snd;
+    const bool haveArchive = snd.open(discRoot_ / "SND.BIN");
+
+    for (std::size_t slot = 0; slot < kSceneMusicRequests; ++slot)
+    {
+      const std::size_t at = table + slot * 2;
+      const auto request = static_cast<std::uint16_t>(blob[at] | (blob[at + 1] << 8));
+      const auto index = static_cast<std::uint16_t>(request & 0x7FFF);
+      const bool autoPlay = (request & 0x8000) != 0;
+      const std::size_t category = orphen::ported::sound::musicCategoryForSlot(slot);
+
+      orphen::ported::sound::SoundEngine::MusicSlotLog log;
+      log.slot = slot;
+      log.category = category;
+      log.request = request;
+      log.index = index;
+      log.autoPlayed = autoPlay;
+
+      const auto *record = soundEngine_.musicRecord(category, index);
+      if (record == nullptr)
+      {
+        // FUN_0025b2f0:18 treats this as fatal; here it is worth reporting and
+        // carrying on, because it means the tables did not parse.
+        log.outcome = "no such music record";
+        soundEngine_.logMusicSlot(log);
+        continue;
+      }
+      log.sndResource = record->sndResource;
+      log.volume = record->volume;
+
+      if (!haveArchive)
+      {
+        log.outcome = "SND.BIN missing";
+        soundEngine_.logMusicSlot(log);
+        continue;
+      }
+
+      // SND resources are stored uncompressed; see FlatBinArchive::raw.
+      const std::vector<std::uint8_t> resource = snd.raw(record->sndResource);
+      if (resource.empty())
+      {
+        log.outcome = "resource unreadable";
+        soundEngine_.logMusicSlot(log);
+        continue;
+      }
+      if (!soundEngine_.FUN_00205938_load_slot(slot, record->sndResource, record->volume, resource))
+      {
+        // A bank whose section 2 is "NSEQ" carries no sequence at all. That is
+        // normal for a sound-effect bank and not an error.
+        log.outcome = soundEngine_.slotHasSequence(slot) ? "bank unreadable" : "no sequence";
+        soundEngine_.logMusicSlot(log);
+        continue;
+      }
+
+      if (autoPlay)
+      {
+        // FUN_00206840:53 passes 1000 -- the fader wide open on the record's own
+        // volume.
+        soundEngine_.FUN_00205d90_play_slot(
+            slot, orphen::ported::sound::SequencePlayer::kFaderFull);
+        log.outcome = "loaded and playing";
+      }
+      else
+      {
+        log.outcome = "loaded";
+      }
+      soundEngine_.logMusicSlot(log);
     }
   }
 
@@ -1258,6 +1371,7 @@ namespace orphen::port
     }
     dialogueStream_.setVoiceIndex(&voiceIndex_);
     voiceAudioEnabled_ = config.audio || !config.soundDumpPath.empty();
+    soundEngine_.setMusicSolo(config.musicSolo);
   }
 
   namespace
@@ -1795,6 +1909,40 @@ namespace orphen::port
       }
       std::cout << soundEngine_.bank(bank).usedProgramCount() << " programs\n";
     }
+
+    // The eight music slots, in the order FUN_00206840 walks them.
+    std::cout << "music tables:";
+    for (std::size_t category = 0; category < orphen::ported::sound::kMusicCategoryCount; ++category)
+    {
+      std::cout << " cat" << category << "=" << soundEngine_.musicRecordCount(category);
+    }
+    std::cout << '\n';
+    for (const auto &entry : soundEngine_.musicLog())
+    {
+      std::cout << "slot " << entry.slot << " (cat " << entry.category << ") request 0x" << std::hex
+                << entry.request << std::dec << " index " << entry.index << " -> SND.BIN resource "
+                << entry.sndResource << " vol " << static_cast<int>(entry.volume) << "  "
+                << entry.outcome << '\n';
+    }
+    for (std::size_t slot = 0; slot < orphen::ported::sound::kMusicSlotCount; ++slot)
+    {
+      const auto &player = soundEngine_.musicSlot(slot);
+      if (!player.hasSequence())
+      {
+        continue;
+      }
+      std::cout << "slot " << slot << " track: loops taken " << player.loopsTaken()
+                << ", end of track " << (player.reachedEndOfTrack() ? "reached" : "not reached")
+                << ", fader " << player.fader() << ", "
+                << (player.playing() ? "playing" : "stopped") << '\n';
+    }
+    for (const auto &entry : soundEngine_.musicEventLog())
+    {
+      std::cout << "frame " << entry.frame << " music slot " << entry.slot << " " << entry.action
+                << " speed " << entry.speed << " fader " << entry.fader
+                << " (SND.BIN resource " << entry.sndResource << ")\n";
+    }
+
     if (soundEngine_.cueLog().empty())
     {
       std::cout << "no cues were requested\n";

@@ -84,13 +84,87 @@ namespace orphen::ported::sound
     std::vector<VabTone> tones;
   };
 
+  // == The ADSR envelope ==
+  //
+  // A one-shot cue never needed one: it plays a waveform to its end block and
+  // stops, and the port's mixer did exactly that. A held sequencer note has no
+  // end block to reach, so the envelope is the only thing that ever ends it, and
+  // the release phase is what stops a chord ringing through the next bar.
+  //
+  // VagAtr stores the two SPU registers verbatim. Fields are the hardware's:
+  //
+  //   adsr1  bits 0-3   sustain level          bits 4-7   decay rate (4 bits)
+  //          bits 8-14  attack rate (7 bits)   bit 15     attack exponential
+  //   adsr2  bits 0-4   release rate (5 bits)  bit 5      release exponential
+  //          bits 6-12  sustain rate (7 bits)  bit 14     sustain decreasing
+  //          bit 15     sustain exponential
+  //
+  // The envelope is a 15-bit counter stepped once per output sample. For a rate
+  // R the hardware waits `1 << max(0, (R >> 2) - 11)` samples and then adds
+  // `step << max(0, 11 - (R >> 2))`, where step is `7 - (R & 3)` rising and
+  // `-8 + (R & 3)` falling. Exponential rise slows by 4x above 0x6000;
+  // exponential fall scales the step by the current level.
+  enum class EnvelopePhase
+  {
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+    Off,
+  };
+
+  class AdsrEnvelope
+  {
+  public:
+    void keyOn(std::uint16_t adsr1, std::uint16_t adsr2);
+    void keyOff();
+    // One output sample. Returns the level as 0..1.
+    float step();
+    bool finished() const { return phase_ == EnvelopePhase::Off; }
+    EnvelopePhase phase() const { return phase_; }
+
+  private:
+    EnvelopePhase phase_ = EnvelopePhase::Off;
+    std::int32_t level_ = 0; // 0..0x7FFF
+    std::int32_t counter_ = 0;
+    std::uint8_t attackRate_ = 0;
+    std::uint8_t decayRate_ = 0;
+    std::uint8_t sustainRate_ = 0;
+    std::uint8_t releaseRate_ = 0;
+    std::int32_t sustainLevel_ = 0x7FFF;
+    bool attackExponential_ = false;
+    bool sustainExponential_ = false;
+    bool sustainDecreasing_ = true;
+    bool releaseExponential_ = false;
+  };
+
   // SPU2 plays a waveform at its recorded rate when the pitch register reads
   // 0x1000, and the register is 48 kHz there (the PS1's SPU was 44.1).
   inline constexpr float kSpuBaseSampleRate = 48000.0f;
 
+  // VagAtr[16] per program, so a note can layer at most this many tones.
+  inline constexpr std::size_t kMaxTonesPerProgram = 16;
+
+  // A decoded waveform and the loop the flag bytes describe.
+  //
+  // The one-shot path never needed this: a sound effect runs to the end block
+  // and stops. A *sequence* holds notes, so the sustained part of a waveform has
+  // to repeat, and the ambient beds in this game are single held notes over a
+  // one-second loop. Without it the wind blows once and stops.
+  struct WaveformPcm
+  {
+    std::vector<std::int16_t> samples;
+    std::size_t loopStart = 0;
+    bool loops = false;
+    bool empty() const { return samples.empty(); }
+  };
+
   // PS-ADPCM: 16-byte blocks, a shift/filter byte, a flag byte, then 28
-  // nibbles. Bit 0 of the flags ends the waveform.
-  std::vector<std::int16_t> decodePsAdpcm(std::span<const std::uint8_t> blocks);
+  // nibbles. Of the flag byte, bit 0 ends the waveform, bit 1 says the end block
+  // repeats rather than stopping, and bit 2 marks the block the repeat returns
+  // to. A one-shot's last block is 0x07 -- all three at once, which is the
+  // degenerate "loop back to my own start" the hardware treats as a stop.
+  WaveformPcm decodePsAdpcm(std::span<const std::uint8_t> blocks);
 
   class SoundBank
   {
@@ -102,7 +176,22 @@ namespace orphen::ported::sound
     // 128 slots always exist; this counts the ones with tones, which is the
     // VAB header's `ps` and what the header-length check keys off.
     std::size_t usedProgramCount() const;
-    // The tone a note selects, or nullopt when the program has none covering it.
+    // == Tones layer ==
+    //
+    // A VAB program is a *set* of tones, and keying a note sounds **every** tone
+    // whose note range covers it, not the first one. Returning only the first is
+    // silently wrong on any program that layers, and this game layers a lot:
+    // SND resource 112's wind is two tones over the same 0..120 range at pan 0
+    // and pan 127 -- a stereo pair. Take only the first and the ambient bed
+    // plays mono, hard left, which does not sound like wind at all. Boot bank 1
+    // (resource 2) has 631 overlapping pairs and bank 2 (resource 3) has 8, so
+    // the sound-effect path needs this as much as the sequencer does.
+    //
+    // Fills `out` with up to `max` matching tones and returns how many. 16 is
+    // the most a program can hold.
+    std::size_t tones(std::size_t program, std::uint8_t note, const VabTone **out,
+                      std::size_t max) const;
+    // The first tone covering a note. Reporting only -- playback must layer.
     const VabTone *tone(std::size_t program, std::uint8_t note) const;
     const VabProgram *program(std::size_t index) const;
     std::uint8_t masterVolume() const { return masterVolume_; }
@@ -110,10 +199,15 @@ namespace orphen::ported::sound
     // Decoded PCM for a 1-based waveform index. Decoded on first use and kept,
     // because a bank is a few hundred kilobytes of ADPCM and the sound effects
     // reach only a handful of it.
-    const std::vector<std::int16_t> *waveform(std::int16_t index) const;
+    const WaveformPcm *waveform(std::int16_t index) const;
 
     // The rate a tone plays a note at, in Hz.
     static float FUN_00205e50_sample_rate(const VabTone &tone, std::uint8_t note);
+
+    // The rate a tone plays a note at including a pitch-bend offset in cents.
+    // Only the sequencer needs this; a sound-effect record carries a whole note
+    // and nothing else.
+    static float sampleRateWithBend(const VabTone &tone, std::uint8_t note, float cents);
 
     const std::string &diagnostic() const { return diagnostic_; }
 
@@ -124,7 +218,7 @@ namespace orphen::ported::sound
     std::vector<VabProgram> programs_;
     std::vector<std::size_t> waveformOffset_;
     std::vector<std::size_t> waveformSize_;
-    mutable std::vector<std::vector<std::int16_t>> decoded_;
+    mutable std::vector<WaveformPcm> decoded_;
     mutable std::vector<bool> decodedValid_;
     std::string diagnostic_;
   };

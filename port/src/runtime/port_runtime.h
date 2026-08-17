@@ -132,6 +132,9 @@ namespace orphen::port
     // --sound-dump <path>: mix the frame loop's cues into a WAV. Headless only;
     // it is how the mixer gets checked without a speaker.
     std::string soundDumpPath;
+    // --music-solo: mute the effect pool and voice line in the mixer, so a
+    // --sound-dump holds only the sequence slots. Diagnostic only.
+    bool musicSolo = false;
     // --screenshot <path>[:<frame>]. Runs the window on a fixed one-simulation-
     // step-per-frame schedule so the captured frame is reproducible, writes a
     // PPM and exits. Read by main().
@@ -364,6 +367,10 @@ namespace orphen::port
     orphen::ported::sound::SoundEngine soundEngine_;
     bool printSoundReport_ = false;
     void loadSoundData();
+    // FUN_0025b2f0 + FUN_00206840: the eight music requests in scene header
+    // word 10.
+    static constexpr std::size_t kSceneMusicRequests = 8;
+    void startSceneMusic();
 
     // VOICE.BIN's table of contents, which is what gives a line of dialogue its
     // real length. Optional: without it every hold falls back to an estimate and

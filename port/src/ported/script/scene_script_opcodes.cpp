@@ -3623,14 +3623,51 @@ namespace orphen::ported::script
       note(OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 8);
 
+    // 0x129 (FUN_00261500): slot, then fader, into FUN_00205d90 -- start a
+    // sequence the scene already loaded into that slot. s01_e012 issues one of
+    // these, `(6, 1000)`, which is the piece under Sephy's scene.
     case 0x129:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 2);
+    {
+      note(OpcodeSupport::Modelled);
+      const auto slot = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const auto fader = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00205d90_play_music_slot && slot >= 0)
+      {
+        environment_.FUN_00205d90_play_music_slot(static_cast<std::size_t>(slot), fader);
+      }
+      return 0;
+    }
 
+    // 0x12A (FUN_00261530) and 0x12B (FUN_00261570): slot, speed, fader. The
+    // first ramps a slot up through FUN_002063c8, the second down through
+    // FUN_00206260 -- which is how a scene ducks its bed under a cue and brings
+    // it back, and how music stops without a click.
     case 0x12A:
     case 0x12B:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 3);
+    {
+      note(OpcodeSupport::Modelled);
+      const auto slot = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const auto speed = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const auto fader = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      if (slot >= 0)
+      {
+        const auto &ramp = opcode == 0x12A ? environment_.FUN_002063c8_ramp_music_up
+                                           : environment_.FUN_00206260_ramp_music_down;
+        if (ramp)
+        {
+          ramp(static_cast<std::size_t>(slot), speed, fader);
+        }
+      }
+      return 0;
+    }
 
     case 0x12C:
     case 0x12D:

@@ -41,11 +41,13 @@
 // simulation, so `--frames` stays byte-identical whether or not a device is
 // open -- and headless runs never open one.
 
+#include "ported/sound/original_sequence_player.h"
 #include "ported/sound/original_sound_bank.h"
 
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -82,6 +84,32 @@ namespace orphen::ported::sound
   // port holds it at the maximum.
   inline constexpr int DAT_003555d5_masterVolume = 128;
 
+  // == Music ==
+  //
+  // FUN_00206840 keeps eight sequence slots. Slot 0 draws from music category 0,
+  // slot 1 from category 1 and slots 2..7 all from category 2 -- the `min(i, 2)`
+  // in FUN_0025b2f0 and FUN_00206840 alike. Each slot owns a whole SND.BIN
+  // resource, loaded into banks 3..10 of the original's array; here each slot
+  // owns its own SequencePlayer instead, which owns its own bank.
+  inline constexpr std::size_t kMusicSlotCount = 8;
+  inline constexpr std::size_t kMusicCategoryCount = 3;
+
+  inline std::size_t musicCategoryForSlot(std::size_t slot)
+  {
+    return slot < kMusicCategoryCount ? slot : kMusicCategoryCount - 1;
+  }
+
+  // One eight-byte record of a category table. FUN_00228e28:89-117 copies these
+  // out of SCR.BIN resource 199, from the three offsets at header word 7, and
+  // stops at the first record whose resource id is zero.
+  struct MusicRecord
+  {
+    std::uint16_t sndResource = 0; // +0
+    std::uint8_t volume = 0;       // +2
+    std::int16_t reverbType = -1;  // +4, -1 for "leave the reverb alone"
+    std::uint16_t reverbDepth = 0; // +6; bit 0 is a flag, not part of the depth
+  };
+
   struct Listener
   {
     float x = 0.0f;
@@ -117,6 +145,12 @@ namespace orphen::ported::sound
 
     void setListener(const Listener &listener) { listener_ = listener; }
 
+    // --music-solo. Mutes the effect pool and the voice line in the mixer so a
+    // --sound-dump contains only the sequence slots. Diagnostic only: dialogue
+    // is centred and full-scale, so it buries the music in any measurement of
+    // the whole mix. Nothing about the simulation changes.
+    void setMusicSolo(bool solo) { musicSolo_ = solo; }
+
     // FUN_00267d38 with a non-zero entity: FUN_00267a80(x, y, z, cue, 100).
     void FUN_00267d38_play_at(std::uint16_t cue, float x, float y, float z);
     // FUN_00267d38 with a null entity, which reaches FUN_002057c8 at full pan.
@@ -143,6 +177,54 @@ namespace orphen::ported::sound
     // FUN_00206a48, which drops DAT_00356788 back to zero.
     void FUN_00206a48_stop_voice_line();
 
+    // == The music slots ==
+    //
+    // FUN_00228e28:89-117's three category tables, out of the same resource 199
+    // the cue table comes from.
+    bool loadMusicTables(std::span<const std::uint8_t> resource199);
+    const MusicRecord *musicRecord(std::size_t category, std::size_t index) const;
+    std::size_t musicRecordCount(std::size_t category) const;
+
+    // FUN_00205938: put a bank resource into a slot. The caller resolves the
+    // SND.BIN id through musicRecord() first and passes it back for the report.
+    bool FUN_00205938_load_slot(std::size_t slot, std::uint16_t sndResource,
+                                std::uint8_t baseVolume,
+                                std::span<const std::uint8_t> bankResource);
+    // FUN_00205d90 (opcode 0x129), FUN_002063c8 (0x12A) and FUN_00206260
+    // (0x12B). The fader runs 0..1000 over the record's own volume byte.
+    void FUN_00205d90_play_slot(std::size_t slot, int fader);
+    void FUN_002063c8_ramp_up_slot(std::size_t slot, int speed, int targetFader);
+    void FUN_00206260_ramp_down_slot(std::size_t slot, int speed, int targetFader);
+    bool slotPlaying(std::size_t slot) const;
+    bool slotHasSequence(std::size_t slot) const;
+    const SequencePlayer &musicSlot(std::size_t slot) const { return musicSlots_[slot]; }
+
+    // --sound-report's music section: what each slot ended up holding.
+    struct MusicSlotLog
+    {
+      std::size_t slot = 0;
+      std::size_t category = 0;
+      std::uint16_t request = 0; // the raw u16 from the scene header
+      std::uint16_t index = 0;
+      std::uint16_t sndResource = 0;
+      std::uint8_t volume = 0;
+      bool autoPlayed = false;
+      const char *outcome = "";
+    };
+    void logMusicSlot(const MusicSlotLog &entry) { musicLog_.push_back(entry); }
+    const std::vector<MusicSlotLog> &musicLog() const { return musicLog_; }
+
+    struct MusicEventLog
+    {
+      std::uint32_t frame = 0;
+      std::size_t slot = 0;
+      const char *action = "";
+      std::uint16_t sndResource = 0;
+      int speed = 0;
+      int fader = 0;
+    };
+    const std::vector<MusicEventLog> &musicEventLog() const { return musicEventLog_; }
+
     // --sound-report. Cue numbers in the order they were asked for, with what
     // happened to each.
     struct CueLogEntry
@@ -165,7 +247,7 @@ namespace orphen::ported::sound
   private:
     struct Voice
     {
-      const std::vector<std::int16_t> *pcm = nullptr;
+      const WaveformPcm *pcm = nullptr;
       double position = 0.0;
       double step = 1.0;
       float gainLeft = 0.0f;
@@ -193,6 +275,15 @@ namespace orphen::ported::sound
     double voiceLineStep_ = 1.0;
     bool voiceLineActive_ = false;
     std::vector<CueLogEntry> cueLog_;
+
+    // The eight sequence slots. Mutated by the simulation, rendered by the
+    // mixer, so every touch of one is under mixLock_.
+    std::array<SequencePlayer, kMusicSlotCount> musicSlots_;
+    std::array<std::vector<MusicRecord>, kMusicCategoryCount> musicTables_;
+    std::array<std::uint16_t, kMusicSlotCount> slotResource_{};
+    bool musicSolo_ = false;
+    std::vector<MusicSlotLog> musicLog_;
+    std::vector<MusicEventLog> musicEventLog_;
   };
 
 } // namespace orphen::ported::sound

@@ -387,6 +387,13 @@ namespace orphen::ported::script
     // opcodes 0x125 / 0x126.
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
 
+    // The music slots. 0x129 starts a slot the scene preloaded, 0x12A ramps one
+    // up and 0x12B ramps one down -- see FUN_00205d90 / FUN_002063c8 /
+    // FUN_00206260. The fader is 0..1000 over the slot record's volume byte.
+    std::function<void(std::size_t slot, int fader)> FUN_00205d90_play_music_slot;
+    std::function<void(std::size_t slot, int speed, int fader)> FUN_002063c8_ramp_music_up;
+    std::function<void(std::size_t slot, int speed, int fader)> FUN_00206260_ramp_music_down;
+
     // FUN_00213640: suspend or resume the player's bandana. Extended opcode
     // 0x146's whole effect; it needs the bone-override table, which lives on the
     // runtime rather than in the pool.

@@ -9,6 +9,7 @@ namespace orphen::ported::sound
   namespace
   {
     constexpr std::size_t kCueRecordBytes = 8;
+    constexpr std::size_t kMusicRecordBytes = 8;
 
     // FUN_0030bd20: float to int, truncating toward zero.
     int FUN_0030bd20_toInt(float value)
@@ -78,6 +79,137 @@ namespace orphen::ported::sound
       cue.alternateBank = resource199[at + 7];
     }
     return true;
+  }
+
+  bool SoundEngine::loadMusicTables(std::span<const std::uint8_t> resource199)
+  {
+    for (std::vector<MusicRecord> &table : musicTables_)
+    {
+      table.clear();
+    }
+    if (resource199.size() < 0x20)
+    {
+      diagnostic_ = "SCR resource 199 is too short to hold the music tables";
+      return false;
+    }
+
+    // FUN_00228e28:92. Header word 7 points at three offsets, one per category.
+    const std::size_t directory = u32At(resource199, 0x1C);
+    if (directory + kMusicCategoryCount * 4 > resource199.size())
+    {
+      diagnostic_ = "SCR resource 199's music directory is out of range";
+      return false;
+    }
+
+    for (std::size_t category = 0; category < kMusicCategoryCount; ++category)
+    {
+      const std::size_t base = u32At(resource199, directory + category * 4);
+      if (base + kMusicRecordBytes > resource199.size())
+      {
+        diagnostic_ = "a music category table falls outside resource 199";
+        return false;
+      }
+      // :101-108 walks eight-byte records until one whose resource id is zero.
+      for (std::size_t index = 0;; ++index)
+      {
+        const std::size_t at = base + index * kMusicRecordBytes;
+        if (at + kMusicRecordBytes > resource199.size())
+        {
+          break;
+        }
+        const auto resourceId =
+            static_cast<std::uint16_t>(resource199[at] | (resource199[at + 1] << 8));
+        if (resourceId == 0)
+        {
+          break;
+        }
+        MusicRecord record;
+        record.sndResource = resourceId;
+        record.volume = resource199[at + 2];
+        record.reverbType =
+            static_cast<std::int16_t>(resource199[at + 4] | (resource199[at + 5] << 8));
+        record.reverbDepth =
+            static_cast<std::uint16_t>(resource199[at + 6] | (resource199[at + 7] << 8));
+        musicTables_[category].push_back(record);
+      }
+    }
+    return true;
+  }
+
+  const MusicRecord *SoundEngine::musicRecord(std::size_t category, std::size_t index) const
+  {
+    if (category >= kMusicCategoryCount || index >= musicTables_[category].size())
+    {
+      return nullptr;
+    }
+    return &musicTables_[category][index];
+  }
+
+  std::size_t SoundEngine::musicRecordCount(std::size_t category) const
+  {
+    return category < kMusicCategoryCount ? musicTables_[category].size() : 0;
+  }
+
+  bool SoundEngine::FUN_00205938_load_slot(std::size_t slot, std::uint16_t sndResource,
+                                           std::uint8_t baseVolume,
+                                           std::span<const std::uint8_t> bankResource)
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return false;
+    }
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    slotResource_[slot] = sndResource;
+    return musicSlots_[slot].FUN_00205938_load(bankResource, baseVolume);
+  }
+
+  void SoundEngine::FUN_00205d90_play_slot(std::size_t slot, int fader)
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return;
+    }
+    {
+      const std::lock_guard<std::mutex> guard(mixLock_);
+      musicSlots_[slot].FUN_00205d90_play(fader);
+    }
+    musicEventLog_.push_back({frame_, slot, "play", slotResource_[slot], 0, fader});
+  }
+
+  void SoundEngine::FUN_002063c8_ramp_up_slot(std::size_t slot, int speed, int targetFader)
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return;
+    }
+    {
+      const std::lock_guard<std::mutex> guard(mixLock_);
+      musicSlots_[slot].ramp(targetFader, speed, true);
+    }
+    musicEventLog_.push_back({frame_, slot, "ramp up", slotResource_[slot], speed, targetFader});
+  }
+
+  void SoundEngine::FUN_00206260_ramp_down_slot(std::size_t slot, int speed, int targetFader)
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return;
+    }
+    {
+      const std::lock_guard<std::mutex> guard(mixLock_);
+      musicSlots_[slot].ramp(targetFader, speed, false);
+    }
+    musicEventLog_.push_back({frame_, slot, "ramp down", slotResource_[slot], speed, targetFader});
+  }
+
+  bool SoundEngine::slotPlaying(std::size_t slot) const
+  {
+    return slot < kMusicSlotCount && musicSlots_[slot].playing();
+  }
+
+  bool SoundEngine::slotHasSequence(std::size_t slot) const
+  {
+    return slot < kMusicSlotCount && musicSlots_[slot].hasSequence();
   }
 
   bool SoundEngine::FUN_00205310_load_bank(std::size_t bank, std::span<const std::uint8_t> resource)
@@ -211,10 +343,9 @@ namespace orphen::ported::sound
     {
       waveform = tone->waveform;
       rate = SoundBank::FUN_00205e50_sample_rate(*tone, record.note);
-      if (const std::vector<std::int16_t> *pcm = banks_[record.bank].waveform(tone->waveform);
-          pcm != nullptr)
+      if (const WaveformPcm *pcm = banks_[record.bank].waveform(tone->waveform); pcm != nullptr)
       {
-        samples = pcm->size();
+        samples = pcm->samples.size();
       }
       const std::lock_guard<std::mutex> guard(mixLock_);
       pending_.push_back(request);
@@ -227,44 +358,54 @@ namespace orphen::ported::sound
   void SoundEngine::startVoice(const KeyOn &request)
   {
     const SoundBank &bank = banks_[request.bank];
-    const VabTone *tone = bank.tone(request.program, request.note);
-    if (tone == nullptr)
-    {
-      return;
-    }
-    const std::vector<std::int16_t> *pcm = bank.waveform(tone->waveform);
-    if (pcm == nullptr || pcm->empty())
-    {
-      return;
-    }
+    // A program layers -- see SoundBank::tones. Bank 0 is key split so this is
+    // always one tone there, but banks 1 and 2 both hold programs whose tones
+    // overlap, and those are two-waveform sounds that were playing at half
+    // their content.
+    const VabTone *matching[kMaxTonesPerProgram] = {};
+    const std::size_t layers =
+        bank.tones(request.program, request.note, matching, kMaxTonesPerProgram);
 
-    Voice *slot = nullptr;
-    for (Voice &voice : voices_)
+    for (std::size_t layer = 0; layer < layers; ++layer)
     {
-      if (!voice.active)
+      const VabTone *tone = matching[layer];
+      const WaveformPcm *pcm = bank.waveform(tone->waveform);
+      if (pcm == nullptr || pcm->empty())
       {
-        slot = &voice;
-        break;
+        continue;
       }
-    }
-    if (slot == nullptr)
-    {
-      return; // FUN_002057c8 drops the cue when no voice is free
-    }
 
-    // The IOP multiplies the tone's own volume and its program's back in.
-    const float toneGain = static_cast<float>(tone->volume) / 127.0f;
-    const float programGain =
-        static_cast<float>(bank.program(request.program)->volume) / 127.0f;
-    const float masterGain = static_cast<float>(bank.masterVolume()) / 127.0f;
-    const float common = toneGain * programGain * masterGain / 127.0f;
+      Voice *slot = nullptr;
+      for (Voice &voice : voices_)
+      {
+        if (!voice.active)
+        {
+          slot = &voice;
+          break;
+        }
+      }
+      if (slot == nullptr)
+      {
+        return; // FUN_002057c8 drops the cue when no voice is free
+      }
 
-    slot->pcm = pcm;
-    slot->position = 0.0;
-    slot->step = SoundBank::FUN_00205e50_sample_rate(*tone, request.note) / kSpuBaseSampleRate;
-    slot->gainLeft = static_cast<float>(request.volumeLeft) * common;
-    slot->gainRight = static_cast<float>(request.volumeRight) * common;
-    slot->active = true;
+      // The IOP multiplies the tone's own volume and its program's back in.
+      const float toneGain = static_cast<float>(tone->volume) / 127.0f;
+      const float programGain =
+          static_cast<float>(bank.program(request.program)->volume) / 127.0f;
+      const float masterGain = static_cast<float>(bank.masterVolume()) / 127.0f;
+      const float common = toneGain * programGain * masterGain / 127.0f;
+
+      slot->pcm = pcm;
+      slot->position = 0.0;
+      slot->step = SoundBank::FUN_00205e50_sample_rate(*tone, request.note) / kSpuBaseSampleRate;
+      // The cue's own left/right already carry FUN_00267a80's 3D pan, so the
+      // tone's pan is deliberately not applied again here; every layered
+      // sound-effect tone in the boot banks is centred anyway.
+      slot->gainLeft = static_cast<float>(request.volumeLeft) * common;
+      slot->gainRight = static_cast<float>(request.volumeRight) * common;
+      slot->active = true;
+    }
   }
 
   void SoundEngine::drainPendingKeyOns()
@@ -307,7 +448,19 @@ namespace orphen::ported::sound
 
     {
       const std::lock_guard<std::mutex> guard(mixLock_);
-      if (voiceLineActive_)
+
+      // The eight sequence slots. These run on the mixer's clock rather than the
+      // simulation's, exactly like the voice line: nothing here can reach the
+      // simulation, so --frames stays byte-identical with or without a device.
+      for (SequencePlayer &slot : musicSlots_)
+      {
+        if (slot.audible())
+        {
+          slot.render(interleavedStereo, frames);
+        }
+      }
+
+      if (voiceLineActive_ && !musicSolo_)
       {
         for (std::size_t frame = 0; frame < frames; ++frame)
         {
@@ -333,11 +486,11 @@ namespace orphen::ported::sound
 
     for (Voice &voice : voices_)
     {
-      if (!voice.active)
+      if (!voice.active || musicSolo_)
       {
         continue;
       }
-      const std::vector<std::int16_t> &pcm = *voice.pcm;
+      const std::vector<std::int16_t> &pcm = voice.pcm->samples;
       for (std::size_t frame = 0; frame < frames; ++frame)
       {
         const auto index = static_cast<std::size_t>(voice.position);

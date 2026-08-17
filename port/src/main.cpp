@@ -128,6 +128,11 @@ namespace
         config.printSoundReport = true;
         continue;
       }
+      if (argument == "--music-solo")
+      {
+        config.musicSolo = true;
+        continue;
+      }
       if (argument == "--sound-dump")
       {
         if (argumentIndex + 1 >= argc)

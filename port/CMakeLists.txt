@@ -63,6 +63,8 @@ target_sources(orphen_port
         src/ported/player/original_item_window.h
         src/ported/resource/item_database.cpp
         src/ported/resource/item_database.h
+        src/ported/sound/original_sequence_player.cpp
+        src/ported/sound/original_sequence_player.h
         src/ported/sound/original_sound_bank.cpp
         src/ported/sound/original_sound_bank.h
         src/ported/sound/original_sound_engine.cpp
