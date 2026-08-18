@@ -7,11 +7,16 @@
 //   src/FUN_00237c70.c  "the stream has finished"          -- script opcode 0x35
 //   src/FUN_00237de8.c  the per-frame stream walk          -- NOT ported here
 //
-// **This is not the dialogue system**, and it is not trying to be. It reproduces
-// the part a scene's *timing* depends on -- the two event flags a stream raises
-// and lowers, and how long a line stays up -- and reads the record's text well
-// enough to print it. What it does not do is render: no glyph pacing, no line
-// wrap, no page breaks, no player input.
+// This file owns a record's *timing*: the two event flags a stream raises and
+// lowers, and how long a line stays up. It also reads the record's text into
+// `speaker()` / `line()` for the report, which is a flat scan with none of the
+// original's layout in it.
+//
+// Rendering is `DialogueWindow`, which this class owns and steps -- the real
+// glyph slot array, word wrap, typewriter pacing and scroll, ported from
+// FUN_00237de8 and friends. See `original_dialogue_window.h`, which also
+// explains why the US release shows no subtitles and what the port does about
+// it. Player input is still absent: a record closes on its clip.
 //
 // ## How a line keeps time
 //
@@ -55,8 +60,10 @@
 // it. So a record's extent is known exactly, and a control code whose width is
 // still unknown can garble one printed line but cannot desync anything.
 
+#include "ported/original_frame_timing.h"
 #include "ported/script/scene_command_interpreter.h"
 #include "ported/sound/original_voice_index.h"
+#include "ported/text/original_dialogue_window.h"
 
 #include <cstdint>
 #include <span>
@@ -78,6 +85,9 @@ namespace orphen::ported::text
     // falls back to the estimate.
     void setVoiceIndex(const orphen::ported::sound::VoiceIndex *index) { voiceIndex_ = index; }
 
+    // The measured width table, needed before a glyph can be placed. Borrowed.
+    void setFont(const DialogueFont *font) { window_.setFont(font); }
+
     // FUN_00237b38 with a non-zero pointer. `recordEnd` is the next
     // pointer-table entry, or the blob end for the last record.
     void FUN_00237b38_start(std::span<const std::uint8_t> blob,
@@ -98,12 +108,22 @@ namespace orphen::ported::text
     // Burns the hold down and terminates when it runs out.
     void update(std::uint32_t frameTicks, orphen::ported::script::SceneScriptState &state);
 
+    // FUN_00237fc0's glyph walk. It has its own slot in the frame -- the
+    // original runs it *after* the script, so a record the script opened this
+    // frame gets its first character this frame -- which is why it is not
+    // folded into `update` above.
+    void FUN_00237fc0_update(std::uint32_t frameTicks) { window_.FUN_00237fc0_update(frameTicks); }
+
     // FUN_00223698 caches per channel and never clears, so this survives across
     // records by design; only a scene load resets it.
     void reset();
 
     const std::string &speaker() const { return speaker_; }
     const std::string &line() const { return line_; }
+
+    // FUN_00237fc0's glyph list for this frame, ready to blit.
+    std::vector<DialogueSprite> sprites() const { return window_.sprites(); }
+    const DialogueWindow &window() const { return window_; }
 
     struct LoggedLine
     {
@@ -125,6 +145,17 @@ namespace orphen::ported::text
     // Records with neither a clip nor any text -- a bare terminate. They hold
     // for nothing, which is not the same as being invented.
     std::uint32_t emptyLines() const { return emptyLines_; }
+    // Records that stayed up after their clip had finished, because the walk
+    // had not reached the terminator yet, and what that cost in frames. Every
+    // texted record does this by at least the two steps the walk needs to
+    // consume its 0x1A and then its terminator; the *total* is the number that
+    // says something -- it is text held on screen that closing on the clip
+    // alone would have thrown away.
+    std::uint32_t typewriterHeldLines() const { return typewriterHeldLines_; }
+    std::uint32_t typewriterHeldFrames() const
+    {
+      return typewriterHeldTicks_ / orphen::ported::kNominalFrameTicks;
+    }
 
   private:
     // The advance each control code applies to the cursor, opcode byte
@@ -132,6 +163,9 @@ namespace orphen::ported::text
     static std::size_t controlWidth(std::uint8_t code);
 
     const orphen::ported::sound::VoiceIndex *voiceIndex_ = nullptr;
+
+    // The glyph slots and the walk that fills them.
+    DialogueWindow window_;
 
     bool active_ = false;
     std::uint32_t holdTicks_ = 0;
@@ -146,6 +180,11 @@ namespace orphen::ported::text
     std::uint32_t measuredLines_ = 0;
     std::uint32_t estimatedLines_ = 0;
     std::uint32_t emptyLines_ = 0;
+    std::uint32_t typewriterHeldLines_ = 0;
+    std::uint32_t typewriterHeldTicks_ = 0;
+    // Set while a record is past its clip and waiting on the walk, so the
+    // counter above is one per record rather than one per frame.
+    bool heldByTypewriter_ = false;
   };
 
 } // namespace orphen::ported::text

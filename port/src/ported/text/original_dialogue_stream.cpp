@@ -30,44 +30,11 @@ namespace orphen::ported::text
     bool printable(std::uint8_t byte) { return byte >= 0x20 && byte < 0x7F; }
   } // namespace
 
-  // Each handler's advance, read off its stores to -0x5140(gp). Where a handler
-  // stores more than once the largest wins, since the smaller stores are the
-  // partial advances on the way there.
-  //
-  //   0x00 00239178   0x01/03/04/05 002391d0   0x02 00239328   0x06 00239338
-  //   0x07 00239368   0x08 00239390   0x09 00239c60   0x0A 002393e0
-  //   0x0B 00239408   0x0C 00239428   0x0D 00239450   0x0E 00239478
-  //   0x0F 002394f8   0x10 00239548   0x11 002395c0   0x12 00239750
-  //   0x13 00239760   0x14 002397f0   0x15 00239848   0x16 00239990
-  //   0x17 00239a00   0x18/0x19 00239a30   0x1A 00239a70   0x1B/0x1C 00239aa0
-  //   0x1D 00239b00   0x1E 00239c78
-  //
-  // The handlers that consume only themselves are the ones whose payload is
-  // rendered rather than parsed -- 0x13's speaker name is emitted as ordinary
-  // glyphs by a recursive FUN_00237de8 call and ended by a 0x00.
-  //
-  // Two entries could not be read off a single straight-line pass and are set to
-  // 1, the safe value: a width that is too small re-reads a payload byte as a
-  // control code, which garbles the printed line, while a width that is too
-  // large can step over a 0x16 or a 0x18 and lose a clip. Both 0x01 and 0x09
-  // only ever appear at a record's tail in this scene's data, after the 0x1A, so
-  // neither can affect a hold.
+  // The cursor advances live with the walk that uses them; see
+  // FUN_00237de8_controlWidth in original_dialogue_window.h.
   std::size_t DialogueStream::controlWidth(std::uint8_t code)
   {
-    switch (code)
-    {
-    case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
-    case 0x14: case 0x18: case 0x1D:
-      return 2;
-    case 0x19: case 0x1B: case 0x1C: case 0x1E:
-      return 3;
-    case 0x0F: case 0x15:
-      return 4;
-    case 0x11: case 0x16:
-      return 7;
-    default:
-      return 1;
-    }
+    return FUN_00237de8_controlWidth(code);
   }
 
   void DialogueStream::FUN_00237b38_start(std::span<const std::uint8_t> blob,
@@ -78,18 +45,20 @@ namespace orphen::ported::text
     speaker_.clear();
     line_.clear();
     pendingFlags_.clear();
+    heldByTypewriter_ = false;
 
     std::uint32_t playedVoice = 0;
 
+    // A target that is not itself a pointer-table entry -- opcode 0x33's inline
+    // text is the case -- has no next entry to bound it, so cap the record.
+    // Without the cap one such record printed a kilobyte of the code segment
+    // read as ASCII.
+    constexpr std::size_t kMaxRecordBytes = 512;
+    const std::size_t end = std::min<std::size_t>(
+        {static_cast<std::size_t>(recordEnd), blob.size(), recordBegin + kMaxRecordBytes});
+
     if (recordBegin < blob.size())
     {
-      // A target that is not itself a pointer-table entry -- opcode 0x33's
-      // inline text is the case -- has no next entry to bound it, so cap the
-      // scan. Without the cap one such record printed a kilobyte of the code
-      // segment read as ASCII.
-      constexpr std::size_t kMaxRecordBytes = 512;
-      const std::size_t end = std::min<std::size_t>(
-          {static_cast<std::size_t>(recordEnd), blob.size(), recordBegin + kMaxRecordBytes});
       bool sawSpeakerCode = false;
       bool speakerTaken = false;
       std::string run;
@@ -213,6 +182,11 @@ namespace orphen::ported::text
     }
     active_ = true;
 
+    // The rendering walk runs over the same bytes, on its own cursor, and its
+    // 0x1A blocks on the clip this record just started.
+    window_.FUN_00237b38_open(blob, recordBegin, static_cast<std::uint32_t>(end));
+    window_.setVoiceBusy(holdTicks_ != 0);
+
     state.FUN_002663d8_clearEventFlag(kFlagWindowVisible);
     state.FUN_002663d8_clearEventFlag(kFlagTextIdleA);
     state.FUN_002663d8_clearEventFlag(kFlagTextIdleB);
@@ -227,6 +201,7 @@ namespace orphen::ported::text
   {
     active_ = false;
     holdTicks_ = 0;
+    window_.FUN_00237b38_close();
 
     // The original executes 0x1B as the walk reaches it, so a flag at the tail
     // of a record lands when the line finishes reading. The port scans the
@@ -252,11 +227,32 @@ namespace orphen::ported::text
     {
       return;
     }
-    if (holdTicks_ > frameTicks)
+
+    // Burn the clip down. This is DAT_00356788's whole role here: while it is
+    // set, the walk's 0x1A refuses to advance.
+    holdTicks_ = holdTicks_ > frameTicks ? holdTicks_ - frameTicks : 0;
+    window_.setVoiceBusy(holdTicks_ != 0);
+
+    // **The record ends where its bytes say it ends**, not when the clip runs
+    // out. The two usually coincide, because 0x1A is the last thing before the
+    // terminator -- but a record can put codes after it, and s01_e012's does:
+    // Dortin's line ends `1A 0C 3C 02`, a full second of held text after the
+    // audio has stopped. Closing on the clip alone dropped that second.
+    if (!window_.complete())
     {
-      holdTicks_ -= frameTicks;
+      if (holdTicks_ == 0)
+      {
+        if (!heldByTypewriter_)
+        {
+          heldByTypewriter_ = true;
+          ++typewriterHeldLines_;
+        }
+        typewriterHeldTicks_ += frameTicks;
+      }
       return;
     }
+    heldByTypewriter_ = false;
+
     FUN_00237b38_terminate(state);
   }
 
@@ -273,6 +269,10 @@ namespace orphen::ported::text
     measuredLines_ = 0;
     estimatedLines_ = 0;
     emptyLines_ = 0;
+    typewriterHeldLines_ = 0;
+    typewriterHeldTicks_ = 0;
+    heldByTypewriter_ = false;
+    window_.reset();
   }
 
 } // namespace orphen::ported::text

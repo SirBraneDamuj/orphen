@@ -700,8 +700,10 @@ a chest holding item 0 down the empty path.)
 reads the real streams and expands the four codes above, but the other 27 stop
 the reader and get reported; there is no wrapping against `FUN_00237b38`'s
 600-unit width, and the glyph list is rebuilt each frame rather than
-accumulated. A real dialogue port should replace that file rather than build on
-it.
+accumulated. The real one now exists — `ported/text/original_dialogue_window.*`,
+below — and this file should be folded into it. It has not been yet, because the
+chest caption is the one place that needs `0x14`'s item-name splice and a real
+Cross press, and the cutscene walk does neither.
 
 The *font*, on the other hand, is the real one — see below.
 
@@ -742,6 +744,80 @@ frames a cycle.
 `FUN_00238608`'s other branch — characters at or above `0xFC`, which draw a
 32x32 face-button icon from slot `0x2C` through the UV table at `0x0031C220` —
 is documented in the header but not reachable from a caption.
+
+### Cutscene subtitles, and why the US release has none
+
+`ported/text/original_dialogue_window.*` is the real text engine: the 300-entry
+glyph slot array, the stream walk, word wrap, the typewriter and the scroll,
+ported from `FUN_00237de8`, `FUN_00238a08`, `FUN_00238f98`, `FUN_00238f18` and
+`FUN_00239760`. `DialogueStream` owns it and steps it; `buildDialogueSprites`
+hands what it produces to the same blit the chest caption uses.
+
+**The subtitles are in the US data and the US code, and one four-line test
+hides them.** `FUN_00238a08` opens with
+
+```
+lVar1 = FUN_00266368(0x509);
+if ((lVar1 == 0) && (lVar1 = FUN_00266368(0x50a), lVar1 == 0)) return;
+```
+
+and `FUN_002391d0` gates the prompt the same way. Nothing in `SLUS_200.11` ever
+sets `0x50A`. `FUN_00237b38` *clears* `0x509` on every start, and the only code
+that sets it is `FUN_002452f0`, an unrelated full-screen caption. So a stream is
+visible only if it turns the flag on itself, with control code `1B 09 05` —
+which is exactly how the chest windows in `SCR.BIN` resource 1 begin, and it is
+why those captions were already on screen.
+
+`scr2.out`'s 84 cutscene records do not. Their six `0x1B` codes set `0x6A`,
+`0x79` and `0x6E`, all scheduler gates; not one sets `0x509`. The Japanese
+build's glyph enqueue, `src-jp/FUN_0023ade8.c`, is the same function with those
+four lines absent — the text was cut for the US release by adding a test, not by
+editing the scripts.
+
+**The port drops the gate.** That is the only deliberate divergence in the file.
+
+The codes `s01_e012` actually uses are `0x00 0x01 0x02 0x07 0x0C 0x13 0x16 0x17
+0x18 0x1A 0x1B` — a small set, all handled. Anything else is stepped over by its
+operand width and named in the report.
+
+Layout comes straight out of `FUN_00237b38`: a window at entry `(-0x130, -0x78)`
+= screen `(16, 344)`, 600 units wide, `uGpffffbce0 = 2` rows deep. `0x13` clears
+the array, draws the name in `0x80606000` — dark cyan, R=0 — on row 0, then
+steps to row 1, and from there every glyph is indented ten units. Past row 2
+`FUN_00238f98` scrolls: each slot's row index drops by one, the one leaving row 1
+is retired, the rest move 22 units up. Row 0 is never touched, which is what
+holds the name still under a scrolling line.
+
+Two divergences the port's structure forces, both in the header:
+
+- The walk **skips** `0x16`/`0x17`/`0x18`/`0x19` by width instead of running
+  them, because `DialogueStream` already read the clip out of `VOICE.BIN` when
+  the record opened. `0x1A` does block, on that clip's remaining length rather
+  than on `DAT_00356788`.
+- `0x01` raises the book prompt and, in the original, holds for Cross — 28 of
+  the 84 records use it. The port spawns the sprite and lets the record close on
+  its clip. A cutscene that stopped for input every fourth line would not be the
+  same scene, and the port has no input model for it.
+
+**Making `0x1A` block is what fixed the record tails.** A record's hold is not
+its clip; it is where its *bytes* end, and a record can put codes after the
+`0x1A`. Dortin's is `... 1A 0C 3C 02` — a full second of held text after the
+audio stops. Closing on the clip alone dropped that second. With the walk
+driving the close instead, every record picks up at least the two steps the walk
+needs to consume its `0x1A` and then its terminator, and Dortin's picks up 65.
+Across the whole scene that is 264 frames of held text, and flag `0x515` — the
+handoff to player control — moves from 13122 to **13317**:
+
+```
+dialogue lines: 42  (38 timed by their voice clip, 0 estimated, 4 empty)
+  38 held open past the clip until the walk reached the terminator, 264 frames in total
+```
+
+Checkable at any frame:
+
+```
+orphen_port --disc-root . --scene s01_e012 --screenshot shot.png:700
+```
 
 For the camera half of `FUN_00234400`, `FUN_00217d70`'s own save/restore pair
 covers it.
@@ -1429,7 +1505,8 @@ hold for a second each.
 Line by line the old `60 + 2 * characters` estimate was nowhere near: "Monsters?"
 held 90 frames against a real 34, and Volcan's opening rant held 310 against a
 real 639. Flag `0x515`, the handoff to player control, moves from frame 10426 to
-**13122**.
+**13122** — and to 13317 once the subtitle walk drives the record's close rather
+than the clip alone, which is the section on cutscene subtitles below.
 
 Remaining gap: a *texted* record with no clip behind it still falls back to the
 estimate, because there the original waits for the player's Cross press rather

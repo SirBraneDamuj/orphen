@@ -837,6 +837,9 @@ namespace orphen::port
         0, modelStore_.textureSlots().slot(orphen::ported::text::kFontSlotLow).texture);
     dialogueFont_.FUN_00238c90_measure(
         1, modelStore_.textureSlots().slot(orphen::ported::text::kFontSlotHigh).texture);
+    // The cutscene subtitle walk needs the same width table before it can place
+    // a glyph, and the sheets have only just been decoded.
+    dialogueStream_.setFont(&dialogueFont_);
     // FUN_0022a418 lines 190-197 bind the lead player's model before the
     // scene script runs, straight through FUN_00221d20 with the default bank
     // rather than through FUN_00266118. It reads the party leader from
@@ -1611,6 +1614,22 @@ namespace orphen::port
       std::cout << "dialogue lines: " << lines.size() << "  (" << dialogueStream_.measuredLines()
                 << " timed by their voice clip, " << dialogueStream_.estimatedLines()
                 << " estimated, " << dialogueStream_.emptyLines() << " empty)\n";
+      if (dialogueStream_.typewriterHeldLines() != 0)
+      {
+        std::cout << "  " << dialogueStream_.typewriterHeldLines()
+                  << " held open past the clip until the walk reached the terminator, "
+                  << dialogueStream_.typewriterHeldFrames() << " frames in total\n";
+      }
+      const auto &unhandled = dialogueStream_.window().unhandledCodes();
+      if (!unhandled.empty())
+      {
+        std::cout << "  glyph walk skipped control codes:";
+        for (std::uint8_t code : unhandled)
+        {
+          std::cout << " 0x" << std::hex << static_cast<int>(code) << std::dec;
+        }
+        std::cout << '\n';
+      }
       std::uint32_t heldFrames = 0;
       for (const auto &entry : lines)
       {
@@ -3171,6 +3190,10 @@ namespace orphen::port
     // FUN_00237fc0, which mode 6 runs after the actors. Cross is raw pad 0x40,
     // the same bit the interaction probe reads.
     itemWindow_.FUN_00237fc0_update(frameTicks, (input.rawPressedPad & 0x0040) != 0);
+    // The same call, for the cutscene subtitles: this is where FUN_00237fc0
+    // sits in FUN_002239c8's frame, after the script has had its turn, so a
+    // record opened this frame types its first character this frame.
+    dialogueStream_.FUN_00237fc0_update(frameTicks);
     mapViewer_.setDialogueSprites(buildDialogueSprites());
 
     // FUN_00267a80 measures against DAT_0058C0A8 and uGpffffb6d4 -- the camera,
@@ -3432,15 +3455,26 @@ namespace orphen::port
   std::vector<orphen::ported::text::DialogueSprite> PortRuntime::buildDialogueSprites() const
   {
     namespace text = orphen::ported::text;
-    if (!itemWindow_.FUN_00237c60_isOpen() || !dialogueFont_.measured())
+    if (!dialogueFont_.measured())
     {
       return {};
+    }
+
+    // The cutscene subtitles. These come out of the real glyph slot array, so
+    // they are already placed, paced and wrapped; nothing is rebuilt here.
+    // Only one of the two windows can be up at a time -- a chest is not opened
+    // mid-cutscene -- but appending rather than choosing keeps that an
+    // observation about the data instead of an assumption in the code.
+    std::vector<text::DialogueSprite> sprites = dialogueStream_.sprites();
+
+    if (!itemWindow_.FUN_00237c60_isOpen())
+    {
+      return sprites;
     }
 
     // The typewriter counts characters across the whole stream, so the reveal
     // spills from one line onto the next the way FUN_00237de8 emits them.
     std::size_t remaining = itemWindow_.revealedCharacters();
-    std::vector<text::DialogueSprite> sprites;
     int penX = 0;
     int lastLine = 0;
     for (const auto &line : itemWindow_.lines())

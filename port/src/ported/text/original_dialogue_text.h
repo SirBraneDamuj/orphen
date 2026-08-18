@@ -99,6 +99,15 @@ namespace orphen::ported::text
   inline constexpr int kPromptTicksPerFrame = 0x80;
   inline constexpr int kPromptCycleTicks = 0x200;
 
+  // The entry colour at +0x30, which FUN_00207938 writes straight into the GS
+  // RGBAQ register: R in bits 0-7, then G, B, A, with 0x80 standing for 1.0
+  // through the texture function's (Ct * Cv) >> 7. FUN_00237b38 opens a window
+  // at 0x80808080, plain white.
+  inline constexpr std::uint32_t kColorDefault = 0x80808080;
+  // FUN_00239760:13. The speaker's name is drawn in this instead -- R 0x00,
+  // G 0x60, B 0x60, so a dark cyan against the white of the line.
+  inline constexpr std::uint32_t kColorSpeaker = 0x80606000;
+
   // One FUN_00239020 entry, reduced to what a 2D blit needs. Screen coordinates
   // are already in the 640x448 top-left space; source coordinates are texels of
   // the 256x256 slot.
@@ -113,6 +122,7 @@ namespace orphen::ported::text
     int v = 0;
     int sourceWidth = 0;
     int sourceHeight = 0;
+    std::uint32_t color = kColorDefault;
   };
 
   // The proportional width table FUN_00238c90 builds, at 0x0031C518.

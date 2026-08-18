@@ -2204,11 +2204,20 @@ namespace orphen::harness
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    // Every entry the dialogue system builds carries 0x80808080, which is x1.0
-    // through the GS's (Ct * Cv) >> 7.
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    // The entry colour at +0x30 goes straight into RGBAQ, where 0x80 is x1.0
+    // through the GS's (Ct * Cv) >> 7. Most entries carry 0x80808080, plain
+    // white; the speaker's name is 0x80606000.
+    const auto submitColor = [](std::uint32_t packed) {
+      const float scale = 1.0f / 128.0f;
+      glColor4f(static_cast<float>(packed & 0xFF) * scale,
+                static_cast<float>((packed >> 8) & 0xFF) * scale,
+                static_cast<float>((packed >> 16) & 0xFF) * scale,
+                static_cast<float>((packed >> 24) & 0xFF) * scale);
+    };
 
     unsigned int boundTexture = 0;
+    std::uint32_t submittedColor = 0;
     for (const auto &sprite : dialogueSprites_)
     {
       const auto slot = static_cast<std::size_t>(sprite.textureSlot);
@@ -2226,6 +2235,11 @@ namespace orphen::harness
       {
         boundTexture = slotTextureIds_[slot];
         glBindTexture(GL_TEXTURE_2D, boundTexture);
+      }
+      if (sprite.color != submittedColor)
+      {
+        submittedColor = sprite.color;
+        submitColor(submittedColor);
       }
 
       const float u0 = static_cast<float>(sprite.u) / texture.width;

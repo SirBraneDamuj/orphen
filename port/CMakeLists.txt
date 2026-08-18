@@ -72,8 +72,11 @@ target_sources(orphen_port
         src/ported/sound/original_voice_index.cpp
         src/ported/sound/original_voice_index.h
         src/ported/text/original_dialogue_text.cpp
-    src/ported/text/original_dialogue_stream.cpp
+        src/ported/text/original_dialogue_stream.cpp
+        src/ported/text/original_dialogue_window.cpp
         src/ported/text/original_dialogue_text.h
+        src/ported/text/original_dialogue_stream.h
+        src/ported/text/original_dialogue_window.h
         src/ported/render/original_screen_fade.cpp
         src/ported/render/original_screen_fade.h
         src/ported/render/original_fade_track.cpp
