@@ -131,6 +131,7 @@ target_sources(orphen_port
     src/ported/psm2/decoded_psm2_loader.cpp
     src/ported/psm2/decoded_psm2_loader.h
     src/ported/psm2/psm2_collision_groups.cpp
+    src/ported/psm2/psm2_uv_animation.cpp
     src/ported/psm2/psm2_geometry_builder.cpp
     src/ported/psm2/psm2_geometry_builder.h
     src/ported/psm2/psm2_material_expansion.cpp

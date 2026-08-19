@@ -282,6 +282,61 @@ namespace orphen::ported::psm2
   // FUN_00227840:94. A group of this type is skipped by the terrain scan.
   inline constexpr std::int16_t kCollisionGroupTypeSkipped = 4;
 
+  // ---------------------------------------------------------------------------
+  // The UV animation script -- PSM2 header +0x2C, section G.
+  //
+  //   src/FUN_0022b5a8.c:331-374  copies the script and allocates the state
+  //   src/FUN_002256d0.c          the state record's size
+  //   src/FUN_002256f0.c          seeds it
+  //   src/FUN_00225940.c          steps it, once per frame
+  //   src/FUN_0020eec0.c:97-110   uploads the result to VU1
+  //
+  // This is how every animated texture in the game moves, and nothing about it
+  // touches the geometry: FUN_00211230 bakes each primitive's UVs into its DMA
+  // packet once, and this subsystem adds a per-frame **offset** that lives in
+  // VU1 registers. So a memory diff of the map, the materials, the packets, the
+  // CLUTs or GS texture memory shows a scrolling texture as completely static.
+  // The only trace is the 0x44-byte state record.
+  //
+  // A track is a little timeline. `duration >= 0` is an absolute keyframe --
+  // the offset becomes (u << 6, v << 6) and holds for `duration` * 32 ticks.
+  // `duration < 0` is a continuous scroll: the offset accumulates (u, v) every
+  // frame and wraps at a modulus the duration selects, -1..-5 giving 0x4000,
+  // 0x2000, 0x1000, 0x800, 0x400. Offsets are in **1/64 texel** units, so the
+  // -1 modulus is exactly one 256-texel page.
+  //
+  // Which track a primitive uses is section E byte 9 -- `MaterialSlot::byte9`.
+  // Zero means "no offset"; N selects track N-1. In s01_e012 all 78 of the rain
+  // sheets outside the windows carry byte9 = 2, sharing one scroller, and the
+  // lantern glows carry the byte that selects an eight-frame strip.
+  struct UvAnimationFrame
+  {
+    std::int16_t duration = 0;  // >= 0 keyframe hold, < 0 scroll mode
+    std::int16_t u = 0;
+    std::int16_t v = 0;
+  };
+
+  struct UvAnimationTrack
+  {
+    std::vector<UvAnimationFrame> frames;
+
+    // FUN_002256f0's seed. frameIndex starts at 0xFF so the first step's
+    // `(int8)(frameIndex + 1)` lands on frame 0, and flags starts at 1 -- the
+    // "running" bit the stepper gates on.
+    std::int16_t u = 0;
+    std::int16_t v = 0;
+    std::int16_t timer = 0;
+    std::uint8_t frameIndex = 0xff;
+    std::uint8_t flags = 1;
+    std::uint8_t link = 0;
+    std::uint8_t repeat = 0;
+  };
+
+  // FUN_0020eec0 unpacks seven pairs whatever the script's real length, reading
+  // past a shorter record. Reproducing the read would only copy junk into a
+  // register nothing selects, so the port just stops at the tracks that exist.
+  inline constexpr std::size_t kUvAnimationUploadSlots = 7;
+
   struct Psm2Stats
   {
     std::size_t positionRecordCount = 0;
@@ -313,6 +368,11 @@ namespace orphen::ported::psm2
     // DAT_003556d8 / DAT_003556d4 and DAT_003556e0 / DAT_003556dc.
     std::vector<CollisionDescriptor> DAT_003556d8_collisionDescriptors;
     std::vector<CollisionGroup> DAT_003556e0_collisionGroups;
+
+    // DAT_003556F4 (the script) and DAT_003556F8 (the state) folded into one.
+    // iGpffffb788 is DAT_003556F8, and FUN_00208F28 gates the whole per-frame
+    // step on it being non-null -- a map with no section G simply has none.
+    std::vector<UvAnimationTrack> DAT_003556f4_uvAnimation;
 
     bool hasCollisionGrid() const { return DAT_00343a18_collisionGrid.size() == kCollisionGridCells; }
 

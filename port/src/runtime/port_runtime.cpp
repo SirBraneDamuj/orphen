@@ -9,6 +9,7 @@
 #include "ported/entity/entity_path_follow.h"
 #include "ported/model/psc3_model.h"
 #include "ported/psm2/psm2_collision_groups.h"
+#include "ported/psm2/psm2_uv_animation.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/model/entity_animation.h"
 #include "ported/script/object_registers.h"
@@ -223,6 +224,30 @@ namespace orphen::port
                 << " cellList=" << stats.collisionCellListLength
                 << " descriptors=" << mapViewer_.loadedMap()->DAT_003556d8_collisionDescriptors.size()
                 << " groups=" << mapViewer_.loadedMap()->DAT_003556e0_collisionGroups.size() << '\n';
+
+      // Section G. Worth printing because a map that silently parsed no tracks
+      // looks exactly like a map with no animated textures.
+      {
+        const auto &tracks = mapViewer_.loadedMap()->DAT_003556f4_uvAnimation;
+        if (!tracks.empty())
+        {
+          std::cout << "[psm2] uv animation tracks=" << tracks.size();
+          for (std::size_t index = 0; index < tracks.size(); ++index)
+          {
+            const auto &track = tracks[index];
+            std::cout << "  #" << index << ":";
+            if (track.frames.size() == 1 && track.frames[0].duration < 0)
+            {
+              std::cout << "scroll(" << track.frames[0].u << "," << track.frames[0].v << ")";
+            }
+            else
+            {
+              std::cout << track.frames.size() << "f";
+            }
+          }
+          std::cout << '\n';
+        }
+      }
 
       if (!config.dumpMapTexturesPath.empty())
       {
@@ -2721,6 +2746,19 @@ namespace orphen::port
         std::cout << " | slot" << slot << " type=0x" << std::hex << static_cast<int>(material.type)
                   << " a=0x" << static_cast<int>(material.alpha)
                   << " f=0x" << static_cast<int>(material.flags) << std::dec;
+        // The four corner (u, v) byte pairs. Which band of a 256x256 page a
+        // primitive samples is the only way to tell a lantern glow from a rain
+        // sheet when both are additive draws off the same effects page.
+        if (material.textured())
+        {
+          std::cout << " uv=";
+          for (std::size_t corner = 0; corner < 4; ++corner)
+          {
+            std::cout << (corner != 0 ? "," : "")
+                      << static_cast<int>(material.textureCoordinates[corner * 2]) << ":"
+                      << static_cast<int>(material.textureCoordinates[corner * 2 + 1]);
+          }
+        }
       }
       std::cout << '\n';
     }
@@ -3359,6 +3397,14 @@ namespace orphen::port
       if (auto *loadedMapForGroups = mapViewer_.loadedMap())
       {
         orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups);
+
+        // FUN_00208F28: step the map's UV animation, gated on iGpffffb788
+        // (DAT_003556F8) being non-null, immediately before FUN_00209140 walks
+        // the primitives. This is the rain outside the windows and the flicker
+        // on the lantern glows -- an offset added to baked coordinates, which
+        // is why none of the geometry or texture state ever changes.
+        orphen::ported::psm2::FUN_00225940_step_uv_animation(
+            loadedMapForGroups->DAT_003556f4_uvAnimation, frameTicks);
       }
 
       if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())

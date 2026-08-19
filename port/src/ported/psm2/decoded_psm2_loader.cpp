@@ -323,6 +323,52 @@ namespace orphen::ported::psm2
       }
     }
 
+    // FUN_0022b5a8:331-374, PSM2 header +0x2C. An s16 track count, then per
+    // track an s16 frame count followed by that many 3-halfword frames. The
+    // original copies it verbatim into DAT_003556F4 and allocates the state
+    // record after it; the port keeps script and state in one structure.
+    //
+    // psm2_format_and_loader_notes.md reads this section as "grouped triangle
+    // index lists" on the strength of the n*3 shape. It is not geometry -- it
+    // is the UV animation script, and FUN_002256F0 seeding a 10-byte state
+    // block per group is what gives it away.
+    void loadUvAnimation(std::span<const std::uint8_t> decodedPsm2,
+                         std::uint32_t sectionOffset,
+                         Psm2RuntimeState &state)
+    {
+      // FUN_0022b5a8:333. No section means DAT_003556F8 stays null and
+      // FUN_00208F28 never steps anything.
+      if (sectionOffset == 0)
+      {
+        return;
+      }
+
+      const std::size_t base = sectionOffset;
+      const std::size_t trackCount = positiveCount(readS16(decodedPsm2, base));
+      std::size_t cursor = base + 2;
+      state.DAT_003556f4_uvAnimation.reserve(trackCount);
+      for (std::size_t track = 0; track < trackCount; ++track)
+      {
+        requireRange(decodedPsm2, cursor, 2, "PSM2 UV animation track");
+        const std::size_t frameCount = positiveCount(readS16(decodedPsm2, cursor));
+        cursor += 2;
+        requireRange(decodedPsm2, cursor, frameCount * 6, "PSM2 UV animation frames");
+
+        UvAnimationTrack record;
+        record.frames.reserve(frameCount);
+        for (std::size_t frame = 0; frame < frameCount; ++frame)
+        {
+          UvAnimationFrame entry;
+          entry.duration = readS16(decodedPsm2, cursor);
+          entry.u = readS16(decodedPsm2, cursor + 2);
+          entry.v = readS16(decodedPsm2, cursor + 4);
+          cursor += 6;
+          record.frames.push_back(entry);
+        }
+        state.DAT_003556f4_uvAnimation.push_back(std::move(record));
+      }
+    }
+
     void loadObjectPlacements(std::span<const std::uint8_t> decodedPsm2,
                               std::uint32_t sectionOffset,
                               Psm2RuntimeState &state)
@@ -420,6 +466,7 @@ namespace orphen::ported::psm2
     loadCollisionDescriptors(decodedPsm2, readU32(decodedPsm2, 0x04), state);
     loadCollisionGroups(decodedPsm2, readU32(decodedPsm2, 0x1c), state);
     loadObjectPlacements(decodedPsm2, readU32(decodedPsm2, 0x34), state);
+    loadUvAnimation(decodedPsm2, readU32(decodedPsm2, 0x2c), state);
 
     // FUN_0022b5a8's tail order: FUN_0022c3d8 then FUN_0022c6e8.
     expandPsm2Materials(state);

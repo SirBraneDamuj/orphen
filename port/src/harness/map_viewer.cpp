@@ -3,6 +3,7 @@
 #include "harness/entity_probe.h"
 
 #include "ported/model/psc3_skeleton.h"
+#include "ported/psm2/psm2_uv_animation.h"
 #include "ported/render/original_entity_draw.h"
 
 #include <string>
@@ -1494,8 +1495,15 @@ namespace orphen::harness
       }
 
       const std::uint8_t sourceCorner = triangle.cornerIndices[triangleCornerIndex] & 3;
-      return {static_cast<float>(slot->textureCoordinates[sourceCorner * 2]) / 256.0f,
-              static_cast<float>(slot->textureCoordinates[sourceCorner * 2 + 1]) / 256.0f};
+      // Section E byte 9 picks a UV animation track, and FUN_0020eec0 hands
+      // VU1 its accumulated offset to add to these baked coordinates. Byte 9
+      // is zero on all but a few hundred slots, so this is a no-op almost
+      // everywhere -- but it is the whole of the rain outside the windows.
+      const auto offset =
+          orphen::ported::psm2::uvOffsetForMaterialByte9(map.DAT_003556f4_uvAnimation, slot->byte9);
+      return {static_cast<float>(slot->textureCoordinates[sourceCorner * 2]) / 256.0f + offset.u,
+              static_cast<float>(slot->textureCoordinates[sourceCorner * 2 + 1]) / 256.0f +
+                  offset.v};
     }
 
     // The GS treats 0x80 as fully opaque, so the fade byte divides by 128. A
@@ -2459,8 +2467,12 @@ namespace orphen::harness
       glBindTexture(GL_TEXTURE_2D, textureId);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      // REPEAT, not clamp: a UV animation track scrolls its offset across a
+      // whole 256-texel page and relies on wrapping round. Filtering is
+      // GL_NEAREST and every static primitive's coordinates sit inside 0..1,
+      // where the two modes sample identically, so this changes nothing else.
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, state.texture.width, state.texture.height, 0,
                    GL_RGBA, GL_UNSIGNED_BYTE, state.texture.rgbaPixels.data());
       slotTextureIds_[slot] = textureId;
@@ -2491,8 +2503,12 @@ namespace orphen::harness
       glBindTexture(GL_TEXTURE_2D, textureId);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      // REPEAT, not clamp: a UV animation track scrolls its offset across a
+      // whole 256-texel page and relies on wrapping round. Filtering is
+      // GL_NEAREST and every static primitive's coordinates sit inside 0..1,
+      // where the two modes sample identically, so this changes nothing else.
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
       const auto &texture = texturePages_[pageIndex].texture;
       glTexImage2D(GL_TEXTURE_2D,
