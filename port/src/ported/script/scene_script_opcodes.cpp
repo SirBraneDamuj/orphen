@@ -49,6 +49,70 @@ namespace orphen::ported::script
     // -- invisible to a cos/sin, but it matters to the opcodes that read +0x5C
     // back.
     using orphen::ported::script::FUN_00216690_wrapAngle;
+
+    // ---------------------------------------------------------------------
+    // PTR_FUN_0031e730, the table opcode 0xBE indexes.
+    //
+    // Fifteen native scene hooks compiled into SLUS_200.11 at 0x0031E730, one
+    // 32-bit pointer each. s01_e012 reaches exactly one of them -- index 6,
+    // argument 0, 243 times -- and that one is the storm.
+    // ---------------------------------------------------------------------
+
+    // FUN_002676d8. The storm: it rolls the sea and the camera together, on one
+    // shared wave, which is the whole trick and is easy to get half right.
+    //
+    // Two sines of the tick accumulator DAT_003555B8. The slow one (t/800,
+    // amplitude 0.1) goes to *two* places -- the sea's rotation channel 1 and
+    // DAT_0035564C -- and the fast one (t/450, amplitude 0.02) goes to the sea's
+    // channel 0 alone.
+    //
+    // DAT_0035564C is `uGpffffb6dc`: gp is 0x00359F70, so gp - 0x492C is
+    // 0x00355644 = fGpffffb6d4, and 0x0035564C is 8 past it. That is the third
+    // rotation FUN_0020bec8:49 feeds the view matrix -- the **camera roll** --
+    // not a spare global. So the camera rolls by exactly the angle the sea
+    // rolls by, the two cancel in screen space, and the sea reads as a level
+    // surface heaving up and down while the ship swings around it. Port only
+    // the sea half and the horizon visibly tilts, which is wrong.
+    //
+    // Confirmed against two PCSX2 save states taken at the swell's extremes:
+    // both read group 17's rotation and DAT_0035564C as the *same* number
+    // (0.099748 at the roll's peak, 0.011833 near its zero), and the group's
+    // live vertices span z -2.02..1.79 -- so the geometry really is tilted in
+    // the original too, and only the camera makes it look level.
+    //
+    // The group is hard-coded in the original as an offset off DAT_003556e0:
+    // +0x7F0 and +0x7F4 are 17 * 0x74 + 0x3C / + 0x40, the first two rotation
+    // channels of group 17, and +0x80E is 17 * 0x74 + 0x5A, its dirty byte. In
+    // s01_e012 group 17 is 64 flat quads spanning x -18..18, y 21..63 at z = 0
+    // -- the ocean -- hinged about (0, 21, -0.16), the near edge's centre.
+    //
+    // The dirty update is byte-for-byte opcode 0x7D's: `< 2 ? 2 : | 2` on a
+    // signed char, so it re-arms a group FUN_00208450 has already settled.
+    constexpr std::size_t kStormCollisionGroup = 17;
+    constexpr float kTwoPi = 6.283184051513672f;  // DAT_00352d00 / DAT_00352d04
+
+    void FUN_002676d8_roll_sea_and_camera(const ScriptEnvironment &environment)
+    {
+      const float tick = static_cast<float>(environment.DAT_003555b8_tickCounter);
+      // fmodf before sinf, exactly as the original: the argument is reduced
+      // against a 2*pi constant rather than left to grow without bound.
+      const float slow = std::sin(std::fmod(tick / 800.0f, kTwoPi)) / 10.0f;
+      const float fast = std::sin(std::fmod(tick / 450.0f, kTwoPi)) / 50.0f;
+
+      // The original assigns DAT_0035564C first, then the two channels.
+      if (environment.set_uGpffffb6dc_roll)
+      {
+        environment.set_uGpffffb6dc_roll(slow);
+      }
+      if (!environment.FUN_00260738_move_collision_group)
+      {
+        return;
+      }
+      // +0x3C is channel 0 and takes the fast, shallow wave; +0x40 is channel 1
+      // and takes the slow, deep one. Both are assignments, not accumulations.
+      environment.FUN_00260738_move_collision_group(kStormCollisionGroup, 0, fast, true);
+      environment.FUN_00260738_move_collision_group(kStormCollisionGroup, 1, slow, true);
+    }
   } // namespace
 
   void SceneCommandInterpreter::noteOpcode(std::uint16_t opcode, OpcodeSupport support)
@@ -1115,6 +1179,37 @@ namespace orphen::ported::script
       counter = static_cast<std::uint8_t>(previous + 1);
     }
     return previous < 99 ? 1u : 0u;
+  }
+
+  // 0xBE (FUN_00263ee0): two expressions -- an index into PTR_FUN_0031e730 and
+  // one argument -- then an indirect call through that table.
+  //
+  // Only index 6 is modelled, because only index 6 is reached: s01_e012 calls
+  // it 243 times with argument 0 and no other scene the port runs touches the
+  // table at all. The remaining fourteen entries are read and recorded so
+  // --scr-report names what a scene asked for rather than silently dropping it.
+  std::uint32_t SceneCommandInterpreter::FUN_00263ee0_call_function_table_entry()
+  {
+    // Which index it is only becomes known after both operands are evaluated,
+    // and evaluating them moves the stream -- so the offset the trace wants is
+    // taken here and handed to recordOpcode directly. noteOpcode would read
+    // streamOffset_ at the wrong end and move --scr-report's `first=`.
+    const std::uint32_t entryOffset = streamOffset_ ? streamOffset_ - 1 : 0;
+    const std::uint32_t index = FUN_0025c258_evaluate();
+    const std::uint32_t argument = FUN_0025c258_evaluate();
+    (void)argument;
+    if (halted_)
+    {
+      return 0;
+    }
+    const bool modelled = index == 6;
+    trace_.recordOpcode(0xBE, entryOffset,
+                        modelled ? OpcodeSupport::Modelled : OpcodeSupport::OperandsOnly);
+    if (modelled)
+    {
+      FUN_002676d8_roll_sea_and_camera(environment_);
+    }
+    return 0;
   }
 
   // 0xB9 / 0xBA (FUN_00263d10, FUN_00263d60): three expressions packed 0xRRGGBB
@@ -2818,12 +2913,8 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0xBE (FUN_00263ee0): two expressions -- an index into PTR_FUN_0031e730
-    // and one argument -- then an indirect call. A second function table the
-    // port has not read out of the executable.
     case 0xBE:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 2);
+      return FUN_00263ee0_call_function_table_entry();
 
     case 0x90:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -2974,10 +3065,21 @@ namespace orphen::ported::script
     case 0x7D:
     case 0x7E:
     {
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      FUN_0025c258_evaluate();
-      readU8();
-      FUN_0025c258_evaluate();
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t group = FUN_0025c258_evaluate();
+      const std::uint8_t channel = readU8();
+      const std::int32_t raw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_ || !environment_.FUN_00260738_move_collision_group)
+      {
+        return 0;
+      }
+      // Both scales are DAT_00352C08 / DAT_00352C0C = 100000.0, the same
+      // divisor every other coordinate operand uses. 0x7D's value additionally
+      // goes through FUN_00216690 because it is an angle; 0x7E's does not.
+      const float value = static_cast<float>(raw) / kScriptCoordinateScale;
+      const bool rotation = opcode == 0x7D;
+      environment_.FUN_00260738_move_collision_group(
+          group, channel, rotation ? FUN_00216690_wrapAngle(value) : value, rotation);
       return 0;
     }
 

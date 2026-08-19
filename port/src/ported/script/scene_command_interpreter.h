@@ -376,6 +376,10 @@ namespace orphen::ported::script
     // FUN_00218230 + uGpffffb6e8: set the camera's log2 zoom outright.
     std::function<void(float zoomLog2)> FUN_00218230_set_zoom;
 
+    // uGpffffb6dc / DAT_0035564c, the third rotation FUN_0020bec8:49 puts into
+    // the view matrix. Assigned outright by opcode 0x4C and by FUN_002676d8.
+    std::function<void(float radians)> set_uGpffffb6dc_roll;
+
     // The camera's current eye and look-at, and cGpffffb6e1. Opcode 0x41 can
     // splice the live pose into its curve as the first or last control point,
     // which is how a cut starts from wherever the camera already is.
@@ -489,6 +493,13 @@ namespace orphen::ported::script
 
     // DAT_003555bc, the per-frame tick count. The fade steps by it.
     std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks;
+
+    // DAT_003555b8 (iGpffffb648), the tick *accumulator* -- FUN_002239c8:189
+    // adds DAT_003555bc to it once per frame. It is the phase every native
+    // wave in the engine is driven from, including FUN_002676d8's, so a
+    // dropped frame advances the swell by the time it actually took rather
+    // than by one frame.
+    std::uint32_t DAT_003555b8_tickCounter = 0;
   };
 
   class SceneCommandInterpreter
@@ -588,6 +599,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_00260318_read_object_register();    // 0x76
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
     std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
+    std::uint32_t FUN_00263ee0_call_function_table_entry(); // 0xBE
     void FUN_00263d10_set_global_color();                // 0xB9, 0xBA
     void FUN_00263db0_set_fade_radius_pair();            // 0xBB
     void FUN_00263cb8_set_camera_distance();             // 0xB8

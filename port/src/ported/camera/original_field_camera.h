@@ -133,6 +133,13 @@ namespace orphen::ported::camera
     // is already through FUN_00218230, so it is a log2 scale, not a distance.
     void setZoomLog2(float zoomLog2) { fGpffffb6e8_zoomLog2_ = zoomLog2; }
 
+    // The camera path is not the only writer of uGpffffb6dc. Opcode 0x4C
+    // (FUN_0025e520) assigns it, and so does FUN_002676d8 -- the storm hook
+    // opcode 0xBE reaches -- which rolls the camera by the same wave it rolls
+    // the sea with. Both write the global directly, so whichever runs last in
+    // the script's own order wins, exactly as here.
+    void setRoll(float radians) { uGpffffb6dc_roll_ = radians; }
+
     const CameraPose &pose() const { return pose_; }
 
     float yawRadians() const { return fGpffffb6d4_yaw_; }

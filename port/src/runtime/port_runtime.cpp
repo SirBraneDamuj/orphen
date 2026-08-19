@@ -8,6 +8,7 @@
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/model/psc3_model.h"
+#include "ported/psm2/psm2_collision_groups.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/model/entity_animation.h"
 #include "ported/script/object_registers.h"
@@ -377,6 +378,7 @@ namespace orphen::port
   {
     orphen::ported::script::ScriptEnvironment environment;
     environment.frameTicks = frameTicks;
+    environment.DAT_003555b8_tickCounter = DAT_003555b8_tickCounter_;
     environment.entityPool = &entityPool_;
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
@@ -510,6 +512,8 @@ namespace orphen::port
     environment.FUN_00218230_set_zoom = [this](float zoomLog2)
     { fieldCamera_.setZoomLog2(zoomLog2); };
 
+    environment.set_uGpffffb6dc_roll = [this](float radians) { fieldCamera_.setRoll(radians); };
+
     environment.FUN_00216868_random = [this]() -> std::uint32_t
     {
       actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
@@ -630,6 +634,25 @@ namespace orphen::port
         record78.leadingWord = solid ? (record78.leadingWord | 0x800u)
                                      : (record78.leadingWord & ~0x800u);
       }
+    };
+
+    // FUN_00260738's two writes, opcodes 0x7D and 0x7E, and the same pair
+    // FUN_002676d8 reaches through opcode 0xBE. The map has to be mutable
+    // here, which ScriptEnvironment::map is not, so it goes through a callback.
+    environment.FUN_00260738_move_collision_group =
+        [this](std::uint32_t group, std::uint8_t channel, float value, bool rotation)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      if (rotation)
+      {
+        orphen::ported::psm2::FUN_00260738_set_group_rotation(*map, group, channel, value);
+        return;
+      }
+      orphen::ported::psm2::FUN_00260738_set_group_translation(*map, group, channel, value);
     };
 
     // FUN_002606d0's body, opcode 0x142.
@@ -3323,6 +3346,20 @@ namespace orphen::port
       pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
+
+      // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and
+      // before FUN_0025b918's late slots. It spends whatever the tick wrote
+      // into the collision groups' channels -- the doors of opcodes 0x7D/0x7E,
+      // and s01_e012's sea, which opcode 0xBE rolls through FUN_002676d8.
+      //
+      // It has to run even on a frame nothing wrote to, because the loader
+      // seeds every group's dirty byte with 3: the first pass is what applies
+      // the identity transform and fills the derived bounds, normals and the
+      // 0x10000 dynamic bit that FUN_00227840's second loop reads.
+      if (auto *loadedMapForGroups = mapViewer_.loadedMap())
+      {
+        orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups);
+      }
 
       if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
