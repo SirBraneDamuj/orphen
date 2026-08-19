@@ -421,6 +421,53 @@ namespace orphen::ported::script
     // runtime rather than in the pool.
     std::function<void(std::int32_t mode)> FUN_00213640_set_bandana;
 
+    // Opcode 0x140/0x141's visual half. FUN_0020dd78 needs the parsed model and
+    // FUN_0020dc38 writes entity +0x168, and both of those live on the runtime
+    // rather than in the pool, so they come in the same way the bandana does.
+    //
+    // The pair is what makes a head swap look like a head swap: 0x140 resolves
+    // bone role 6 on the character to decide where the replacement attaches, and
+    // the hide loop blanks the bones the replacement stands in for. Without the
+    // hide the original head is still drawn, inside the new one.
+    std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
+    std::function<void(std::size_t slot, int firstBone, int count)> FUN_0020dc38_hide_bones;
+
+    // Opcode 0x142 (FUN_002606d0) past its entity selection, which is the exact
+    // undo of the pair above: FUN_00265f70 destroys every entity whose +0x192
+    // names this slot, FUN_00251e40 rebuilds the bandana when the entity is the
+    // lead, and FUN_0020dc48(-1) clears all 42 of its +0x168 bytes. Without it a
+    // cutscene's replacement head outlives the cutscene, still wearing the last
+    // pose the scene left it in, and the character's own head stays hidden
+    // underneath it.
+    std::function<void(std::size_t slot)> FUN_002606d0_detach_children;
+
+    // Opcodes 0xA4 and 0xA6 (FUN_00261f60 -> FUN_0022dbc8 / FUN_0022dc68).
+    //
+    // Both take a group mask and test it against the 0x78 terrain record's
+    // +0x04 -- the same word entity +0x74 rejects against -- and both walk the
+    // two primitive tables in lockstep, so record 78[i] selects record 80[i].
+    // Between them they are how a map opens a door:
+    //
+    //   0xA4  bit 0x20 of the 0x80 record's +0x70, the draw-time hidden bit
+    //   0xA6  bit 0x800 of the 0x78 record's word 0, the bit the ground scan
+    //         requires before a primitive is terrain at all
+    //
+    // The inline byte reads the same way for both even though the polarity of
+    // the two bits is opposite: zero turns the group off, non-zero turns it on.
+    std::function<void(std::uint32_t groupMask, bool visible)> FUN_0022dbc8_show_map_primitives;
+    std::function<void(std::uint32_t groupMask, bool solid)> FUN_0022dc68_enable_map_terrain;
+
+    // Opcodes 0x7D and 0x7E (FUN_00260738): a collision group index, an inline
+    // channel byte (0..2) and a value. 0x7D writes a rotation channel, 0x7E a
+    // translation channel, and each raises its bit in the group's dirty byte
+    // for FUN_00208450 to spend. This is how a door swings -- the map's own
+    // geometry moves, so the drawn door and its collision travel together.
+    //
+    // The map is not const here the way ScriptEnvironment::map is, which is why
+    // this is a callback rather than a direct write.
+    std::function<void(std::uint32_t group, std::uint8_t channel, float value, bool rotation)>
+        FUN_00260738_move_collision_group;
+
     // FUN_00237b38: start a dialogue stream at a blob offset, or terminate the
     // current one when the offset is zero. Both the scheduler and opcode 0x33
     // reach the text system through this.

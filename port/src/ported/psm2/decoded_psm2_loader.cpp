@@ -236,8 +236,13 @@ namespace orphen::ported::psm2
       for (std::size_t index = 0; index < count; ++index)
       {
         CollisionDescriptor descriptor;
+        descriptor.firstVertex = readU16(decodedPsm2, base + index * 24 + 0);
+        descriptor.vertexCount = readU16(decodedPsm2, base + index * 24 + 2);
         descriptor.firstPrimitive = readU16(decodedPsm2, base + index * 24 + 4);
         descriptor.primitiveCount = readU16(decodedPsm2, base + index * 24 + 6);
+        descriptor.center = {readF32(decodedPsm2, base + index * 24 + 8),
+                             readF32(decodedPsm2, base + index * 24 + 12),
+                             readF32(decodedPsm2, base + index * 24 + 16)};
         state.DAT_003556d8_collisionDescriptors[index] = descriptor;
       }
     }
@@ -263,15 +268,29 @@ namespace orphen::ported::psm2
         CollisionGroup group;
         group.descriptorIndex = readU16(decodedPsm2, base + index * 28);
         group.type = readS16(decodedPsm2, base + index * 28 + 2);
+        // +0x04..+0x0C. The original copies all 28 bytes into the 0x74 record
+        // as halfwords, which leaves these three intact as floats.
+        group.pivot = {readF32(decodedPsm2, base + index * 28 + 4),
+                       readF32(decodedPsm2, base + index * 28 + 8),
+                       readF32(decodedPsm2, base + index * 28 + 12)};
+        // FUN_0022b5a8:473 seeds +0x5A with 3, so the first FUN_00208450 pass
+        // applies the identity transform and computes every derived field once.
+        group.dirty5a = 3;
         state.DAT_003556e0_collisionGroups[index] = group;
       }
     }
 
-    // FUN_00227840 rejects a group on the XY box the original recomputes every
-    // frame. For a group that never moves that box is the union of its own
-    // primitives' bounds, so it can be resolved once at load. Must run after the
-    // geometry pass, which is what fills those bounds.
-    void resolveCollisionGroupBounds(Psm2RuntimeState &state)
+    // FUN_0022b5a8:477-514. Resolve each group against its descriptor and take
+    // the rest pose: every vertex, plus the group centre one past the end,
+    // stored relative to the pivot. The original parks that copy in the map's
+    // own arena and never touches the live vertices again except through
+    // FUN_00208450.
+    //
+    // The live box at +0x24..+0x38 is deliberately *not* computed here. The
+    // loader seeds the dirty byte with 3, so the first FUN_00208450 pass fills
+    // it -- from the moved geometry, which is the only version that stays right
+    // once the group starts moving.
+    void resolveCollisionGroups(Psm2RuntimeState &state)
     {
       for (auto &group : state.DAT_003556e0_collisionGroups)
       {
@@ -280,35 +299,27 @@ namespace orphen::ported::psm2
           continue;
         }
         const auto &descriptor = state.DAT_003556d8_collisionDescriptors[group.descriptorIndex];
+        group.firstVertex = descriptor.firstVertex;
+        group.vertexCount = descriptor.vertexCount;
         group.firstPrimitive = descriptor.firstPrimitive;
         group.primitiveCount = descriptor.primitiveCount;
 
-        for (std::size_t offset = 0; offset < group.primitiveCount; ++offset)
+        group.restVertices.clear();
+        group.restVertices.reserve(group.vertexCount);
+        for (std::size_t offset = 0; offset < group.vertexCount; ++offset)
         {
-          const std::size_t primitiveIndex = static_cast<std::size_t>(group.firstPrimitive) + offset;
-          if (primitiveIndex >= state.DAT_003556b0_dRecords78.size())
+          const std::size_t vertexIndex = static_cast<std::size_t>(group.firstVertex) + offset;
+          if (vertexIndex >= state.DAT_0035569c_sectionCRecords.size())
           {
             break;
           }
-          const auto &bounds = state.DAT_003556b0_dRecords78[primitiveIndex].bounds;
-          if (!bounds.valid)
-          {
-            continue;
-          }
-          if (!group.boundsValid)
-          {
-            group.minX = bounds.min.x;
-            group.maxX = bounds.max.x;
-            group.minY = bounds.min.y;
-            group.maxY = bounds.max.y;
-            group.boundsValid = true;
-            continue;
-          }
-          group.minX = std::min(group.minX, bounds.min.x);
-          group.maxX = std::max(group.maxX, bounds.max.x);
-          group.minY = std::min(group.minY, bounds.min.y);
-          group.maxY = std::max(group.maxY, bounds.max.y);
+          const Vec3 &live = state.DAT_0035569c_sectionCRecords[vertexIndex].position;
+          group.restVertices.push_back({live.x - group.pivot.x, live.y - group.pivot.y,
+                                        live.z - group.pivot.z});
         }
+        group.restCenter = {descriptor.center.x - group.pivot.x,
+                            descriptor.center.y - group.pivot.y,
+                            descriptor.center.z - group.pivot.z};
       }
     }
 
@@ -414,8 +425,8 @@ namespace orphen::ported::psm2
     expandPsm2Materials(state);
     buildPsm2DerivedGeometry(state);
 
-    // Needs the bounds the geometry pass just filled in.
-    resolveCollisionGroupBounds(state);
+    // Needs the live vertex positions, which the sections above filled in.
+    resolveCollisionGroups(state);
 
     state.stats.positionRecordCount = state.DAT_0035569c_sectionCRecords.size();
     state.stats.sectionBRecordCount = state.DAT_003556a4_sectionBRecords.size();

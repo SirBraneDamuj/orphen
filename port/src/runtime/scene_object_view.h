@@ -58,6 +58,25 @@ namespace orphen::port
     // original builds it in FUN_0020c5a8, inside the frame function, for the
     // same reason. Empty when the entity has no model.
     std::vector<orphen::ported::model::Matrix4> bonePalette;
+    // Entity +0x168 reduced to the bones whose byte is negative -- the ones
+    // FUN_0020eec0 uploads as a zero matrix. Empty when nothing is hidden.
+    //
+    // The palette above already carries the zero matrix for these, which is
+    // faithful, but a zero matrix is not how the *hardware* makes them vanish.
+    // On VU1 the transformed vertex comes out with w = 0 and the perspective
+    // divide sends it to a float with no finite screen position, so the GS
+    // never sees a primitive worth clipping. In a rasteriser with a real
+    // divide, the same vertices land on the world origin instead and any
+    // primitive with one corner on a hidden bone and another on a visible one
+    // stretches from the character to that point -- which is what the pink
+    // streak off Sephy's hair and the flesh-coloured spike out of Orphen's neck
+    // were. Skipping the primitive is the closest thing a finite rasteriser has
+    // to a vertex with no position.
+    std::vector<std::uint8_t> hiddenBones;
+    bool boneHidden(std::uint8_t bone) const
+    {
+      return bone < hiddenBones.size() && hiddenBones[bone] != 0;
+    }
     // The rest of what FUN_0020cdc0 builds the root matrix from: +0x14C scales
     // x and y, +0x150 scales z, and +0x154 / +0x158 are pitch and roll on top
     // of the facing in +0x5C. All of them are 1/1/0/0 for every entity in

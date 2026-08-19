@@ -120,6 +120,81 @@ namespace orphen::ported::psm2
     return std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
   }
 
+  // FUN_0022c6e8's per-primitive body, shared by the load pass and by
+  // FUN_00208450's rebuild of a group it has just moved. Returns false for a
+  // primitive whose corner indices are out of range, which the load pass counts
+  // as skipped.
+  bool rebuildPsm2Primitive(Psm2RuntimeState &state, std::size_t primitiveIndex)
+  {
+    DRecord80 &record80 = state.DAT_003556ac_dRecords80[primitiveIndex];
+    DRecord78 &record78 = state.DAT_003556b0_dRecords78[primitiveIndex];
+    const auto &indices = record80.vertexIndices;
+
+    if (!primitiveIndicesAreValid(state, indices))
+    {
+      return false;
+    }
+
+    const bool isTriangle = indices[2] == indices[3];
+    const std::size_t vertexCount = isTriangle ? 3 : 4;
+    Vec3 center{};
+    record78.bounds = {};
+
+    for (std::size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+    {
+      const Vec3 &position = positionForIndex(state, indices[vertexIndex]);
+      includePoint(record78.bounds, position);
+      center = add(center, position);
+    }
+
+    center = scale(center, 1.0f / static_cast<float>(vertexCount));
+    record80.center = center;
+
+    float radius = 0.0f;
+    for (std::size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+    {
+      radius = std::max(radius, distance(center, positionForIndex(state, indices[vertexIndex])));
+    }
+    record80.radius = radius;
+
+    // FUN_0022c6e8:106-126. A triangle takes corners (0, 1, 2); a quad is
+    // split as (3, 0, 1) and (1, 2, 3), and each half gets its own plane.
+    // The corner order here is what defines the winding for the whole
+    // renderer, so it must not be "tidied".
+    const auto plane = [&](std::uint8_t a, std::uint8_t b, std::uint8_t c, std::size_t slot)
+    {
+      const Vec3 &first = positionForIndex(state, indices[a]);
+      const Vec3 &second = positionForIndex(state, indices[b]);
+      const Vec3 &third = positionForIndex(state, indices[c]);
+      record78.planeNormal[slot] = planeNormalFor(first, second, third);
+      record78.unitNormal[slot] = unitNormalFor(first, second, third);
+      record78.slopeAngle[slot] = slopeAngleFor(record78.unitNormal[slot]);
+      // FUN_0022caf8 anchors the plane at the middle corner, not the first.
+      record78.planeOriginCorner[slot] = b;
+    };
+
+    if (isTriangle)
+    {
+      plane(0, 1, 2, 0);
+      record78.planeNormal[1] = record78.planeNormal[0];
+      record78.unitNormal[1] = record78.unitNormal[0];
+      record78.slopeAngle[1] = record78.slopeAngle[0];
+      record78.planeOriginCorner[1] = record78.planeOriginCorner[0];
+    }
+    else
+    {
+      plane(3, 0, 1, 0);
+      plane(1, 2, 3, 1);
+      // FUN_0022c6e8:122-124: identical slopes on the two halves are nudged
+      // apart by DAT_003524e4 so the terrain query can tell them apart.
+      if (record78.slopeAngle[0] == record78.slopeAngle[1])
+      {
+        record78.slopeAngle[1] += kSlopeTieBreak;
+      }
+    }
+    return true;
+  }
+
   void buildPsm2DerivedGeometry(Psm2RuntimeState &state)
   {
     state.derivedTriangles.clear();
@@ -128,82 +203,35 @@ namespace orphen::ported::psm2
 
     for (std::size_t primitiveIndex = 0; primitiveIndex < state.DAT_003556ac_dRecords80.size(); ++primitiveIndex)
     {
-      DRecord80 &record80 = state.DAT_003556ac_dRecords80[primitiveIndex];
-      DRecord78 &record78 = state.DAT_003556b0_dRecords78[primitiveIndex];
-      const auto &indices = record80.vertexIndices;
-
-      if (!primitiveIndicesAreValid(state, indices))
+      if (!rebuildPsm2Primitive(state, primitiveIndex))
       {
         ++state.stats.skippedPrimitiveCount;
         continue;
       }
 
+      DRecord80 &record80 = state.DAT_003556ac_dRecords80[primitiveIndex];
+      const DRecord78 &record78 = state.DAT_003556b0_dRecords78[primitiveIndex];
+      const auto &indices = record80.vertexIndices;
       const bool isTriangle = indices[2] == indices[3];
-      const std::size_t vertexCount = isTriangle ? 3 : 4;
-      Vec3 center{};
-      record78.bounds = {};
 
-      for (std::size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+      // The map's own bounds are the load pass's business, not the rebuild's --
+      // a door that swings must not grow them.
+      for (std::size_t vertexIndex = 0; vertexIndex < (isTriangle ? 3u : 4u); ++vertexIndex)
       {
-        const Vec3 &position = positionForIndex(state, indices[vertexIndex]);
-        includePoint(record78.bounds, position);
-        includePoint(state.bounds, position);
-        center = add(center, position);
+        includePoint(state.bounds, positionForIndex(state, indices[vertexIndex]));
       }
-
-      center = scale(center, 1.0f / static_cast<float>(vertexCount));
-      record80.center = center;
-
-      float radius = 0.0f;
-      for (std::size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
-      {
-        radius = std::max(radius, distance(center, positionForIndex(state, indices[vertexIndex])));
-      }
-      record80.radius = radius;
+      (void)record78;
 
       record80.firstTriangle = state.derivedTriangles.size();
-
-      // FUN_0022c6e8:106-126. A triangle takes corners (0, 1, 2); a quad is
-      // split as (3, 0, 1) and (1, 2, 3), and each half gets its own plane.
-      // The corner order here is what defines the winding for the whole
-      // renderer, so it must not be "tidied".
-      const auto plane = [&](std::uint8_t a, std::uint8_t b, std::uint8_t c, std::size_t slot)
-      {
-        const Vec3 &first = positionForIndex(state, indices[a]);
-        const Vec3 &second = positionForIndex(state, indices[b]);
-        const Vec3 &third = positionForIndex(state, indices[c]);
-        record78.planeNormal[slot] = planeNormalFor(first, second, third);
-        record78.unitNormal[slot] = unitNormalFor(first, second, third);
-        record78.slopeAngle[slot] = slopeAngleFor(record78.unitNormal[slot]);
-        // FUN_0022caf8 anchors the plane at the middle corner, not the first.
-        record78.planeOriginCorner[slot] = b;
-      };
-
       if (isTriangle)
       {
-        plane(0, 1, 2, 0);
-        record78.planeNormal[1] = record78.planeNormal[0];
-        record78.unitNormal[1] = record78.unitNormal[0];
-        record78.slopeAngle[1] = record78.slopeAngle[0];
-        record78.planeOriginCorner[1] = record78.planeOriginCorner[0];
-
         appendTriangle(state, primitiveIndex, indices[0], indices[1], indices[2], 0, 1, 2);
       }
       else
       {
-        plane(3, 0, 1, 0);
-        plane(1, 2, 3, 1);
-        // FUN_0022c6e8:122-124: identical slopes on the two halves are nudged
-        // apart by DAT_003524e4 so the terrain query can tell them apart.
-        if (record78.slopeAngle[0] == record78.slopeAngle[1])
-        {
-          record78.slopeAngle[1] += kSlopeTieBreak;
-        }
-
         appendTriangle(state, primitiveIndex, indices[3], indices[0], indices[1], 3, 0, 1);
         appendTriangle(state, primitiveIndex, indices[1], indices[2], indices[3], 1, 2, 3);
       }
-
       record80.triangleCount = state.derivedTriangles.size() - record80.firstTriangle;
     }
   }

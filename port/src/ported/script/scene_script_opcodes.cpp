@@ -1590,9 +1590,15 @@ namespace orphen::ported::script
   //
   //   selector, [bone], hideCount, typeId, workSlot
   //
-  // Not modelled: the trailing FUN_0020dc38 loop, which hides `hideCount` of the
-  // parent's own bones from the bone the prop took over -- the visual half of
-  // the swap. The port has no bone-hide list.
+  // The trailing FUN_0020dc38 loop hides `hideCount` of the parent's own bones
+  // from the bone the prop took over, which is the visual half of the swap. It
+  // is not decoration: this is the mechanism behind every talking head in the
+  // game. s01_e012 runs it four times -- Orphen's head onto his bone 32 with
+  // five bones hidden (32..36, confirmed against eeMemory.bin's entity +0x168),
+  // a second layer onto the head's own bone 1, and one each for two party
+  // members -- and the replacement head is what carries the mouth and eye
+  // animation. Skip the hide and the character's original head draws inside the
+  // new one; skip the attach and the new one sits at the world origin.
   std::uint32_t SceneCommandInterpreter::FUN_00260578_spawn_attached_prop()
   {
     const bool boneFromStream = (currentOpcode_ == 0x141);
@@ -1611,7 +1617,6 @@ namespace orphen::ported::script
     {
       return 0;
     }
-    (void)hideCount;
 
     // FUN_0025d6c0: pick the parent, falling back to the current selection.
     if (selector != orphen::ported::entity::kCurrentEntityIndex)
@@ -1631,6 +1636,14 @@ namespace orphen::ported::script
       return 0;
     }
     const std::size_t parentSlot = currentEntity_;
+
+    // FUN_0020dd78(DAT_00355044, 6). The original does this after the allocation
+    // succeeds, but it only reads the parent, which nothing between here and
+    // there touches.
+    if (!boneFromStream && environment_.FUN_0020dd78_bone_for_role)
+    {
+      bone = static_cast<std::uint32_t>(environment_.FUN_0020dd78_bone_for_role(parentSlot, 6));
+    }
 
     SpawnRecord &spawnRecord = trace_.beginSpawn();
     spawnRecord.scriptOffset = streamOffset_;
@@ -1655,6 +1668,15 @@ namespace orphen::ported::script
     if (workSlot < SceneScriptState::kWorkWordCount)
     {
       environment_.state->DAT_00355060_work[workSlot] = static_cast<std::uint32_t>(slot);
+    }
+
+    // The FUN_0020dc38 loop. The original decrements before it tests, so a
+    // hideCount of N hides exactly N bones starting at the attach bone, and a
+    // hideCount of 0 hides none.
+    if (environment_.FUN_0020dc38_hide_bones && hideCount > 0)
+    {
+      environment_.FUN_0020dc38_hide_bones(parentSlot, static_cast<int>(bone),
+                                           static_cast<int>(hideCount));
     }
     return 0;
   }
@@ -3193,10 +3215,34 @@ namespace orphen::ported::script
     // visibility pass already owns both arrays. Consumed rather than modelled
     // for now because the animatic is about who moves where, and because the
     // operand widths are unambiguous either way.
+    // 0xA4 / 0xA6 (FUN_00261f60): a group mask and an inline on/off byte. Not
+    // audio, whatever the analyzed filename says -- FUN_0022dbc8 and
+    // FUN_0022dc68 walk the map's primitive tables and flip one bit each.
+    // Together they open and close a door: 0xA4 the geometry, 0xA6 the
+    // collision. See ScriptEnvironment for the bits.
     case 0xA4:
     case 0xA6:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t groupMask = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      const std::uint8_t enableByte = readU8();
+      if (opcode == 0xA4)
+      {
+        if (environment_.FUN_0022dbc8_show_map_primitives)
+        {
+          environment_.FUN_0022dbc8_show_map_primitives(groupMask, enableByte != 0);
+        }
+      }
+      else if (environment_.FUN_0022dc68_enable_map_terrain)
+      {
+        environment_.FUN_0022dc68_enable_map_terrain(groupMask, enableByte != 0);
+      }
+      return 0;
+    }
 
     // 0x9B (FUN_00261c38): one expression into FUN_0025d480. Ghidra types the
     // handler `void`, but it ends on the call and never touches `v0`, so
@@ -3601,12 +3647,29 @@ namespace orphen::ported::script
     // The remaining audio dispatchers (FUN_00261500 / 530 / 570 / 5b0 / 5d8 /
     // 600 / 638 / 7c0 / 868). All end at a SIF command to the IOP, which the
     // port's mixer does not model.
-    // 0x142 (FUN_002606d0): one expression. Tears an entity's actions down and
-    // re-attaches the bandana if it is the lead's class. The port has no action
-    // list to remove.
+    // 0x142 (FUN_002606d0): one expression. Destroys everything attached to the
+    // entity, rebuilds the bandana when it is the lead (FUN_002298d0 answers 0
+    // for type 1 and nothing else), and clears all 42 of its bone hides. This is
+    // how a cutscene gives a character its own head back.
     case 0x142:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (selector != orphen::ported::entity::kCurrentEntityIndex)
+      {
+        resolveEntity(selector);
+      }
+      if (currentEntity_ < orphen::ported::entity::kEntitySlotCount &&
+          environment_.FUN_002606d0_detach_children)
+      {
+        environment_.FUN_002606d0_detach_children(currentEntity_);
+      }
+      return 0;
+    }
 
     // 0x10B (FUN_00262780): **ten** expressions into FUN_002198a0, a graphics
     // submitter -- seven coordinates scaled by DAT_00352c74 and three raw

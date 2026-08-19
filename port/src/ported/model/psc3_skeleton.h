@@ -178,9 +178,7 @@ namespace orphen::ported::model
 
   // FUN_0020cdc0's second branch, taken when entity +0x192 names a parent slot
   // and the bone byte at +0x194 is *negative*. The attached entity rides the
-  // named bone's position and keeps its own facing; the third branch (a
-  // non-negative bone byte, a fully rigid attachment that inherits the bone's
-  // orientation too) is still not ported, because nothing in the port takes it.
+  // named bone's position and keeps its own facing.
   //
   // For the player's bandana, `boneLocalOffset` is the entity's own +0x20..+0x28
   // -- which for a parented entity is a bone-local offset, not a world position.
@@ -193,6 +191,38 @@ namespace orphen::ported::model
                                      float rotationY158,
                                      float scaleXY14c,
                                      float scaleZ150);
+
+  // FUN_0020cdc0's third branch: +0x192 names a parent and the bone byte at
+  // +0x194 is *non-negative*. Rigid attachment -- the entity's own local matrix
+  // is concatenated with the parent's bone matrix, so it inherits the bone's
+  // orientation as well as its position.
+  //
+  // This is how a character's head is a separate entity. Opcode 0x140/0x141
+  // parents a head model to the neck bone and hides the body's own head bones,
+  // and the head then carries the face animation (mouth, eyes) on its own
+  // animation channel. In s01_e012 the real game runs four of these -- Orphen's
+  // head on his bone 32, a second layer on the head's bone 1, and one each for
+  // two party members.
+  //
+  // Two differences from the second branch, both the original's:
+  //   - no facing bias. Branches one and two add fGpffff80c8 / fGpffff80cc to
+  //     +0x5C; this one passes +0x5C straight through, because the quarter turn
+  //     is already in the bone matrix it multiplies by.
+  //   - the offset is used as the local translation before the concatenation,
+  //     not resolved through FUN_0020dc88 first.
+  //
+  // The original reads 0x357E00 + parentSlot * 0xA80 + bone * 0x40 with no
+  // liveness test; when the parent has no palette this frame it is reading
+  // whatever the slot held last. The port has nothing to read there, so an
+  // absent or out-of-range bone yields the local matrix alone.
+  Matrix4 FUN_0020cdc0_rigid_attached_root(std::span<const Matrix4> parentPalette,
+                                           std::size_t parentBone,
+                                           const Vec3 &boneLocalOffset,
+                                           float facingRadians,
+                                           float rotationX154,
+                                           float rotationY158,
+                                           float scaleXY14c,
+                                           float scaleZ150);
 
   // DAT_00352188 / DAT_0035218c, read out of s01_e24.bin. The game's pi is
   // 3.141592025756836, a hair short of the real one, and every wrap in the pose
@@ -273,6 +303,18 @@ namespace orphen::ported::model
 
   // FUN_0020d9c8 / FUN_0020dc38 / FUN_0020dc48. A negative bone clears all 42.
   void FUN_0020d9c8_clear_bone_override(EntityBoneOverrides &state, std::size_t bone);
+
+  // FUN_0020eec0's matrix upload loop, which walks entity +0x168 one byte per
+  // bone and writes sixteen zeros instead of the matrix when the byte is
+  // negative -- every vertex on that bone lands on the same point, so nothing
+  // it belongs to has any area.
+  //
+  // This is deliberately not folded into the palette build. The palette at
+  // 0x00357E00 keeps the true matrix for a hidden bone, and it has to: opcode
+  // 0x140/0x141 hides a character's head bones *and* attaches a replacement
+  // head to one of them, so the attachment reads a bone that is hidden.
+  void FUN_0020eec0_apply_hidden_bones(std::vector<Matrix4> &palette,
+                                       const EntityBoneOverrides *overrides);
   void FUN_0020dc38_hide_bone(EntityBoneOverrides &state, std::size_t bone);
   void FUN_0020dc48_clear_bone(EntityBoneOverrides &state, int bone);
 

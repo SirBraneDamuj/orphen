@@ -277,6 +277,23 @@ namespace orphen::ported::model
     }
   }
 
+  void FUN_0020eec0_apply_hidden_bones(std::vector<Matrix4> &palette,
+                                       const EntityBoneOverrides *overrides)
+  {
+    if (overrides == nullptr)
+    {
+      return;
+    }
+    const std::size_t count = std::min(palette.size(), kMaxFilteredBones);
+    for (std::size_t bone = 0; bone < count; ++bone)
+    {
+      if (overrides->mode168[bone] < 0)
+      {
+        palette[bone] = Matrix4{};
+      }
+    }
+  }
+
   void FUN_0020dc48_clear_bone(EntityBoneOverrides &state, int bone)
   {
     if (bone >= 0)
@@ -511,6 +528,28 @@ namespace orphen::ported::model
                                 ComposeOrder::XYZ);
   }
 
+  Matrix4 FUN_0020cdc0_rigid_attached_root(std::span<const Matrix4> parentPalette,
+                                           std::size_t parentBone,
+                                           const Vec3 &boneLocalOffset,
+                                           float facingRadians,
+                                           float rotationX154,
+                                           float rotationY158,
+                                           float scaleXY14c,
+                                           float scaleZ150)
+  {
+    // No facing bias here: the original's third branch passes +0x5C unmodified.
+    const Matrix4 local =
+        FUN_0020cf28_compose(boneLocalOffset, scaleXY14c, scaleZ150,
+                             Vec3{rotationX154, rotationY158, facingRadians}, ComposeOrder::XYZ);
+    if (parentPalette.empty() || parentBone >= parentPalette.size())
+    {
+      return local;
+    }
+    // FUN_0020bca8 then FUN_0020bb58: dest = local * the parent's bone matrix,
+    // the same order FUN_0020d618 uses to hang a child bone off its parent.
+    return multiply(local, parentPalette[parentBone]);
+  }
+
   std::vector<Matrix4> FUN_0020d618_build_palette(const Psc3Model &model,
                                                   std::span<const std::uint8_t> blob,
                                                   std::uint16_t poseColumn,
@@ -575,14 +614,14 @@ namespace orphen::ported::model
         continue;
       }
 
+      // A negative +0x168 is *not* handled here. FUN_0020c810 runs FUN_0020d378
+      // and FUN_0020d618 over every bone in the root list without consulting
+      // +0x168 at all; the hide is applied later, by FUN_0020eec0, on the way
+      // from the palette to VU1. Keeping the composed matrix matters because
+      // 0x00357E00 is what an attached entity reads to find the bone it rides --
+      // and the bones a head is attached to are exactly the ones the same
+      // opcode hides. See FUN_0020eec0_apply_hidden_bones.
       const std::int8_t mode = overrides != nullptr ? overrides->mode168[bone] : 0;
-      if (mode < 0)
-      {
-        // FUN_0020eec0's hidden submesh: the zero matrix, which sends every
-        // vertex to the same point and leaves nothing with area to rasterise.
-        palette[bone] = Matrix4{};
-        continue;
-      }
 
       BoneFilterState &state = filter.bones[bone];
       PoseFilterInputs boneInputs = inputs;

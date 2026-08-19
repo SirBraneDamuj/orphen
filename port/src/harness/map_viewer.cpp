@@ -942,6 +942,22 @@ namespace orphen::harness
           continue;
         }
 
+        // Entity +0x168's hidden bones. One corner is enough: on VU1 that
+        // corner has no finite screen position, so the whole primitive is gone.
+        if (!object.hiddenBones.empty())
+        {
+          bool touchesHidden = false;
+          for (std::size_t corner = 0; corner < corners && !touchesHidden; ++corner)
+          {
+            touchesHidden =
+                object.boneHidden(model.vertices[primitive.vertexIndices[corner]].boneIndex);
+          }
+          if (touchesHidden)
+          {
+            continue;
+          }
+        }
+
         // FUN_00212058 draws one pass per active subdraw index, in order, each
         // with the blend mode its texFlags select. Pass 0 is the opaque base and
         // the later ones are overlays -- additive glow layers, mostly. Drawing

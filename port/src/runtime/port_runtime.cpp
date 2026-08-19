@@ -546,6 +546,150 @@ namespace orphen::port
           entityPool_, DAT_004a7e00_boneOverrides_[orphen::ported::entity::kBandanaSlot], mode);
     };
 
+    // FUN_0020dd78 for opcode 0x140, which needs the parsed submesh table.
+    environment.FUN_0020dd78_bone_for_role = [this](std::size_t slot, std::uint8_t role) -> std::size_t
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return 0;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return 0;
+      }
+      // The original returns 0 on a miss too, so a model with no role 6 attaches
+      // at bone 0 rather than not attaching.
+      return orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role);
+    };
+
+    // FUN_0020dc38, run `count` times. Entity +0x168 lives in the runtime's
+    // override table, alongside the DAT_004a7e00 block it shares a struct with.
+    environment.FUN_0020dc38_hide_bones = [this](std::size_t slot, int firstBone, int count)
+    {
+      if (slot >= DAT_004a7e00_boneOverrides_.size())
+      {
+        return;
+      }
+      auto &state = DAT_004a7e00_boneOverrides_[slot];
+      for (int index = 0; index < count; ++index)
+      {
+        const int bone = firstBone + index;
+        if (bone < 0)
+        {
+          continue;
+        }
+        orphen::ported::model::FUN_0020dc38_hide_bone(state, static_cast<std::size_t>(bone));
+      }
+    };
+
+    // FUN_0022dbc8 / FUN_0022dc68, opcodes 0xA4 and 0xA6. Both walk the two
+    // primitive tables in lockstep against the 0x78 record's +0x04 group mask.
+    environment.FUN_0022dbc8_show_map_primitives = [this](std::uint32_t groupMask, bool visible)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      const std::size_t count =
+          std::min(map->DAT_003556ac_dRecords80.size(), map->DAT_003556b0_dRecords78.size());
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        if ((map->DAT_003556b0_dRecords78[index].terrainFlags & groupMask) == 0)
+        {
+          continue;
+        }
+        auto &flags = map->DAT_003556ac_dRecords80[index].primitiveFlags;
+        // The byte-zero branch ORs the bit in, and 0x20 is the *hidden* bit, so
+        // "off" sets it. FUN_00209140 skips the primitive outright once it is.
+        flags = visible ? (flags & ~orphen::ported::render::visibility::kHiddenBit)
+                        : (flags | orphen::ported::render::visibility::kHiddenBit);
+      }
+    };
+
+    environment.FUN_0022dc68_enable_map_terrain = [this](std::uint32_t groupMask, bool solid)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      for (auto &record78 : map->DAT_003556b0_dRecords78)
+      {
+        if ((record78.terrainFlags & groupMask) == 0)
+        {
+          continue;
+        }
+        // 0x800 is kOriginalTerrainSampleBit: both loops of FUN_00227840 skip a
+        // primitive without it, so clearing it takes the surface out of the
+        // ground scan entirely. That is what an opening door does -- and while
+        // it stayed set, walking into the closed door's panel found it as ground
+        // and lifted the actor up it.
+        record78.leadingWord = solid ? (record78.leadingWord | 0x800u)
+                                     : (record78.leadingWord & ~0x800u);
+      }
+    };
+
+    // FUN_002606d0's body, opcode 0x142.
+    environment.FUN_002606d0_detach_children = [this](std::size_t slot)
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return;
+      }
+
+      // FUN_00265f70: every slot whose +0x192 names this one, released through
+      // FUN_00265ec0 -- which runs FUN_00265f70 again on its way out, so the
+      // whole subtree comes down with its root. s01_e012 needs that: the head is
+      // parented to the character and a second layer is parented to the head.
+      // The original's status test is `> 0`, so a slot merely reserved by
+      // FUN_00265dc0 is not swept up.
+      std::vector<std::size_t> pending{slot};
+      while (!pending.empty())
+      {
+        const std::size_t parent = pending.back();
+        pending.pop_back();
+        for (std::size_t child = 0; child < entityPool_.slotCount(); ++child)
+        {
+          if (child == parent ||
+              entityPool_.status(child) != orphen::ported::entity::SlotStatus::ScriptSpawned ||
+              entityPool_.slot(child).parentSlot192 != static_cast<std::int16_t>(parent))
+          {
+            continue;
+          }
+          entityPool_.releaseSlot(child);
+          // FUN_00229c40 zeroes the whole 0x1D8-byte entity when the slot is
+          // reused, and +0x168 is inside it, so a freed slot must not carry its
+          // hides into whatever lands there next.
+          DAT_004a7e00_boneOverrides_[child].reset();
+          pending.push_back(child);
+        }
+      }
+
+      // FUN_002298d0 maps type 1 to 0 and everything else to non-zero, so only
+      // the lead player reaches FUN_00251e40 -- which rebuilds the bandana the
+      // sweep above just destroyed.
+      if (entityPool_.slot(slot).typeId00 == 1)
+      {
+        const EntityModelBinding *leaderBinding =
+            modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+        if (orphen::ported::entity::FUN_00251e40_attach_bandana(
+                entityPool_, descriptorTable_,
+                leaderBinding != nullptr ? leaderBinding->model : nullptr))
+        {
+          DAT_0054ee00_bandana_ = orphen::ported::entity::BandanaState{};
+          DAT_004a7e00_boneOverrides_[orphen::ported::entity::kBandanaSlot].reset();
+        }
+      }
+
+      // FUN_0020dc48(entity, -1): all 42 bytes of +0x168 back to zero. The
+      // override poses in the DAT_004a7e00 half are not touched -- the original
+      // clears 0x168..0x191 and nothing else.
+      orphen::ported::model::FUN_0020dc48_clear_bone(DAT_004a7e00_boneOverrides_[slot], -1);
+    };
+
     return environment;
   }
 
@@ -1143,6 +1287,21 @@ namespace orphen::port
           {parent.positionX20, parent.positionZ24, parent.positionY28 + parent.height58 * 0.5f},
           view.facingRadians, view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
     }
+    else if (entity.parentSlot192 >= 0)
+    {
+      // FUN_0020cdc0's third branch, the rigid one. This is a character's head:
+      // opcode 0x140/0x141 hangs a head model off the neck bone and hides the
+      // body's own head bones, and the face animation rides on the head entity.
+      // The parent has already been through this pass -- publishSceneObjectViews
+      // walks slot 0 first and then ascending, which is the order FUN_0020c5a8's
+      // deferral queue produces for every attachment chain in s01_e012.
+      const std::size_t parentSlot = static_cast<std::size_t>(entity.parentSlot192);
+      root = orphen::ported::model::FUN_0020cdc0_rigid_attached_root(
+          DAT_00357e00_bonePalettes_[parentSlot],
+          static_cast<std::size_t>(entity.attachBone194),
+          {view.position.x, view.position.y, view.position.z}, view.facingRadians,
+          view.rotationX154, view.rotationY158, view.scale, view.scaleZ150);
+    }
     else
     {
       root = orphen::ported::model::FUN_0020cdc0_entity_root(
@@ -1159,8 +1318,32 @@ namespace orphen::port
         DAT_003ffe00_poseFilters_[view.slot], inputs,
         &DAT_004a7e00_boneOverrides_[view.slot]);
     // 0x00357E00 + slot * 0xA80. Kept past the frame so an attached entity, and
-    // the rope simulation behind it, can read the bone it rides.
+    // the rope simulation behind it, can read the bone it rides. This is the
+    // *unhidden* palette, the way the original's bank is: FUN_0020eec0 applies
+    // +0x168 on the way to VU1, not on the way into the bank, which is what lets
+    // a replacement head ride a bone the same opcode just hid.
     DAT_00357e00_bonePalettes_[view.slot] = view.bonePalette;
+    orphen::ported::model::FUN_0020eec0_apply_hidden_bones(
+        view.bonePalette, &DAT_004a7e00_boneOverrides_[view.slot]);
+
+    // The same +0x168 bytes the draw needs, because a zero matrix alone does
+    // not make a primitive disappear off the GS. See SceneObjectView::hiddenBones.
+    const auto &mode168 = DAT_004a7e00_boneOverrides_[view.slot].mode168;
+    for (std::size_t bone = 0; bone < view.bonePalette.size(); ++bone)
+    {
+      if (bone < mode168.size() && mode168[bone] < 0)
+      {
+        view.hiddenBones.assign(view.bonePalette.size(), 0);
+        break;
+      }
+    }
+    if (!view.hiddenBones.empty())
+    {
+      for (std::size_t bone = 0; bone < view.hiddenBones.size(); ++bone)
+      {
+        view.hiddenBones[bone] = (bone < mode168.size() && mode168[bone] < 0) ? 1u : 0u;
+      }
+    }
   }
 
   // FUN_00225c90 for every entity that has a model, run before the views are

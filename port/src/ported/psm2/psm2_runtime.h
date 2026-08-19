@@ -209,8 +209,16 @@ namespace orphen::ported::psm2
   // what makes `4 + count * 24` land exactly on the next section.
   struct CollisionDescriptor
   {
+    // The file record is 24 bytes; the original blits it into a 0x20 slot.
+    std::uint16_t firstVertex = 0;     // memory +0x00
+    std::uint16_t vertexCount = 0;     // memory +0x02
     std::uint16_t firstPrimitive = 0;  // memory +0x04
     std::uint16_t primitiveCount = 0;  // memory +0x06
+
+    // +0x08..+0x10. The group's centre, in the same space as the vertices.
+    // FUN_00208450 rewrites it every time the group moves, from a rest copy the
+    // loader parks one past the group's own vertices.
+    Vec3 center{};
   };
 
   // PSM2 header word 7, FUN_0022b5a8:443-517: an int16 count then 14 int16 per
@@ -221,21 +229,53 @@ namespace orphen::ported::psm2
   // around 2500 and the groups run 3131..3948. FUN_00227840's second loop is the
   // only thing that reaches them, so without it those primitives do not collide
   // at all.
+  // A movable map sub-object. Doors are these: in s01_e012 the six doorways are
+  // groups 0..5, sixteen primitives each. The script writes the transform
+  // channels through opcodes 0x7D / 0x7E and FUN_00208450 spends them.
   struct CollisionGroup
   {
     std::uint16_t descriptorIndex = 0;  // +0x00
     std::int16_t type = 0;              // +0x02; the terrain scan skips type 4
+
+    // +0x04..+0x0C. The pivot the group rotates about, and the origin its rest
+    // vertices are stored relative to. File data, three floats.
+    Vec3 pivot{};
+
+    std::uint16_t firstVertex = 0;      // +0x00 of the descriptor
+    std::uint16_t vertexCount = 0;      // +0x54, copied from the descriptor
     std::uint16_t firstPrimitive = 0;   // resolved through the descriptor
     std::uint16_t primitiveCount = 0;
 
-    // +0x24/+0x28/+0x2C/+0x30, the XY box FUN_00227840:99-102 rejects against.
-    // The original computes it at runtime, but for a group that never moves it
-    // is exactly the union of its primitives' bounds -- verified 20/20 against
-    // eeMemory.bin. A group the port made move would need the live recompute.
+    // +0x3C..+0x44 and +0x48..+0x50, three channels each. Opcode 0x7D writes a
+    // rotation channel, 0x7E a translation channel, and each raises its bit in
+    // the dirty byte below.
+    Vec3 rotation{};
+    Vec3 translation{};
+
+    // +0x5A, and it is a *signed* char in the original, which is the whole
+    // trick. FUN_00208450 leaves 0xFF behind after it applies a transform; the
+    // next pass reads bit 7, clears the byte and stops. But 0x7D's update is
+    // `status < 2 ? 2 : status | 2`, and 0xFF is negative, so a fresh write
+    // resets it to exactly 2 -- clearing bit 7 and re-arming the pass. That is
+    // how a door keeps swinging while a script drives it every frame, and how
+    // it settles exactly one frame after the script stops.
+    std::int8_t dirty5a = 0;
+
+    // The rest pose: every vertex of the group, and its centre one past the
+    // end, stored relative to `pivot`. FUN_0022b5a8:487-514 builds this at load
+    // by subtracting the pivot from the live positions, so the group's first
+    // transform reproduces them exactly.
+    std::vector<Vec3> restVertices;
+    Vec3 restCenter{};
+
+    // +0x24..+0x38, the live box FUN_00227840:99-102 rejects against.
+    // FUN_00208450 recomputes it from the moved primitives every time.
     float minX = 0.0f;
     float maxX = 0.0f;
     float minY = 0.0f;
     float maxY = 0.0f;
+    float minZ = 0.0f;
+    float maxZ = 0.0f;
     bool boundsValid = false;
   };
 
