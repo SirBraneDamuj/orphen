@@ -5,19 +5,38 @@ namespace orphen::ported::debug
   namespace
   {
 
-    // FUN_0030bd20: truncate toward zero, saturating at the int32 ends. The
-    // callers all pass value * 1000.0f.
-    int FUN_0030bd20_toInt(float value)
+    // FUN_0030bd20: truncate toward zero, saturating at the int32 ends. It
+    // takes a float in the original; the argument is a double here so that
+    // millimetres() below can hand it an exact product.
+    int FUN_0030bd20_toInt(double value)
     {
-      if (!(value > -2147483648.0f))
+      if (!(value > -2147483648.0))
       {
         return -2147483647 - 1;
       }
-      if (!(value < 2147483648.0f))
+      if (!(value < 2147483648.0))
       {
         return 2147483647;
       }
       return static_cast<int>(value);
+    }
+
+    // `value * 1000.0f` as the EE computes it. The EE core's FPU has no
+    // rounding-mode control -- every result is truncated toward zero, not
+    // rounded to nearest -- so a product that lands a hair under a whole
+    // millimetre stays under it there and rounds up to it here. That is a
+    // whole unit in this display: the camera resting at -0.792 (0xBF4AC083)
+    // gives an exact product of -791.9999957, which the EE keeps below -791
+    // and a round-to-nearest host snaps to -792.
+    //
+    // Truncating the *exact* product reproduces the EE exactly. Truncating to
+    // float and then to int can only ever move toward zero twice, and the
+    // second step lands on the same integer as truncating the exact product
+    // once, so the double here is not an approximation of the hardware -- it
+    // is the same answer with one step instead of two.
+    int millimetres(float value)
+    {
+      return FUN_0030bd20_toInt(static_cast<double>(value) * 1000.0);
     }
 
   } // namespace
@@ -28,9 +47,9 @@ namespace orphen::ported::debug
     // stack buffer and hand that to FUN_002681c0 as the format string, which
     // is a detail the port can drop -- the text is identical either way.
     buffer.FUN_002681c0_printf("(%d, %d, %d)\n",
-                               FUN_0030bd20_toInt(x * 1000.0f),
-                               FUN_0030bd20_toInt(y * 1000.0f),
-                               FUN_0030bd20_toInt(z * 1000.0f));
+                               millimetres(x),
+                               millimetres(y),
+                               millimetres(z));
   }
 
   void emitDetailedPositionDisplay(DebugTextBuffer &buffer, const PositionDisplayState &state)
@@ -88,9 +107,9 @@ namespace orphen::ported::debug
 
     // 0x0034BE70. Note the tighter format: no spaces after the commas.
     buffer.FUN_002681c0_printf("(%d,%d,%d)\n",
-                               FUN_0030bd20_toInt(state.DAT_0058bed0_playerX * 1000.0f),
-                               FUN_0030bd20_toInt(state.DAT_0058bed4_playerY * 1000.0f),
-                               FUN_0030bd20_toInt(state.DAT_0058bed8_playerZ * 1000.0f));
+                               millimetres(state.DAT_0058bed0_playerX),
+                               millimetres(state.DAT_0058bed4_playerY),
+                               millimetres(state.DAT_0058bed8_playerZ));
 
     // The original writes a literal 0 here rather than restoring, but it only
     // reaches this branch when the gate was already off.

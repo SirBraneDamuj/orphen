@@ -2258,8 +2258,8 @@ translucent when the camera is outside it.
 
 The near-plane path has its *own*, looser condition set (`FUN_0020a2c0`): blend
 flag, overlap and height only. That path is ported; the polygon clip it wraps
-(`FUN_0020b600`) is not -- GL clips those primitives instead, and
-`--render-report` counts them rather than staying quiet about it.
+is not -- GL clips those primitives instead, at the plane the next section is
+about, and `--render-report` counts them rather than staying quiet about it.
 
 **Not everything is single-sided.** Flag `0x1` on the record is the two-sided
 bit: `FUN_00211230:190` hands it to VU1 as a byte of its own, `packet + 9`, next
@@ -2268,6 +2268,55 @@ they are exactly 16 coincident perpendicular pairs -- the hanging chains, built
 as crossed planes. Culling those makes each plane vanish from one side, so
 `drawPrimitive` skips culling for them. `--probe x,y,z[,r]` dumps the records
 around a world point with their flags, which is how that was pinned down.
+
+### The near plane is 0.4, and it is not the projection's 0.3
+
+`s01_e012`'s "Big ones! They're all over the place!" cut rests its camera at
+`(-2.793, 3.424, -0.792)`, **0.31 m behind the cabin's near wall** -- primitive
+2672, the quad standing at `x = -3.100`. On hardware the shot is clear. The port
+filled the entire frame with that wall.
+
+The camera was not the problem. At frame 13260 the port reaches
+`cPOS>(-2793, 3424, -792)` against the save state's `(-2793, 3424, -791)`, and
+the eye's z is the same float `0xBF4AC083` in both -- the last unit is a print,
+not a position, and the millimetre note below is the whole of it. What differed
+was where the wall got cut off.
+
+Two 0.3/0.4 pairs live in this engine and only one of them clips anything:
+
+- `uGpffff80b4` (0x00352024) **= 0.3** is `FUN_0020bd58`'s near argument. It
+  fixes the depth mapping `z_screen = m22 + m32/z` and nothing else. No
+  geometry is removed by it.
+- `DAT_00351FE8` / `DAT_00351FEC` / `DAT_00351FF0` **= 0.4** is
+  `FUN_0020a2c0`'s Sutherland-Hodgman pass: every edge crossing 0.4 is split at
+  it and every vertex behind it dropped. Nothing else clips the map.
+  `FUN_00209140` routes any primitive whose bounding sphere comes within
+  `DAT_00351FCC + DAT_00351FD0` of the eye through `FUN_00209ca0` into that
+  clipper, and everything it keeps instead is wholly beyond 0.6 by
+  construction, so no unclipped primitive can reach a near plane at all.
+
+`glCameraFor` was being handed the first one. The 0.1 m between them decides the
+whole shot, because the wall is nearly edge-on and the cut line sweeps across it
+fast:
+
+    prim 2672, view depths at its four corners:  0.039  0.279  0.409  0.559
+      clipped at 0.30  ->  covers 100% of the 640x224 frame
+      clipped at 0.40  ->  the surviving sliver projects to x in
+                           [-2792, -158] px, entirely past the left edge: 0%
+
+`constants::kGeometryNearClip` is that 0.4 and both `glCameraFor` callers use
+it. `kNearPlane` stays 0.3 and stays where it belongs, in
+`FUN_0020bec8_build`'s projection. Ordinary play does not notice: the follow
+camera sits 3 m back, and frame 13400 of the same run -- the shot after this cut
+hands the camera back -- is byte-identical across the change.
+
+**The millimetre.** The EE core's FPU has no rounding-mode control; every result
+is truncated toward zero. `-0.792f * 1000.0f` therefore stays at `-791.9999957`
+on hardware and becomes exactly `-792.0` on a round-to-nearest host, which is a
+whole unit apart once `FUN_0030bd20` truncates. `original_position_display.cpp`
+now does that multiply in double and truncates the exact product, which lands on
+the same integer the EE does -- truncating to float and then to int only ever
+moves toward zero twice and cannot cross an integer the one-step version keeps.
 
 ### The cutscene fade cap, and the room that would not go dark
 
@@ -2764,7 +2813,7 @@ count and material slots. It is a hypothesis-testing tool, not part of the port.
 
 `--render-report` prints what the map visibility pass culled, faded and drew,
 how many primitives straddle the near plane (which GL clips rather than
-`FUN_0020b600`), and two oracles that can be checked without looking at a
+`FUN_0020a2c0`), and two oracles that can be checked without looking at a
 picture: whether the plane normals agree with the map's own `0x100` ceiling
 flag, and how much of the drawn set faces the camera.
 

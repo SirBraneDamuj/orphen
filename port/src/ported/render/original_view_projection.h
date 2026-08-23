@@ -80,6 +80,23 @@ namespace orphen::ported::render
     inline constexpr float kNearPlane = 0.3f;                // uGpffff80b4, 0x00352024
     inline constexpr float kFarPlane = 128.0f;               // 0x43000000, the stack argument
 
+    // DAT_00351FE8 / DAT_00351FEC / DAT_00351FF0, all 0.4. **This, not
+    // kNearPlane, is where geometry is cut off.** kNearPlane only sets the
+    // projection's depth mapping (FUN_0020bd58's z_screen = m22 + m32/z); it
+    // clips nothing. The map's actual clip is FUN_0020a2c0's Sutherland-Hodgman
+    // pass, which splits every edge crossing 0.4 and drops the vertices behind
+    // it -- and it sees every primitive that could straddle a near plane at
+    // all, because FUN_00209140 routes anything within
+    // DAT_00351FCC + DAT_00351FD0 of the eye to FUN_00209ca0 and everything
+    // else is wholly beyond 0.6.
+    //
+    // The 0.1 m between the two decides whole shots. In the s01_e012 "Big
+    // ones!" cut the camera rests 0.31 m behind the cabin's near wall
+    // (primitive 2672, the quad at x = -3.100): clipped at 0.4 the surviving
+    // sliver is entirely off the left edge and the frame is clear, clipped at
+    // 0.3 it covers three quarters of the screen. See README.
+    inline constexpr float kGeometryNearClip = 0.4f;
+
     inline constexpr float kHalfPi = 1.57079601f;            // fGpffff8094 / -fGpffff8098
     inline constexpr float kEyeHeightOffset = 0.400000036f;  // fGpffff808c, 0x00351FFC
 

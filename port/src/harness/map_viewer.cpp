@@ -2680,7 +2680,7 @@ namespace orphen::harness
       const auto camera = orphen::ported::render::glCameraFor(*renderCamera_,
                                                               framebufferWidth,
                                                               framebufferHeight,
-                                                              orphen::ported::render::constants::kNearPlane,
+                                                              orphen::ported::render::constants::kGeometryNearClip,
                                                               drawDistance_ + kFarPlaneMargin);
       glMatrixMode(GL_PROJECTION);
       glLoadMatrixf(camera.projection.data());

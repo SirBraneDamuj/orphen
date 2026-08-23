@@ -3786,7 +3786,8 @@ namespace orphen::port
     if (width > 0 && height > 0)
     {
       const auto camera = orphen::ported::render::glCameraFor(
-          renderCamera_, width, height, orphen::ported::render::constants::kNearPlane, visibilityInput.drawDistance);
+          renderCamera_, width, height, orphen::ported::render::constants::kGeometryNearClip,
+          visibilityInput.drawDistance);
       visibilityInput.horizontalCullHalfTangent = std::max(1.0f, camera.horizontalHalfTangent);
       visibilityInput.verticalCullHalfTangent = std::max(1.0f, camera.verticalHalfTangent);
     }
