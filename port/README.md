@@ -214,14 +214,16 @@ The opening cutscene chain **runs to its end.** From `--scr-report`:
 ```
 event records dispatched: 208     event flag changes: 60+
   frame     1  -> 0x40b2 (slot)      frame   634  -> 0x2c (dialogue)
-  frame   544  -> 0x461f (slot)      frame 10354  -> 0xb63 (dialogue)
-  frame 10426  flag 0x515 set  at 0x6813
+  frame   544  -> 0x461f (slot)      frame 13279  -> 0xb63 (dialogue)
+  frame 13317  flag 0x515 set  at 0x6813
 0x6D player lock mode=-1  (state 10)   ...   mode=1  (release)
 ```
 
 Forty-two lines of dialogue, a dozen camera shots, and characters walking
-between marks -- about **three minutes** of cutscene, with **zero unimplemented
-opcodes** and `--frames` byte-identical run to run.
+between marks -- about **three and a half minutes** of cutscene, with **zero
+unimplemented opcodes** and `--frames` byte-identical run to run. (The last two
+frame numbers used to read 10354 and 10426; the chain got longer, and correctly
+so, when dialogue holds started being timed from the voice clip -- see Voice.)
 
 `0x515` is the handoff latch: `docs/scr2_offset_tables_dialogue_voice_flow.md`
 identifies it as what the opening sets when it gives the player control, and the
@@ -254,12 +256,17 @@ Three mechanisms, and none of them is a linear script:
    `0xE9` in front of it — `0xE9` reads and clears `+0x1CC`, the interaction
    pulse that `FUN_0025b978` sets when the player talks to the NPC.
 
-   `s01_e012` converts fourteen entities but only **five** are characters:
-   slots 18, 19, 21, 23 and 24, all really type `0x293`, each with its own body
-   (`0x39d9`, `0x3a52`, `0x3b42`, `0x3c32`, `0x3ca9`). The other nine are types
-   `0x281` and `0x2ca` sharing two bodies between them — scenery that happens to
-   want a script, not cast. `--actor-report` prints the real type and the body
-   offset behind the role, because fourteen lines reading `type=0x38` hide both.
+   `s01_e012` converts fourteen entities. Seven are type `0x293` — slots 18..24,
+   of which five survive the opening — and they are **the ship's doors**, not
+   cast: two rows of cabin doors at `x = 5.5 / -0.5 / -6.5`, `y = ±1.2`, plus one
+   at `(-9.885, 0.099)`. Their bodies are seven copies of the same 0x78-byte
+   routine laid end to end from `0x39d9` (`0x39d9`, `0x3a52`, `0x3aca`, `0x3b42`,
+   `0x3bba`, `0x3c32`, `0x3caa`), each differing only in its door id — see The
+   doors below. The other seven are types `0x281` and `0x2ca`; the five `0x281`
+   share body `0x397c`, which is not an interaction at all but a visibility gate
+   (`switch (0xED) { case 0: if (flag 0x28A) clear +0x08 bit 0; }`).
+   `--actor-report` prints the real type and the body offset behind the role,
+   because fourteen lines reading `type=0x38` hide both.
 5. **Floor panels start the rest.** Opcode `0x61` tests the terrain word the
    player is standing on, and the six panel groups at `0x3d40`..`0x400e` are
    **exact four-bit pattern matches**, not "any of these":
@@ -507,6 +514,543 @@ executable: `0x4004` on party members sends them to scene script header word 3,
   inline dialogue, is where it stops, and that is the right place: its operands
   are a variable-length text stream, so a stub would desync everything after it.
   The party swap itself is not implemented.
+
+### The doors, and the pulse nothing was setting
+
+Every door in `s01_e012` was inert to the player, and the reason was one missing
+assignment.
+
+`FUN_00252828`'s **first** branch — before the chest branch, before the
+map-streamed branch — is the scripted one: `+0x02` bit `0x4000` set, `+0x04` bit
+`0x4000` clear, type not `0x37`. Opcode `0x66` raises that `+0x02` bit on every
+entity it converts, so *every script-driven object in the game* arrives here. It
+hands off to `FUN_0025b978`, which is three statements:
+
+```c
+psGpffffb0d4 = psGpffffb79c;                     // select the target
+if (*psGpffffb79c == 0x38) target[+0x1CC] = 1;   // raise the interaction pulse
+FUN_0025bc68(header word 3);                     // run the shared hook
+```
+
+The port did the first and the third. **`+0x1CC` is the mechanism**: a type-0x38
+entity's behaviour, `FUN_0025bf20`, re-enters its body from the top every frame
+with itself as both selection and focus, and the body tests `+0x1CC` through
+`0xE9` — read and clear. With nothing ever raising it, that test read zero
+forever. `FUN_00239ce0` runs after `FUN_00251ed8` in `FUN_002239c8`, so the pulse
+is raised and consumed on the same frame.
+
+Each door body is:
+
+```
+if (work[14] == -1)                  // no other door mid-animation
+  if (0xE9) 0xEC(1);                 // interacted with -> step 1
+  switch (0xED) {
+    case 1: work[14] = <door id>; 0x90 arm ramp 7;
+            0x9D(0xA0, 0xb348);      // queue the body at 0xb348 in a free slot
+            0xEC(2);
+    case 2: 0xF5 ...
+  }
+```
+
+`0xb348` carries the marker `0B 04 83 12 00 00`, so the debug overlay's
+"SCR SUBPROC DISP" names it **subproc 4739** — and all seven door bodies queue
+the same one, which is why every door reports the same id. It is the door driver,
+and it is six instructions:
+
+```
+if (0x91 step ramp 7)      // non-zero the frame the ramp reaches its target
+{
+  work[14] = -1;           // release the door lock
+  0x9E(-1);                // retire this slot
+}
+0x7D(work[14], channel 2, 0x92 read ramp 7);   // rotate the collision group
+```
+
+So the door *is* a map collision group, rotated about channel 2 by a ramp, and
+`work[14]` is both the lock and the group id. Opening the cabin door at
+`(-6.50, -1.20)` (pool slot 23) moves group **5** from 2° to exactly 90° over 46
+frames and the subproc then retires, leaving the group where it stopped.
+`FUN_00208450` picks the transform up and, per the `0x800` note in
+`port_runtime.cpp`, drops the leaf out of the ground scan while it is open.
+
+Reproduce it headless:
+
+```
+--scr-tick --arm-stream d300:13400 --hold-stick 0,1 --press-confirm 15235
+```
+
+which walks the lead out of the re-entry cutscene into slot 23's door and opens
+it. (`--press-confirm` with a *list* of frames re-opens the same door each time
+it finishes, because `work[14]` is back to `-1` — that is the script's own
+behaviour, not a bug.)
+
+### The doorway scene: 0x64, 0x56, 0x8E and 0x13F
+
+The doorway scene at the end of the hall — Orphen talking to Dortin and Volcan,
+armed as stream `0xd530` by the tile-`0x62` floor panel — started on its camera
+move and then stopped. The debug overlay showed six subprocs live, of which
+**3507**, **4192** and **4414** belong to the scene (4927 and 4947 are the
+always-resident per-frame slots and 5112 is the flood's ambient pair).
+
+Subproc 3507 (`0x8ebf`) is the one that stops, and it is short:
+
+```
+0x54(work[2], 0x53(work[2],0), 0x53(work[2],1), 0x53(work[2],2) + 0.08);
+if (0x53(work[2], 2) >= 3.0) { 0x64(work[2]); 0x9E(-1); }
+```
+
+It reads the entity's own position back with `0x53` and writes it forward with
+`0x54`, so it rises 0.08 a frame, and at 3.0 it hands the object over with
+`0x64` and retires. `0x64` had no implementation, so the body halted at `0x8f19`
+6490 times and the object rose forever.
+
+**`0x64` (`FUN_0025f700`) detaches an entity from the bone it is riding**, and
+the order of its four statements is the whole point:
+
+```c
+FUN_0025d6c0(sel, DAT_00355044);              // select
+sVar1 = cur[+0x192];                          // parent slot
+if (sVar1 >= 0) {
+  if ((char)cur[+0x194] >= 0) {               // a rigid bone, not the middle case
+    FUN_0020dc88(&pool[sVar1], cur[+0x194], cur + 0x20, out);
+    memcpy(cur + 0x20, out, 12);              // bone-local -> world, in place
+    cur[+0x4C] = FUN_00227798(cur[+0x20], cur[+0x24], cur[+0x28]);
+  }
+  cur[+0x192] = 0xFFFF;                       // detached
+}
+```
+
+An attached entity's `+0x20..+0x28` is a **bone-local offset**, not a world
+position — `FUN_0020cdc0` branches on `+0x192` for exactly that reason. Clearing
+`+0x192` without resolving it first drops the object at whatever small offset it
+was carrying, next to the world origin. The bake is what makes a handover look
+like a handover, and it is also why the rise in subproc 3507 is authored in bone
+space: the object is climbing relative to whoever is holding it right up to the
+frame it is let go.
+
+Every piece was already in the port — `parentSlot192`, `attachBone194`,
+`FUN_0020dc88_bone_point` in `psc3_skeleton`, and the `terrainHeight`
+(`FUN_00227798`) hook. What was missing was the palette lookup, which lives in
+`PortRuntime` because the script has no view of `DAT_00357e00`.
+
+The chain now runs to its last record with **zero unimplemented opcodes** — 237
+event records, four dialogue lines, the player released at the end.
+
+One repro note: `--arm-stream d530:13400` runs the stream's first ten records
+*twice*. That is the harness, not the scene. Body `0x8f41` teleports the lead to
+`(-0.653, -1.658)`, which is on the tile-`0x80` panel, and arming the stream
+directly skips whatever the panel's own trigger path latches — so the panel
+re-arms it once. Reached through the panel it does not happen, and the second
+pass runs to the end either way.
+
+**And `0xd530` was the wrong stream.** The scene the doorway actually reaches is
+`0xd780`, armed at `0x4049` by the last floor-panel group, and it is 43 records
+long. Three more opcodes stood in front of it, each one named by the halt on the
+last:
+
+- **`0x56`** (`FUN_0025efa8`) sets an entity's size, and subproc **4192**
+  (`0xa03c`) hits it at `0xa10a` on its *first* frame, so the stream never
+  started. Two expressions, the second over `fGpffff8c44` = 100000.0. The work is
+  `FUN_00229ef0`, and the thing worth copying exactly is that it re-derives the
+  collision box from the **descriptor** rather than scaling what is already
+  there, so repeated calls do not compound: `+0x54 = scale * desc[+0x08]`,
+  `+0x58 = scale * desc[+0x0C]`, `+0x14C = +0x150 = scale`. It also writes
+  `+0x140`/`+0x144`/`+0x148`, the draw cull box `FUN_0020c810:48` reads as
+  `max(+0x144, +0x140)`; the port does no entity culling, so those three are
+  named rather than invented into fields nothing reads.
+
+- **`0x8E`** (`FUN_002610a8`) is **the scene transition**, and it is the last
+  statement of the whole cutscene, at `0xab41`:
+
+  ```c
+  FUN_00267da0(0x31e668, 0x58bed0, 0xc);   // the lead's position -> arrival spawn
+  DAT_003551f8 = param;
+  DAT_003551ec = 0x20001;
+  ```
+
+  `FUN_0022b300`, the map loader, reads `DAT_003551ec` as a selector (`0x2001` an
+  ordinary scene, `0x20000` the 0xE group) and `DAT_003551f8` as the index into
+  the table at `DAT_00315b04`. **This is the one that read as a hang.** The body
+  ahead of it waits on the fade-out, releases the player, drops the camera and
+  sets flag `0x523` — then asks to leave. Halting there left the slot re-entering
+  and halting every frame, 4071 times in one run, with the screen already faded
+  to nothing: the scene had finished and simply could not leave. Consumed and
+  reported now, so the body reaches its `0x9E` and retires; `--scr-report` prints
+  `0x8E scene change requested ... last destination=1`.
+
+- **`0x13F`** (`FUN_002604a8`) publishes a type-`0x28` rig's two children into two
+  work slots. Operands only, and deliberately: the fields it reads (`+0x198` /
+  `+0x19C`) are filled by `FUN_002d2f40`, type `0x28`'s own behaviour, which
+  allocates types `0x27`, `0x26` and `0x19` and hangs them off each other by bone
+  role — `0x26` on the rig's role-1 bone, `0x19` on the `0x26`'s role-2 bone with
+  the index **negated** (`FUN_0020cdc0`'s middle, non-rigid branch) and `0x27` on
+  its role-1. That behaviour is unported, and `+0x198`/`+0x19C`/`+0x1A0` already
+  carry three different per-type meanings in `OriginalEntity`. Writing the work
+  slots from fields nothing populates would put stale indices in front of every
+  opcode that later reads them, which is worse than not writing them. It is one
+  contained job — `FUN_002d2f40` is 40 lines and every piece it needs is already
+  ported — but it is a storage change and belongs with the behaviour, not here.
+
+With all four, `0xd780` runs its 43 records with **zero unimplemented opcodes**,
+ending on the last at frame 15874 with the player released in the doorway and no
+object-script slot left spinning.
+
+### The close-up rig, and the draw walk's deferral queue
+
+The doorway scene swaps Orphen for a close-up model with an animating head, and
+in the port the head never appeared and his bandana stayed behind in the corridor.
+Three separate things, and the first one is the whole scene:
+
+**Type `0x28` is not a character, it is a mount.** Pool slot 64 becomes one
+during the scene, and `FUN_002d2f40` — its entire behaviour — builds a
+three-entity rig the first time it ticks:
+
+```c
+b = FUN_00265e28(0x26);  b->+0x192 = this;  b->+0x194 =  role1(this)
+c = FUN_00265e28(0x19);  c->+0x192 = b;     c->+0x194 = -role2(b)
+a = FUN_00265e28(0x27);  a->+0x192 = b;     a->+0x194 =  role1(b)
+this->+0x198 = a;  this->+0x19C = b;  this->+0x1A0 = c;  this->+0x94 = 1;
+```
+
+So the mount `0x28` (`grp_0021`, 39 bones) is the **torso and arms**, `0x26`
+(`grp_001f`, 30 bones) is the **head**, `0x27` (`grp_0020`) is the **hair**, and
+`0x19` is a bandana of its own — the same type the field player wears. All three
+settled by capture rather than by model size: hiding the `0x27` slot removes the
+hair and leaves a headbanded bald head, and hiding `0x26` *and* `0x27` leaves a
+headless torso with a bare neck stump, so the mount carries no face of its own
+and nothing needs hiding on it the way opcode `0x140` hides the field body's
+head bones.
+
+The negated bone index on the cloth is deliberate: it selects `FUN_0020cdc0`'s
+middle, position-only branch instead of the rigid one, which is what lets the
+rope hang rather than being welded to the bone's orientation. On the live rig the
+three resolve to bone 30 of the mount, bone 1 of the body and bone -2 of the
+body.
+
+Opcode **`0x13F`** (`FUN_002604a8`) is the script's handle on it: it clears
+`+0x94` to force a rebuild, calls `FUN_002d2f40`, and publishes the two pool
+indices into work slots — `work[e1]` from `+0x19C` (the bust) and `work[e2]` from
+`+0x198` (the hair), which is not the order it reads its operands in. It is now
+modelled rather than operands-only, and it runs exactly **once**: the 173 hits it
+showed while halting were the body being re-entered, not the opcode firing.
+
+**And `FUN_0020c5a8` walks a deferral queue, not the pool in slot order.** Its
+first pass queues every live slot whose `+0x02` bit `0x200` is clear and marks it
+0; everything else is `0xFF`. The second pass walks that queue *while it grows*:
+
+| parent | action |
+|---|---|
+| `< 0` | pose and draw, mark 1 |
+| `status[parent] == 0` | push this slot on the back and move on |
+| `status[parent] == 1` | pose and draw, mark 1 |
+| `status[parent] == 0xFF` | neither — the slot is dropped this frame |
+
+The port had a plain ascending walk, and the comment on the rigid-attach branch
+said as much: slot order happens to be right for the head-on-neck attachments in
+the opening, so it held up. `FUN_002d2f40` breaks it, because it allocates the
+hair **before** the bust — so the hair takes the lower slot and was posed against
+a palette its parent had not built yet. `FUN_0020dc88`'s no-palette fallback is
+the parent's own `+0x20`, and for a bone-local attachment that is `(0, 0, 0)`:
+the hair was at the world origin.
+
+With the queue, the chain resolves in dependency order and the rig lands where it
+belongs — mount at `(5.50, -1.20, -1.50)`, head on its bone at
+`(5.518, -1.177, -0.692)`, hair on the head's at `(5.518, -1.195, -0.677)`, cloth
+at `(5.515, -1.182, -0.593)`. The shot itself is Orphen leaning through the
+cargo hatch at the end of the corridor with Dortin and Volcan beyond it, and the
+mount stands 0.91 m to the field model's ~1.0 m: "close-up" here means a
+higher-detail model with a real face, not a smaller one.
+
+### The field model is hidden with `+0x08` bit 0, and its bandana has to go too
+
+The bandana that stayed behind in the doorway was not the rig's. It was slot 4,
+the *field* player's, and the port was drawing it for the whole cutscene after
+the field model itself had gone.
+
+The script hides Orphen at the same instant it builds the rig. Tracing the two
+`0x79` register ORs that sit between opcode `0x6D` and the `0x52` that spawns the
+mount:
+
+```
+[scr] f=14795 @0xa3f5 op=0x79    reg 0x3 slot 0: 0x3024 -> 0x3025
+[scr] f=14795 @0xa405 op=0x79    reg 0x4 slot 0: 0x100  -> 0x101
+```
+
+Register `0x4` is entity `+0x08`, and bit 0 is `FUN_0020c5a8`'s hidden flag — not
+`+0x02` bit `0x200`, which the whole scene writes exactly once and never to slot
+0. (`--scr-trace-range` now prints the slot, register and before/after value under
+every `0x76`..`0x7C`, which is what made this a one-line answer instead of a
+guess.)
+
+**`FUN_0020c5a8` gives slot 0 no special treatment.** It is queue entry 0 like
+anything else, and its status byte is what decides whether its children draw. The
+port posed the lead outside the queue — slot 4 reads slot 0's palette to find the
+neck — and then pinned `drawStatus[0]` to "posed" unconditionally, so the
+bandana kept drawing against a body that was no longer there. Worse, the mount
+walks forward at frame 15149 and the field model does not, so the bandana ends up
+hanging alone in the doorway.
+
+Slot 0 now writes its real status, and the three branches are not the same:
+
+| lead state | status | why |
+|---|---|---|
+| `+0x02 & 0x200` | `0xFF` | children dropped with it |
+| `+0x08 & 1` | stays **queued** | the original's `& 1` branch never writes the byte, so children defer against it until the queue's byte counter wraps — not drawn, by a different route |
+| drawn | posed | children draw |
+
+Verified by instrumenting the publish: slot 4 reaches the view list on frames
+0..14794 and never again, which is exactly the frame the OR lands on. A pre-fix
+and post-fix capture of frame 15030 differ only in a red bandana strip beside
+Orphen's head.
+
+### `0x6D` hides the bandana too, and a save state proved the head was fine
+
+A PCSX2 save state taken during the close-up settled both halves of this, and
+one of them the wrong way round: **the head was never deformed.**
+
+`--arm-stream d780:13400` reaches the same shot at frame 15810 — same camera
+(`cPOS 6161,-1226,-996` against the state's `-1228`), same line, same pose. The
+head model's palette is not merely close, it is exact. All 30 bones of `grp_001f`
+at animation 23 / column 2, port against `0x00357E00 + 64 * 0xA80`:
+
+```
+bone  0  port( 5.500 -0.477 -0.637)  real( 5.500 -0.477 -0.637)
+bone  9  port( 5.495 -0.550 -0.576)  real( 5.495 -0.550 -0.576)
+bone 28  port( 5.522 -0.539 -0.549)  real( 5.522 -0.539 -0.549)
+...   worst bone 9, 0.0005 m — the print's own precision
+```
+
+and the head's bone 0 equals the mount's bone 30 in *both*, which is
+`FUN_0020cdc0`'s rigid branch confirmed against hardware rather than inferred.
+The keyframe tables match too: animation 23 is ten entries cycling columns
+2,1,3,1,4,1,5,1,6,1, and 36 is a single column-26 key, exactly as the port reads
+them.
+
+What I had been looking at was the mount's collar and hood surrounding a head
+that is small and tucked into it at that angle. Masking the head's own pixels
+(`--hide-slots 71,72,73` differenced against `--hide-slots 71,73`) shows a clean,
+compact face. Two lessons: **a low-poly head read through an occluder is not
+evidence**, and once the palette is measurably right the search should move to
+what is drawn in front of it, not further into the pose pipeline.
+
+**The real bug was the bandana, and `0x6D` is what hides it.** `DAT_0058C610`,
+`DAT_0058C614` and `DAT_0058C618` are not globals of their own — `0x0058BEB0 +
+4 * 0x1D8` is `0x0058C610`, so they are pool slot 4's `+0x00`, `+0x04` and
+`+0x08`. With an operand below -2 `FUN_0025fd10` sets `+0x04 |= 0x4000` and
+`+0x08 |= 1` on the bandana whenever the lead is the player and slot 4 is
+occupied, and clears both on the `== 1` release (gated on the lead actually
+sitting in state 10). The port drove only the lead's state and skipped all of it.
+
+The save state reads slot 4 `+0x04 = 0x4019`, `+0x08 = 0x0031`; the port now
+reads `0x4019` / `0x31` at the same point in the scene.
+
+Why it looked like a face bug: the hidden lead's position decides where the
+orphaned bandana hangs, and that differs between a forced `--arm-stream` trigger
+and real play. The save state has the lead at `(5.140, -0.838, -1.500)` — half a
+metre from the close-up head, well inside a shot whose camera sits about 1.2 m
+away. Forcing the stream leaves him at `(5.500, -1.199, -1.500)`, behind the
+camera, so the same build renders the same frame clean. **A cutscene reproduced
+by arming its stream does not put the player where play does**, and anything
+parented to the player will lie about it.
+
+### `+0x80` is a slope limit, and the wall test was invented
+
+Floor panel tile `0x80` arms stream `0xd5e0`, which walks a companion in on a
+spline and Orphen in with `0xF0` — **subproc 3670** at `0x93e4`:
+
+```
+0xEB(0);                                    // focus pool slot 0, the lead
+if (0xF0 -0.500, 2.599) { 0x77(0,8,1); 0x3E(0x190); 0x9E(-1); }
+```
+
+He stopped dead at `(-0.50, 1.73)` and flag `0x190` never set, so record
+`0xd600` blocked forever. (Subproc **5112** at `0xb9b6` is running alongside and
+is unrelated — a two-line `0x53`/`0xE2` pair the flood arms, re-entered every
+frame by design.)
+
+Three things were wrong and they compound:
+
+**1. `FUN_002262c0` has no map-wall query.** Its only geometry call is
+`FUN_00227390`; the four "blocker" helpers it also calls (`FUN_00228380`,
+`FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) walk `DAT_0058beb0` — the entity
+pool — not the map. A move into a wall is refused because the destination's
+ground scan fails, and by nothing else.
+
+The port ran an invented swept-capsule test, `queryPsm2ActiveBlockerAlong`, over
+every triangle steeper than `|nz| > 0.5` whose vertical span reached more than
+5 cm above the feet. `s01_e012` has a **10 cm door sill** at `y = 1.9` —
+primitive 3497, a 1.0 x 0.1 strip across the doorway, part of a collision group —
+and that rejected the move permanently. A player would sidestep; a cutscene's
+`0xF0` cannot. It is now deleted rather than tuned: it had no `FUN_*` behind it,
+and neither did its two thresholds.
+
+**2. Entity `+0x80` is the walkable-slope limit, not a step height.** The
+original reads it in exactly one place:
+
+```c
+if (fVar18 - fVar19 < DAT_00352434) {                    // step gate
+  if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80)) {  // slope gate
+```
+
+`puVar11[2]` is scan-workspace `+0x08`, which `FUN_00227390` fills from `+0x54`
+on the same branch that adopts a corner's terrain flags — so it is the *winning*
+corner's value — and `FUN_00227840:59` fills `+0x54` from the record's stored
+angle at `+0x70 + subTriangle * 4`, defaulting to `uGpffff8504` = pi/2 when
+nothing is found. That is `DRecord78::slopeAngle`, which the port already
+computed and never read. Type 1's descriptor `+0x10` is **0.872665 = 50 degrees**,
+the same constant `FUN_0022d258` tests the same field against.
+
+The port called the field `maxStepHeight80`, used it as a step height, and put an
+invented `0.75` in it for the lead. That is what the wall test was really
+covering for: with a three-quarter-unit step allowance and no slope test, the
+lead could ratchet up the ship's hull plating (which samples about 60 degrees)
+and walk out of the hold — reproducibly, to `z = +0.95` at `y = 4.51`. The field
+is now `slopeLimit80`, seeded from the descriptor, and the gate is ported.
+
+**3. The step height is `DAT_00352434` = 0.26**, a global, tested *strictly*
+less than. Not `+0x80`, and not 0.75.
+
+With the slope gate in and the invented test out, every stick angle keeps the
+lead on the `z = -1.50` deck instead of climbing the hull, and subproc 3670
+reaches `(-0.50, 2.60)` — its authored target — at frame 13627, with the rest of
+the chain (`0x193`, `0x192`) following. `--frames 4000 --actor-report
+--scr-report` stays byte-identical on both scenes.
+
+**Still not ported**, and worth naming rather than inventing around: `FUN_00228cf0`
+(the dynamic-support pass `FUN_00227390` runs at `LAB_002276d8`, which can raise
+the answer and set `+0x0C` bit `0x100`), and the four entity-pool blocker helpers
+on the *player's* path — the actor loop has its clamp, the lead does not.
+
+### The flooding of the hold
+
+The story chest — pool slot **78**, at `(-12.731, -1.373, -1.50)` — opens a
+cutscene that floods the map and ends on the save prompt. It reaches the player
+through a path worth spelling out, because it is not the chest path:
+
+The script gives that one chest `+0x02 = 0x4100` and `+0x95 = 100` (object
+registers 1 and 17, one write each in the whole scene). `0x4100` is *both*
+interaction bits, and `FUN_00252828` tests the scripted one **first** — so it
+runs header word 3 rather than the native chest cutscene. Header word 3 is:
+
+```
+if (current->+0x95 == 100)              // is this the story chest?
+  if (!flag(0x51C) && work[13] == 0) {
+    work[15]->+0x04 |= 0x4000;          // veto the scripted branch from now on
+    work[13] = 28;                      // story progress
+    setFlag(0x404);
+    0xA1 channel 0 <- stream 0xd430;
+  }
+```
+
+`+0x04` bit `0x4000` is the same bit `FUN_00252828` checks to *suppress* the
+scripted branch, so the chest reverts to an ordinary chest the moment the
+cutscene starts. It fires exactly once.
+
+Stream `0xd430` is 29 records: a camera move, subproc **3205**, three flag joins,
+the map swap, five dialogue lines and the save prompt. Reproduce it with
+
+```
+--scr-tick --arm-stream d300:13400 --hold-stick -1.9,1 --press-confirm <frames>
+```
+
+which walks the lead out of the re-entry cutscene to that chest.
+
+**Subproc 3205** (`0x86fc`) is the camera hold at the front of it:
+
+```
+if (0x42(60)) { 0x45(0); 0x43(<three curve streams>); setFlag(0x12C); 0x9E(-1); }
+```
+
+Three opcodes had to be ported to get from there to the end, and each one named
+the next:
+
+- **`0x42`** is `FUN_0025dd60`, *the same handler as `0x44`*, which picks between
+  two interpolators on its own opcode — `sVar1 = sGpffffbd68`, captured in its
+  first instruction, before the duration is evaluated. `0x44` calls
+  `FUN_00218158`; `0x42` calls `FUN_00217f38`, which is the same function minus
+  the `FUN_00266988` roll/zoom sample and the two globals it publishes. So a
+  `0x42` move drives the eye and the look-at and deliberately leaves the
+  projection alone. The port had `0x44` and halted on `0x42`.
+- **`0x89`** (`FUN_00260ce0`) drives the full-screen overlay directly. Two
+  expressions, packed by the original as `expr0 | (expr1 << 24)` and handed to
+  `FUN_0025d0e0` with `(char)expr1` alongside — so expr0 is the colour, expr1 is
+  the alpha, and expr1 also picks the GS blend word. `FUN_0025d0e0` is the sink
+  both fade ramps already feed, so this shares `ScreenFade`'s overlay rather than
+  owning a second one. The flood's white-out is a body running
+  `0x89 RGB(255,255,255), 255` every frame until flag `0x132` opens — a *held*
+  white, not a ramp — and body `0x89d8` then arms a normal fade-in over it, which
+  is what takes the overlay back down. Measured: alpha 0 → 227 → 27 → 0 across
+  frames 16000..16600, and 0 for the rest of the run.
+- **`0xA7`** (`FUN_00261fd8`) **is the flooding.** It walks all `iGpffffb718`
+  primitive records at `iGpffffb740` — the port's `DAT_003556b0_dRecords78`, the
+  same array `FUN_00227840` scans — and for every one whose `+0x04` matches a
+  mask, overwrites the **top nibble** of that word:
+  `rec = (rec & 0x0FFFFFFF) | (value << 28)`. `+0x04` is `terrainFlags`, which is
+  both the reject mask the ground query tests and the surface *class*
+  `FUN_00253080` reads out of the top nibble (`0xD` being the drift surface). So
+  one opcode retags the whole map's surfaces. In `s01_e012` the lead's
+  `terrainWord` goes from `0x40120006` to `0x1012000e` across the transition.
+
+With those three the chain runs with **zero unimplemented opcodes**: 284 event
+records, all seven join flags (`0x12C`, `0x12D`, `0x12E`, `0x130`..`0x133`), five
+dialogue lines, and it ends on `0xE1` at `0x8c20` — the save/menu mode. There is
+no save menu, so `DAT_00354d2c` is raised to `0x10`, the following `0x6D` hands
+control back and play continues on the flooded map. That last part is the known
+gap, not a halt.
+
+### The lead is walked by the script too, and its request was being wiped
+
+`s01_e012`'s re-entry cutscene -- floor panel `0x3d94`'s second branch, arming
+scheduler stream `0xd300` -- softlocked forever. Three characters walk back into
+the room and the stream joins on three event flags:
+
+| body | subproc | mechanism | flag |
+|---|---|---|---|
+| `0x80e0` -> `0x811c` | | `0xBD` `0x70`/`0x72`, path `0x378C` | `0xFC` |
+| `0x815b` -> `0x8197` | 2991 | `0xBD` `0x70`/`0x72`, path `0x3740` | `0xFD` |
+| `0x8066` | 2947 | `0xEB` focus 0, then `0xF0` to (-6.600, 2.599) | `0xFB` |
+
+`0xFC` and `0xFD` landed. `0xFB` never did, and record `0xd340` waits on it, so
+everything after -- the whole rest of the scene -- never ran.
+
+The difference between the two mechanisms is *which entity*. The path-follow
+pair drives companions; subproc 2947 focuses pool slot **0**, the lead player,
+and walks him in with `0xF0`. `OriginalPlayerController::update` opened by
+zeroing `+0x30`/`+0x34`/`+0x38`, and `FUN_002239c8` runs `FUN_0025b778` (the
+script tick) immediately *before* `FUN_00251ed8`. So the walk request was made
+one statement before the player controller destroyed it. Orphen never moved,
+`0xF0` never saw `distance < step`, `+0x1BC` never advanced and the flag was
+never set.
+
+**`FUN_00251ed8` does not clear those fields anywhere.** Its only write to them
+is the *additive* leader-follow at its tail (`psVar8[0x18] += ...` over a short
+pointer, i.e. byte `+0x30`). `FUN_002262c0`'s epilogue is the sole owner of the
+clear and it clears only after spending them. `FUN_00253080`, the drift pass
+`FUN_00251ed8` really does call, *assigns* `+0x30`/`+0x34` -- but only on a
+`0xD`-class surface, or while airborne with residual drift; on ordinary ground
+`bVar3` stays false and it leaves them alone.
+
+This is the same bug the actor loop had (see the `FUN_00239ce0` note above); the
+lead's copy of it survived that fix because nothing had yet asked the script to
+move slot 0. Removing it leaves `--frames 4000 --actor-report --scr-report`
+byte-identical on both `s01_e012` and `s01_e024`.
+
+Reproducing it needs the opening out of the way first: `--arm-stream d300:13400`
+lands after the handover, and flag `0xFB` now sets 109 frames later at `0x80a9`.
+Armed any earlier it fails for unrelated reasons -- before the opening's `0x78`
+at script `0x5f8e` clears `+0x04` bit `0x108`, physics is off on the lead
+entirely, and armed at frame 1 he walks into a map blocker no opening has moved.
+
+**Where physics actually lives, which the port does not reproduce.** No state
+handler calls `FUN_002262c0`, and neither does `FUN_00239ce0`. The only caller
+is `FUN_002261e0`, a single late pass that walks all 256 pool slots -- *from slot
+0* -- running `FUN_00225c90` then `FUN_002262c0` on each live one whose `+0x02`
+bit `0x800` is clear and whose `+0x192` is negative. `FUN_002239c8` orders it
+`FUN_0025b778`, `FUN_00251ed8`, `FUN_00239ce0`, `FUN_00208450`, **`FUN_002261e0`**,
+`FUN_0025b918`, `FUN_00216aa0`. The port instead runs physics inside the player
+controller and again inside the actor loop, which puts both before
+`FUN_00208450` rather than after it. Nothing in either scene depends on the
+difference yet, but a moving door would.
 
 ### The chest cutscene
 

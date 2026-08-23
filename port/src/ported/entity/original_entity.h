@@ -73,7 +73,14 @@ namespace orphen::ported::entity
     std::uint32_t flagWord70 = 0;            // +0x70: opcode 0x61's alternate word.
     std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
     std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
-    float maxStepHeight80 = 0.75f;           // +0x80: maximum step-up height accepted by FUN_002262c0.
+    // +0x80 is the **maximum walkable slope**, in radians, not a step height.
+    // FUN_002262c0's only use of it is
+    //   if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))
+    // where workspace +0x08 is the destination surface's stored slope angle
+    // (record78 +0x70). Type 1's descriptor value is 0.872665 = 50 degrees,
+    // which is also the constant FUN_0022d258 compares the same field against.
+    // The step height is a global, DAT_00352434 = 0.26.
+    float slopeLimit80 = 0.872664626f;
 
     // +0x84..+0x90: the four corner heights FUN_00227070:133-138 publishes after
     // a four-corner sample, in its own order -- (-r,-r), (+r,-r), (+r,+r),
@@ -174,6 +181,16 @@ namespace orphen::ported::entity
     // aliased, the same way eventFlagId198 and interactTarget198 are -- an
     // entity is never both a party follower and a type 0x62 enemy.
     std::int16_t partyOriginalType1a0 = 0;
+
+    // Type 0x28's block. FUN_002d2f40 builds a three-entity rig the first time
+    // it runs -- FUN_00265e28(0x27), (0x26) and (0x19) -- parks the three pool
+    // slots at +0x198 / +0x19C / +0x1A0 and latches +0x94 so it never runs
+    // again. Held apart from the other readings of those bytes for the same
+    // reason eventFlagId198 and interactTarget198 are: the original reuses the
+    // storage per type, and an entity is never two of these things at once.
+    std::int32_t rigHair198 = -1;  // +0x198: the type 0x27 (hair) on the bust's role-1 bone
+    std::int32_t rigBust19c = -1;  // +0x19C: the type 0x26 bust on this entity's role-1 bone
+    std::int32_t rigCloth1a0 = -1; // +0x1A0: the type 0x19 cloth on the bust's role-2 bone
     std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
     float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
     float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.

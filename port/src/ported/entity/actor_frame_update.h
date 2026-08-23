@@ -99,6 +99,11 @@ namespace orphen::ported::entity
     // the same reason everything else here does.
     std::function<void(std::size_t slot, std::int16_t bodyOffset)> FUN_0025bf20_run_npc_body;
 
+    // FUN_0020dd78: the bone carrying a semantic role on an entity's model.
+    // FUN_002d2f40 needs it three times to hang its rig together, and the
+    // lookup reads the loaded PSC3, which the entity layer has no view of.
+    std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
+
     // DAT_004a7e00, indexed by pool slot. Behaviors that drive bones directly
     // rather than through the animation -- FUN_002cdb28 is the one this scene
     // exercises -- write their override here. Empty when the runtime has none.
@@ -180,6 +185,13 @@ namespace orphen::ported::entity
   void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment);
 
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress);
+
+  // FUN_002d2f40, type 0x28: allocate the close-up rig (types 0x26, 0x27, 0x19)
+  // and hang it together by bone role. Exposed because opcode 0x13F calls it
+  // directly rather than waiting for the actor loop.
+  void FUN_002d2f40_build_closeup_rig(OriginalEntity &entity,
+                                      std::size_t slot,
+                                      const ActorEnvironment &environment);
 
   // A readable name for a handler address, for the report. Returns nullptr for
   // addresses with no name yet.

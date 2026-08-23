@@ -730,6 +730,78 @@ namespace orphen::ported::entity
     entity.desiredDeltaY38 = 0.0f;
   }
 
+  // FUN_002d2f40, type 0x28: **build the close-up rig**, once.
+  //
+  // Type 0x28 is not a character -- it is a mount point. The first time it
+  // ticks it allocates three entities and hangs them off each other:
+  //
+  //   b = FUN_00265e28(0x26);  b->+0x192 = this;  b->+0x194 =  role1(this)
+  //   c = FUN_00265e28(0x19);  c->+0x192 = b;     c->+0x194 = -role2(b)
+  //   a = FUN_00265e28(0x27);  a->+0x192 = b;     a->+0x194 =  role1(b)
+  //   this->+0x198 = a;  this->+0x19C = b;  this->+0x1A0 = c;  this->+0x94 = 1;
+  //
+  // So `0x26` is the close-up bust -- face, torso and arms -- `0x27` is the
+  // **hair**, and `0x19` is a bandana of its own, the same type the field
+  // player wears. (Confirmed by capture: hiding the 0x27 slot removes the hair
+  // and leaves a headbanded, bald bust behind.) The negated bone index on the cloth is
+  // deliberate: it selects FUN_0020cdc0's middle, position-only branch rather
+  // than the rigid one, which is what lets the rope hang instead of being
+  // welded to the bone's orientation.
+  //
+  // The allocation order in the original is 0x27, 0x26, 0x19 -- the pool slots
+  // come out in that order -- but the *linking* order is 0x26 first, because the
+  // other two need its role bones. Both are reproduced.
+  //
+  // Without this the scene's close-up shot has no body, no head and no cloth,
+  // and the field player's own bandana is the only one left -- still parented to
+  // pool slot 0, still standing wherever the field model was left.
+  void FUN_002d2f40_build_closeup_rig(OriginalEntity &entity,
+                                      std::size_t slot,
+                                      const ActorEnvironment &environment)
+  {
+    if (entity.spawnParam94 != 0 || environment.entityPool == nullptr ||
+        environment.descriptors == nullptr)
+    {
+      return;
+    }
+
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t hair = pool.FUN_00265e28_allocate_and_initialize(0x27, *environment.descriptors);
+    const std::size_t body = pool.FUN_00265e28_allocate_and_initialize(0x26, *environment.descriptors);
+    const std::size_t cloth = pool.FUN_00265e28_allocate_and_initialize(0x19, *environment.descriptors);
+
+    // FUN_0026bfc0 on any of the three failing. The original reports and keeps
+    // going with whatever it got; there is nothing sensible to do either way, so
+    // the port takes the same shape rather than half-building the rig.
+    if (hair >= pool.slotCount() || body >= pool.slotCount() || cloth >= pool.slotCount())
+    {
+      return;
+    }
+
+    const auto boneForRole = [&](std::size_t of, std::uint8_t role) -> int {
+      return environment.FUN_0020dd78_bone_for_role
+                 ? static_cast<int>(environment.FUN_0020dd78_bone_for_role(of, role))
+                 : 0;
+    };
+
+    OriginalEntity &bodyEntity = pool.slot(body);
+    bodyEntity.parentSlot192 = static_cast<std::int16_t>(slot);
+    bodyEntity.attachBone194 = static_cast<std::int8_t>(boneForRole(slot, 1));
+
+    OriginalEntity &clothEntity = pool.slot(cloth);
+    clothEntity.parentSlot192 = static_cast<std::int16_t>(body);
+    clothEntity.attachBone194 = static_cast<std::int8_t>(-boneForRole(body, 2));
+
+    OriginalEntity &hairEntity = pool.slot(hair);
+    hairEntity.parentSlot192 = static_cast<std::int16_t>(body);
+    hairEntity.attachBone194 = static_cast<std::int8_t>(boneForRole(body, 1));
+
+    entity.rigHair198 = static_cast<std::int32_t>(hair);
+    entity.rigBust19c = static_cast<std::int32_t>(body);
+    entity.rigCloth1a0 = static_cast<std::int32_t>(cloth);
+    entity.spawnParam94 = 1;
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -740,6 +812,7 @@ namespace orphen::ported::entity
     case 0x002CD0A0u: // FUN_002cd0a0, the type 0x62 enemy
     case 0x00213720u: // FUN_00213720, type 0x19, the player's bandana
     case 0x0025BF20u: // FUN_0025bf20, type 0x38, the script-driven NPC
+    case 0x002D2F40u: // FUN_002d2f40, type 0x28, the close-up rig
       return true;
     default:
       return false;
@@ -762,6 +835,8 @@ namespace orphen::ported::entity
       return "FUN_00213720 (player bandana)";
     case 0x0025BF20u:
       return "FUN_0025bf20 (script-driven NPC)";
+    case 0x002D2F40u:
+      return "FUN_002d2f40 (close-up rig)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -866,6 +941,9 @@ namespace orphen::ported::entity
         {
           environment.FUN_0025bf20_run_npc_body(slot, entity.recordId130);
         }
+        break;
+      case 0x002D2F40u:
+        FUN_002d2f40_build_closeup_rig(entity, slot, environment);
         break;
       case kFUN_00239e78_noOp:
       default:

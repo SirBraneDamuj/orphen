@@ -25,15 +25,14 @@ namespace orphen::port
     std::uint32_t leadingWord = 0;
     std::uint32_t terrainFlags = 0;
     bool sampledByOriginalTerrain = false;
-    std::array<orphen::ported::psm2::Vec3, 3> vertices{};
-    orphen::ported::psm2::Vec3 normal{};
-  };
 
-  struct Psm2BlockerHit
-  {
-    std::size_t triangleIndex = 0;
-    std::size_t primitiveIndex = 0;
-    std::uint32_t record80Flags = 0;
+    // The record's own stored slope, read at `+0x70 + subTriangle * 4`.
+    // FUN_00227840:59 copies exactly that into the scan workspace's +0x54:
+    //   uVar17 = *(u32 *)(rec + ((+0xD0 << 16) >> 14) + 0x70);
+    //   *(u32 *)(ws + 0x54) = uVar17;
+    // and the default when nothing is found is uGpffff8504 = pi/2.
+    float slopeAngle = 1.570796012878418f;
+
     std::array<orphen::ported::psm2::Vec3, 3> vertices{};
     orphen::ported::psm2::Vec3 normal{};
   };
@@ -77,6 +76,12 @@ namespace orphen::port
     std::uint32_t terrainFlagsWinning = 0;  // entity +0x6C
     std::uint32_t terrainFlagsAll = 0;      // entity +0x70, ANDed over the samples
 
+    // Workspace +0x08, which FUN_00227390 sets from +0x54 on the same line it
+    // adopts a corner's terrain flags -- so it is the *winning* corner's slope,
+    // not the last one scanned. FUN_002262c0 gates the whole upward-step branch
+    // on it: `if ((float)puVar11[2] <= *(float *)(entity + 0x80))`.
+    float slopeAngle = 1.570796012878418f;
+
     // entity +0x84..+0x90, written only on the four-corner path.
     std::array<float, 4> cornerHeights{};
     bool sampledFourCorners = false;
@@ -108,14 +113,5 @@ namespace orphen::port
                                                  float y,
                                                  float referenceHeight,
                                                  const Psm2TerrainQueryOptions &options);
-
-  std::optional<Psm2BlockerHit> queryPsm2ActiveBlockerAlong(const orphen::ported::psm2::Psm2RuntimeState &map,
-                                                            float startX,
-                                                            float startY,
-                                                            float endX,
-                                                            float endY,
-                                                            float baseHeight,
-                                                            float characterHeight,
-                                                            float radius);
 
 } // namespace orphen::port

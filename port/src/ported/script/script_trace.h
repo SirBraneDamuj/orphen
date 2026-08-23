@@ -61,6 +61,11 @@ namespace orphen::ported::script
     void reset();
 
     void recordOpcode(std::uint16_t opcode, std::uint32_t offset, OpcodeSupport support);
+
+    // True while the opcode being interpreted sits inside --scr-trace-range.
+    // recordOpcode latches it, so a handler can print its decoded operands
+    // under the same window that selected the opcode line above them.
+    bool tracingCurrentOpcode() const { return tracingCurrentOpcode_; }
     void recordPreloadedResource(std::uint16_t resourceId) { preloadedResources_.push_back(resourceId); }
     void recordRegisteredScript(std::uint32_t scriptId) { registeredScripts_.push_back(scriptId); }
     void recordLeadTeleport(float x, float y, float z);
@@ -212,6 +217,16 @@ namespace orphen::ported::script
 
     void recordPlayerLock(std::int8_t mode);
     void recordBattleBoot() { ++battleBootCount_; }
+
+    // Opcode 0x8E, the scene transition. Recorded rather than performed, so
+    // --scr-report can say which scene a chain wanted to leave for.
+    void recordSceneChange(std::int32_t destination)
+    {
+      ++sceneChangeCount_;
+      lastSceneChange_ = destination;
+    }
+    std::uint32_t sceneChangeCount() const { return sceneChangeCount_; }
+    std::int32_t lastSceneChange() const { return lastSceneChange_; }
     const std::map<std::int32_t, std::uint32_t> &playerLocks() const { return playerLocks_; }
     std::uint32_t battleBootCount() const { return battleBootCount_; }
 
@@ -257,6 +272,7 @@ namespace orphen::ported::script
     std::vector<EventDispatch> eventDispatches_;
     std::vector<EventStreamArmed> eventStreamsArmed_;
     std::uint32_t frame_ = 0;
+    bool tracingCurrentOpcode_ = false;
     bool traceRangeSet_ = false;
     std::uint32_t traceRangeLow_ = 0;
     std::uint32_t traceRangeHigh_ = 0;
@@ -264,6 +280,8 @@ namespace orphen::ported::script
     std::map<std::uint32_t, FadeTrackArmed> fadeTracksArmed_;
     std::map<std::int32_t, std::uint32_t> playerLocks_;
     std::uint32_t battleBootCount_ = 0;
+    std::uint32_t sceneChangeCount_ = 0;
+    std::int32_t lastSceneChange_ = 0;
     std::uint32_t tickRunCount_ = 0;
     std::uint32_t slotRunCount_ = 0;
 

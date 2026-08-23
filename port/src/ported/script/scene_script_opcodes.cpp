@@ -14,6 +14,7 @@
 #include "ported/script/object_registers.h"
 
 #include <cmath>
+#include <iostream>
 
 namespace orphen::ported::script
 {
@@ -957,6 +958,17 @@ namespace orphen::ported::script
         registerIndex,
         currentEntity_ < orphen::ported::entity::kEntitySlotCount ? static_cast<std::int32_t>(currentEntity_) : -1,
         result);
+    if (trace_.tracingCurrentOpcode())
+    {
+      // Which slot, which register and which value -- the three things the
+      // opcode line alone does not say, and the only way to tell a hide from
+      // a facing change without stepping a debugger.
+      std::cout << "[scr]   reg 0x" << std::hex << registerIndex << " slot "
+                << (currentEntity_ < orphen::ported::entity::kEntitySlotCount
+                        ? static_cast<int>(currentEntity_)
+                        : -1)
+                << ": 0x" << current << " -> 0x" << result << std::dec << '\n';
+    }
     if (entity == nullptr || !FUN_0025c8f8_write_object_register(*entity, registerIndex, result))
     {
       environment_.state->objectRegister(bank, registerIndex) = result;
@@ -1062,14 +1074,51 @@ namespace orphen::ported::script
     }
 
     auto &lead = environment_.entityPool->leadPlayer();
+    auto &bandana = environment_.entityPool->slot(orphen::ported::entity::kBandanaSlot);
+
+    // `DAT_0058C610`, `DAT_0058C614` and `DAT_0058C618` are not globals of their
+    // own: 0x0058BEB0 + 4 * 0x1D8 is 0x0058C610, so they are **pool slot 4's**
+    // +0x00, +0x04 and +0x08 -- the player's bandana. That is how this opcode
+    // hides it, and nothing else in the scene does. Confirmed against a save
+    // state taken during the close-up: slot 4 reads +0x04 = 0x4019 and
+    // +0x08 = 0x0031, exactly the two bits set below.
+    const bool leadIsPlayer =
+        orphen::ported::entity::FUN_002298d0_character_class(lead.typeId00) == 0;
+    const bool bandanaPresent = bandana.typeId00 > 0;
+
+    // FUN_0025fd10's first statement, before any branch.
+    lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 & 0xFFFEu);
+
     if (mode < 1)
     {
       orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 10, 1);
+      if (mode < -2)
+      {
+        lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 1u);
+        if (leadIsPlayer && bandanaPresent)
+        {
+          bandana.halfword04 = static_cast<std::uint16_t>(bandana.halfword04 | 0x4000u);
+          bandana.halfword08 = static_cast<std::uint16_t>(bandana.halfword08 | 1u);
+        }
+      }
+      // The -1 / -2 arm seeds iGpffffb0e4, uGpffffbd8c and cGpffffb6e4, none of
+      // which the port models; it is an alignment mode for the walk-into-place
+      // that follows, and no scene reached so far depends on it.
     }
     else if (mode == 1)
     {
-      // FUN_00252d88: back to the idle state and animation.
-      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 0, 1);
+      // FUN_00252d88: back to the idle state and animation. The original gates
+      // both this and the bandana restore on the lead actually sitting in state
+      // 10, so a release that arrives without a matching lock does nothing.
+      if (lead.state60 == 10)
+      {
+        orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 0, 1);
+        if (leadIsPlayer && bandanaPresent)
+        {
+          bandana.halfword04 = static_cast<std::uint16_t>(bandana.halfword04 & 0xBFFFu);
+          bandana.halfword08 = static_cast<std::uint16_t>(bandana.halfword08 & 0xFFFEu);
+        }
+      }
     }
     trace_.recordPlayerLock(mode);
     return 0;
@@ -1482,10 +1531,15 @@ namespace orphen::ported::script
   // shows a1 loaded from the duration slot and never clobbered, which is the
   // argument Ghidra drops.
   //
-  // 0x42's own interpolator, FUN_00217f38, is a different curve type and is not
-  // ported; that opcode still halts rather than silently sharing this one.
+  // The two opcodes differ only in which interpolator they call, and
+  // FUN_0025dd60 picks with `sVar1 = sGpffffbd68` -- captured in its *first*
+  // instruction, before FUN_0025c258 evaluates the duration, because an operand
+  // expression can contain another opcode. 0x42 calls FUN_00217f38, which is
+  // FUN_00218158 minus the FUN_00266988 roll/zoom sample and its two publishes,
+  // so a 0x42 move leaves the projection alone.
   std::uint32_t SceneCommandInterpreter::FUN_0025dd60_step_camera_path()
   {
+    const std::uint16_t opcode = currentOpcode_;
     const std::uint32_t durationFrames = FUN_0025c258_evaluate();
     if (halted_)
     {
@@ -1498,12 +1552,281 @@ namespace orphen::ported::script
       return 1;
     }
 
-    if (environment_.FUN_00218158_step_camera_path)
+    const auto &step = opcode == 0x42 ? environment_.FUN_00217f38_step_camera_path
+                                      : environment_.FUN_00218158_step_camera_path;
+    if (step)
     {
-      environment_.FUN_00218158_step_camera_path(
-          static_cast<int>(state.uGpffffbd78_pathElapsed >> 5), static_cast<int>(durationFrames));
+      step(static_cast<int>(state.uGpffffbd78_pathElapsed >> 5), static_cast<int>(durationFrames));
     }
     state.uGpffffbd78_pathElapsed += environment_.frameTicks;
+    return 0;
+  }
+
+  // 0x8E (FUN_002610a8): **leave for another scene.** One expression.
+  //
+  //   FUN_00267da0(0x31e668, 0x58bed0, 0xc);   // the lead's +0x20..+0x28
+  //   DAT_003551f8 = param;
+  //   DAT_003551ec = 0x20001;
+  //
+  // `0x58bed0` is pool slot 0's position, so the copy is the arrival spawn, and
+  // the two globals are the destination: FUN_0022b300 -- the map loader -- reads
+  // `DAT_003551ec` as a selector (`0x2001` an ordinary scene, `0x20000` the 0xE
+  // group) and `DAT_003551f8` as the index within it, then indexes the table at
+  // `DAT_00315b04`. The port has no script-driven scene transition, so this is
+  // consumed and *reported* rather than performed.
+  //
+  // It is the last statement of `s01_e012`'s doorway cutscene, at `0xab41`. The
+  // body ahead of it releases the player (`0x6D 1`), drops the camera and sets
+  // flag `0x523`, then asks to leave. Halting instead left that slot re-entering
+  // and halting every frame -- 4071 times over one run -- with the screen
+  // already faded out behind it, which is what a hang at the end of the scene
+  // looks like. Consuming it lets the body reach its `0x9E` and retire.
+  std::uint32_t SceneCommandInterpreter::FUN_002610a8_request_scene_change()
+  {
+    const std::int32_t destination = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return 0;
+    }
+    trace_.recordSceneChange(destination);
+    return 0;
+  }
+
+  // 0x13F (FUN_002604a8): publish a type-0x28 rig's two child entities into two
+  // work slots. Three expressions -- the selector and the two work indices.
+  //
+  //   FUN_0025d6c0(sel, cur);
+  //   if (*cur == 0x28) {
+  //     cur[+0x94] = 0;  FUN_002d2f40(cur);
+  //     work[e1] = poolIndexOf(cur[+0x19C]);
+  //     work[e2] = poolIndexOf(cur[+0x198]);
+  //   } else FUN_0026bfc0("...");          // an assert, not a fallback
+  //
+  // (The `* -0x5f75270d >> 3` is the compiler's divide by the 0x1D8 slot
+  // stride.) `FUN_002d2f40` is what fills those two fields: it allocates types
+  // `0x27`, `0x26` and `0x19` through FUN_00265e28 and hangs them off each other
+  // by bone role -- `0x26` on this entity's role-1 bone, then `0x19` on the
+  // `0x26`'s role-2 bone with the index *negated* (FUN_0020cdc0's middle,
+  // non-rigid branch) and `0x27` on its role-1 -- parking the three at `+0x198`,
+  // `+0x19C` and `+0x1A0`.
+  //
+  // Note the `cur[+0x94] = 0` in front of the call: the opcode *forces* a
+  // rebuild rather than reusing whatever the actor loop already made.
+  //
+  // The else branch is FUN_0026bfc0, an assert, not a fallback -- so a selector
+  // that is not a type 0x28 leaves both work slots alone, which is what the port
+  // does too.
+  std::uint32_t SceneCommandInterpreter::FUN_002604a8_publish_rig_children()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t bodySlotIndex = FUN_0025c258_evaluate();
+    const std::uint32_t headSlotIndex = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    auto *entity = resolveEntity(selector);
+    if (entity == nullptr || entity->typeId00 != 0x28 ||
+        !environment_.FUN_002d2f40_build_closeup_rig)
+    {
+      return 0;
+    }
+
+    entity->spawnParam94 = 0;
+    const auto rig = environment_.FUN_002d2f40_build_closeup_rig(currentEntity_);
+    if (!rig.has_value())
+    {
+      return 0;
+    }
+    // work[e1] takes +0x19C (the 0x26 body) and work[e2] takes +0x198 (the 0x27
+    // head) -- the order the original writes them in, which is not the order it
+    // reads the two operands.
+    if (bodySlotIndex < SceneScriptState::kWorkWordCount)
+    {
+      environment_.state->DAT_00355060_work[bodySlotIndex] = static_cast<std::uint32_t>(rig->first);
+    }
+    if (headSlotIndex < SceneScriptState::kWorkWordCount)
+    {
+      environment_.state->DAT_00355060_work[headSlotIndex] = static_cast<std::uint32_t>(rig->second);
+    }
+    return 0;
+  }
+
+  // 0x56 (FUN_0025efa8): set an entity's size. Two expressions -- selector, then
+  // the scale as an integer over fGpffff8c44 = 100000.0, the same divisor every
+  // other coordinate operand uses.
+  //
+  // The work is FUN_00229ef0, and it re-derives the collision box from the
+  // *descriptor* rather than scaling whatever is currently there, so repeated
+  // calls do not compound:
+  //
+  //   desc = FUN_00229980(entity, entity->type, 0);
+  //   +0x14C = +0x150 = scale;
+  //   +0x11C = +0x54  = scale * desc[+0x08];        // radius
+  //   +0x120 = +0x58  = scale * desc[+0x0C];        // height
+  //   +0x140 = (scale * desc[+0x08]) * 1.5 + 0.3;   // fGpffff8564
+  //   +0x144 = -0.2;                                 // uGpffff856c
+  //   +0x148 = (scale * desc[+0x0C]) * 1.1 + 0.2;   // fGpffff8560 / fGpffff8568
+  //
+  // +0x140/+0x144/+0x148 are the draw cull box: FUN_0020c810:48 takes
+  // `max(+0x144, +0x140)` and tests it against the view bounds. The port does no
+  // entity culling, so those three are computed nowhere and named here instead
+  // of being invented into a field nothing reads.
+  //
+  // s01_e012's doorway scene halts here without it -- subproc 4192 (`0xa03c`)
+  // reaches `0x56` at `0xa10a` on its first frame, so the whole of stream
+  // `0xd780` never starts.
+  std::uint32_t SceneCommandInterpreter::FUN_0025efa8_set_entity_scale()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::int32_t rawScale = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return 0;
+    }
+    auto *entity = resolveEntity(selector);
+    if (entity == nullptr)
+    {
+      return 0;
+    }
+
+    const float scale = static_cast<float>(rawScale) / kScriptCoordinateScale;
+    entity->scale14c = scale;
+    entity->scaleZ150 = scale;
+
+    // FUN_00229980 on the entity's *effective* type -- a 0x66-converted actor
+    // keeps its real one at +0x1CE, which is the type its descriptor is under.
+    if (environment_.descriptors != nullptr)
+    {
+      const auto descriptor = environment_.descriptors->FUN_00229980_resolve(
+          static_cast<std::uint32_t>(entity->effectiveTypeId()));
+      if (descriptor.has_value())
+      {
+        entity->radius54 = scale * descriptor->radius0x08;
+        entity->height58 = scale * descriptor->height0x0c;
+      }
+    }
+    return 0;
+  }
+
+  // 0x64 (FUN_0025f700): **detach an entity from the bone it is riding**, baking
+  // its world position first. One expression, the entity selector.
+  //
+  //   FUN_0025d6c0(sel, DAT_00355044);          // select
+  //   sVar1 = cur[+0x192];                       // parent slot
+  //   if (sVar1 >= 0) {
+  //     if ((char)cur[+0x194] >= 0) {            // and a real bone
+  //       FUN_0020dc88(&pool[sVar1], cur[+0x194], cur + 0x20, out);
+  //       memcpy(cur + 0x20, out, 12);           // local -> world, in place
+  //       cur[+0x4C] = FUN_00227798(cur[+0x20], cur[+0x24], cur[+0x28]);
+  //     }
+  //     cur[+0x192] = 0xFFFF;                    // detached
+  //   }
+  //
+  // The bake matters because an attached entity's +0x20..+0x28 is a *bone-local*
+  // offset, not a world position -- FUN_0020cdc0 branches on +0x192 for exactly
+  // that reason. Clearing +0x192 without resolving it first drops the object at
+  // whatever small offset it was carrying, next to the world origin.
+  //
+  // s01_e012 uses it at the end of subproc 3507 (`0x8ebf`), the doorway scene:
+  // the body raises work[2]'s +0x28 by 0.08 a frame until it passes 3.0, then
+  // hands the object over with this and retires. The rise is written with 0x54
+  // from the entity's own 0x53 reads, so it is climbing in bone space until the
+  // frame it is let go.
+  std::uint32_t SceneCommandInterpreter::FUN_0025f700_detach_from_bone()
+  {
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    auto *entity = resolveEntity(selector);
+    if (entity == nullptr || entity->parentSlot192 < 0)
+    {
+      return 0;
+    }
+
+    // `-1 < *(char *)(cur + 0x194)`: a negative bone is the attached-but-not-
+    // rigid case FUN_0020cdc0's middle branch handles, and it is not baked.
+    if (entity->attachBone194 >= 0 && environment_.FUN_0020dc88_bone_point)
+    {
+      const auto world = environment_.FUN_0020dc88_bone_point(
+          static_cast<std::size_t>(entity->parentSlot192),
+          static_cast<int>(entity->attachBone194),
+          orphen::ported::psm2::Vec3{entity->positionX20, entity->positionZ24, entity->positionY28});
+      if (world.has_value())
+      {
+        entity->positionX20 = world->x;
+        entity->positionZ24 = world->y;
+        entity->positionY28 = world->z;
+      }
+
+      // FUN_00227798 with the same z in both body slots, which is the hook's
+      // shape already. The original stores the answer unconditionally; a miss
+      // there is the 128.0 sentinel, and the port's nullopt is the same miss.
+      if (environment_.terrainHeight)
+      {
+        const auto height = environment_.terrainHeight(
+            entity->positionX20, entity->positionZ24, entity->positionY28, entity->positionY28);
+        // 128.0 is what FUN_00227840 leaves in the workspace when nothing is
+        // found, and FUN_00227798 hands that straight back.
+        constexpr float kNoGroundHeight = 128.0f;
+        entity->groundHeight4c = height.value_or(kNoGroundHeight);
+      }
+    }
+
+    entity->parentSlot192 = -1;
+    return 0;
+  }
+
+  // 0x89 (FUN_00260ce0): drive the full-screen overlay directly.
+  //
+  // Two expressions. The original packs them as `expr0 | (expr1 << 24)` and
+  // hands that to FUN_0025d0e0 with `(char)expr1` as the second argument -- so
+  // expr0 is the colour, expr1 is the alpha, and expr1 also picks the GS blend
+  // word (`0x44180` when non-zero, `0x40180` when zero). That is the same sink
+  // the two fade ramps feed through, which is why this shares ScreenFade's
+  // overlay rather than owning a second one; in the original they are literally
+  // the same screen-sized sprite, rebuilt per call.
+  //
+  // s01_e012's flood transition is a body that runs `0x89 RGB(255,255,255), 255`
+  // every frame until event flag 0x132 opens -- a held white-out over the map
+  // swap, not a ramp.
+  std::uint32_t SceneCommandInterpreter::FUN_00260ce0_set_overlay_colour()
+  {
+    const std::uint32_t colour = FUN_0025c258_evaluate();
+    const std::uint32_t alpha = FUN_0025c258_evaluate();
+    if (halted_ || environment_.DAT_00571dc0_screenFade == nullptr)
+    {
+      return 0;
+    }
+    environment_.DAT_00571dc0_screenFade->FUN_0025d0e0_set_overlay(
+        colour & 0x00FFFFFFu, static_cast<std::uint8_t>(alpha));
+    return 0;
+  }
+
+  // 0xA7 (FUN_00261fd8): retag every map primitive whose surface word matches a
+  // mask, by overwriting the **top nibble** of that word:
+  //
+  //   for (i = 0; i < iGpffffb718; ++i)
+  //     if (rec[i].+0x04 & mask)
+  //       rec[i].+0x04 = (rec[i].+0x04 & 0x0FFFFFFF) | (value << 28);
+  //
+  // `iGpffffb740` is the base of the 0x78 records -- the same array
+  // FUN_00227840 scans -- and `+0x04` is the port's DRecord78::terrainFlags, the
+  // word the ground query tests against an entity's reject mask and the one
+  // FUN_00253080 reads the surface *class* out of (`& 0xF0000000`, with `0xD`
+  // being the drift surface). So this is a bulk surface-material change, and in
+  // s01_e012 it is how the hold becomes the flooded hold.
+  std::uint32_t SceneCommandInterpreter::FUN_00261fd8_retag_map_primitives()
+  {
+    const std::uint32_t mask = FUN_0025c258_evaluate();
+    const std::uint32_t topNibble = FUN_0025c258_evaluate();
+    if (halted_ || !environment_.FUN_00261fd8_retag_primitives)
+    {
+      return 0;
+    }
+    environment_.FUN_00261fd8_retag_primitives(mask, topNibble);
     return 0;
   }
 
@@ -3096,9 +3419,32 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025de08_build_camera_path();
 
+    case 0x42:
     case 0x44:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025dd60_step_camera_path();
+
+    case 0x56:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025efa8_set_entity_scale();
+
+    case 0x8E:
+      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
+      return FUN_002610a8_request_scene_change();
+
+
+
+    case 0x64:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025f700_detach_from_bone();
+
+    case 0x89:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00260ce0_set_overlay_colour();
+
+    case 0xA7:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00261fd8_retag_map_primitives();
 
     // 0x88 (FUN_00260cc0): no operands. Steps fade bank 0 and returns whether it
     // has bottomed out, which is the completion test s01_e012's handoff polls.
@@ -3654,6 +4000,10 @@ namespace orphen::ported::script
 
     switch (opcode)
     {
+    case 0x13F:
+      note(OpcodeSupport::Modelled);
+      return FUN_002604a8_publish_rig_children();
+
     case 0x140:
     case 0x141:
       note(OpcodeSupport::Modelled);

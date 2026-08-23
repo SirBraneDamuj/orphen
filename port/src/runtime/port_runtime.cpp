@@ -316,6 +316,23 @@ namespace orphen::port
     environment.camera = &fieldCamera_;
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
 
+    // The same lookup the script environment gets. FUN_002d2f40 hangs its rig
+    // together by role, so type 0x28 needs it inside the actor loop.
+    environment.FUN_0020dd78_bone_for_role = [this](std::size_t slot, std::uint8_t role) -> std::size_t
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return 0;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return 0;
+      }
+      return orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role);
+    };
+
     // FUN_0025bf20, type 0x38. Re-entering the interpreter from inside the actor
     // loop is safe because the scene tick has already finished by then --
     // FUN_00239ce0 runs between FUN_0025b778 and FUN_0025b918, exactly as here.
@@ -476,6 +493,52 @@ namespace orphen::port
       fieldCamera_.FUN_00217e18_release_manual_camera(restore);
     };
 
+    // FUN_00261fd8's loop, opcode 0xA7. iGpffffb718 is the record count and
+    // iGpffffb740 the base, so this is every 0x78 record in the loaded map.
+    // FUN_0020dc88's palette lookup for opcode 0x64. DAT_00357e00 is the port's
+    // per-slot palette store, rebuilt by publishSceneObjectViews, so the point
+    // resolves against the pose the parent was drawn at last frame -- which is
+    // the same one-frame lag the original has.
+    environment.FUN_0020dc88_bone_point =
+        [this](std::size_t parentSlot, int bone,
+               orphen::ported::psm2::Vec3 localPoint) -> std::optional<orphen::ported::psm2::Vec3>
+    {
+      if (parentSlot >= DAT_00357e00_bonePalettes_.size())
+      {
+        return std::nullopt;
+      }
+      const auto &palette = DAT_00357e00_bonePalettes_[parentSlot];
+      if (palette.empty())
+      {
+        return std::nullopt;
+      }
+      const auto &parent = entityPool_.slot(parentSlot);
+      return orphen::ported::model::FUN_0020dc88_bone_point(
+          palette, bone < 0 ? 0u : static_cast<std::size_t>(bone), localPoint,
+          {parent.positionX20, parent.positionZ24, parent.positionY28});
+    };
+
+    environment.FUN_00261fd8_retag_primitives = [this](std::uint32_t mask, std::uint32_t topNibble)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      for (auto &record78 : map->DAT_003556b0_dRecords78)
+      {
+        if ((record78.terrainFlags & mask) != 0)
+        {
+          record78.terrainFlags = (record78.terrainFlags & 0x0FFFFFFFu) | (topNibble << 28);
+        }
+      }
+    };
+
+    environment.FUN_00217f38_step_camera_path = [this](int elapsedFrames, int durationFrames)
+    {
+      fieldCamera_.FUN_00217f38_step_camera_path(elapsedFrames, durationFrames);
+    };
+
     environment.FUN_00218158_step_camera_path = [this](int elapsedFrames, int durationFrames)
     {
       fieldCamera_.FUN_00218158_step_camera_path(elapsedFrames, durationFrames);
@@ -591,6 +654,26 @@ namespace orphen::port
       // The original returns 0 on a miss too, so a model with no role 6 attaches
       // at bone 0 rather than not attaching.
       return orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role);
+    };
+
+    // Opcode 0x13F calls FUN_002d2f40 itself rather than waiting for the actor
+    // loop, so the script reaches it through the same actor environment the
+    // loop would have used.
+    environment.FUN_002d2f40_build_closeup_rig =
+        [this](std::size_t slot) -> std::optional<std::pair<std::int32_t, std::int32_t>>
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return std::nullopt;
+      }
+      auto &entity = entityPool_.slot(slot);
+      orphen::ported::entity::FUN_002d2f40_build_closeup_rig(
+          entity, slot, actorEnvironment(orphen::ported::kNominalFrameTicks));
+      if (entity.rigBust19c < 0 || entity.rigHair198 < 0)
+      {
+        return std::nullopt;
+      }
+      return std::make_pair(entity.rigBust19c, entity.rigHair198);
     };
 
     // FUN_0020dc38, run `count` times. Entity +0x168 lives in the runtime's
@@ -1340,9 +1423,9 @@ namespace orphen::port
       // FUN_0020cdc0's third branch, the rigid one. This is a character's head:
       // opcode 0x140/0x141 hangs a head model off the neck bone and hides the
       // body's own head bones, and the face animation rides on the head entity.
-      // The parent has already been through this pass -- publishSceneObjectViews
-      // walks slot 0 first and then ascending, which is the order FUN_0020c5a8's
-      // deferral queue produces for every attachment chain in s01_e012.
+      // The parent has already been through this pass, because
+      // publishSceneObjectViews runs FUN_0020c5a8's deferral queue and defers
+      // any slot whose parent has not been posed yet.
       const std::size_t parentSlot = static_cast<std::size_t>(entity.parentSlot192);
       root = orphen::ported::model::FUN_0020cdc0_rigid_attached_root(
           DAT_00357e00_bonePalettes_[parentSlot],
@@ -1665,9 +1748,18 @@ namespace orphen::port
     // walks all 256 slots; this list is what stands in for that walk, so the
     // lead player belongs in it.
     //
-    // **Slot 0 must be published before the walk**, because slot 4 -- the
-    // bandana -- reads slot 0's palette out of DAT_00357e00_bonePalettes_ to
-    // find the neck, and this is the pass that writes it.
+    // **Slot 0 must be posed before the walk**, because slot 4 -- the bandana --
+    // reads slot 0's palette out of DAT_00357e00_bonePalettes_ to find the
+    // neck, and this is the pass that writes it. That is a port detail; in the
+    // original slot 0 is simply the first entry the first pass queues, so it is
+    // posed first anyway. What it must *not* do is skip the status array -- see
+    // the branches below.
+    constexpr std::uint8_t kNotQueued = 0xFF;
+    constexpr std::uint8_t kQueued = 0;
+    constexpr std::uint8_t kPosed = 1;
+    std::array<std::uint8_t, orphen::ported::entity::kEntitySlotCount> drawStatus;
+    drawStatus.fill(kNotQueued);
+
     {
       auto &lead = entityPool_.leadPlayer();
       SceneObjectView view;
@@ -1695,17 +1787,55 @@ namespace orphen::port
       {
         // No +0x08 bit 0x10 here: the 0x200 skip happens in the first pass,
         // before the pass that raises it. See FUN_0020c5a8_isUndrawable.
+        //
+        // **And slot 0 keeps that status**, which is the whole point of writing
+        // it down rather than assuming. FUN_0020c5a8 gives the lead no special
+        // treatment: it is queue entry 0 like anything else, and a child whose
+        // parent reads 0xFF is dropped with it. Slot 4 is such a child. When
+        // the doorway scene swaps Orphen for the close-up rig it hides the
+        // field model by ORing 0x200 into its +0x02 -- and the port, which
+        // pinned slot 0 to `kPosed`, went on drawing the bandana alone in the
+        // doorway for the rest of the cutscene.
+        drawStatus[0] = kNotQueued;
       }
       else if ((lead.halfword08 & 1) != 0)
       {
         lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 0x0010);
+        // The original's `& 1` branch never writes the status byte, so the slot
+        // stays *queued* -- children keep deferring against it until the byte
+        // counter wraps and the walk ends. Not drawn, by a different route.
+        drawStatus[0] = kQueued;
       }
       else
       {
         views.push_back(view);
+        drawStatus[0] = kPosed;
       }
     }
 
+    // **FUN_0020c5a8's deferral queue**, which the port used to do without.
+    //
+    // The original does not walk the pool in slot order. Its first pass fills a
+    // work queue with every live slot whose +0x02 bit 0x200 is clear and marks
+    // each 0 ("queued"); every other slot is marked 0xFF. The second pass then
+    // walks that queue *while it grows*:
+    //
+    //   parent < 0                  -> pose and draw, mark 1
+    //   status[parent] == 0         -> push this slot on the back and move on
+    //   status[parent] == 1         -> pose and draw, mark 1
+    //   status[parent] == 0xFF      -> neither; the slot is dropped this frame
+    //
+    // so a child whose parent has not been posed yet is deferred until it has.
+    // Slot order happens to be right for the head-on-neck attachments in
+    // s01_e012's opening, which is why ascending order held up this long, but it
+    // is wrong the moment a parent sits above its child. FUN_002d2f40 does
+    // exactly that: it allocates the head (0x27) *before* the body (0x26), so
+    // the head takes the lower slot and was being posed against a palette its
+    // parent had not built yet -- falling back to the parent's own +0x20, which
+    // for a bone-local attachment is (0, 0, 0). That is the close-up head
+    // sitting at the world origin.
+    std::vector<std::size_t> queue;
+    queue.reserve(orphen::ported::entity::kEntitySlotCount);
     entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
@@ -1713,7 +1843,53 @@ namespace orphen::port
           {
             return;
           }
+          drawStatus[slot] = kQueued;
+          queue.push_back(slot);
+        });
 
+    for (std::size_t cursor = 0; cursor < queue.size(); ++cursor)
+    {
+      const std::size_t slot = queue[cursor];
+      auto &entity = entityPool_.slot(slot);
+
+      // The parent test comes before everything else the original does per
+      // slot, because a deferred slot must not be hidden or drawn yet.
+      const std::int16_t parent = entity.parentSlot192;
+      if (parent >= 0 && (entity.halfword08 & 1) == 0)
+      {
+        const std::uint8_t parentStatus = drawStatus[static_cast<std::size_t>(parent)];
+        if (parentStatus == kQueued)
+        {
+          // Defer: the original pushes the slot on the back of the same queue.
+          // Guarded against a parent cycle, which the original's byte-sized
+          // queue length would simply wrap through.
+          if (queue.size() < queue.capacity())
+          {
+            queue.push_back(slot);
+          }
+          continue;
+        }
+        if (parentStatus == kNotQueued)
+        {
+          // The parent is not drawable this frame, so neither branch of the
+          // original fires and the child is dropped with it.
+          continue;
+        }
+      }
+
+      publishOneSceneObjectView(views, slot, entity, frameTicks);
+      drawStatus[slot] = kPosed;
+    }
+
+    mapViewer_.setSceneObjectViews(std::move(views));
+    mapViewer_.setTextureSlotCache(&modelStore_.textureSlots());
+  }
+
+  void PortRuntime::publishOneSceneObjectView(SceneObjectViewList &views,
+                                              std::size_t slot,
+                                              orphen::ported::entity::OriginalEntity &entity,
+                                              std::uint32_t frameTicks)
+  {
           if (!hideSlots_.empty() &&
               std::find(hideSlots_.begin(), hideSlots_.end(), static_cast<int>(slot)) !=
                   hideSlots_.end())
@@ -1749,9 +1925,6 @@ namespace orphen::port
           view.rotationY158 = entity.rotationY158;
           attachModel(view, entity, frameTicks);
           views.push_back(view);
-        });
-    mapViewer_.setSceneObjectViews(std::move(views));
-    mapViewer_.setTextureSlotCache(&modelStore_.textureSlots());
   }
 
   void PortRuntime::printScriptReport() const
@@ -2054,6 +2227,12 @@ namespace orphen::port
         std::cout << "  0xE1 save/menu mode hits=" << scriptTrace_.battleBootCount()
                   << "  (flag 0x8EE cleared, mode 0x10 raised; no menu to hand off to)\n";
       }
+      if (scriptTrace_.sceneChangeCount() != 0)
+      {
+        std::cout << "  0x8E scene change requested hits=" << scriptTrace_.sceneChangeCount()
+                  << " last destination=" << scriptTrace_.lastSceneChange()
+                  << "  (FUN_0022b300's map load is not ported; the scene stays put)\n";
+      }
     }
 
     {
@@ -2258,6 +2437,15 @@ namespace orphen::port
       std::cout << "(after " << frameCount_ << " frames)\n";
       printEntityModelBindings();
     }
+    // The pose report's other call site runs at load time, which for a slot a
+    // cutscene fills much later prints whatever the slot held before -- or
+    // nothing at all. What the pose looks like *after* the frames have run is
+    // the question it exists to answer.
+    if (poseReportSlot_ >= 0 && frameCount_ > 0)
+    {
+      std::cout << "(after " << frameCount_ << " frames)\n";
+      printPoseReport(static_cast<std::size_t>(poseReportSlot_));
+    }
     if (printSoundReport_)
     {
       printSoundReport();
@@ -2391,7 +2579,26 @@ namespace orphen::port
               << " prev(+0xAE)=" << entity.previousPoseColumnAe
               << " firstColumnForAnim=" << firstColumn
               << "  blend(+0x13C)=" << entity.animationBlend13c
-              << "  flags08=0x" << std::hex << entity.halfword08 << std::dec << '\n';
+              << "  hidden(+0x168)="
+              << [&] {
+                   std::string list;
+                   const auto &m = DAT_004a7e00_boneOverrides_[slot].mode168;
+                   for (std::size_t b = 0; b < m.size(); ++b)
+                   {
+                     if (m[b] != 0)
+                     {
+                       list += std::to_string(b) + "(" + std::to_string(m[b]) + ") ";
+                     }
+                   }
+                   return list.empty() ? std::string("none") : list;
+                 }()
+              << "  flags08=0x" << std::hex << entity.halfword08 << std::dec
+              << std::fixed << std::setprecision(4) << "\n  root basis: x=("
+              << view->bonePalette[0][0] << "," << view->bonePalette[0][1] << ","
+              << view->bonePalette[0][2] << ") y=(" << view->bonePalette[0][4] << ","
+              << view->bonePalette[0][5] << "," << view->bonePalette[0][6] << ") z=("
+              << view->bonePalette[0][8] << "," << view->bonePalette[0][9] << ","
+              << view->bonePalette[0][10] << ")" << std::defaultfloat << '\n';
 
     const auto root = orphen::ported::model::FUN_0020cdc0_entity_root(
         {view->position.x, view->position.y, view->position.z}, view->facingRadians,
@@ -2417,8 +2624,8 @@ namespace orphen::port
     int firstColumnDivergence = -1;
     constexpr float kTolerance = 1e-3f;
 
-    std::cout << "  bone  parent  live-origin                    scale   "
-                 "gap(live-unfiltered)  gap(unfiltered-firstColumn)\n";
+    std::cout << "  bone  parent  live-origin                    scale    axes(x,y,z)          "
+                 "keys(place/rot)   track\n";
     for (std::size_t bone = 0; bone < model.submeshes.size() && bone < view->bonePalette.size();
          ++bone)
     {
@@ -2435,11 +2642,23 @@ namespace orphen::port
       {
         firstColumnDivergence = static_cast<int>(bone);
       }
+      // Three axis lengths, not one. FUN_0020cf28 composes a uniform scale, so
+      // any spread between them is shear arriving from somewhere else -- which
+      // a single "scale" column cannot show.
+      const auto probe = orphen::ported::model::FUN_0020d378_probe_bone(
+          model, model.blob, bone, entity.poseColumnAc);
       std::cout << "  " << std::setw(4) << bone << "  " << std::setw(6)
                 << model.submeshes[bone].parentIndex << std::fixed << std::setprecision(3)
                 << "  (" << std::setw(8) << live[12] << "," << std::setw(8) << live[13] << ","
                 << std::setw(8) << live[14] << ")  " << std::setw(6) << rowLength(live, 0)
-                << "  " << std::setw(18) << filterGap << "  " << std::setw(24) << columnGap
+                << "  " << std::setw(6) << rowLength(live, 0) << "," << std::setw(6)
+                << rowLength(live, 1) << "," << std::setw(6) << rowLength(live, 2)
+                << std::defaultfloat << "   0x" << std::hex << probe.placementKey << "/0x"
+                << probe.rotationKey << std::dec << (probe.sentinel ? " SENTINEL" : "")
+                << (probe.trackInRange ? "" : " OFF-END") << "   0x" << std::hex
+                << probe.trackOffset << std::dec << std::fixed << std::setprecision(3)
+                << "  rot=(" << probe.rotationRadians.x << "," << probe.rotationRadians.y
+                << "," << probe.rotationRadians.z << ")" << std::defaultfloat
                 << '\n';
     }
     std::cout << std::defaultfloat;
@@ -3206,8 +3425,49 @@ namespace orphen::port
       //
       // The actual party swap -- rebinding pool slot 0, the camera and the
       // controller to another entity -- is not implemented.
+      //
+      // **FUN_0025b978 is three statements, and the port only had two:**
+      //
+      //   psGpffffb0d4 = psGpffffb79c;                    // select the target
+      //   if (*psGpffffb79c == 0x38) target[+0x1CC] = 1;  // the interact pulse
+      //   FUN_0025bc68(header word 3);
+      //
+      // The pulse is the whole mechanism for anything the *script* owns. A
+      // type-0x38 entity's behaviour, FUN_0025bf20, re-enters its body from the
+      // top every frame with itself as both selection and focus, and the body
+      // tests +0x1CC through 0xE9 -- read and clear. With nothing ever setting
+      // it, that test read zero forever and every scripted object in the scene
+      // was inert to the player.
+      //
+      // s01_e012's doors are exactly this. Seven type 0x293 entities, five live
+      // after the opening, each converted by 0x66 to type 0x38 with its own
+      // 0x78-byte body in 0x39d9..0x3d40. Each body reads:
+      //
+      //   if (work[14] == -1)            // no other door mid-animation
+      //     if (0xE9) 0xEC(1);           // interacted with -> step 1
+      //     switch (0xED) {
+      //       case 1: work[14] = <door id>; 0x90 <audio>;
+      //               0x9D(0xA0, 0xb348);   // queue the body at 0xb348
+      //               0xEC(2);
+      //       case 2: 0xF5 ...
+      //     }
+      //
+      // and 0xb348 is subproc **4739**, the shared door driver keyed on
+      // work[14] -- which is why the debug overlay names the same subproc id
+      // whichever of the five doors is opened.
+      //
+      // FUN_0025b978 sets the selection but *not* the focus (iGpffffb0d8); the
+      // focus is installed by FUN_0025bf20 when the entity's own body runs.
+      // FUN_00239ce0 comes after FUN_00251ed8 in FUN_002239c8, so the pulse is
+      // raised and consumed on the same frame.
+      auto &scriptedTarget = entityPool_.slot(result.targetSlot);
+      if (scriptedTarget.typeId00 == 0x38)
+      {
+        scriptedTarget.interactPulse1cc = 1;
+      }
       std::cout << "[interact] scripted entity slot=" << result.targetSlot
                 << " type=0x" << std::hex << result.targetType << std::dec
+                << (scriptedTarget.typeId00 == 0x38 ? " pulse +0x1CC=1" : "")
                 << " -> scene script header word 3\n";
       sceneScript_.runEntryForEntity(orphen::ported::script::SceneScriptEntry::ActorStatePrimary,
                                      scriptEnvironment(),

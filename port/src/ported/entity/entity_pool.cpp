@@ -87,14 +87,14 @@ namespace orphen::ported::entity
     entity.modelIndex = descriptor->modelIndex0x00;
 
     // Descriptor +0x10 is copied to entity +0x80 as raw bits, so it is a float,
-    // not an integer. Worth flagging: for type id 1 it reads 0.8727, which is 50
-    // degrees in radians and reads more like a slope limit than the step height
-    // the port currently calls this field. The lead player does not come through
-    // here -- resetAt sets its +0x80 to 0.75 -- so nothing depends on resolving
-    // that today, but it should be resolved before entity collision is ported.
+    // not an integer -- and it is the **walkable-slope limit**, not a step
+    // height. Type id 1 reads 0.8727, which is 50 degrees in radians and is the
+    // same value FUN_0022d258 tests a stored slope against. FUN_002262c0's only
+    // read of +0x80 compares it to the destination surface's slope, and the step
+    // height it uses is the global DAT_00352434 = 0.26.
     float word0x10AsFloat = 0.0f;
     std::memcpy(&word0x10AsFloat, &descriptor->word0x10, sizeof(word0x10AsFloat));
-    entity.maxStepHeight80 = word0x10AsFloat;
+    entity.slopeLimit80 = word0x10AsFloat;
 
     // FUN_00229c40 clears the whole 0x1D8-byte slot and then never writes
     // +0xA0, so a freshly spawned entity is on animation 0 and stays there

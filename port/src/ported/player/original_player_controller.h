@@ -42,6 +42,12 @@ namespace orphen::ported::player
     // test (entity +0x78) reads it; it is deliberately not the same thing as
     // terrainFlags, which is the settled surface's own word.
     std::uint32_t commonFootprintFlags = 0;
+
+    // The surface's stored slope, record78 +0x70 + subTriangle*4. FUN_00227840
+    // stages it in the scan workspace's +0x54, FUN_00227390 copies it to +0x08
+    // for whichever corner wins, and FUN_002262c0 tests it against entity +0x80.
+    // A corner that found nothing reads pi/2.
+    float slopeAngle = 1.570796012878418f;
   };
 
   // FUN_00227390's workspace +0x2C and +0x30: the actor's feet and the top of
@@ -81,13 +87,6 @@ namespace orphen::ported::player
   // is exclusive.
   using OriginalScriptedStateStep = std::function<bool(std::uint32_t frameTicks)>;
 
-  using OriginalMovementBlocker = std::function<bool(float originalStartX,
-                                                     float originalStartZ,
-                                                     float originalEndX,
-                                                     float originalEndZ,
-                                                     float baseY,
-                                                     float height,
-                                                     float radius)>;
 
   struct OriginalPlayerFrameInput
   {
@@ -136,7 +135,6 @@ namespace orphen::ported::player
     void update(std::uint32_t frameTicks,
                 const OriginalPlayerFrameInput &input,
                 const OriginalTerrainSampler &terrainSampler,
-                const OriginalMovementBlocker &movementBlocker = {},
                 const OriginalInteractionProbe &interactionProbe = {});
 
     OriginalPlayerSnapshot snapshot() const;
@@ -197,8 +195,7 @@ namespace orphen::ported::player
                                                                            float bodyBaseHeight,
                                                                            const OriginalTerrainSampler &terrainSampler) const;
     void FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
-                                        const OriginalTerrainSampler &terrainSampler,
-                                        const OriginalMovementBlocker &movementBlocker);
+                                        const OriginalTerrainSampler &terrainSampler);
   };
 
 } // namespace orphen::ported::player

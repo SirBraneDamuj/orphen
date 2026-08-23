@@ -22,6 +22,8 @@ namespace orphen::ported::script
     fadesArmed_.clear();
     playerLocks_.clear();
     battleBootCount_ = 0;
+    sceneChangeCount_ = 0;
+    lastSceneChange_ = 0;
     tickRunCount_ = 0;
     slotRunCount_ = 0;
     leadTeleported_ = false;
@@ -43,7 +45,8 @@ namespace orphen::ported::script
 
   void ScriptTrace::recordOpcode(std::uint16_t opcode, std::uint32_t offset, OpcodeSupport support)
   {
-    if (traceRangeSet_ && offset >= traceRangeLow_ && offset <= traceRangeHigh_)
+    tracingCurrentOpcode_ = traceRangeSet_ && offset >= traceRangeLow_ && offset <= traceRangeHigh_;
+    if (tracingCurrentOpcode_)
     {
       std::cout << "[scr] f=" << frame_ << " @0x" << std::hex << offset << " op=0x" << opcode
                 << std::dec << ' ' << opcodeSupportName(support) << '\n';

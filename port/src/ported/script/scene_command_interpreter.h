@@ -365,6 +365,15 @@ namespace orphen::ported::script
     // publish the eye, look-at, roll and zoom. Opcode 0x44 steps it.
     std::function<void(int elapsedFrames, int durationFrames)> FUN_00218158_step_camera_path;
 
+    // FUN_00217f38: the same sample without the roll/zoom publish. Opcode 0x42
+    // steps this one; FUN_0025dd60 picks between the two on its own opcode.
+    std::function<void(int elapsedFrames, int durationFrames)> FUN_00217f38_step_camera_path;
+
+    // FUN_00261fd8, opcode 0xA7: retag the map's 0x78 primitive records. The
+    // map has to be mutable, which ScriptEnvironment::map is not, so this goes
+    // through a callback the same way the collision-group move does.
+    std::function<void(std::uint32_t mask, std::uint32_t topNibble)> FUN_00261fd8_retag_primitives;
+
     // FUN_00217fe8: install a scripted camera path. `zoomScales` are the raw
     // values from the script, before FUN_00218230's log.
     std::function<void(std::span<const orphen::ported::psm2::Vec3> eyePoints,
@@ -433,6 +442,22 @@ namespace orphen::ported::script
     // bone role 6 on the character to decide where the replacement attaches, and
     // the hide loop blanks the bones the replacement stands in for. Without the
     // hide the original head is still drawn, inside the new one.
+    // FUN_0020dc88: a bone-local point in world space, for opcode 0x64's bake.
+    // The port already has the maths in psc3_skeleton; this is the palette
+    // lookup, which lives with the runtime because the script has no view of
+    // DAT_00357e00. nullopt means the parent slot has no palette this frame,
+    // which is FUN_0020dc88's own +0x0C bit 0x2000 fallback.
+    std::function<std::optional<orphen::ported::psm2::Vec3>(std::size_t parentSlot,
+                                                            int bone,
+                                                            orphen::ported::psm2::Vec3 localPoint)>
+        FUN_0020dc88_bone_point;
+
+    // FUN_002d2f40, called straight from opcode 0x13F rather than waited for.
+    // Returns the pool slots it parked at +0x19C and +0x198 -- the close-up body
+    // and the head -- or nullopt when the rig could not be built.
+    std::function<std::optional<std::pair<std::int32_t, std::int32_t>>(std::size_t slot)>
+        FUN_002d2f40_build_closeup_rig;
+
     std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
     std::function<void(std::size_t slot, int firstBone, int count)> FUN_0020dc38_hide_bones;
 
@@ -630,7 +655,13 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025ee08_read_position();     // 0x53
     std::uint32_t FUN_0025db20_build_camera_path_pair(); // 0x41
     std::uint32_t FUN_0025de08_build_camera_path();   // 0x43
-    std::uint32_t FUN_0025dd60_step_camera_path();    // 0x44
+    std::uint32_t FUN_0025dd60_step_camera_path();    // 0x42 / 0x44
+    std::uint32_t FUN_0025efa8_set_entity_scale();    // 0x56
+    std::uint32_t FUN_002610a8_request_scene_change();// 0x8E
+    std::uint32_t FUN_002604a8_publish_rig_children();// 0x13F
+    std::uint32_t FUN_0025f700_detach_from_bone();    // 0x64
+    std::uint32_t FUN_00260ce0_set_overlay_colour();  // 0x89
+    std::uint32_t FUN_00261fd8_retag_map_primitives();// 0xA7
     std::uint32_t FUN_0025dfc8_release_camera();      // 0x45
     void FUN_0025f5d8_attach_and_place_entity();      // 0x63
     void FUN_0025f950_convert_to_npc();               // 0x66

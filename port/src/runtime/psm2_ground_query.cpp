@@ -41,8 +41,6 @@ namespace orphen::port
     constexpr std::uint32_t kCeilingBit = 0x100;
     constexpr std::uint32_t kRecord80HiddenBit = 0x20;
 
-    constexpr float kSteepBlockerMaxAbsNormalZ = 0.5f;
-    constexpr float kBlockerHeightPadding = 0.05f;
     constexpr float kGeometryEpsilon = 0.000001f;
 
     struct Vec2
@@ -174,18 +172,6 @@ namespace orphen::port
       return u >= kBarycentricEpsilon && v >= kBarycentricEpsilon && w >= kBarycentricEpsilon;
     }
 
-    bool movementCapsuleIntersectsTriangle2d(const Vec2 &start, const Vec2 &end, const Vec2 &first, const Vec2 &second, const Vec2 &third, float radius)
-    {
-      if (pointInsideTriangle2d(end, first, second, third))
-      {
-        return true;
-      }
-
-      const float radiusSquared = radius * radius;
-      return squaredDistanceSegmentSegment2d(start, end, first, second) <= radiusSquared ||
-             squaredDistanceSegmentSegment2d(start, end, second, third) <= radiusSquared ||
-             squaredDistanceSegmentSegment2d(start, end, third, first) <= radiusSquared;
-    }
 
     // FUN_00227d28. The bbox reject at +0x18..+0x24 followed by a winding test
     // per half. A triangle (corner 2 == corner 3) is one half over corners
@@ -294,6 +280,7 @@ namespace orphen::port
       hit.leadingWord = record78.leadingWord;
       hit.terrainFlags = record78.terrainFlags;
       hit.sampledByOriginalTerrain = true;
+      hit.slopeAngle = record78.slopeAngle[half < record78.slopeAngle.size() ? half : 0];
       hit.vertices = {first, second, third};
       hit.normal = normalize(cross(firstEdge, secondEdge));
 
@@ -665,6 +652,11 @@ namespace orphen::port
     const auto flagsOf = [](const std::optional<Psm2GroundHit> &hit) -> std::uint32_t {
       return hit.has_value() ? hit->terrainFlags : 0u;
     };
+    // uGpffff8504 = pi/2: a corner that found nothing reads as vertical, which
+    // is what FUN_00227840 seeds +0x54 with before it scans.
+    const auto slopeOf = [](const std::optional<Psm2GroundHit> &hit) {
+      return hit.has_value() ? hit->slopeAngle : 1.570796012878418f;
+    };
 
     if ((entityFlags04 & 2u) != 0)
     {
@@ -673,6 +665,7 @@ namespace orphen::port
       sample.height = heightOf(hit);
       sample.terrainFlagsWinning = flagsOf(hit);
       sample.terrainFlagsAll = flagsOf(hit);
+      sample.slopeAngle = slopeOf(hit);
       sample.found = sample.height < kNoGroundHeight;
       return sample;
     }
@@ -697,6 +690,7 @@ namespace orphen::port
         running = height;
         sample.terrainFlagsWinning = flagsOf(hit);
         sample.terrainFlagsAll = flagsOf(hit);
+        sample.slopeAngle = slopeOf(hit);
         continue;
       }
 
@@ -710,6 +704,9 @@ namespace orphen::port
         // if it actually found one (`-1 < (short)puVar4[0x17]`).
         adopt(hit, true);
         sample.terrainFlagsWinning = flagsOf(hit);
+        // FUN_00227390 sets workspace +0x08 from +0x54 on the same branch that
+        // adopts the flags, so the slope follows the winning corner.
+        sample.slopeAngle = slopeOf(hit);
         running = height;
       }
       else if (height == running)
@@ -722,76 +719,6 @@ namespace orphen::port
     sample.found = running < kNoGroundHeight;
     sample.sampledFourCorners = true;
     return sample;
-  }
-
-  std::optional<Psm2BlockerHit> queryPsm2ActiveBlockerAlong(const orphen::ported::psm2::Psm2RuntimeState &map,
-                                                            float startX,
-                                                            float startY,
-                                                            float endX,
-                                                            float endY,
-                                                            float baseHeight,
-                                                            float characterHeight,
-                                                            float radius)
-  {
-    const Vec2 movementStart{startX, startY};
-    const Vec2 movementEnd{endX, endY};
-    if (squaredDistance(movementStart, movementEnd) <= kGeometryEpsilon)
-    {
-      return std::nullopt;
-    }
-
-    const float actorMinHeight = baseHeight + kBlockerHeightPadding;
-    const float actorMaxHeight = baseHeight + std::max(characterHeight, 0.0f);
-    const float clampedRadius = std::max(radius, 0.0f);
-
-    for (std::size_t triangleIndex = 0; triangleIndex < map.derivedTriangles.size(); ++triangleIndex)
-    {
-      const auto &triangle = map.derivedTriangles[triangleIndex];
-      if (triangle.primitiveIndex >= map.DAT_003556ac_dRecords80.size())
-      {
-        continue;
-      }
-
-      const auto &record80 = map.DAT_003556ac_dRecords80[triangle.primitiveIndex];
-      if ((record80.primitiveFlags & kRecord80HiddenBit) != 0)
-      {
-        continue;
-      }
-
-      const auto first = positionForIndex(map, triangle.vertexIndices[0]);
-      const auto second = positionForIndex(map, triangle.vertexIndices[1]);
-      const auto third = positionForIndex(map, triangle.vertexIndices[2]);
-      const auto firstEdge = orphen::ported::psm2::subtract(second, first);
-      const auto secondEdge = orphen::ported::psm2::subtract(third, first);
-      const auto normal = normalize(cross(firstEdge, secondEdge));
-      if (std::abs(normal.z) > kSteepBlockerMaxAbsNormalZ)
-      {
-        continue;
-      }
-
-      const float triangleMinHeight = std::min({first.z, second.z, third.z});
-      const float triangleMaxHeight = std::max({first.z, second.z, third.z});
-      if (triangleMaxHeight < actorMinHeight || triangleMinHeight > actorMaxHeight)
-      {
-        continue;
-      }
-
-      const Vec2 firstProjected{first.x, first.y};
-      const Vec2 secondProjected{second.x, second.y};
-      const Vec2 thirdProjected{third.x, third.y};
-      if (!movementCapsuleIntersectsTriangle2d(movementStart, movementEnd, firstProjected, secondProjected, thirdProjected, clampedRadius))
-      {
-        continue;
-      }
-
-      return Psm2BlockerHit{triangleIndex,
-                            triangle.primitiveIndex,
-                            record80.primitiveFlags,
-                            {first, second, third},
-                            normal};
-    }
-
-    return std::nullopt;
   }
 
 } // namespace orphen::port

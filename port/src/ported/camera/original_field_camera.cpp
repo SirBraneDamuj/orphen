@@ -291,6 +291,29 @@ namespace orphen::ported::camera
     FUN_00217d10_set_look_at(sample.lookAt);
   }
 
+  // FUN_00217f38. Identical to the above minus the roll/zoom half:
+  //
+  //   FUN_00266ce8(t, eyeCurve,    eyeOut);
+  //   FUN_00266ce8(t, lookAtCurve, lookAtOut);
+  //   FUN_00217d40(eyeOut);  FUN_00217d10(lookAtOut);
+  //
+  // where FUN_00218158 additionally runs FUN_00266988 over the 2-component
+  // curve and publishes DAT_0035564c / DAT_00355658. So this is the camera move
+  // that deliberately does not touch the projection.
+  void OriginalFieldCamera::FUN_00217f38_step_camera_path(int elapsed, int duration)
+  {
+    if (!cameraPath_.active() || duration == 0)
+    {
+      return;
+    }
+
+    const CameraPathSample sample =
+        cameraPath_.sample(static_cast<float>(elapsed) / static_cast<float>(duration));
+
+    FUN_00217d40_set_eye(sample.eye);
+    FUN_00217d10_set_look_at(sample.lookAt);
+  }
+
   void OriginalFieldCamera::FUN_002241d8_reset_zoom()
   {
     cameraPath_.clear();

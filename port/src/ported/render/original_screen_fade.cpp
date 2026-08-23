@@ -75,6 +75,12 @@ namespace orphen::ported::render
     return block.DAT_00571dd8_done != 0;
   }
 
+  void ScreenFade::FUN_0025d0e0_set_overlay(std::uint32_t colour, std::uint8_t alpha)
+  {
+    DAT_0025d0e0_applied_.colour = colour;
+    DAT_0025d0e0_applied_.alpha = alpha;
+  }
+
   void ScreenFade::reset()
   {
     DAT_00571dc0_fadeIn_ = Block{};

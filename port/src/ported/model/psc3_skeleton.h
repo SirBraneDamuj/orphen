@@ -119,6 +119,25 @@ namespace orphen::ported::model
   };
 
   // FUN_0020d378 without the scripted-override branch or the smoothing.
+  // The raw key pair FUN_0020d378 reads for one bone at one column, for
+  // diagnostics: 0xFFFF is "no key", 0x7FFF at the placement target is the
+  // unposed marker, and a track that runs off the blob reads as neither.
+  struct BoneKeyProbe
+  {
+    std::uint32_t trackOffset = 0;
+    std::uint16_t placementKey = 0;
+    std::uint16_t rotationKey = 0;
+    bool trackInRange = false;
+    bool sentinel = false;
+    Vec3 rotationRadians{};
+    Vec3 translation{};
+    float scale = 1.0f;
+  };
+  BoneKeyProbe FUN_0020d378_probe_bone(const Psc3Model &model,
+                                       std::span<const std::uint8_t> blob,
+                                       std::size_t boneIndex,
+                                       std::uint16_t poseColumn);
+
   BonePose FUN_0020d378_sample_bone(const Psc3Model &model,
                                     std::span<const std::uint8_t> blob,
                                     std::size_t boneIndex,

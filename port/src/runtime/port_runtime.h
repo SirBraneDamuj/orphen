@@ -313,6 +313,12 @@ namespace orphen::port
     void applySceneEnvironment();
     void reportSceneEnvironment() const;
     void publishSceneObjectViews(std::uint32_t frameTicks);
+    // One slot of that walk. Split out so FUN_0020c5a8's deferral queue can
+    // call it in dependency order rather than slot order.
+    void publishOneSceneObjectView(orphen::port::SceneObjectViewList &views,
+                                   std::size_t slot,
+                                   orphen::ported::entity::OriginalEntity &entity,
+                                   std::uint32_t frameTicks);
     void advanceEntityAnimations(std::uint32_t frameTicks);
     void attachModel(SceneObjectView &view,
                      orphen::ported::entity::OriginalEntity &entity,

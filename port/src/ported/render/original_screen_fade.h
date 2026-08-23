@@ -58,6 +58,13 @@ namespace orphen::ported::render
 
     const Overlay &overlay() const { return DAT_0025d0e0_applied_; }
 
+    // FUN_0025d0e0 called directly, which is what opcode 0x89 (FUN_00260ce0)
+    // does: it bypasses both ramp blocks and hands the sink a colour and an
+    // alpha of its own. The original packs `expr0 | (expr1 << 24)` into the
+    // same argument the steppers build, so the split here is the same one
+    // FUN_0025d0e0_apply makes.
+    void FUN_0025d0e0_set_overlay(std::uint32_t colour, std::uint8_t alpha);
+
     // Not an original entry point: a map load leaves no fade behind, and the
     // port has no equivalent of the boot path that clears these.
     void reset();

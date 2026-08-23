@@ -61,9 +61,22 @@ namespace orphen::ported::player
       return wrapAngle(to - from);
     }
 
-    bool canStepToHeight(float currentHeight, float destinationHeight, float maxStepHeight, bool wasGrounded)
+    // FUN_002262c0:0x00226cb4. The gate on an upward step is `fVar18 - fVar19 <
+    // DAT_00352434`, and it is checked twice -- once before the provisional
+    // raise and once on the re-query afterwards. DAT_00352434 is **0.26**, a
+    // global, and it is *strictly* less than.
+    //
+    // Entity +0x80 is not this. The original's only use of it is
+    // `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))` on the same path,
+    // where puVar11[2] is the workspace's copy of the destination surface's
+    // stored slope angle -- and type 1's descriptor value is 0.8727, which is 50
+    // degrees in radians. It is the walkable-slope limit. Using it as a step
+    // height let the lead ratchet 0.75 up per move and climb out of the hold.
+    constexpr float kStepHeightDAT_00352434 = 0.26f;
+
+    bool canStepToHeight(float currentHeight, float destinationHeight, bool wasGrounded)
     {
-      return !wasGrounded || destinationHeight - currentHeight <= maxStepHeight;
+      return !wasGrounded || destinationHeight - currentHeight < kStepHeightDAT_00352434;
     }
 
   } // namespace
@@ -88,11 +101,11 @@ namespace orphen::ported::player
     entity().positionY28 = spawn.z;
     entity().verticalAcceleration48 = kOriginalGravity;
     // radius54/height58 come from OriginalEntity's own defaults (type id 1's
-    // descriptor). maxStepHeight80 is left at 0.75 rather than the
-    // descriptor's 0.8727 -- see entity_pool.cpp's FUN_00229c40_initialize,
-    // which flags that field as more likely a slope limit than a step height
-    // and leaves it unresolved.
-    entity().maxStepHeight80 = 0.75f;
+    // descriptor), and so does slopeLimit80: +0x80 is the walkable-slope limit
+    // and type 1's descriptor value is 0.872665 = 50 degrees. The port used to
+    // put 0.75 here and read the field as a step height, which let the lead
+    // ratchet three quarters of a unit up per move and climb out of the hold.
+    entity().slopeLimit80 = 0.872664626f;
     FUN_00252d88_return_to_idle_state();
 
     if (terrainSampler)
@@ -115,15 +128,27 @@ namespace orphen::ported::player
   void OriginalPlayerController::update(std::uint32_t frameTicks,
                                         const OriginalPlayerFrameInput &input,
                                         const OriginalTerrainSampler &terrainSampler,
-                                        const OriginalMovementBlocker &movementBlocker,
                                         const OriginalInteractionProbe &interactionProbe)
   {
     // FUN_002000c0 clamps DAT_003555bc to [0x20, 0x80] before anything reads it.
     const std::uint32_t clampedFrameTicks =
         std::clamp(frameTicks, orphen::ported::kMinFrameTicks, orphen::ported::kMaxFrameTicks);
-    entity().desiredDeltaX30 = 0.0f;
-    entity().desiredDeltaZ34 = 0.0f;
-    entity().desiredDeltaY38 = 0.0f;
+    // **The movement request is not cleared here.** FUN_00251ed8 does not touch
+    // +0x30 / +0x34 / +0x38 anywhere -- its only write to them is the *additive*
+    // leader-follow at its tail (`psVar8[0x18] += ...`, halfword indices, i.e.
+    // byte +0x30). FUN_002262c0's epilogue is the sole owner of the clear, and
+    // it clears only after it has spent them. FUN_00253080, the drift pass, does
+    // assign them, but only on a 0xD-class surface or while airborne with
+    // residual drift; on ordinary ground it leaves them alone.
+    //
+    // Clearing them here destroyed every movement a *script* asked of the lead.
+    // FUN_002239c8 runs FUN_0025b778 before FUN_00251ed8, so opcodes
+    // 0xEE..0xF1 -- which accumulate into +0x30 / +0x34 on the focus entity and
+    // wait for it to arrive -- wrote their request one statement before this
+    // wiped it. Focused on pool slot 0 the actor never moved, never reached its
+    // target, never advanced +0x1BC and never set the event flag its cutscene
+    // gates on. This is the same bug the actor loop had (see the FUN_00239ce0
+    // note in port/README.md); the lead's copy of it survived that fix.
 
     // FUN_00251ed8's table dispatch is exclusive: exactly one handler runs.
     // A state owned elsewhere -- the chest cutscene, states 0x0C..0x15 --
@@ -158,7 +183,7 @@ namespace orphen::ported::player
       FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
     }
 
-    FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler, movementBlocker);
+    FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler);
 
     // +0xA8 used to be advanced here, once per frame, as a substate counter.
     // It is not one: FUN_00225c90 owns that halfword and steps it by *two per
@@ -518,8 +543,7 @@ namespace orphen::ported::player
   }
 
   void OriginalPlayerController::FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
-                                                                const OriginalTerrainSampler &terrainSampler,
-                                                                const OriginalMovementBlocker &movementBlocker)
+                                                                const OriginalTerrainSampler &terrainSampler)
   {
     // FUN_002262c0:0x00226304. The very first thing the original does is copy
     // +0x04 into the workspace and bail on bit 0x100 -- before it clears +0x64,
@@ -545,21 +569,40 @@ namespace orphen::ported::player
     const float attemptedX = startX + entity().desiredDeltaX30;
     const float attemptedZ = startZ + entity().desiredDeltaZ34;
 
+    // **There is no map-wall query here, and the original does not have one.**
+    // FUN_002262c0's only geometry call is FUN_00227390; its four blocker
+    // helpers (FUN_00228380 / FUN_002285d8 / FUN_00228838 / FUN_00228a90) walk
+    // DAT_0058beb0, the entity pool, not the map. A move into a wall is refused
+    // because the destination's ground scan fails one of the tests below, and
+    // nothing else.
+    //
+    // The port used to run an invented swept-capsule test over every steep
+    // triangle (`queryPsm2ActiveBlockerAlong`), which had no FUN_* behind it and
+    // rejected anything taller than 5 cm. s01_e012 has a 10 cm door sill at
+    // y = 1.9 -- primitive 3497, a 1.0 x 0.1 strip across the doorway -- and
+    // that blocked the scripted walk in stream 0xd5e0 permanently, because a
+    // cutscene's 0xF0 cannot give up and route around.
     auto validateMove = [&](float fromX, float fromZ, float toX, float toZ) -> std::optional<OriginalTerrainSample>
     {
-      if (movementBlocker && movementBlocker(fromX,
-                                             fromZ,
-                                             toX,
-                                             toZ,
-                                             entity().positionY28,
-                                             entity().height58,
-                                             entity().radius54))
+      (void)fromX;
+      (void)fromZ;
+
+      auto ground = FUN_00227390_validate_destination(toX, toZ, entity().positionY28, terrainSampler);
+      if (!ground.has_value())
       {
         return std::nullopt;
       }
 
-      auto ground = FUN_00227390_validate_destination(toX, toZ, entity().positionY28, terrainSampler);
-      if (!ground.has_value() || !canStepToHeight(entity().positionY28, ground->height, entity().maxStepHeight80, wasGrounded))
+      // FUN_002262c0:0x00226cb4, the gate in front of the whole upward-step
+      // branch: `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))`. This is
+      // what stops an actor walking up the hull -- the ship's plating samples
+      // about 60 degrees and the limit is 50.
+      if (ground->slopeAngle > entity().slopeLimit80)
+      {
+        return std::nullopt;
+      }
+
+      if (!canStepToHeight(entity().positionY28, ground->height, wasGrounded))
       {
         return std::nullopt;
       }

@@ -382,6 +382,35 @@ namespace orphen::ported::model
                 point.x * matrix[2] + point.y * matrix[6] + point.z * matrix[10] + matrix[14]};
   }
 
+  BoneKeyProbe FUN_0020d378_probe_bone(const Psc3Model &model,
+                                       std::span<const std::uint8_t> blob,
+                                       std::size_t boneIndex,
+                                       std::uint16_t poseColumn)
+  {
+    BoneKeyProbe probe;
+    const std::size_t track = boneTrackOffset(model, boneIndex);
+    probe.trackOffset = static_cast<std::uint32_t>(track);
+    if (track == 0 || !fits(blob, track + static_cast<std::size_t>(poseColumn) * 4, 4))
+    {
+      return probe;
+    }
+    probe.trackInRange = true;
+    const std::uint32_t packed = u32At(blob, track + static_cast<std::size_t>(poseColumn) * 4);
+    probe.placementKey = static_cast<std::uint16_t>(packed & 0xFFFF);
+    probe.rotationKey = static_cast<std::uint16_t>(packed >> 16);
+    if (probe.placementKey != kNoKey && model.keyframePoolOffset != 0)
+    {
+      const std::size_t at =
+          model.keyframePoolOffset + static_cast<std::size_t>(probe.placementKey) * 2;
+      probe.sentinel = fits(blob, at, 8) && u16At(blob, at) == kKeySentinel;
+    }
+    const BonePose sampled = FUN_0020d378_sample_bone(model, blob, boneIndex, poseColumn);
+    probe.rotationRadians = sampled.rotationRadians;
+    probe.translation = sampled.translation;
+    probe.scale = sampled.scale;
+    return probe;
+  }
+
   BonePose FUN_0020d378_sample_bone(const Psc3Model &model,
                                     std::span<const std::uint8_t> blob,
                                     std::size_t boneIndex,

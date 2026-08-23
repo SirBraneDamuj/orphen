@@ -11,7 +11,13 @@ namespace orphen::port
 
     orphen::ported::player::OriginalTerrainSample toOriginalTerrainSample(const Psm2GroundHit &groundHit)
     {
-      return {groundHit.height, groundHit.leadingWord, groundHit.terrainFlags, groundHit.sampledByOriginalTerrain};
+      orphen::ported::player::OriginalTerrainSample sample;
+      sample.height = groundHit.height;
+      sample.leadingWord = groundHit.leadingWord;
+      sample.terrainFlags = groundHit.terrainFlags;
+      sample.sampledByOriginalTerrain = groundHit.sampledByOriginalTerrain;
+      sample.slopeAngle = groundHit.slopeAngle;
+      return sample;
     }
 
     Psm2TerrainQueryOptions toPsm2TerrainQueryOptions(const orphen::ported::player::OriginalTerrainQuery &query)
@@ -185,25 +191,7 @@ namespace orphen::port
       }
       return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)};
     };
-    const auto movementBlocker = [map](float originalStartX,
-                                       float originalStartZ,
-                                       float originalEndX,
-                                       float originalEndZ,
-                                       float baseY,
-                                       float height,
-                                       float radius)
-    {
-      return queryPsm2ActiveBlockerAlong(*map,
-                                         originalStartX,
-                                         originalStartZ,
-                                         originalEndX,
-                                         originalEndZ,
-                                         baseY,
-                                         height,
-                                         radius)
-          .has_value();
-    };
-    controller_.update(frameTicks, input, terrainSampler, movementBlocker, interactionProbe);
+    controller_.update(frameTicks, input, terrainSampler, interactionProbe);
     refreshViewState(*map);
   }
 

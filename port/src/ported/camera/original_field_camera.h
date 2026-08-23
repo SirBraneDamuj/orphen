@@ -122,6 +122,13 @@ namespace orphen::ported::camera
     // FUN_00218158: sample the path at elapsed/duration and publish the eye,
     // the look-at, the roll and the zoom.
     void FUN_00218158_step_camera_path(int elapsed, int duration);
+
+    // FUN_00217f38, the sibling opcode 0x42 steps. It is FUN_00218158 with the
+    // FUN_00266988 call and its two publishes removed: it samples the eye and
+    // look-at curves and nothing else, so a move made with it leaves the roll
+    // and the zoom exactly where they were. Same curves, same sampler -- the
+    // difference is entirely in what gets written out.
+    void FUN_00217f38_step_camera_path(int elapsed, int duration);
     bool cameraPathActive() const { return cameraPath_.active(); }
 
     // uGpffffb6dc and fGpffffb6e8, which FUN_0020bec8 reads when it builds the
