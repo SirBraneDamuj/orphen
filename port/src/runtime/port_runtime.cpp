@@ -425,6 +425,7 @@ namespace orphen::port
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
     environment.DAT_00571dc0_screenFade = &DAT_00571dc0_screenFade_;
+    environment.DAT_00355054_letterbox = &DAT_00355054_letterbox_;
     environment.map = mapViewer_.loadedMap();
 
     // Opcode 0xBD methods 0x70 / 0x72.
@@ -3719,6 +3720,12 @@ namespace orphen::port
     // The same call, for the cutscene subtitles: this is where FUN_00237fc0
     // sits in FUN_002239c8's frame, after the script has had its turn, so a
     // record opened this frame types its first character this frame.
+    //
+    // iGpffffb0e4 is a live global read inside FUN_00238a08, and the walk is
+    // downstream of FUN_0025cfb8 in the original's frame, so the mode published
+    // here is this frame's -- a line typed on the frame the bars are armed is
+    // already clear of them.
+    dialogueStream_.setMovieMode(DAT_00355054_letterbox_.DAT_00355054_mode());
     dialogueStream_.FUN_00237fc0_update(frameTicks);
     mapViewer_.setDialogueSprites(buildDialogueSprites());
 
@@ -3745,6 +3752,7 @@ namespace orphen::port
 
     mapViewer_.setScreenFadeOverlay(DAT_00571dc0_screenFade_.overlay().colour,
                                     DAT_00571dc0_screenFade_.overlay().alpha);
+    mapViewer_.setLetterboxBarHeight(DAT_00355054_letterbox_.barHeight());
     updateOriginalDebugOverlay();
     updateHud(input, frameTicks);
 
@@ -3867,6 +3875,11 @@ namespace orphen::port
     DAT_00355700_globalFadeCap_ = 0;
     itemSceneRenderState_ = false;
     DAT_00571dc0_screenFade_.reset();
+    // FUN_00271220 / FUN_0022b300 / FUN_00225340 all clear DAT_00355054 on a
+    // scene change, so the bars never survive one.
+    DAT_00355054_letterbox_.reset();
+    mapViewer_.setLetterboxBarHeight(0);
+    dialogueStream_.setMovieMode(0);
     fieldCamera_.FUN_00217e18_release_manual_camera(false);
     fieldCamera_.FUN_00216930_install_normal_field_defaults();
     fieldCamera_.snapToTarget(leadPlayer_.viewState().position);

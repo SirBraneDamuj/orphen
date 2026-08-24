@@ -2196,6 +2196,100 @@ namespace orphen::harness
     dialogueSprites_ = std::move(sprites);
   }
 
+  MapViewer::ScreenFit MapViewer::originalScreenFit(int framebufferWidth, int framebufferHeight) const
+  {
+    namespace debugText = orphen::ported::debug::text;
+    // The free viewer has no 4:3 box -- the whole window is its picture.
+    const bool useOriginalCamera = leadPlayerView_.has_value() && renderCamera_.has_value();
+    const ViewportRect view = useOriginalCamera
+                                  ? gameViewportRect(framebufferWidth, framebufferHeight)
+                                  : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
+
+    ScreenFit fit;
+    // The rect is in GL's bottom-up window space; these overlays draw under a
+    // top-left ortho, so flip the origin over.
+    fit.offsetX = static_cast<float>(view.x);
+    fit.offsetY = static_cast<float>(framebufferHeight - (view.y + view.height));
+    fit.scaleX = static_cast<float>(view.width) / debugText::kScreenWidth;
+    fit.scaleY = static_cast<float>(view.height) / debugText::kScreenHeight;
+    return fit;
+  }
+
+  // FUN_0025cfb8's two sprites: entry x = -320 and width 640, so the full width
+  // of the screen, and a height of `iGpffffbd8c >> 5` each. The bottom one is
+  // entry y = height - 224 (screen y 448 - height) and the top one entry y = 224
+  // (screen y 0). Untextured, blending off, colour 0xFF000000 -- flat black.
+  void MapViewer::drawLetterboxBars(int framebufferWidth, int framebufferHeight) const
+  {
+    if (letterboxBarHeight_ <= 0 || framebufferWidth <= 0 || framebufferHeight <= 0)
+    {
+      return;
+    }
+
+    namespace debugText = orphen::ported::debug::text;
+    const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
+    const float height = static_cast<float>(letterboxBarHeight_) * fit.scaleY;
+    const float left = fit.offsetX;
+    const float right = fit.offsetX + debugText::kScreenWidth * fit.scaleX;
+    const float topBarBottom = fit.offsetY + height;
+    const float bottomBarTop = fit.offsetY + debugText::kScreenHeight * fit.scaleY - height;
+    const float bottomBarBottom = fit.offsetY + debugText::kScreenHeight * fit.scaleY;
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_FOG);
+    glDisable(GL_BLEND);
+
+    glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(left, fit.offsetY);
+    glVertex2f(right, fit.offsetY);
+    glVertex2f(right, topBarBottom);
+    glVertex2f(left, topBarBottom);
+
+    glVertex2f(left, bottomBarTop);
+    glVertex2f(right, bottomBarTop);
+    glVertex2f(right, bottomBarBottom);
+    glVertex2f(left, bottomBarBottom);
+    glEnd();
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    if (blendWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_BLEND);
+    }
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (textureWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_TEXTURE_2D);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
   void MapViewer::drawDialogueSprites(int framebufferWidth, int framebufferHeight) const
   {
     if (textureSlots_ == nullptr || framebufferWidth <= 0 || framebufferHeight <= 0)
@@ -2203,14 +2297,11 @@ namespace orphen::harness
       return;
     }
 
-    // The same fit the ported debug overlay uses: the original's 640x448
-    // picture, centred and uniformly scaled, so the two overlays agree with
-    // each other about where the edges of the screen are.
-    namespace debugText = orphen::ported::debug::text;
-    const float scale = std::min(static_cast<float>(framebufferWidth) / debugText::kScreenWidth,
-                                 static_cast<float>(framebufferHeight) / debugText::kScreenHeight);
-    const float offsetX = (framebufferWidth - debugText::kScreenWidth * scale) * 0.5f;
-    const float offsetY = (framebufferHeight - debugText::kScreenHeight * scale) * 0.5f;
+    // The same fit the bars and the ported debug overlay use, so the 0x1E
+    // FUN_00238a08 lifts a cutscene line by lands where the bar edge is.
+    const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
+    const float offsetX = fit.offsetX;
+    const float offsetY = fit.offsetY;
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
@@ -2271,10 +2362,10 @@ namespace orphen::harness
       const float v0 = static_cast<float>(sprite.v) / texture.height;
       const float v1 = static_cast<float>(sprite.v + sprite.sourceHeight) / texture.height;
 
-      const float left = offsetX + sprite.x * scale;
-      const float top = offsetY + sprite.y * scale;
-      const float right = left + sprite.width * scale;
-      const float bottom = top + sprite.height * scale;
+      const float left = offsetX + sprite.x * fit.scaleX;
+      const float top = offsetY + sprite.y * fit.scaleY;
+      const float right = left + sprite.width * fit.scaleX;
+      const float bottom = top + sprite.height * fit.scaleY;
 
       glBegin(GL_QUADS);
       glTexCoord2f(u0, v0);
@@ -2815,6 +2906,12 @@ namespace orphen::harness
 
     glViewport(0, 0, framebufferWidth, framebufferHeight);
 
+    // FUN_0025cfb8's bars. They and the fade share GS sort bucket 0x1007, and
+    // both FUN_002239c8 and FUN_00224320 submit the fade first -- insertion is
+    // LIFO within a bucket, so the bars are the earlier draw and the fade tints
+    // them. Every text overlay is bucket 0x1009 and lands on top of both.
+    drawLetterboxBars(framebufferWidth, framebufferHeight);
+
     if (screenFadeAlpha_ != 0)
     {
       // FUN_0025d0e0's quad. It covers the scene, so it goes down before the
@@ -2913,8 +3010,10 @@ namespace orphen::harness
         fontWidth = slotState.texture.width;
         fontHeight = slotState.texture.height;
       }
+      const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
       const float overlayBottom = debugText_.drawOriginalOverlay(
-          framebufferWidth, framebufferHeight, originalDebugGlyphs_, fontTexture, fontWidth, fontHeight);
+          framebufferWidth, framebufferHeight, fit.offsetX, fit.offsetY, fit.scaleX, fit.scaleY,
+          originalDebugGlyphs_, fontTexture, fontWidth, fontHeight);
       if (hudVisible_)
       {
         debugText_.draw(framebufferWidth, framebufferHeight, hudLines_, 11.0f, overlayBottom);

@@ -1056,8 +1056,9 @@ namespace orphen::ported::script
   //
   //   <= 0  lead into state 10 / animation 1 (the locked pose), plus, for
   //         operands below -2, a battle-party handoff this port has no model
-  //         for, and for -1 / -2, a countdown seed at uGpffffbd8c.
-  //   == 1  release: FUN_00252d88 puts the lead back to idle.
+  //         for, and for -1 / -2, the cinematic bars.
+  //   == 1  release: FUN_00252d88 puts the lead back to idle, and the bars
+  //         start coming down.
   //
   // The port drives the state write and the release. What it cannot yet do is
   // *hold* the lock: the lead's state table entry 10 (0x00254cf0) is not ported,
@@ -1101,9 +1102,21 @@ namespace orphen::ported::script
           bandana.halfword08 = static_cast<std::uint16_t>(bandana.halfword08 | 1u);
         }
       }
-      // The -1 / -2 arm seeds iGpffffb0e4, uGpffffbd8c and cGpffffb6e4, none of
-      // which the port models; it is an alignment mode for the walk-into-place
-      // that follows, and no scene reached so far depends on it.
+      else if (mode < 0)
+      {
+        // :21-28. iGpffffb0e4 and uGpffffbd8c are the cinematic bars: -1 slides
+        // them in from nothing, -2 starts with them already closed. This is the
+        // only thing in the executable that raises either, and it also moves
+        // the subtitles clear of the bottom bar -- see FUN_00238a08:36-45,
+        // which DialogueWindow::setMovieMode carries.
+        //
+        // cGpffffb6e4 is the field camera's "look" toggle, which the port's
+        // FUN_00216aa0 does not model; the bars do not depend on it.
+        if (environment_.DAT_00355054_letterbox != nullptr)
+        {
+          environment_.DAT_00355054_letterbox->FUN_0025fd10_open(mode == -2);
+        }
+      }
     }
     else if (mode == 1)
     {
@@ -1118,6 +1131,12 @@ namespace orphen::ported::script
           bandana.halfword04 = static_cast<std::uint16_t>(bandana.halfword04 & 0xBFFFu);
           bandana.halfword08 = static_cast<std::uint16_t>(bandana.halfword08 & 0xFFFEu);
         }
+      }
+      // :44-46, outside that gate: the bars come down whether or not the lead
+      // was still locked.
+      if (environment_.DAT_00355054_letterbox != nullptr)
+      {
+        environment_.DAT_00355054_letterbox->FUN_0025fd10_close();
       }
     }
     trace_.recordPlayerLock(mode);
@@ -3268,11 +3287,28 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0x4C (FUN_0025e520): one expression into DAT_0035564c, a projection
-    // distance the port's renderer does not read.
+    // 0x4C (FUN_0025e520): one expression into DAT_0035564c, scaled by
+    // DAT_00352b8c (100000.0). DAT_0035564C is gp - 0x492C -- `uGpffffb6dc`,
+    // the **camera roll** FUN_0020bec8 feeds the view matrix, the same global
+    // 0xBE's storm rolls through FUN_002676d8. It is not a projection
+    // distance, and dropping it is what left s01_e012 tilted: the roll/zoom
+    // curve at 0x43 banks the camera about 7 degrees for the close-up, and
+    // this opcode is how the next shot puts it back level. Both of the
+    // scene's uses pass a literal 0 degrees, right after a 0x45 release.
     case 0x4C:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::int32_t scaled = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.set_uGpffffb6dc_roll)
+      {
+        environment_.set_uGpffffb6dc_roll(static_cast<float>(scaled) / kScriptCoordinateScale);
+      }
+      return 0;
+    }
 
     case 0x53:
       noteOpcode(opcode, OpcodeSupport::Modelled);

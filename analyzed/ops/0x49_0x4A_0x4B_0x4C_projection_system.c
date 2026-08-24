@@ -38,11 +38,23 @@
 //   - Distance parameters (DAT_00355d0c/10)
 // - Returns true if distance < DAT_00355d10 (intersection found).
 //
-// 0x4C (FUN_0025e520): Set projection distance parameter
-// - Evaluates 1 expression (distance value).
-// - Normalizes by DAT_00352b8c.
-// - Stores in DAT_0035564c (global distance/scale parameter).
+// 0x4C (FUN_0025e520): Set the camera roll
+// - Evaluates 1 expression (an angle; script operand token 0x11 is degrees).
+// - Normalizes by DAT_00352b8c (100000.0).
+// - Stores in DAT_0035564c.
 // - Returns 0.
+//
+// This one does NOT belong to the projection system despite sitting next to it
+// in the dispatch table. DAT_0035564c is gp - 0x492C with gp = 0x00359F70,
+// i.e. `uGpffffb6dc`: the camera roll FUN_0020bec8:49 feeds into the view
+// matrix. It is the same global FUN_002676d8 (opcode 0xBE's storm) rolls the
+// camera with, and the same one FUN_00217fe8 seeds from a camera path's
+// roll/zoom curve.
+//
+// Scripts use it to put a banked camera back level. s01_e012 calls it exactly
+// twice, both with a literal 0 and both immediately after a 0x45 camera
+// release: at 0xb9a0, ending the storm roll, and at 0x67b3, ending the ~7
+// degree dutch angle its close-up curve dialled in.
 
 // Usage Pattern:
 // These opcodes implement a 3D projection/ray-casting system, likely for:
@@ -151,9 +163,9 @@ extern float DAT_00354c98; // Scale/distance parameter
 extern float DAT_00352b80; // General world scale
 extern float DAT_00352b84; // Height offset scale
 extern float DAT_00352b88; // Distance scale (used in 0x4B)
-extern float DAT_00352b8c; // Distance scale (used in 0x4C)
+extern float DAT_00352b8c; // Angle scale, 100000.0 (used in 0x4C)
 
-// Global distance/scale parameter
+// Camera roll in radians; gp-relative uGpffffb6dc
 extern float DAT_0035564c;
 
 // Busy flag
@@ -295,16 +307,16 @@ bool opcode_0x4b_query_projection_intersection(void)
   return intersection_distance < DAT_00355d10;
 }
 
-// Opcode 0x4C: Set projection distance parameter
-uint64_t opcode_0x4c_set_projection_distance(void)
+// Opcode 0x4C: Set the camera roll
+uint64_t opcode_0x4c_set_camera_roll(void)
 {
-  int32_t distance[4];
+  int32_t angle[4];
 
-  // Evaluate distance expression
-  FUN_0025c258(distance);
+  // Evaluate the angle expression
+  FUN_0025c258(angle);
 
-  // Normalize and store in global distance parameter
-  DAT_0035564c = (float)distance[0] / DAT_00352b8c;
+  // Normalize and store as the camera roll (uGpffffb6dc)
+  DAT_0035564c = (float)angle[0] / DAT_00352b8c;
 
   return 0;
 }

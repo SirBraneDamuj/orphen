@@ -148,9 +148,30 @@ namespace orphen::ported::text
     // entry -- and stands in for the terminator the original trusts.
     void FUN_00237b38_open(std::span<const std::uint8_t> blob, std::uint32_t begin, std::uint32_t end);
 
-    // FUN_00237b38(0). Leaves the slots alone; the next open clears them, which
-    // is what the original does.
+    // The end of a record's walk -- FUN_00239178's outermost branch, control
+    // code 0x00. It stops the walk and nothing else: the original leaves
+    // pcGpffffaec0 pointing at the terminator, so the *window* is still up and
+    // every glyph on it stays drawn.
+    void FUN_00239178_end_record();
+
+    // FUN_00237b38(0) while the window is up, which is what an explicit script
+    // terminate and FUN_00237fc0's Cross press on a 0x01 prompt both are. The
+    // pointer goes to zero, so nothing is drawn any more -- but the slot array
+    // is left exactly as it was, because FUN_00237b38's clear is behind its
+    // window-was-already-closed test and the confirm branch never calls it.
     void FUN_00237b38_close();
+
+    // LAB_00239328, control code 0x02: `pcGpffffaec0 = 0` **then**
+    // FUN_00237b38(0). Nulling the pointer first is what puts that test the
+    // other way round, so this is the one close that also wipes the slots.
+    // s01_e012 reaches it through records whose body ends `02 00`, and through
+    // four whose entire body is a bare 0x02 -- one between each group of lines
+    // by the same speaker.
+    void LAB_00239328_close();
+
+    // pcGpffffaec0 != 0, which is FUN_00237c60's whole test. Distinct from
+    // `open()`: a record that has finished leaves the window up.
+    bool windowUp() const { return pcGpffffaec0_windowUp_; }
 
     // FUN_00237fc0's tail: age the budget, burn the two wait counters, and step
     // the walk once per 0x20 of budget.
@@ -166,6 +187,13 @@ namespace orphen::ported::text
     std::vector<DialogueSprite> sprites() const;
 
     void reset();
+
+    // iGpffffb0e4, which lives on the `Letterbox` the script and the renderer
+    // share. Published every frame rather than latched, because the nudge is a
+    // live read in FUN_00238a08 -- a glyph enqueued while the bars are up moves,
+    // one enqueued after they come down does not, and the two can belong to the
+    // same line.
+    void setMovieMode(int mode) { movieMode_ = mode; }
 
     // Control codes the walk skipped by width without acting on them, for the
     // report. The audio codes are excluded -- DialogueStream runs those.
@@ -190,6 +218,11 @@ namespace orphen::ported::text
     std::size_t end_ = 0;
     bool open_ = false;
     bool complete_ = false;
+    // pcGpffffaec0 != 0 -- whether there is a window on screen at all, as
+    // opposed to whether a record is being walked. FUN_00237b38 only resets the
+    // window when this was false on the way in, which is how a record with no
+    // 0x13 keeps the previous record's speaker name.
+    bool pcGpffffaec0_windowUp_ = false;
 
     std::array<GlyphSlot, kSlotCount> slots_{};
 
@@ -202,9 +235,13 @@ namespace orphen::ported::text
     // iGpffffbcd0, set by the speaker handler. Once a name has been drawn every
     // glyph on a row below it is indented ten units.
     bool speakerDrawn_ = false;
-    // iGpffffb0e4, the movie-sequence mode FUN_0025fd10 raises. Zero in a
-    // cutscene, so the two nudges in FUN_00238a08:36-45 never fire -- kept
-    // because the offsets only make sense together with the origin test.
+    // iGpffffb0e4, the mode opcode 0x6D raises alongside the cinematic bars.
+    // While it is positive FUN_00238a08:36-45 moves a glyph clear of whichever
+    // bar its window would run into: the bottom window (origin y -0x78) rises
+    // 0x1E so its third line ends at 380, eight units above the 388 the bottom
+    // bar starts at, and the top window (origin y 0xD0) drops 0x2D for the same
+    // reason at the other edge. Without it s01_e012's subtitles are drawn
+    // underneath the bar.
     int movieMode_ = 0;
 
     std::uint32_t budget_ = 0;   // iGpffffbce8

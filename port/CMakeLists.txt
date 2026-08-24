@@ -79,6 +79,8 @@ target_sources(orphen_port
         src/ported/text/original_dialogue_window.h
         src/ported/render/original_screen_fade.cpp
         src/ported/render/original_screen_fade.h
+        src/ported/render/original_letterbox.cpp
+        src/ported/render/original_letterbox.h
         src/ported/render/original_fade_track.cpp
         src/ported/render/original_fade_track.h
         src/ported/render/original_light_table.cpp

@@ -95,9 +95,18 @@ namespace orphen::ported::text
                             std::uint32_t recordEnd,
                             orphen::ported::script::SceneScriptState &state);
 
-    // FUN_00237b38(0). Raises flags 0x8FE / 0x8FF and the 0x6000 bits, which is
-    // what a scheduler gate waiting on "the text finished" is watching.
+    // FUN_00237b38(0). Takes the window down -- nothing is drawn from it any
+    // more, and the next record that opens will clear it. Raises flags 0x8FE and
+    // 0x8FF and the 0x6000 gate bits. Reached from an explicit script terminate,
+    // and from a walk that ended on the 0x01 prompt or on 0x02.
     void FUN_00237b38_terminate(orphen::ported::script::SceneScriptState &state);
+
+    // FUN_00239178's outermost branch, control code 0x00: the ordinary end of a
+    // record. It raises flag 0x8FE and gate bit 0x2000 -- so a scheduler gate
+    // waiting on "the text finished" opens either way -- and leaves the window
+    // standing with its glyphs on it. That is the difference the speaker name
+    // rides on; see DialogueWindow::FUN_00237b38_open.
+    void FUN_00239178_end_record(orphen::ported::script::SceneScriptState &state);
 
     // FUN_00237c60 / FUN_00237c70. The original's completion test is "the mode
     // is 8 and the cursor sits on a NUL"; here the hold stands in for the cursor
@@ -113,6 +122,11 @@ namespace orphen::ported::text
     // frame gets its first character this frame -- which is why it is not
     // folded into `update` above.
     void FUN_00237fc0_update(std::uint32_t frameTicks) { window_.FUN_00237fc0_update(frameTicks); }
+
+    // iGpffffb0e4, published from the shared `Letterbox` before the walk runs.
+    // FUN_00238a08 reads the global as it enqueues, so this has to be current
+    // for the frame rather than latched when the record opened.
+    void setMovieMode(int mode) { window_.setMovieMode(mode); }
 
     // FUN_00223698 caches per channel and never clears, so this survives across
     // records by design; only a scene load resets it.
@@ -158,6 +172,10 @@ namespace orphen::ported::text
     }
 
   private:
+    // The 0x1B flags this record collected, spent when it ends. Shared by both
+    // terminators.
+    void applyPendingFlags(orphen::ported::script::SceneScriptState &state);
+
     // The advance each control code applies to the cursor, opcode byte
     // included. Recovered from the handlers themselves.
     static std::size_t controlWidth(std::uint8_t code);

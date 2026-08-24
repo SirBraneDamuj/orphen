@@ -55,7 +55,8 @@
  *       }
  *     }
  *
- *     FUN_0025cfb8();                           // letterbox bars: a GS packet
+ *     FUN_0025cfb8();                           // the cinematic letterbox bars,
+ *                                               // see analyzed/cinematic_letterbox_bars.c
  *     /-* debug-only dump of the scene work flags at DAT_0031e770 *-/
  *
  * Slot 0x40 is special twice over: it is skipped by the 0..0x3D loop, and before

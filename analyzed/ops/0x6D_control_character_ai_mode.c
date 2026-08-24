@@ -6,7 +6,7 @@
 //   main character AI/animation state based on the value. Different ranges trigger
 //   different behavior modes:
 //     - value < -2: Enable attack/battle mode, set animation state
-//     - value == -2 or -1: Set timing parameter and alignment mode
+//     - value == -2 or -1: Raise the cinematic letterbox bars
 //     - value == 1: Disable battle mode, reset AI state
 //
 // Behavior by Parameter Value
@@ -22,10 +22,13 @@
 //           - Set bit 0 of DAT_0058c618 (attack enabled flag)
 //
 //   - == -2 or -1 (when iGpffffb0e4 < 1):
-//       • Set iGpffffb0e4 = 1 (enable alignment/positioning mode)
-//       • If value == -2: uGpffffbd8c = 0x780 (1920 decimal - timing value)
-//       • If value == -1: uGpffffbd8c = 0 (clear timing)
+//       • Set iGpffffb0e4 = 1 -- raise the CINEMATIC LETTERBOX BARS
+//       • If value == -2: uGpffffbd8c = 0x780, the bars start already closed
+//       • If value == -1: uGpffffbd8c = 0, the bars slide in
 //       • If cGpffffb6e4 != 0: clear it and clear bit 0 of DAT_0058beb8
+//     See analyzed/cinematic_letterbox_bars.c. This pair used to be documented
+//     here as an "alignment/positioning mode" and a "timing parameter"; both
+//     names were guesses, and FUN_0025cfb8 is what actually reads them.
 //
 //   - == 1:
 //       • If DAT_0058bf10 == 10:
@@ -34,7 +37,7 @@
 //           - If player character and in valid context:
 //               • Clear bit 0x4000 of DAT_0058c614 (disable battle mode)
 //               • Clear bit 0 of DAT_0058c618 (disable attack)
-//       • If iGpffffb0e4 != 0: set it to -1 (disable/reverse alignment mode)
+//       • If iGpffffb0e4 != 0: set it to -1, so the bars slide back out
 //
 //   - == 0: Set state 10/substate 1, with no extra battle/alignment flags
 //   - > 1: Clear bit 0 of DAT_0058beb8 only
@@ -47,8 +50,8 @@
 //   DAT_0058c610         - Character context/validity counter
 //   DAT_0058c614         - Battle mode flags (bit 0x4000 = battle active)
 //   DAT_0058c618         - Attack control flags (bit 0 = attack enabled)
-//   iGpffffb0e4          - Alignment/positioning mode flag
-//   uGpffffbd8c          - Timing parameter (0x780 or 0)
+//   iGpffffb0e4          - DAT_00355054, letterbox mode (0 off, 1 open, -1 closing)
+//   uGpffffbd8c          - DAT_00355CFC, letterbox ramp, 0..0x780
 //   cGpffffb6e4          - Special mode flag
 //
 // Related Functions
@@ -57,15 +60,15 @@
 //   FUN_002298d0(char_id) - Get character type (0=player, others=NPC types)
 //
 // Usage Context
-//   This opcode appears to control when the main character enters/exits combat-ready
-//   states, sets positioning/alignment modes for cutscenes, and manages timing
-//   parameters for movement or animation synchronization. The negative values likely
-//   come from script bytecode commands that signal combat encounters or special
-//   movement modes.
+//   This opcode takes player control away and gives it back, and the -1 / -2 arm
+//   is also how a cutscene raises the letterbox bars -- FUN_0025cfb8 draws them
+//   from these two globals at the end of every script tick, and FUN_00238a08
+//   reads the mode to move the subtitles clear of them.
 //
 // PS2-specific Notes
 //   - Bit manipulation of character flags suggests hardware-level state tracking
-//   - Timing value 0x780 (1920) likely relates to frame counts or animation cycles
+//   - 0x780 is the letterbox ramp at full extension; FUN_0025cfb8 draws
+//     `ramp >> 5` scanlines-of-448 per bar, so 60 units
 //   - The entity base at 0x58beb0 is the main player character slot
 //
 // Returns: 0 (always)
@@ -82,8 +85,8 @@ extern uint16_t DAT_0058bf10;       // character animation state
 extern int DAT_0058c610;            // character context counter
 extern uint16_t DAT_0058c614;       // battle mode flags
 extern uint16_t DAT_0058c618;       // attack control flags
-extern int iGpffffb0e4;             // alignment/positioning mode
-extern unsigned int uGpffffbd8c;    // timing parameter
+extern int iGpffffb0e4;             // DAT_00355054, letterbox mode
+extern unsigned int uGpffffbd8c;    // DAT_00355CFC, letterbox ramp
 extern char cGpffffb6e4;            // special mode flag
 
 // External functions
@@ -118,16 +121,16 @@ unsigned long opcode_0x6D_control_character_ai_mode(void)
     }
     else if (mode_param < 0 && iGpffffb0e4 < 1) // -2 or -1
     {
-      // Set alignment/positioning mode with timing
+      // Raise the letterbox bars
       iGpffffb0e4 = 1;
 
       if (mode_param == -2)
       {
-        uGpffffbd8c = 0x780; // timing value: 1920
+        uGpffffbd8c = 0x780; // already closed
       }
       else if (mode_param == -1)
       {
-        uGpffffbd8c = 0; // clear timing
+        uGpffffbd8c = 0; // slide them in
       }
 
       if (cGpffffb6e4 != 0)
@@ -155,7 +158,7 @@ unsigned long opcode_0x6D_control_character_ai_mode(void)
 
     if (iGpffffb0e4 != 0)
     {
-      iGpffffb0e4 = -1; // disable/reverse alignment mode
+      iGpffffb0e4 = -1; // slide the letterbox bars back out
     }
   }
   // else mode_param > 1: flag already cleared, nothing more to do

@@ -16,8 +16,10 @@ namespace orphen::ported::text
     // The window-visible flag FUN_00237b38 clears on every path.
     constexpr std::uint32_t kFlagWindowVisible = 0x509;
 
-    // uGpffffb0f4 bits 0x6000, the scheduler's other gate.
+    // uGpffffb0f4 bits 0x6000, the scheduler's other gate. FUN_00239178 raises
+    // only 0x2000 of it; FUN_00237b38(0) raises both bits.
     constexpr std::uint32_t kGateMaskText = 0x6000;
+    constexpr std::uint32_t kGateBitRecordEnded = 0x2000;
 
     constexpr std::uint8_t kControlTerminate = 0x02;   // LAB_00239328
     constexpr std::uint8_t kControlSpeaker = 0x13;     // FUN_00239760
@@ -201,23 +203,45 @@ namespace orphen::ported::text
   {
     active_ = false;
     holdTicks_ = 0;
+    // A walk that stopped on 0x01 or 0x02 has already taken the window down
+    // its own way; this is the explicit script terminate, FUN_00237b38(0) with
+    // the window still up, which does not clear the slots either.
     window_.FUN_00237b38_close();
-
-    // The original executes 0x1B as the walk reaches it, so a flag at the tail
-    // of a record lands when the line finishes reading. The port scans the
-    // whole record up front, so the sets are held here and applied on close --
-    // which puts them at the right moment for every site this scene uses, all
-    // of which sit at the end of their record.
-    for (std::uint32_t flagId : pendingFlags_)
-    {
-      state.FUN_002663a0_setEventFlag(flagId);
-    }
-    pendingFlags_.clear();
+    applyPendingFlags(state);
 
     state.FUN_002663d8_clearEventFlag(kFlagWindowVisible);
     state.FUN_002663a0_setEventFlag(kFlagTextIdleA);
     state.FUN_002663a0_setEventFlag(kFlagTextIdleB);
     state.uGpffffb0f4_gateMask |= kGateMaskText;
+  }
+
+  void DialogueStream::FUN_00239178_end_record(orphen::ported::script::SceneScriptState &state)
+  {
+    active_ = false;
+    holdTicks_ = 0;
+    window_.FUN_00239178_end_record();
+    applyPendingFlags(state);
+
+    // FUN_00239178 raises exactly these two and nothing else -- no 0x8FF, no
+    // 0x4000, and it does not touch 0x509. Every gate in s01_e012's scheduler
+    // stream that waits on text waits on 0x8FE, so a record ending normally
+    // opens them without pretending the window went away.
+    state.FUN_002663a0_setEventFlag(kFlagTextIdleB);
+    state.uGpffffb0f4_gateMask |= kGateBitRecordEnded;
+  }
+
+  // The original executes 0x1B as the walk reaches it, so a flag at the tail of
+  // a record lands when the line finishes reading. The port scans the whole
+  // record up front, so the sets are held and applied when the record ends --
+  // which puts them at the right moment for every site this scene uses, all of
+  // which sit at the end of their record.
+  void DialogueStream::applyPendingFlags(orphen::ported::script::SceneScriptState &state)
+  {
+    for (std::uint32_t flagId : pendingFlags_)
+    {
+      state.FUN_002663a0_setEventFlag(flagId);
+    }
+    pendingFlags_.clear();
   }
 
   void DialogueStream::update(std::uint32_t frameTicks,
@@ -253,7 +277,17 @@ namespace orphen::ported::text
     }
     heldByTypewriter_ = false;
 
-    FUN_00237b38_terminate(state);
+    // Which terminator the walk stopped on decides whether the window survives.
+    // A 0x02 has already run LAB_00239328 and taken it down; anything else is
+    // FUN_00239178's ordinary record end.
+    if (window_.windowUp())
+    {
+      FUN_00239178_end_record(state);
+    }
+    else
+    {
+      FUN_00237b38_terminate(state);
+    }
   }
 
   void DialogueStream::reset()

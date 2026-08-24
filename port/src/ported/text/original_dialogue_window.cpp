@@ -44,27 +44,44 @@ namespace orphen::ported::text
                                          std::uint32_t begin,
                                          std::uint32_t end)
   {
+    // FUN_00237b38:11. The test is on the *old* pointer, before the assignment.
+    const bool wasClosed = !pcGpffffaec0_windowUp_;
+
     blob_ = blob;
     cursor_ = begin;
     end_ = std::min<std::size_t>(end, blob.size());
     open_ = true;
     complete_ = false;
+    pcGpffffaec0_windowUp_ = true;
 
     // FUN_00237b38:14-30, the block that only runs when the window was closed.
-    // Between two cutscene records it always does: the scheduler terminates the
-    // old stream before it starts the new one.
-    originX_ = kWindowOriginX;
-    originY_ = kWindowOriginY;
-    defaultWait_ = 0;
-    FUN_00238f18_clearSlots();
-    color_ = kColorDefault;
-    budget_ = 0;
+    //
+    // **It usually is not.** A record ends on control code 0x00, which is
+    // FUN_00239178, and that raises the "text idle" flag the scheduler gates on
+    // without touching pcGpffffaec0 -- so the window the record was drawn on is
+    // still up when the next one starts, and none of this runs. The glyphs stay,
+    // the pen and line carry over, and FUN_00238f98's scroll -- which skips
+    // line 0 entirely -- ages the body out from under a speaker name that never
+    // moves. That is how s01_e012 draws "Dortin" over a record that has no 0x13
+    // of its own, and there are five such records in the opening.
+    //
+    // Only control code 0x02 (LAB_00239328) and an explicit FUN_00237b38(0)
+    // take the window down and so make this run.
+    if (wasClosed)
+    {
+      originX_ = kWindowOriginX;
+      originY_ = kWindowOriginY;
+      defaultWait_ = 0;
+      FUN_00238f18_clearSlots();
+      color_ = kColorDefault;
+      budget_ = 0;
 
-    // The two wait counters are deliberately *not* cleared here -- the original
-    // does not clear them either, so a 0x0C pause left over from the tail of a
-    // record still holds off the first glyph of the next one.
-    promptSlot_ = kNoSlot;
-    promptTicks_ = 0;
+      // The two wait counters are deliberately *not* cleared here -- the
+      // original does not clear them either, so a 0x0C pause left over from the
+      // tail of a record still holds off the first glyph of the next one.
+      promptSlot_ = kNoSlot;
+      promptTicks_ = 0;
+    }
     unhandledCodes_.clear();
 
     if (cursor_ >= end_)
@@ -73,11 +90,23 @@ namespace orphen::ported::text
     }
   }
 
-  void DialogueWindow::FUN_00237b38_close()
+  void DialogueWindow::FUN_00239178_end_record()
   {
     open_ = false;
     complete_ = true;
     promptSlot_ = kNoSlot;
+  }
+
+  void DialogueWindow::FUN_00237b38_close()
+  {
+    FUN_00239178_end_record();
+    pcGpffffaec0_windowUp_ = false;
+  }
+
+  void DialogueWindow::LAB_00239328_close()
+  {
+    FUN_00238f18_clearSlots();
+    FUN_00237b38_close();
   }
 
   void DialogueWindow::reset()
@@ -229,24 +258,39 @@ namespace orphen::ported::text
       // FUN_00239178. Its live branch raises flag 0x8FE and sets the 0x2000
       // gate bit -- "the record has finished" -- and leaves the cursor where it
       // is, so the handler re-runs harmlessly every frame after. DialogueStream
-      // owns those two pieces of state; here it is just the end of the walk.
-      complete_ = true;
+      // owns those two pieces of state; here it is just the end of the walk,
+      // and the window stays up behind it.
+      FUN_00239178_end_record();
       return;
 
     case 0x01:
+      // FUN_002391d0 raises the book prompt without advancing the cursor, and
+      // the original waits there for Cross. FUN_00237fc0:108-115 is that press:
+      // with the cursor on a 0x01 it nulls pcGpffffaec0 and raises 0x8FF, 0x8FE
+      // and the 0x6000 gate bits -- and pointedly does *not* clear the slots.
+      // The port has no player to wait for on this path, so it stands in for
+      // the press immediately; that is what it has always done, and the flags
+      // are what the end of s01_e012's chain gates on.
+      FUN_002391d0_prompt();
+      FUN_00237b38_close();
+      return;
+
     case 0x03:
     case 0x04:
     case 0x05:
-      // FUN_002391d0. Raises the book prompt and does not advance the cursor;
-      // the original then waits for Cross. See the header for why the port
-      // spawns the sprite and finishes the record anyway.
+      // The same prompt, but the original's confirm branch resumes the record
+      // for these three rather than ending it -- 0x04 does a layered clear and
+      // 0x05 a newline, then both step past the code. The port still finishes
+      // the record, as it always has, but leaves the window standing, which is
+      // the nearer of the two answers. No record in s01_e012 uses them.
       FUN_002391d0_prompt();
-      complete_ = true;
+      FUN_00239178_end_record();
       return;
 
     case 0x02:
-      // LAB_00239328: FUN_00237b38(0), the stream's own terminator.
-      complete_ = true;
+      // LAB_00239328: `pcGpffffaec0 = 0` then FUN_00237b38(0) -- the real close,
+      // and the only thing that wipes the slots between records.
+      LAB_00239328_close();
       return;
 
     case 0x07:
@@ -509,7 +553,9 @@ namespace orphen::ported::text
   std::vector<DialogueSprite> DialogueWindow::sprites() const
   {
     std::vector<DialogueSprite> out;
-    if (!open_)
+    // FUN_00237fc0 draws whatever is in the slot array while the *window* is
+    // up, which outlasts the record that filled it.
+    if (!pcGpffffaec0_windowUp_)
     {
       return out;
     }

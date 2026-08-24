@@ -176,6 +176,12 @@ namespace orphen::harness
     // fade, out of the texture slots, in the order given. Empty hides it.
     void setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites);
 
+    // FUN_0025cfb8's cinematic bars: the height of each one, in units of the
+    // original's 640x448 virtual screen, 0..60. Drawn under the fade, which is
+    // the bucket order the two share, and under both text overlays. Zero hides
+    // them.
+    void setLetterboxBarHeight(int height) { letterboxBarHeight_ = height; }
+
     void setHudLines(std::vector<std::string> lines);
     // FUN_00268270's placed glyphs for this frame, drained from the ported
     // debug text buffer by PortRuntime on the simulation step.
@@ -259,6 +265,8 @@ namespace orphen::harness
     std::uint32_t screenFadeRgb_ = 0;
     std::uint8_t screenFadeAlpha_ = 0;
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
+    // FUN_0025cfb8's `iGpffffbd8c >> 5`, 0..60.
+    int letterboxBarHeight_ = 0;
     // H: the harness's own screen-space text. Off by default -- it covers the
     // game's picture, and the game has a debug overlay of its own.
     bool hudVisible_ = false;
@@ -286,8 +294,31 @@ namespace orphen::harness
       int height = 0;
     };
     static ViewportRect gameViewportRect(int framebufferWidth, int framebufferHeight);
-    // FUN_00239020's sprites, fitted to the framebuffer the same way the
-    // ported debug overlay is.
+
+    // Where the original's 640x448 virtual screen lands in the window.
+    //
+    // FUN_00207938 addresses that screen for every 2D thing the engine draws --
+    // the cinematic bars, the subtitles, the debug text -- and on the GS it *is*
+    // the displayed frame, so all 640x448 of it covers all of the picture. The
+    // port's picture is the 4:3 box, so the fit is that box, and the scale is
+    // not uniform: the field was 640x224 and the display stretched it back to
+    // 4:3, which is exactly where the half-height y unit comes from.
+    //
+    // All three overlays go through this, because the whole point of the bars is
+    // that the text clears them -- fit two of them differently and the 0x1E the
+    // subtitles move by stops meaning anything.
+    struct ScreenFit
+    {
+      float offsetX = 0.0f;
+      float offsetY = 0.0f;
+      float scaleX = 1.0f;
+      float scaleY = 1.0f;
+    };
+    ScreenFit originalScreenFit(int framebufferWidth, int framebufferHeight) const;
+
+    // FUN_0025cfb8's two flat black sprites.
+    void drawLetterboxBars(int framebufferWidth, int framebufferHeight) const;
+    // FUN_00239020's sprites, in the same screen the bars use.
     void drawDialogueSprites(int framebufferWidth, int framebufferHeight) const;
     void applyFogState(bool enabled) const;
   };

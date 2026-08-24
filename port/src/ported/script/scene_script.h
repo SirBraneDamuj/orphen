@@ -110,8 +110,9 @@ namespace orphen::ported::script
     // the original ever suspends the interpreter mid-stream. See
     // analyzed/scene_script_frame_entry.c.
     //
-    // Two things FUN_0025b778 does that the port deliberately does not: the
-    // letterbox bars (FUN_0025cfb8, a GS packet) and the debug work-flag dump.
+    // FUN_0025cfb8, the cinematic bars, is stepped from the end of this the
+    // way the original does; the renderer reads the resulting height off the
+    // shared `Letterbox`.
     bool FUN_0025b778_run_tick(const ScriptEnvironment &environment, ScriptTrace &trace);
 
     // FUN_0025ce30: the timed event scheduler, run from inside the tick between

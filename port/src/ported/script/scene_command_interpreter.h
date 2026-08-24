@@ -6,6 +6,7 @@
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/render/original_fade_track.h"
 #include "ported/render/original_light_table.h"
+#include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/script/script_trace.h"
 
@@ -324,6 +325,11 @@ namespace orphen::ported::script
     // BSS, so the port has to share one too or a script fade and a cutscene fade
     // fight over a screen only one of them is drawn on.
     orphen::ported::render::ScreenFade *DAT_00571dc0_screenFade = nullptr;
+
+    // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them
+    // and FUN_0025b778 steps them at the end of every tick, so like the fade
+    // this is one object the renderer also reads rather than a second copy.
+    orphen::ported::render::Letterbox *DAT_00355054_letterbox = nullptr;
 
     // The loaded map. Opcode 0x51 spawns from its object placement table, which
     // is where scene objects actually stand.

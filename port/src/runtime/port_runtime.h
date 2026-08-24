@@ -14,6 +14,7 @@
 #include "ported/text/original_dialogue_text.h"
 #include "ported/text/original_dialogue_stream.h"
 #include "ported/resource/item_database.h"
+#include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_frame_update.h"
@@ -352,6 +353,11 @@ namespace orphen::port
     // field camera.
     std::uint32_t DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
     orphen::ported::render::ScreenFade DAT_00571dc0_screenFade_;
+    // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them,
+    // FUN_0025b778's tail steps them, the renderer draws them and the dialogue
+    // window reads the mode to move its text clear -- one object, the way the
+    // fade is one object.
+    orphen::ported::render::Letterbox DAT_00355054_letterbox_;
     // DAT_00355700. FUN_00209140 hands it to VU1 as the cap on every map
     // primitive's fade byte, against the 0x80 = x1.0 scale -- so a small
     // non-zero value renders the world nearly black. Zero is "no cap".

@@ -177,6 +177,10 @@ namespace orphen::harness
   float DebugTextRenderer::drawOriginalOverlay(
       int framebufferWidth,
       int framebufferHeight,
+      float offsetX,
+      float offsetY,
+      float scaleX,
+      float scaleY,
       const std::vector<orphen::ported::debug::DebugGlyph> &glyphs,
       unsigned int fontAtlasTexture,
       int fontAtlasWidth,
@@ -189,19 +193,14 @@ namespace orphen::harness
       return 0.0f;
     }
 
-    // Fit the original's 640x448 picture into the window without distorting
-    // it. The world is drawn Hor+ -- wider than 4:3 reveals more to the sides
-    // -- but the overlay is authored against the shipped framing, and both of
-    // its anchors (the left margin at x = 16, the '~' escape's right edge at
-    // x = 640) only line up with each other inside that box.
-    const float scale = std::min(static_cast<float>(framebufferWidth) / text::kScreenWidth,
-                                 static_cast<float>(framebufferHeight) / text::kScreenHeight);
-    const float offsetX = (framebufferWidth - text::kScreenWidth * scale) * 0.5f;
-    const float offsetY = (framebufferHeight - text::kScreenHeight * scale) * 0.5f;
-
-    const float cellWidth = text::kGlyphCellWidth * scale;
-    const float cellHeight = text::kGlyphCellHeight * scale;
-    const float capWidth = text::kGlyphCellWidth * kCapWidthFraction * scale;
+    // The caller's fit. The two anchors this overlay is authored against -- the
+    // left margin at x = 16 and the '~' escape's right edge at x = 640 -- are
+    // both in the 640x448 screen, so they line up with each other under any
+    // mapping of it; what matters is that it is the *same* mapping the rest of
+    // the engine's 2D draws through, which is the game's picture.
+    const float cellWidth = text::kGlyphCellWidth * scaleX;
+    const float cellHeight = text::kGlyphCellHeight * scaleY;
+    const float capWidth = text::kGlyphCellWidth * kCapWidthFraction * scaleX;
     const float capHeight = cellHeight * kCapHeightFraction;
     const float baselineRise = cellHeight * kBaselineFraction;
 
@@ -248,8 +247,8 @@ namespace orphen::harness
         const float v0 = window.v / atlasHeight;
         const float v1 = (window.v + window.height) / atlasHeight;
 
-        const float left = offsetX + glyph.x * scale;
-        const float top = offsetY + glyph.y * scale;
+        const float left = offsetX + glyph.x * scaleX;
+        const float top = offsetY + glyph.y * scaleY;
         const float right = left + cellWidth;
         const float bottom = top + cellHeight;
 
@@ -271,13 +270,13 @@ namespace orphen::harness
     else
     {
       glDisable(GL_TEXTURE_2D);
-      glLineWidth(std::max(1.0f, scale * 0.75f));
+      glLineWidth(std::max(1.0f, std::min(scaleX, scaleY) * 0.75f));
       glBegin(GL_LINES);
 
       for (const auto &glyph : glyphs)
       {
-        const float cellLeft = offsetX + glyph.x * scale;
-        const float cellBottom = offsetY + glyph.y * scale + cellHeight;
+        const float cellLeft = offsetX + glyph.x * scaleX;
+        const float cellBottom = offsetY + glyph.y * scaleY + cellHeight;
         drawGlyph(glyph.character, cellLeft, cellBottom - baselineRise, capWidth, capHeight);
         lowestY = std::max(lowestY, cellBottom);
       }

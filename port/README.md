@@ -1340,8 +1340,9 @@ Two divergences the port's structure forces, both in the header:
   than on `DAT_00356788`.
 - `0x01` raises the book prompt and, in the original, holds for Cross — 28 of
   the 84 records use it. The port spawns the sprite and lets the record close on
-  its clip. A cutscene that stopped for input every fourth line would not be the
-  same scene, and the port has no input model for it.
+  its clip, taking the Cross press for granted (which is `FUN_00237fc0:108-115`,
+  flags and all — see below). A cutscene that stopped for input every fourth
+  line would not be the same scene, and the port has no input model for it.
 
 **Making `0x1A` block is what fixed the record tails.** A record's hold is not
 its clip; it is where its *bytes* end, and a record can put codes after the
@@ -1363,6 +1364,51 @@ Checkable at any frame:
 orphen_port --disc-root . --scene s01_e012 --screenshot shot.png:700
 ```
 
+### A record does not close the window, and that is where the speaker lives
+
+Five of `s01_e012`'s records carry no `0x13` at all -- "Hey... Volcan... You
+notice anything peculiar?", both of Volcan's `[vomits]`, and two of Sephy's --
+and the game keeps the previous speaker's name on screen through every one of
+them. The port drew them with no name.
+
+The name survives because **the window does not come down between records.** A
+record ends on control code `0x00`, which is `FUN_00239178`; at the outermost
+nesting level it raises flag `0x8FE` and gate bit `0x2000` and returns, leaving
+`pcGpffffaec0` pointing at the terminator. So when the next record opens,
+`FUN_00237b38`'s `bVar1` -- the test on that pointer, taken before the
+assignment -- is false, and the whole reset block is skipped: no
+`FUN_00238f18`, no origin, no colour, no pen or line. The new text carries on
+into a window that still holds the old one, `FUN_00238f98`'s scroll ages the
+body out from under it, and row 0 is the row the scroll never touches.
+
+There are exactly three ways out, and they are not interchangeable:
+
+| | window | slots |
+|---|---|---|
+| `0x00` — `FUN_00239178` | stays up | kept |
+| `0x01` + Cross — `FUN_00237fc0:108-115` | down | **kept** |
+| `0x02` — `LAB_00239328` | down | cleared |
+
+`LAB_00239328` is the only one that wipes the slot array, and only because it
+nulls `pcGpffffaec0` *before* calling `FUN_00237b38(0)`, which flips that same
+`bVar1` test the other way. An explicit `FUN_00237b38(0)` from the script does
+not clear either -- the next open does. This scene closes the window between
+each group of same-speaker lines with a record whose entire body is a bare
+`0x02`; there are four of them, and the port already logged them as empty lines.
+
+The flags differ too, and the difference is load-bearing: `0x00` raises only
+`0x8FE`, while both closes also raise `0x8FF` and gate bit `0x4000`. The port
+used to raise all of them at every record end. Record 207 of the scheduler
+stream gates on `0x8FF` and is the handoff that sets flag `0x515`, so raising
+it early is harmless but raising it *never* stalls the chain -- which is what
+happened when `0x00` was first split out and the `0x01` prompt path had not
+been. `0x01` is that path: the original's Cross press nulls the pointer and
+raises `0x8FF`/`0x8FE`/`0x6000` without touching the slots, and the port stands
+in for the press immediately, exactly as it always has.
+
+None of this moves a single frame. The full run is byte-identical: 42 lines on
+the same frames, 208 event records, flag `0x515` still at 13317.
+
 For the camera half of `FUN_00234400`, `FUN_00217d70`'s own save/restore pair
 covers it.
 
@@ -1382,6 +1428,54 @@ item caption, which state `0x12` waits on. With only the first, the cutscene
 parks at `0x12` forever and the last four state changes never happen — that
 looks exactly like a regression and is not one. The ten transitions land on
 frames 61, 89, 111, 365, 366, 399, 441, 469, 475 and 497.
+
+### The cinematic bars, and where they put the subtitles
+
+`ported/render/original_letterbox.*` is `FUN_0025cfb8`, which `FUN_0025b778`
+runs at the end of every script tick. Two flat black sprites, full width, one
+against the top edge and one against the bottom -- so the bars are **part of the
+game's picture**, not a border drawn around it.
+
+Two globals, and opcode `0x6D` (`FUN_0025fd10`) is the only writer of either:
+`DAT_00355054` is the mode and `DAT_00355CFC` is a `0..0x780` ramp. An operand
+of `-1` raises the mode and starts the ramp at zero, so the bars slide in; `-2`
+starts it full, so they are already there; `1` runs the ramp back down and
+clears the mode at the bottom. The ramp steps by `DAT_003555bc * 8`, which at
+the nominal `0x20` ticks is 7.5 frames end to end. The drawn height is
+`ramp >> 5`, so 60 units of the 640x448 virtual screen -- 30 of the field's 224
+scanlines -- leaving a 328-unit picture between them. `s01_e012` arms them with
+`-1` on frame 1.
+
+**The subtitles move for them.** `FUN_00238a08:36-45` reads the same mode as it
+enqueues each glyph and nudges the whole window clear of whichever bar it would
+run into: the bottom window (origin y `-0x78`) rises `0x1E`, which puts its
+third line's bottom edge at 380 against the bar's 388, and the top window
+(origin y `0xD0`) drops `0x2D` for the same reason at the other end. The port
+had the arithmetic already and never had anything to drive it, so a cutscene
+line was drawn flush against where the bar belongs. It is a *live* read, not
+something latched when the record opened, which is why `setMovieMode` is
+published every frame immediately before `FUN_00237fc0`'s walk.
+
+**Draw order comes out of the GS sort buckets.** `FUN_00207938` head-inserts
+into one of 0x1010 buckets that `FUN_00200c48` chains in ascending order, so a
+higher bucket draws later and, within one bucket, a *later* submission draws
+*earlier*. The bars are bucket `0x1007` -- the same one the full-screen fade
+uses (`FUN_0025d0e0` calls `FUN_00207de8(0x1007)`) -- and both `FUN_002239c8`
+and `FUN_00224320` submit the fade first, so the bars go down first and the fade
+tints them. Every text overlay is bucket `0x1009`: the dialogue glyphs
+(`FUN_00237b38` seeds each slot's word 1 with `-0x1009`) and the debug text
+(`FUN_00268410` passes the same), so both draw over the bars. `render()` is in
+that order.
+
+**One screen for all three.** `MapViewer::originalScreenFit` maps the 640x448
+virtual screen onto the game's 4:3 box, and the bars, the subtitles and the
+ported debug overlay all go through it. The two text overlays used to fit that
+screen *uniformly* into the whole window instead, which is a different rectangle
+-- wider than the picture on a 16:9 window, and vertically offset from it on a
+4:3 one -- and once the bars exist the disagreement is the difference between
+text that clears them and text that does not. The scale is deliberately not
+uniform: the field was 640x224 and the display stretched it back to 4:3, which
+is where the half-height y unit came from in the first place.
 
 ### The bandana
 

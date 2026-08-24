@@ -318,6 +318,14 @@ namespace orphen::ported::script
       completed = runAtOffset(leadOffset, environment, trace, 0) && completed;
     }
 
+    // FUN_0025b778:57. The cinematic bars, stepped once per tick whether or
+    // not this scene ever arms them -- that is what runs the slide down after
+    // an operand-1 0x6D and clears the mode at the bottom of it.
+    if (environment.DAT_00355054_letterbox != nullptr)
+    {
+      environment.DAT_00355054_letterbox->FUN_0025cfb8_step(environment.frameTicks);
+    }
+
     // FUN_0025b778:38-58, after FUN_0025cfb8. Four words of display mask at
     // DAT_0031e770, one bit per work word; every set bit prints its work value
     // twice, once decimal and once hex. Nothing in the game writes the mask --

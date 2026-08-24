@@ -60,9 +60,14 @@ namespace orphen::harness
               float topOffsetPixels = 0.0f) const;
 
     // The ported debug overlay (FUN_00268270's output). Glyphs arrive already
-    // placed on the original's 640x448 virtual screen, so this only has to fit
-    // that screen into the framebuffer -- uniformly, centred, the way a 4:3
-    // picture would sit in a wider window -- and stamp one glyph per cell.
+    // placed on the original's 640x448 virtual screen, so this only has to map
+    // that screen into the framebuffer and stamp one glyph per cell.
+    //
+    // The mapping is the caller's: `offsetX`/`offsetY` are where screen (0, 0)
+    // lands and `scaleX`/`scaleY` are framebuffer pixels per screen unit. It is
+    // MapViewer::originalScreenFit, the same one the cinematic bars and the
+    // subtitles use -- FUN_00268410's glyphs share a GS screen with both, and
+    // the debug text is authored to sit on top of the bars.
     //
     // fontAtlasTexture is the GL object holding texture slot 0x30, the sheet
     // FUN_00268410 samples. Zero falls back to the stroke font above, which is
@@ -72,6 +77,10 @@ namespace orphen::harness
     // there were none, so a caller can stack under it.
     float drawOriginalOverlay(int framebufferWidth,
                               int framebufferHeight,
+                              float offsetX,
+                              float offsetY,
+                              float scaleX,
+                              float scaleY,
                               const std::vector<orphen::ported::debug::DebugGlyph> &glyphs,
                               unsigned int fontAtlasTexture,
                               int fontAtlasWidth,
