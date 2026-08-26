@@ -13,6 +13,7 @@
 #include "ported/sound/original_voice_index.h"
 #include "ported/text/original_dialogue_text.h"
 #include "ported/text/original_dialogue_stream.h"
+#include "ported/resource/character_stats.h"
 #include "ported/resource/item_database.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
@@ -233,6 +234,21 @@ namespace orphen::port
         std::make_unique<orphen::ported::entity::PathFollowerTable>();
     const char *spawnSourceLabel_ = "map centre";
     float previousStickMagnitude_ = 0.0f;
+    // DAT_00355704 / DAT_00355708: the lead's breadcrumb trail, 512 entries
+    // wide, and the cursor into it. FUN_0022a418 seeds every entry with the
+    // lead's spawn position at scene load and FUN_00224060 appends to it once
+    // per frame. A wedged party follower teleports back onto one of these.
+    static constexpr std::size_t kLeadTrailCapacity = 0x200;
+    std::array<orphen::ported::entity::ActorEnvironment::LeadTrailPoint, kLeadTrailCapacity>
+        DAT_00355704_leadTrail_{};
+    std::uint16_t DAT_00355708_leadTrailCursor_ = 0;
+    void FUN_0022a418_reset_lead_trail();
+    void FUN_00224060_record_lead_trail();
+
+    // DAT_003555e8, this frame's analog magnitude. FUN_0023b5d8 publishes it
+    // at the top of the frame; behaviours downstream of the pad read it, and
+    // the party follower is the first of them.
+    float DAT_003555e8_stickMagnitude_ = 0.0f;
     std::optional<orphen::ported::resource::ElfDataReader> executable_;
     orphen::ported::entity::EntityDescriptorTable descriptorTable_;
     orphen::ported::entity::ActorDispatchTable actorDispatchTable_;
@@ -386,6 +402,9 @@ namespace orphen::port
     bool buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId);
     orphen::ported::player::ItemWindow itemWindow_;
     orphen::ported::resource::ItemDatabase itemDatabase_;
+    // uGpffffadf8, the character stat table. DAT_00343688's seven party
+    // records come out of it; see FUN_002294d0_load_party_records.
+    orphen::ported::resource::CharacterStats characterStats_;
     // The proportional width table FUN_00238c90 measures out of slots 0x2E and
     // 0x2F at boot, and this frame's glyph list built against it.
     orphen::ported::text::DialogueFont dialogueFont_;

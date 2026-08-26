@@ -8,6 +8,7 @@
 #include "ported/render/original_light_table.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
+#include "ported/resource/character_stats.h"
 #include "ported/script/script_trace.h"
 
 #include <cstdint>
@@ -205,6 +206,50 @@ namespace orphen::ported::script
     // three.
     static constexpr std::size_t kPartySlotCount = 7;
     std::uint16_t DAT_00343692_partySlots[kPartySlotCount]{};
+
+    // The rest of the same 0x28-byte records at DAT_00343688, which
+    // FUN_002294d0 fills once per new game from group 1 of the SCR.BIN stat
+    // blob, keyed by DAT_0031c1f0 = {1, 3, 4, 5, 6, 7, 0x16} -- the party
+    // character type ids, in slot order. Kept beside the slot halfword rather
+    // than folded into one struct because every existing reader addresses
+    // DAT_00343692 by itself.
+    //
+    // Opcode 0xAC hands a record to FUN_0023a518, which is where a follower
+    // gets its collision radius and height. Empty records leave a follower with
+    // a zero-radius body, so `partyRecordsLoaded` gates the call.
+    static constexpr std::int16_t DAT_0031c1f0_partyCharacterIds[kPartySlotCount] = {1, 3, 4, 5, 6, 7, 0x16};
+    orphen::ported::resource::StatRecord DAT_00343688_partyRecords[kPartySlotCount]{};
+    bool partyRecordsLoaded = false;
+
+    // FUN_002294d0's record loop, without the flag wipe around it: that half is
+    // a new-game reset and the port's scenes start mid-game.
+    //
+    //   FUN_0025bae8(1, FUN_00229888(i), record); record[0x0A] = 0x100;
+    //   record[0x02] = (short)(char)record[0x06];
+    //
+    // The 0x100 goes to DAT_00343692, which the port keeps in its own array and
+    // which opcode 0xAC's own paths already write, so it is not repeated here.
+    void FUN_002294d0_load_party_records(const orphen::ported::resource::CharacterStats &stats)
+    {
+      if (!stats.loaded())
+      {
+        return;
+      }
+      bool anyLoaded = false;
+      for (std::size_t slot = 0; slot < kPartySlotCount; ++slot)
+      {
+        const auto record = stats.FUN_0025bae8_record(1, DAT_0031c1f0_partyCharacterIds[slot]);
+        if (!record.has_value())
+        {
+          continue;
+        }
+        DAT_00343688_partyRecords[slot] = *record;
+        DAT_00343688_partyRecords[slot].halfword02 =
+            static_cast<std::int16_t>(static_cast<std::int8_t>(record->byte06));
+        anyLoaded = true;
+      }
+      partyRecordsLoaded = anyLoaded;
+    }
 
     // DAT_00571de0: parameter ramps, three floats each -- current, target,
     // step. Opcode 0x90 arms one and 0x91 advances it, **returning 1 only once
@@ -673,6 +718,8 @@ namespace orphen::ported::script
     void FUN_0025f950_convert_to_npc();               // 0x66
     void FUN_002589c0_release_party_slot(std::size_t slot);
     std::uint32_t FUN_002631f0_bind_party_slot();     // 0xAC
+    static void FUN_0023a518_apply_party_record(orphen::ported::entity::OriginalEntity &entity,
+                                                const orphen::ported::resource::StatRecord &record);
     std::uint32_t FUN_00263498_release_party_slot();  // 0xAD, 0xAE
     std::uint32_t FUN_00260578_spawn_attached_prop(); // 0x140, 0x141
     void FUN_00263c58_set_entity_short_and_word();    // 0xB7

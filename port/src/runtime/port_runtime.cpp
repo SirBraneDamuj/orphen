@@ -198,6 +198,21 @@ namespace orphen::port
       std::cout << "[items] SCR.BIN resource 1 not readable; item names unavailable\n";
     }
 
+    // FUN_00228e28:145, then FUN_002294d0's record loop. The original runs that
+    // loop on new game, keyed by DAT_0031c1f0; the port has no new-game path, so
+    // it fills the table once here. Opcode 0xAC hands the record to
+    // FUN_0023a518, which is where a follower's radius and height come from.
+    if (!discRoot_.empty())
+    {
+      characterStats_.load(discRoot_);
+    }
+    sceneScript_.state().FUN_002294d0_load_party_records(characterStats_);
+    if (!sceneScript_.state().partyRecordsLoaded)
+    {
+      std::cout << "[party] SCR.BIN resource 0xBF not readable; followers keep their"
+                   " descriptor size\n";
+    }
+
     loadSoundData();
     loadVoiceIndex(config);
 
@@ -322,6 +337,84 @@ namespace orphen::port
     environment.descriptors = &descriptorTable_;
     environment.camera = &fieldCamera_;
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
+    environment.DAT_003555e8_stickMagnitude = DAT_003555e8_stickMagnitude_;
+    environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;
+    environment.DAT_00355704_leadTrail = DAT_00355704_leadTrail_;
+    environment.DAT_00355708_leadTrailCursor = DAT_00355708_leadTrailCursor_;
+
+    // FUN_0023ae60: the point's bearing from pool slot 1 against the camera's
+    // yaw (uGpffffb6d4), inside the cone at DAT_00352600/604 -- +/- 40 degrees.
+    environment.FUN_0023ae60_on_camera_axis = [this](float x, float z) {
+      constexpr float kfGpffff8690_coneLow = -0.6981316f;
+      constexpr float kfGpffff8694_coneHigh = 0.6981316f;
+      const auto &reference = entityPool_.slot(1);
+      const float bearing = std::atan2(z - reference.positionZ24, x - reference.positionX20);
+      const float delta =
+          orphen::ported::model::FUN_002166e8_angle_delta(fieldCamera_.yawRadians(), bearing);
+      return delta > kfGpffff8690_coneLow && delta < kfGpffff8694_coneHigh;
+    };
+
+    environment.mapPrimitive = [this](std::int32_t packedPrimitive)
+        -> std::optional<orphen::ported::entity::ActorEnvironment::MapPrimitive>
+    {
+      const auto *loadedMap = mapViewer_.loadedMap();
+      if (loadedMap == nullptr || packedPrimitive < 0)
+      {
+        return std::nullopt;
+      }
+      const std::size_t index = static_cast<std::size_t>(packedPrimitive) & 0x3FFFu;
+      if (index >= loadedMap->DAT_003556ac_dRecords80.size() ||
+          index >= loadedMap->DAT_003556b0_dRecords78.size())
+      {
+        return std::nullopt;
+      }
+      orphen::ported::entity::ActorEnvironment::MapPrimitive primitive;
+      primitive.centerX = loadedMap->DAT_003556ac_dRecords80[index].center.x;
+      primitive.centerZ = loadedMap->DAT_003556ac_dRecords80[index].center.y;
+      primitive.centerY = loadedMap->DAT_003556ac_dRecords80[index].center.z;
+      primitive.terrainFlags = loadedMap->DAT_003556b0_dRecords78[index].terrainFlags;
+      return primitive;
+    };
+
+    // FUN_0020da68: the entity layer has no model store, so the sampler comes
+    // in the same way the role lookup above does. `firstPoseColumnForAnimation`
+    // is FUN_0020da68's own `*(short *)(param_4 * 4 + animationTable[anim])`
+    // with param_4 == 0 -- the animation's first key column.
+    environment.FUN_0020da68_sample_bone_pose =
+        [this](std::size_t slot, std::size_t bone, std::uint16_t animation)
+        -> std::optional<std::array<float, orphen::ported::model::kPoseFieldCount>>
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return std::nullopt;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return std::nullopt;
+      }
+      const auto &model = *binding->model;
+      const std::uint16_t column =
+          orphen::ported::model::firstPoseColumnForAnimation(model, model.blob, animation);
+      const orphen::ported::model::BonePose pose =
+          orphen::ported::model::FUN_0020d378_sample_bone(model, model.blob, bone, column);
+      // FUN_0020d8c0's field order: rotation xyz, translation xyz, scale.
+      return std::array<float, orphen::ported::model::kPoseFieldCount>{
+          pose.rotationRadians.x, pose.rotationRadians.y, pose.rotationRadians.z,
+          pose.translation.x,     pose.translation.y,     pose.translation.z,
+          pose.scale};
+    };
+
+    environment.FUN_0020d9d8_bone_yaw = [this](std::size_t slot, std::size_t bone) -> float
+    {
+      if (slot >= DAT_003ffe00_poseFilters_.size())
+      {
+        return 0.0f;
+      }
+      return orphen::ported::model::FUN_0020d9d8_read_bone_pose(DAT_003ffe00_poseFilters_[slot],
+                                                                bone)[2];
+    };
 
     // The same lookup the script environment gets. FUN_002d2f40 hangs its rig
     // together by role, so type 0x28 needs it inside the actor loop.
@@ -383,6 +476,7 @@ namespace orphen::port
         surface.primitiveIndex = sample.packedPrimitive;
         surface.cornerHeights = sample.cornerHeights;
         surface.sampledFourCorners = sample.sampledFourCorners;
+        surface.slopeAngle = sample.slopeAngle;
         return surface;
       };
     }
@@ -421,6 +515,84 @@ namespace orphen::port
       return bandana;
     };
     return environment;
+  }
+
+  // FUN_0022a418:318-321. Every entry starts at the lead's spawn position; only
+  // the primitive is different here, because the original leaves that halfword
+  // holding whatever was in the arena and the port cannot read uninitialised
+  // memory on purpose. -1 is what an entity with no cached surface carries, and
+  // the follower's scan skips it.
+  void PortRuntime::FUN_0022a418_reset_lead_trail()
+  {
+    const auto &lead = entityPool_.slot(0);
+    orphen::ported::entity::ActorEnvironment::LeadTrailPoint seed;
+    seed.x = lead.positionX20;
+    seed.z = lead.positionZ24;
+    seed.groundHeight = lead.positionY28;
+    seed.primitive = -1;
+    DAT_00355704_leadTrail_.fill(seed);
+    DAT_00355708_leadTrailCursor_ = 0;
+  }
+
+  // FUN_00224060, called once per frame from FUN_002239c8 between the physics
+  // pass and the late script slots.
+  void PortRuntime::FUN_00224060_record_lead_trail()
+  {
+    const auto &lead = entityPool_.slot(0);
+
+    // The gates, in the original's order: +0x04 bit 8, then six states that do
+    // not lay a trail, then a cached surface, then that surface's terrain word.
+    if ((lead.halfword04 & 0x0008u) != 0)
+    {
+      return;
+    }
+    const std::uint16_t state = lead.state60;
+    if (state == 0 || state == 10 || state == 0x16 || state == 0x17 || state == 0x18 ||
+        state == 0x19)
+    {
+      return;
+    }
+    if (lead.groundPrimitive0a < 0)
+    {
+      return;
+    }
+    const auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap == nullptr)
+    {
+      return;
+    }
+    const std::size_t recordIndex = static_cast<std::size_t>(lead.groundPrimitive0a) & 0x3FFFu;
+    if (recordIndex >= loadedMap->DAT_003556b0_dRecords78.size())
+    {
+      return;
+    }
+    if ((loadedMap->DAT_003556b0_dRecords78[recordIndex].terrainFlags & 0x01000000u) != 0)
+    {
+      return;
+    }
+
+    // The newest entry is one behind the cursor, wrapping to the top.
+    const std::size_t newest = DAT_00355708_leadTrailCursor_ == 0
+                                   ? kLeadTrailCapacity - 1
+                                   : static_cast<std::size_t>(DAT_00355708_leadTrailCursor_) - 1;
+    const auto &last = DAT_00355704_leadTrail_[newest];
+    const float dx = last.x - lead.positionX20;
+    const float dz = last.z - lead.positionZ24;
+    if (std::sqrt(dx * dx + dz * dz) <= 0.25f)
+    {
+      return;
+    }
+
+    auto &entry = DAT_00355704_leadTrail_[DAT_00355708_leadTrailCursor_];
+    entry.x = lead.positionX20;
+    entry.z = lead.positionZ24;
+    entry.groundHeight = lead.groundHeight4c;
+    entry.primitive = lead.groundPrimitive0a;
+    ++DAT_00355708_leadTrailCursor_;
+    if (DAT_00355708_leadTrailCursor_ > kLeadTrailCapacity - 1)
+    {
+      DAT_00355708_leadTrailCursor_ = 0;
+    }
   }
 
   orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment(std::uint32_t frameTicks)
@@ -3786,6 +3958,9 @@ namespace orphen::port
     ++DAT_003555b4_frameCounter_;
     DAT_003555b8_tickCounter_ += frameTicks;
     soundEngine_.setFrame(frameCount_);
+    // FUN_0023b5d8's slot: the pad's analog magnitude is published before
+    // anything downstream of it runs.
+    DAT_003555e8_stickMagnitude_ = input.stickMagnitude;
     scriptTrace_.setFrame(static_cast<std::uint32_t>(frameCount_));
     dialogueStream_.setFrame(static_cast<std::uint32_t>(frameCount_));
     // FUN_00237de8's slot in the frame: the stream ages before the script runs,
@@ -3905,6 +4080,11 @@ namespace orphen::port
         orphen::ported::psm2::FUN_00225940_step_uv_animation(
             loadedMapForGroups->DAT_003556f4_uvAnimation, frameTicks);
       }
+
+      // FUN_002239c8:134-138 -- FUN_00208450, the physics pass, FUN_00224060,
+      // then the late slots. The lead's breadcrumb goes down after it has
+      // finished moving for the frame and before anything can read it back.
+      FUN_00224060_record_lead_trail();
 
       if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
@@ -4105,6 +4285,7 @@ namespace orphen::port
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
     leadPlayer_.resetToMap(*loadedMap, spawnOverride_);
     FUN_0022a418_stamp_lead_player_flags();
+    FUN_0022a418_reset_lead_trail();
 
     previousStickMagnitude_ = 0.0f;
     // A map load cannot leave a cutscene half-run behind it. FUN_0022a418:293

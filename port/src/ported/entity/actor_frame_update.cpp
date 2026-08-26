@@ -1,6 +1,7 @@
 #include "ported/entity/actor_frame_update.h"
 
 #include "ported/entity/entity_collision.h"
+#include "ported/entity/party_follower.h"
 #include "ported/script/object_registers.h"
 
 #include <algorithm>
@@ -45,6 +46,10 @@ namespace orphen::ported::entity
     // FUN_002cde50 / FUN_002cde40: type 0x62's wing beat and its death cry.
     constexpr std::uint16_t kEnemyWingCue = 0x196;
     constexpr std::uint16_t kEnemyDeathCue = 0x197;
+
+    // DAT_00352434: the step an actor will climb in one move, 0.26. A global,
+    // not a per-entity field -- +0x80 is the slope limit, not this.
+    constexpr float kDAT_00352434_stepHeight = 0.26f;
   } // namespace
 
   bool FUN_0023a068_freeze_gate(OriginalEntity &entity, std::uint32_t frameTicks)
@@ -658,6 +663,8 @@ namespace orphen::ported::entity
     // Which flag in FUN_002262c0 gates that is not identified yet. It matters
     // the moment a ground-walking non-player actor is ported; it does not matter
     // for a flyer, and inventing a gate would be worse than naming the gap.
+    const float startX = entity.positionX20;
+    const float startZ = entity.positionZ24;
     entity.positionX20 += entity.desiredDeltaX30;
     entity.positionZ24 += entity.desiredDeltaZ34;
     entity.positionY28 += entity.desiredDeltaY38;
@@ -688,9 +695,82 @@ namespace orphen::ported::entity
     const bool movedHorizontally = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f;
     if (movedHorizontally && environment.terrainSurface)
     {
-      const auto surface = environment.terrainSurface(
+      auto surface = environment.terrainSurface(
           entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
           entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+
+      // FUN_002262c0:0x00226cb4, the gate in front of the whole upward-step
+      // branch: `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))`, where
+      // workspace +0x08 is the destination surface's stored slope. The lead's
+      // copy of this loop has carried it for a while; this one had not, because
+      // until the party follower there was no ground-*walking* non-player actor
+      // and a flyer never notices.
+      //
+      // Without it the step below raises the actor onto whatever the scan
+      // answered with, so a follower walking into the shop's counter ratcheted
+      // up it a tenth of a unit per frame and ended the scene standing in the
+      // air. The refusal is the original's shape too: the move is rolled back
+      // one axis at a time and the refused axes are recorded in +0x0C, which is
+      // what FUN_0025a500's stuck detection reads.
+      const auto walkable = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
+        return at.has_value() && at->slopeAngle <= entity.slopeLimit80 &&
+               at->height - entity.positionY28 < kDAT_00352434_stepHeight;
+      };
+
+      if (!walkable(surface))
+      {
+        entity.collisionFlags0c |= 0x0002u;
+
+        // X alone, then Z alone from wherever X ended up -- the same slide the
+        // lead's copy does, and the same order.
+        std::optional<ActorEnvironment::TerrainSurface> slid;
+        if (entity.desiredDeltaX30 != 0.0f)
+        {
+          auto xOnly = environment.terrainSurface(
+              entity.positionX20, startZ, entity.positionY28, entity.height58,
+              entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+          if (walkable(xOnly))
+          {
+            entity.positionZ24 = startZ;
+            slid = xOnly;
+          }
+          else
+          {
+            entity.collisionFlags0c |= 0x0020u;
+          }
+        }
+        if (!slid.has_value() && entity.desiredDeltaZ34 != 0.0f)
+        {
+          auto zOnly = environment.terrainSurface(
+              startX, entity.positionZ24, entity.positionY28, entity.height58,
+              entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+          if (walkable(zOnly))
+          {
+            entity.positionX20 = startX;
+            slid = zOnly;
+          }
+          else
+          {
+            entity.collisionFlags0c |= 0x0040u;
+          }
+        }
+        if (!slid.has_value())
+        {
+          // Nothing was walkable: stay put and re-sample where we already were,
+          // so +0x4C and the terrain words still describe the actor's own spot.
+          entity.positionX20 = startX;
+          entity.positionZ24 = startZ;
+          slid = environment.terrainSurface(startX, startZ, entity.positionY28, entity.height58,
+                                            entity.radius54, entity.halfword04,
+                                            entity.rejectTerrainMask74);
+          if (!walkable(slid))
+          {
+            slid.reset();
+          }
+        }
+        surface = slid;
+      }
+
       if (surface.has_value())
       {
         entity.groundHeight4c = surface->height;
@@ -807,6 +887,7 @@ namespace orphen::ported::entity
     switch (handlerAddress)
     {
     case kFUN_00239e78_noOp:
+    case 0x00258AB8u: // FUN_00258ab8, type 0x37, the party follower
     case 0x002D1EA8u: // FUN_002d1ea8, type 0x3A
     case 0x0025AB68u: // FUN_0025ab68, party members
     case 0x002CD0A0u: // FUN_002cd0a0, the type 0x62 enemy
@@ -825,6 +906,8 @@ namespace orphen::ported::entity
     {
     case kFUN_00239e78_noOp:
       return "FUN_00239e78 (no-op)";
+    case 0x00258AB8u:
+      return "FUN_00258ab8 (party follower)";
     case 0x002D1EA8u:
       return "FUN_002d1ea8 (treasure chest)";
     case 0x0025AB68u:
@@ -912,6 +995,9 @@ namespace orphen::ported::entity
       {
       case 0x002D1EA8u:
         FUN_002d1ea8_treasure_chest(entity, slotEnvironment);
+        break;
+      case 0x00258AB8u:
+        FUN_00258ab8_party_follower(entity, slotEnvironment, trace);
         break;
       case 0x0025AB68u:
         FUN_0025ab68_party_member(entity, slotEnvironment, trace);

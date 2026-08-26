@@ -61,6 +61,7 @@ target_sources(orphen_port
         src/ported/player/original_chest_cutscene.h
         src/ported/player/original_item_window.cpp
         src/ported/player/original_item_window.h
+        src/ported/resource/character_stats.cpp
         src/ported/resource/item_database.cpp
         src/ported/resource/item_database.h
         src/ported/sound/original_sequence_player.cpp
@@ -112,6 +113,7 @@ target_sources(orphen_port
     src/ported/entity/actor_dispatch_table.h
     src/ported/entity/actor_frame_update.cpp
     src/ported/entity/entity_collision.cpp
+    src/ported/entity/party_follower.cpp
     src/ported/entity/entity_path_follow.cpp
     src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h

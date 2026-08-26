@@ -1893,28 +1893,53 @@ namespace orphen::ported::script
     }
   }
 
+  // FUN_0023a518: copy a party record's body onto the entity bound to it.
+  //
+  //   entity +0x54 = +0x11C = record +0x0C   collision radius
+  //   entity +0x58 = +0x120 = record +0x10   body height
+  //   entity +0x12A = +0x128 = (char)record +0x06
+  //   entity +0x12C = (char)record +0x07,  +0x12E = (char)record +0x08
+  //
+  // The port's entity carries +0x54, +0x58 and +0x12A. The rest -- the unscaled
+  // pair FUN_00229ef0 rescales from, and two more stat halfwords -- has no
+  // reader on this side yet.
+  void SceneCommandInterpreter::FUN_0023a518_apply_party_record(
+      orphen::ported::entity::OriginalEntity &entity,
+      const orphen::ported::resource::StatRecord &record)
+  {
+    entity.radius54 = record.radius0c;
+    entity.height58 = record.height10;
+    entity.staggerTimer12a = static_cast<std::uint16_t>(static_cast<std::int8_t>(record.byte06));
+  }
+
   // 0xAC (FUN_002631f0): bind an entity into a party slot, or clear one.
   //
-  // Four expressions; the first is the slot (0..6) and the fourth is the entity.
+  // Four expressions. The first is the slot (0..6); **the entity is the third,
+  // not the fourth** -- the original evaluates four expressions but reads the
+  // entity back from `sp+8`, and the fourth lands in a stack word nothing looks
+  // at again. Taking the fourth picked up 180, which is not a pool index, so
+  // every bind in s01_e012 resolved to nothing and no follower was ever created.
+  // (180 is not a coincidence: it is what the handler stores into +0x1A2 further
+  // down, so the script is pushing a speed the opcode stopped reading.)
+  //
   // The whole thing is a no-op when the slot's own flag (0x501 + slot) is
   // already set, and it refuses to bind once three slots are taken -- the party
   // size cap lives in the flags, not in a counter.
   //
-  // A negative entity clears the slot instead. Otherwise the entity's real type
-  // is parked at +0x1A0 and it becomes a type 0x37 follower, which is why
-  // effectiveTypeId() has to alias 0x37 the same way it aliases 0x38.
+  // A negative entity marks the slot *deliberately empty*: the flag is *set*
+  // (FUN_002663a0, not FUN_002663d8) and the table entry goes to -1, so a later
+  // 0xAC on the same slot takes the already-bound path above and leaves it
+  // alone. Releasing for real is 0xAD/0xAE's job, and that is what writes 0x100.
   //
-  // Not modelled: the free-position scan that assigns +0x1C6 (which of three
-  // formation spots the follower walks in), the +0x1A2 / +0x1C7 bookkeeping and
-  // FUN_0023a518's per-slot parameter block. Those shape *where* a follower
-  // stands, which the port has no follow behaviour to use yet.
+  // Otherwise the entity's real type is parked at +0x1A0 and it becomes a type
+  // 0x37 follower, which is why effectiveTypeId() has to alias 0x37 the same way
+  // it aliases 0x38.
   std::uint32_t SceneCommandInterpreter::FUN_002631f0_bind_party_slot()
   {
-    const std::size_t savedEntity = currentEntity_;
     const std::uint32_t slot = FUN_0025c258_evaluate();
     FUN_0025c258_evaluate();
-    FUN_0025c258_evaluate();
     const std::int32_t entitySelector = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    FUN_0025c258_evaluate();
     if (halted_ || environment_.entityPool == nullptr)
     {
       return 0;
@@ -1936,6 +1961,10 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // FUN_0025d6c0 runs *before* the cap test in the original, so even a
+    // rejected bind leaves the selection on the named entity.
+    auto *entity = resolveEntity(static_cast<std::uint32_t>(entitySelector));
+
     // Skipping index 6 is the original's own exception, so the seventh slot
     // does not count against the cap.
     int bound = 0;
@@ -1953,24 +1982,67 @@ namespace orphen::ported::script
 
     if (entitySelector < 0)
     {
-      state.FUN_002663d8_clearEventFlag(slotFlag);
+      state.FUN_002663a0_setEventFlag(slotFlag);
       state.DAT_00343692_partySlots[slot] = 0xFFFF;
-      currentEntity_ = savedEntity;
       return 0;
     }
 
-    auto *entity = resolveEntity(static_cast<std::uint32_t>(entitySelector));
     if (entity == nullptr)
     {
       return 0;
     }
 
+    // +0x1C6: which of three collision lanes this follower paths in. The lowest
+    // index no already-bound follower is using, or 3 when all three are taken.
+    std::int8_t spot = 0;
+    for (;;)
+    {
+      bool taken = false;
+      for (std::size_t index = 0; index < SceneScriptState::kPartySlotCount; ++index)
+      {
+        const std::int16_t other = static_cast<std::int16_t>(state.DAT_00343692_partySlots[index]);
+        // The original's guard is `!= 0 && < 0x100`, which lets the -1 sentinel
+        // through and reads a slot one stride *before* the pool. That read
+        // lands on zeroed memory and never matches, so the port bounds the
+        // index rather than reproducing an out-of-bounds load.
+        if (other <= 0 ||
+            static_cast<std::size_t>(other) >= orphen::ported::entity::kEntitySlotCount)
+        {
+          continue;
+        }
+        if (environment_.entityPool->slot(static_cast<std::size_t>(other)).followSpot1c6 == spot)
+        {
+          taken = true;
+          break;
+        }
+      }
+      if (!taken)
+      {
+        break;
+      }
+      ++spot;
+      if (spot >= 3)
+      {
+        spot = 3;
+        break;
+      }
+    }
+
     entity->partyOriginalType1a0 =
         (entity->typeId00 == 0x38) ? entity->originalType1ce : entity->typeId00;
+    entity->followSpot1c6 = spot;
+    entity->followSpeedBase1a2 = 180;
+    entity->followPartySlot1c7 = static_cast<std::int8_t>(slot);
+    entity->rejectTerrainMask74 |= 0x0D000000u;
     entity->typeId00 = 0x37;
     entity->descriptorFlags02 = static_cast<std::uint16_t>((entity->descriptorFlags02 & 0xBFFFu) | 0x1002u);
     entity->halfword04 = static_cast<std::uint16_t>((entity->halfword04 & 0xFFEEu) | 0x2000u);
     entity->state60 = 0;
+
+    if (state.partyRecordsLoaded)
+    {
+      FUN_0023a518_apply_party_record(*entity, state.DAT_00343688_partyRecords[slot]);
+    }
 
     state.DAT_00343692_partySlots[slot] = static_cast<std::uint16_t>(currentEntity_);
     state.FUN_002663a0_setEventFlag(slotFlag);

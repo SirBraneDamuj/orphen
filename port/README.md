@@ -195,12 +195,108 @@ opcode VM uses. `--actor-report` lists every live entity with the handler addres
 it resolves to and whether that handler is ported. That report, not guesswork,
 picks the next behavior to write.
 
-Two behaviors are implemented outright. Type `0x3A`, `FUN_002d1ea8`, the
+Several behaviors are implemented outright. Type `0x37`, `FUN_00258ab8`, the
+party follower, has its own section below. Type `0x3A`, `FUN_002d1ea8`, the
 treasure chest.
 It is the only handler in the game with no state table -- it switches on the
 animation id directly. Its `+0x198` is an **event flag id** (the placement
 record's param byte plus `0x400`), not a pointer; flag clear means closed, set
 means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
+
+### The party follows Orphen (type `0x37`)
+
+After the opening cutscenes hand control back, Cleo and Magnus are supposed to
+walk after the player. They stood still, and the reason was one operand.
+
+Opcode `0xAC` (`FUN_002631f0`) binds an entity into a party slot and stamps type
+`0x37` over it. It evaluates **four** expressions and reads the entity back from
+`sp+8` -- the *third*, not the fourth. The port took the fourth, which in
+`s01_e012` is `180`; that is not a pool index, so every bind resolved to nothing
+and no follower was ever created. (`180` is not random: it is the value the
+handler stores into `+0x1A2` a few lines later, so the script is pushing a speed
+the opcode stopped reading.) Two other details of the same handler were wrong or
+missing -- the "deliberately empty" path *sets* the slot flag rather than
+clearing it, and the free-lane scan that assigns `+0x1C6` had no port.
+
+With the bind fixed, `src/ported/entity/party_follower.*` is `FUN_00258ab8` and
+its state table `PTR_FUN_0031e1a0`:
+
+| state | original | what it does |
+| --- | --- | --- |
+| 0 | `FUN_002596c8` | init: pick this follower's side of the lead (`+0x1BC`) |
+| 1 | `FUN_002597d0` | idle: watch the lead, then decide whether to walk |
+| 2 | `FUN_00259D00` | turn to an angle, then push through on it |
+| 3 | `FUN_00259e50` | turn in place |
+| 4, 5 | — | navmesh walk, waypoint walk. **Not ported** |
+| 6 | `FUN_0025a298` | wedged: teleport back onto the lead's trail |
+| 7 | `FUN_0025a450` | walk blind, after being shoved |
+| 8 | `FUN_0025a500` | **the follow walk** |
+| 9 | `FUN_0025aa48` | sidestep out of a crowd |
+| 10 | `0x0025AB48` | hold a stagger until the floor is back |
+
+Three things about it are worth writing down.
+
+**The formation is a ring, not a queue.** A follower walks to
+`lead + (cos, sin)` of `lead.facing + its own +0x1BC`, one unit out. The first
+one bound takes +150 degrees and every later one takes the *negation* of the
+first one it finds, which is why two followers end up on opposite shoulders.
+It only re-aims when it is more than 1.5 units from the lead and more than 0.3
+from the spot, so a stationary party settles rather than jitters.
+
+**Walk versus run comes off the stick, not off the lead's speed.**
+`FUN_0025a500` reads `DAT_003555e8`, the analog magnitude, and picks animation 4
+under 100 and animation `0x0E` at or over it. Past two units it stops matching
+the gait at all and just adds a flat `0.05` to its step to catch up.
+
+**The idle look-at is a bone override, not a turn.** State 1 twists the bust and
+head toward the lead through `FUN_0020d8c0` -- the bust by the full angle, the
+head by 0.3 of it. Past 60 degrees it gives up on twisting and hands over to
+state 3, which turns the whole body. That needed two new callbacks into the
+model layer (`FUN_0020da68`'s sampler and `FUN_0020d9d8`'s filtered pose),
+because a follower's rest pose has to be read before it can be twisted.
+
+The lead's breadcrumb trail (`FUN_00224060`, `DAT_00355704`) is ported with it.
+It is not map data: it is a 512-entry ring of where the lead has actually been,
+appended to whenever it moves a quarter unit. State 6 walks it backwards for
+somewhere off camera to reappear, which is a follower's only way out of a wedge.
+
+#### What is still missing
+
+`FUN_00259378` and the cell-graph flood fill behind it (`FUN_002584b0`,
+`FUN_00258c70`) are **not ported**. That is the follower's pathfinder: the thing
+that routes it *around* an obstacle rather than into it. A follower that gets
+wedged against geometry while the player can see it therefore has no recovery --
+state 6 refuses to teleport on camera, exactly as the original does, and the
+original's other exit is the pathfinder. `--actor-report` names it:
+
+```
+type=0x37 state=6 -> 0x259378 ticks=6568  UNIMPLEMENTED
+```
+
+That only shows up under `--hold-stick`, which pins the lead into a wall for
+thousands of frames; normal play walks out of it.
+
+#### The gate that had never been needed before
+
+The party follower is the port's first ground-*walking* non-player actor, and it
+immediately found the gap `integrateNonPlayerMovement` had been carrying a note
+about. That step committed a move and then raised the actor onto whatever the
+ground scan answered with, so a follower walking into the shop counter ratcheted
+up it about a tenth of a unit per frame and finished the scene standing in the
+air.
+
+`FUN_002262c0` gates that on the destination's slope against the entity's
+`+0x80`, the same test the lead's copy has carried since the hull-climbing bug.
+It is now applied to non-player actors too, with the same one-axis-at-a-time
+slide and the same refusal bits written into `+0x0C` -- which the follower's own
+stuck detection reads, and which nothing had ever been setting for a non-player.
+
+**This moves `s01_e024`.** The type `0x62` enemies now get blocked by the hull
+where they used to pass through it, so their positions after 3000 frames differ
+and the shared RNG stream shifts with them. `s01_e012` is byte-identical at 3000
+frames. The change is toward the original, not away from it -- `FUN_002262c0` is
+one function and every actor goes through it -- but it is a visible change to a
+scene that was tuned without it, so it is called out here rather than buried.
 
 ### State of play
 

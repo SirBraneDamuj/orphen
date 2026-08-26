@@ -73,6 +73,14 @@ namespace orphen::ported::entity
     std::uint32_t flagWord70 = 0;            // +0x70: opcode 0x61's alternate word.
     std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
     std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
+    // +0x7C: how far this entity will follow the floor *down* in one step.
+    // FUN_002262c0:256 is its only reader -- a drop bigger than this leaves the
+    // actor in the air instead of snapping it to the new surface. The lead's
+    // copy is 10.0 (FUN_002b1568), and FUN_002596c8 stamps that same value onto
+    // a follower so it takes the same drops the lead just took. The port's
+    // movement step does not consult it yet; it is written because the original
+    // writes it, so the field is there when that step grows the branch.
+    float maxStepDown7c = 0.0f;
     // +0x80 is the **maximum walkable slope**, in radians, not a step height.
     // FUN_002262c0's only use of it is
     //   if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))
@@ -134,6 +142,10 @@ namespace orphen::ported::entity
 
     // +0xBE: damage taken since the last tick, drained by FUN_002cd0a0.
     std::uint16_t pendingDamageBe = 0;
+    // +0xC4: the direction the last hit came *from*. FUN_00258ab8 turns a
+    // follower to face it (plus pi) before playing the stagger, so the
+    // character reels away from the blow rather than in a fixed direction.
+    float hitDirectionC4 = 0.0f;
     // +0x130: the placement record's id byte for a spawned prop. Script opcode
     // 0xB7 also writes it outright, which is how s01_e012's init tags its cast.
     std::int16_t recordId130 = -1;
@@ -234,6 +246,35 @@ namespace orphen::ported::entity
     // +0x1CE: the type this entity had before 0x66 made it a 0x38. Opcode 0xF1
     // and FUN_002298d0 read it to recover the real character class.
     std::int16_t originalType1ce = 0;
+
+    // The type 0x37 party follower's block, PTR_FUN_0031e1a0's states. It
+    // **overlaps** the two blocks above the same way they overlap each other --
+    // +0x1B0..+0x1BC are the enemy's wing phase and home position, +0x1C0 its
+    // attack roll, +0x1C8 its flags -- and an entity is never two of these
+    // things at once, because opcode 0xAC stamps type 0x37 over whatever it was.
+    //
+    // FUN_002631f0 seeds +0x1A2 (180) and +0x1C6/+0x1C7; FUN_002596c8, state 0,
+    // seeds +0x1BC.
+    std::int16_t followSpeedBase1a2 = 0; // +0x1A2: base walk speed, in the 200000ths FUN_0025a500 divides by.
+    // +0x1B0/+0x1B4/+0x1B8: the point this follower is walking to, in the
+    // original's x/z/y order. Either the formation spot beside the lead
+    // (FUN_00259520) or a navmesh cell centre (FUN_00259378).
+    float followTargetX1b0 = 0.0f;
+    float followTargetZ1b4 = 0.0f;
+    float followTargetY1b8 = 0.0f;
+    // +0x1BC: where in the ring around the lead this follower walks, as an
+    // angle added to the lead's facing. FUN_002596c8 hands the first follower
+    // +150 degrees and every later one the negation of the previous one's, so
+    // two followers end up on opposite shoulders.
+    float followFormationAngle1bc = 0.0f;
+    std::int16_t followPathNode1c0 = -1; // +0x1C0: waypoint index states 5 and 6 walk to.
+    std::int8_t followSpot1c6 = 0;       // +0x1C6: which of three collision lanes this follower paths in.
+    std::int8_t followPartySlot1c7 = 0;  // +0x1C7: the party slot it was bound to.
+    std::int8_t followBumpCount1c8 = 0;  // +0x1C8: consecutive walls hit in state 2; three gives up to state 6.
+    std::int8_t followStuckCount1c9 = 0; // +0x1C9: consecutive blocked frames in state 8.
+    // +0x1CA: set while a *recovery* state is re-entering state 1, so state 1
+    // skips its idle look-at and goes straight to the follow decision.
+    std::int8_t followBlocked1ca = 0;
 
     // The type to resolve a model, descriptor or character class from.
     //

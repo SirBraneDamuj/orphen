@@ -73,6 +73,11 @@ namespace orphen::ported::entity
       // entity +0x84..+0x90, written only when the four-corner path ran.
       std::array<float, 4> cornerHeights{};
       bool sampledFourCorners = false;
+
+      // The winning corner's stored slope, in radians. FUN_002262c0 gates the
+      // whole upward-step branch on it against the entity's +0x80, which is what
+      // stops a walker ratcheting up a wall.
+      float slopeAngle = 1.570796012878418f;
     };
 
     // The arguments FUN_00227070 reads off the entity: the sample centre, the
@@ -134,6 +139,63 @@ namespace orphen::ported::entity
     // it divides by the entity's own period, so the sound is phase-locked to
     // the frame number rather than to anything the entity tracks.
     std::uint32_t DAT_003555b4_frameCounter = 0;
+
+    // DAT_00343692, the seven party slots, each holding the pool index of the
+    // entity bound to it. Type 0x37 reads it three times -- to pick its side of
+    // the lead, to avoid walking through another follower, and to notice it is
+    // standing inside one. Empty when the runtime has no script state.
+    std::span<const std::uint16_t> DAT_00343692_partySlots;
+
+    // DAT_003555e8, the analog stick's magnitude, 0..128. A follower close
+    // enough to the lead matches its gait from this rather than from the lead's
+    // measured speed: under 100 it walks, at or over it runs.
+    float DAT_003555e8_stickMagnitude = 0.0f;
+
+    // DAT_00355704 / DAT_00355708: the lead's own breadcrumb trail and the
+    // cursor into it. FUN_00224060 appends the lead's position once per frame
+    // whenever it has moved a quarter unit from the last entry, wrapping at 512.
+    //
+    // It is not map data -- it is where the lead has actually been -- which is
+    // what makes it usable as a recovery path: a party follower wedged against
+    // geometry walks the ring backwards for somewhere off camera the lead
+    // reached, and teleports onto that primitive.
+    struct LeadTrailPoint
+    {
+      float x = 0.0f;                // +0x00
+      float z = 0.0f;                // +0x04
+      float groundHeight = 0.0f;     // +0x08, the lead's +0x4C at the time
+      std::int32_t primitive = -1;   // +0x0C, the lead's +0x0A, packed
+    };
+    std::span<const LeadTrailPoint> DAT_00355704_leadTrail;
+    std::uint16_t DAT_00355708_leadTrailCursor = 0;
+
+    // FUN_0023ae60: is this world point inside the camera's forward cone? The
+    // follower's recovery refuses to teleport anywhere the player can see.
+    std::function<bool(float x, float z)> FUN_0023ae60_on_camera_axis;
+
+    // One map primitive by its packed index (the form entity +0x0A carries):
+    // DAT_003556AC's centre at +0x60 and DAT_003556B0's terrain word at +0x04.
+    struct MapPrimitive
+    {
+      float centerX = 0.0f;
+      float centerZ = 0.0f;
+      float centerY = 0.0f;
+      std::uint32_t terrainFlags = 0;
+    };
+    std::function<std::optional<MapPrimitive>(std::int32_t packedPrimitive)> mapPrimitive;
+
+    // FUN_0020da68: one bone's pose out of an animation, in FUN_0020d8c0's
+    // field order (rotation xyz, translation xyz, scale). The look-at reads the
+    // rest pose before twisting it, so it needs the model the entity layer has
+    // no view of. Empty when the entity has no model loaded.
+    std::function<std::optional<std::array<float, orphen::ported::model::kPoseFieldCount>>(
+        std::size_t slot, std::size_t bone, std::uint16_t animation)>
+        FUN_0020da68_sample_bone_pose;
+
+    // FUN_0020d9d8's third field: how much yaw a bone's *filtered* pose is
+    // currently carrying. The look-at reads it to decide whether there is a
+    // twist left to unwind. Zero when the runtime has no filter for the slot.
+    std::function<float(std::size_t slot, std::size_t bone)> FUN_0020d9d8_bone_yaw;
   };
 
   // FUN_0023a068: the freeze gate every behavior opens with. Advances the
@@ -179,6 +241,10 @@ namespace orphen::ported::entity
   inline constexpr float kDAT_00354534_hoverUp = 0.004f;
   // DAT_003525f0 / DAT_003525f4: FUN_0023a320's dead zone, half a degree.
   inline constexpr float kAngleDeadZone = 0.00872664f;
+
+  // FUN_0023a320: one capped step of `from` toward `to`, zero once inside the
+  // dead zone. Every turning behaviour goes through it.
+  float FUN_0023a320_approach_angle(float from, float to, float maxStep);
 
   // Integrates +0x30/+0x34/+0x38 into position for a non-player actor. See the
   // definition: this is deliberately not the full FUN_002262c0.
