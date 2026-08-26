@@ -1,7 +1,6 @@
 #include "runtime/port_runtime.h"
 
 #include <cstdio>
-#include <cstdlib>
 
 #include "harness/flat_bin_archive.h"
 
@@ -18,6 +17,7 @@
 
 #include <cmath>
 #include <iomanip>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -2767,11 +2767,12 @@ namespace orphen::port
     std::ostringstream name;
     name << "orphen_snapshot_" << frameCount_;
     const std::string stem = name.str();
-    if (std::FILE *file = std::fopen((stem + ".txt").c_str(), "wb"))
+    // std::ofstream, the way every other writer in the port does it -- the
+    // framebuffer capture beside this one included.
+    if (std::ofstream file(stem + ".txt", std::ios::binary); file)
     {
-      std::fwrite(text.data(), 1, text.size(), file);
-      std::fclose(file);
-      std::cout << "[snapshot] wrote " << stem << ".txt\n";
+      file.write(text.data(), static_cast<std::streamsize>(text.size()));
+      std::cout << "[snapshot] wrote " << stem << ".txt" << '\n';
     }
     pendingSnapshotImagePath_ = stem + ".ppm";
   }

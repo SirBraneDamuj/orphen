@@ -14,7 +14,6 @@
 #include "ported/script/object_registers.h"
 
 #include <cmath>
-#include <cstdio>
 #include <iostream>
 
 namespace orphen::ported::script
@@ -1913,10 +1912,9 @@ namespace orphen::ported::script
   {
     const std::size_t savedEntity = currentEntity_;
     const std::uint32_t slot = FUN_0025c258_evaluate();
-    const std::uint32_t p1 = FUN_0025c258_evaluate();
-    const std::uint32_t p2 = FUN_0025c258_evaluate();
+    FUN_0025c258_evaluate();
+    FUN_0025c258_evaluate();
     const std::int32_t entitySelector = static_cast<std::int32_t>(FUN_0025c258_evaluate());
-    std::fprintf(stderr, "[0xAC] args %u %u %u %d\n", (unsigned)slot, p1, p2, (int)entitySelector);
     if (halted_ || environment_.entityPool == nullptr)
     {
       return 0;
@@ -1927,7 +1925,6 @@ namespace orphen::ported::script
       return 0;
     }
 
-    std::fprintf(stderr, "[0xAC] slot=%u entity=%d cur=%u\n", (unsigned)slot, (int)entitySelector, (unsigned)savedEntity);
     const std::uint32_t slotFlag = static_cast<std::uint32_t>(slot) + 0x501;
     if (state.FUN_00266368_eventFlag(slotFlag))
     {
