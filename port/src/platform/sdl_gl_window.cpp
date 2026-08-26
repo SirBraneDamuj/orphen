@@ -209,6 +209,10 @@ namespace orphen::port
         {
           input.toggleSubprocDisplayRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_g)
+        {
+          input.captureSnapshotRequested = true;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
         {
           input.previousMapRequested = true;

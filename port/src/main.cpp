@@ -766,6 +766,7 @@ int main(int argc, char **argv)
         ++loopStats.simSteps;
 
         stepInput.jumpRequested = false;
+        stepInput.captureSnapshotRequested = false;
         stepInput.toggleWireframeRequested = false;
         stepInput.previousMapRequested = false;
         stepInput.nextMapRequested = false;
@@ -787,6 +788,17 @@ int main(int argc, char **argv)
       ++loopStats.displayedFrames;
 
       ++renderedFrames;
+
+      // 'G' during play. The runtime has already written the text; photograph
+      // the frame it describes, after the swap so the buffer still holds it.
+      if (std::string snapshotImage = runtime.consumePendingSnapshotImagePath();
+          !snapshotImage.empty())
+      {
+        const bool wrote = window.captureFramebuffer(snapshotImage.c_str());
+        std::cout << (wrote ? "[snapshot] wrote " : "[snapshot] FAILED to write ") << snapshotImage
+                  << '\n';
+      }
+
       if (capturing && renderedFrames >= config.screenshotFrame)
       {
         const bool wrote = window.captureFramebuffer(config.screenshotPath.c_str());

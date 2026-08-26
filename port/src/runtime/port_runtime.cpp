@@ -1,6 +1,7 @@
 #include "runtime/port_runtime.h"
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "harness/flat_bin_archive.h"
 
@@ -117,6 +118,12 @@ namespace orphen::port
 
   void PortRuntime::initialize(const PortRuntimeConfig &config)
   {
+    // +0x168 lives inside the 0x1D8-byte slot in the original, so every clear of
+    // an entity clears it. The port stores it beside the pool rather than in it;
+    // handing the pool the table restores that shared lifetime.
+    entityPool_.setBoneOverrideTable(DAT_004a7e00_boneOverrides_.data(),
+                                     DAT_004a7e00_boneOverrides_.size());
+
     // Bind before reset: the lead player is pool slot 0, so the controller must
     // already be writing there when resetToMap places it.
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
@@ -2544,6 +2551,231 @@ namespace orphen::port
   // live vs unfiltered isolates the filter. unfiltered vs first isolates the
   // column. Reporting both separately is the point -- a divergence that shows up
   // in one and not the other says which half to go and read.
+
+  std::string PortRuntime::consumePendingSnapshotImagePath()
+  {
+    std::string path;
+    path.swap(pendingSnapshotImagePath_);
+    return path;
+  }
+
+  // 'G'. Everything one frame of the pose pipeline decided, in a form that can
+  // be pasted into a bug report.
+  //
+  // This exists because the interesting failures in this port are the ones that
+  // only appear when the scene is *played*: the script reaches them carrying
+  // state an armed stream never builds, so there is no frame number to point
+  // --screenshot at. What goes in follows the same rule as the other reports --
+  // values the original also has, named by the field they came from, so a line
+  // can be checked against an EE dump rather than believed.
+  void PortRuntime::writeDiagnosticSnapshot()
+  {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3);
+    out << "=== orphen snapshot: frame " << frameCount_ << " ===\n";
+
+    out << "camera eye=(" << fieldCamera_.pose().eye.x << "," << fieldCamera_.pose().eye.y << ","
+        << fieldCamera_.pose().eye.z << ") target=(" << fieldCamera_.pose().target.x << ","
+        << fieldCamera_.pose().target.y << "," << fieldCamera_.pose().target.z << ")"
+        << " yaw=" << fieldCamera_.yawRadians() << " pitch=" << fieldCamera_.pitchRadians()
+        << " roll=" << fieldCamera_.uGpffffb6dc_roll()
+        << " zoom=" << fieldCamera_.fGpffffb6e8_zoomLog2() << "\n";
+
+    // The same ids the SCR SUBPROC DISP overlay prints, so a snapshot lines up
+    // against a screenshot of the overlay.
+    {
+      const auto &state = sceneScript_.state();
+      out << "subprocs:";
+      for (std::size_t slot = 0; slot < orphen::ported::script::SceneScriptState::kGeneralSlotCount;
+           ++slot)
+      {
+        const std::uint32_t offset = state.DAT_00355cf4_objectScriptSlots[slot];
+        if (offset != 0)
+        {
+          out << "  " << slot << "[" << sceneScript_.subprocIdAt(offset) << "]@0x" << std::hex
+              << offset << std::dec;
+        }
+      }
+      out << "\n";
+    }
+
+    EntityModelStore &store = const_cast<EntityModelStore &>(modelStore_);
+
+    // `span` is the posed mesh's bounding box and `bind` the same model's
+    // unposed one. Their ratio is what separates an animation from a palette
+    // that has come apart, and sorting on it puts the broken entity at the top
+    // of the report instead of somewhere in the middle of sixty static props.
+    struct Row
+    {
+      std::size_t slot = 0;
+      float ratio = 0.0f;
+      std::string line;
+      std::string bones;
+    };
+    std::vector<Row> rows;
+
+    for (const auto &view : mapViewer_.sceneObjectViews())
+    {
+      const auto &entity = entityPool_.slot(view.slot);
+      Row row;
+      row.slot = view.slot;
+
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(3);
+      line << "  slot=" << view.slot << " type=0x" << std::hex << entity.typeId00 << std::dec;
+
+      const EntityModelBinding *binding = store.bindingForTypeId(entity.effectiveTypeId());
+      if (binding != nullptr)
+      {
+        line << " grp_" << std::hex << std::setw(4) << std::setfill('0') << binding->meshId
+             << std::dec << std::setfill(' ');
+      }
+
+      line << " anim=" << entity.animationA0 << " col=" << entity.poseColumnAc
+           << " prev=" << entity.previousPoseColumnAe << " blend=" << entity.animationBlend13c
+           << " keyTicks=" << entity.keyframeTicksA6 << std::hex << " +04=0x" << entity.halfword04
+           << " +06=0x" << entity.flags06 << " +08=0x" << entity.halfword08 << std::dec
+           << " parent=" << entity.parentSlot192 << " bone="
+           << static_cast<int>(entity.attachBone194) << " state=" << entity.state60 << " pos=("
+           << view.worldOrigin.x << "," << view.worldOrigin.y << "," << view.worldOrigin.z << ")";
+
+      if (binding != nullptr && binding->model != nullptr && !view.bonePalette.empty())
+      {
+        const auto &model = *binding->model;
+        orphen::ported::psm2::Bounds3 posed;
+        orphen::ported::psm2::Bounds3 bind;
+        for (const auto &vertex : model.vertices)
+        {
+          const std::size_t bone =
+              vertex.boneIndex < view.bonePalette.size() ? vertex.boneIndex : 0u;
+          orphen::ported::psm2::includePoint(
+              posed, orphen::ported::model::transformPoint(vertex.position, view.bonePalette[bone]));
+          orphen::ported::psm2::includePoint(bind, vertex.position);
+        }
+        const float posedSpan = std::max({posed.max.x - posed.min.x, posed.max.y - posed.min.y,
+                                          posed.max.z - posed.min.z});
+        const float bindSpan = std::max({bind.max.x - bind.min.x, bind.max.y - bind.min.y,
+                                         bind.max.z - bind.min.z});
+        line << " span=" << posedSpan << " bind=" << bindSpan;
+        if (bindSpan > 0.0f)
+        {
+          row.ratio = posedSpan / bindSpan;
+          line << " ratio=" << row.ratio;
+          // Skinning moves a mesh around; a legitimate pose in this game reaches
+          // about 2x its bind box (slot 16's grp_00a6 sits at 1.95). Past three
+          // is not an animation.
+          //
+          // The bind span has to be real for the ratio to mean anything. A rope
+          // (grp_001e, the bandana) is authored with every bone stacked at the
+          // origin and takes its shape from the simulation, so its bind box is
+          // 0.044 and the ratio reads 6 while the pose is correct to 4 mm
+          // against hardware. Sort by it, but do not accuse it.
+          if (row.ratio > 3.0f && bindSpan > 0.1f)
+          {
+            line << "  <<< DEFORMED";
+          }
+        }
+
+        // The bone table, for the entities where this class of bug lives: an
+        // attached one, whose root comes out of another entity's palette, and
+        // whatever it is attached to. Origins are relative to bone 0 so they can
+        // be diffed against 0x00357E00 + slot * 0xA80 in an EE dump without
+        // having to subtract a world position first.
+        const bool attached = entity.parentSlot192 >= 0;
+        bool isParent = false;
+        for (const auto &other : mapViewer_.sceneObjectViews())
+        {
+          if (entityPool_.slot(other.slot).parentSlot192 == static_cast<std::int16_t>(view.slot))
+          {
+            isParent = true;
+            break;
+          }
+        }
+        if (attached || isParent || row.ratio > 3.0f)
+        {
+          std::ostringstream bones;
+          bones << std::fixed << std::setprecision(3);
+          bones << "    bones (origin relative to bone 0, then axis length):\n";
+          for (std::size_t bone = 0; bone < view.bonePalette.size(); ++bone)
+          {
+            const auto &m = view.bonePalette[bone];
+            const auto &r = view.bonePalette[0];
+            const float scale =
+                std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+            bones << "      " << std::setw(2) << bone << " (" << std::setw(7) << m[12] - r[12]
+                  << "," << std::setw(7) << m[13] - r[13] << "," << std::setw(7) << m[14] - r[14]
+                  << ")  scale=" << scale << "\n";
+          }
+          row.bones = bones.str();
+        }
+      }
+      line << "\n";
+      row.line = line.str();
+      rows.push_back(std::move(row));
+    }
+
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const Row &a, const Row &b) { return a.ratio > b.ratio; });
+
+    out << "draw list (" << rows.size()
+        << " entries, worst posed/bind ratio first; a rope bind box is collapsed"
+           " so its ratio runs high while posed correctly):\n";
+    for (const auto &row : rows)
+    {
+      out << row.line;
+    }
+    for (const auto &row : rows)
+    {
+      if (!row.bones.empty())
+      {
+        out << "  slot " << row.slot << " bone detail:\n" << row.bones;
+      }
+    }
+
+    // A live entity that is *not* in the draw list was dropped by
+    // FUN_0020c5a8's queue -- hidden, or deferred behind a parent that never
+    // posed. Which of those it is matters, so the flags come along.
+    out << "live but not drawn:";
+    for (std::size_t slot = 0; slot < orphen::ported::entity::kEntitySlotCount; ++slot)
+    {
+      const auto &entity = entityPool_.slot(slot);
+      if (entity.typeId00 <= 0)
+      {
+        continue;
+      }
+      bool drawn = false;
+      for (const auto &view : mapViewer_.sceneObjectViews())
+      {
+        if (view.slot == slot)
+        {
+          drawn = true;
+          break;
+        }
+      }
+      if (!drawn)
+      {
+        out << "  " << slot << "(0x" << std::hex << entity.typeId00 << " +04=0x"
+            << entity.halfword04 << " +08=0x" << entity.halfword08 << std::dec
+            << " parent=" << entity.parentSlot192 << ")";
+      }
+    }
+    out << "\n=== end snapshot ===\n";
+
+    const std::string text = out.str();
+    std::cout << text << std::flush;
+
+    std::ostringstream name;
+    name << "orphen_snapshot_" << frameCount_;
+    const std::string stem = name.str();
+    if (std::FILE *file = std::fopen((stem + ".txt").c_str(), "wb"))
+    {
+      std::fwrite(text.data(), 1, text.size(), file);
+      std::fclose(file);
+      std::cout << "[snapshot] wrote " << stem << ".txt\n";
+    }
+    pendingSnapshotImagePath_ = stem + ".ppm";
+  }
+
   void PortRuntime::printPoseReport(std::size_t slot) const
   {
     const auto &entity = entityPool_.slot(slot);
@@ -3564,6 +3796,11 @@ namespace orphen::port
     const float stepSeconds = orphen::ported::kNominalFrameSeconds *
                               (static_cast<float>(frameTicks) / static_cast<float>(orphen::ported::kNominalFrameTicks));
     mapViewer_.update(stepSeconds, input);
+
+    if (input.captureSnapshotRequested)
+    {
+      writeDiagnosticSnapshot();
+    }
 
     if (input.toggleSubprocDisplayRequested)
     {

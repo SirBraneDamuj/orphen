@@ -272,6 +272,20 @@ namespace orphen::port
     bool suppressPointLights_ = false;
     int poseReportSlot_ = -1;
     void printPoseReport(std::size_t slot) const;
+
+    // 'G' in play. One frame's worth of everything the pose pipeline decided,
+    // for a glitch that only reproduces by playing the scene rather than at a
+    // frame number a capture run can be pointed at.
+    void writeDiagnosticSnapshot();
+
+  public:
+    // Set for one frame after writeDiagnosticSnapshot ran, so main() can
+    // photograph the same frame next to the text. Returns the .ppm path to
+    // write, or empty when no snapshot is pending.
+    std::string consumePendingSnapshotImagePath();
+
+  private:
+    std::string pendingSnapshotImagePath_;
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;
     // Rising-edge state for the live trigger log, so stepping on a panel says

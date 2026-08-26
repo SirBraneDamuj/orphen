@@ -1,9 +1,26 @@
 #include "ported/entity/entity_pool.h"
 
+#include "ported/model/psc3_skeleton.h"
+
 #include <cstring>
 
 namespace orphen::ported::entity
 {
+
+  void EntityPool::setBoneOverrideTable(orphen::ported::model::EntityBoneOverrides *table,
+                                        std::size_t count)
+  {
+    boneOverrides_ = table;
+    boneOverrideCount_ = count;
+  }
+
+  void EntityPool::clearBoneOverrides(std::size_t index)
+  {
+    if (boneOverrides_ != nullptr && index < boneOverrideCount_)
+    {
+      boneOverrides_[index].reset();
+    }
+  }
 
   void EntityPool::reset()
   {
@@ -14,6 +31,7 @@ namespace orphen::ported::entity
     {
       slots_[index] = OriginalEntity{};
       status_[index] = SlotStatus::Free;
+      clearBoneOverrides(index);
     }
   }
 
@@ -25,6 +43,7 @@ namespace orphen::ported::entity
     }
     slots_[index] = OriginalEntity{};
     status_[index] = SlotStatus::Free;
+    clearBoneOverrides(index);
   }
 
   std::size_t EntityPool::FUN_00265dc0_allocate_slot(std::size_t start, std::size_t count)
@@ -52,6 +71,9 @@ namespace orphen::ported::entity
 
     OriginalEntity &entity = slots_[index];
     entity = OriginalEntity{};
+    // FUN_00229c40:20's FUN_00267e78(param_1, 0x1d8) -- the whole slot, which
+    // includes +0x168.
+    clearBoneOverrides(index);
     entity.typeId00 = static_cast<std::int16_t>(typeId);
 
     // The status byte follows the sign of the type id, not the allocation.

@@ -7,6 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace orphen::ported::model
+{
+  struct EntityBoneOverrides;
+}
+
 namespace orphen::ported::entity
 {
 
@@ -59,6 +64,21 @@ namespace orphen::ported::entity
     // FUN_0022a418 clears slots 10..255 on every map load and leaves slot 0
     // alone, because slot 0 is rebuilt separately from its own descriptor.
     void reset();
+
+    // Entity +0x168..+0x191, the 42 per-bone override modes, live *inside* the
+    // 0x1D8-byte slot in the original -- so every FUN_00267e78(entity, 0x1d8)
+    // clears them along with the rest of the struct. The port keeps them in a
+    // side table instead (EntityBoneOverrides, so the mode byte and the pose it
+    // selects stay together), and a side table does not get cleared by
+    // assigning a fresh OriginalEntity. Point the pool at it and the two go
+    // back to sharing a lifetime.
+    //
+    // Without this a slot inherits the previous occupant's overrides:
+    // FUN_002cdb28 drives bones {3,4,5,6} on every type 0x62, and s01_e012's
+    // close-up head lands in a slot one of them vacated, so its jaw -- bones
+    // 3..7 of grp_001f -- collapsed onto the skull.
+    void setBoneOverrideTable(orphen::ported::model::EntityBoneOverrides *table,
+                              std::size_t count);
 
     OriginalEntity &slot(std::size_t index) { return slots_[index]; }
     const OriginalEntity &slot(std::size_t index) const { return slots_[index]; }
@@ -149,8 +169,15 @@ namespace orphen::ported::entity
     std::size_t scriptSpawnedCount() const;
 
   private:
+    // Mirrors FUN_00267e78(entity, 0x1d8) over the half of the slot the port
+    // stores outside OriginalEntity. No-op until the table is installed, which
+    // keeps the pool usable in harnesses that have no skeleton at all.
+    void clearBoneOverrides(std::size_t index);
+
     std::array<OriginalEntity, kEntitySlotCount> slots_{};
     std::array<SlotStatus, kEntitySlotCount> status_{};
+    orphen::ported::model::EntityBoneOverrides *boneOverrides_ = nullptr;
+    std::size_t boneOverrideCount_ = 0;
   };
 
 } // namespace orphen::ported::entity

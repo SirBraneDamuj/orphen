@@ -2023,6 +2023,91 @@ The port holds the bit set by default, the same way it holds
 here, and these lines belong to the same readout as the position display. `P`
 toggles it, `--no-scr-subproc-disp` starts it off.
 
+### `+0x168` is inside the slot, so clearing the slot clears it
+
+Orphen's jaw came apart in the s01_e012 close-up when the scene was **played**,
+and never under `--arm-stream d780:13400`. The armed run put the close-up head in
+pool slot 72; play puts it in slot **64**, which is where the save state has it
+too -- so the allocation was right and the difference was what had been in the
+slot before.
+
+A `G` snapshot from play, differenced against the head's palette in the save
+state (`0x00357E00 + 64 * 0xA80`), named the bones:
+
+```
+bone   port(rel to bone0)          real(rel to bone0)         delta
+   1  (  0.000, -0.010,  0.021)   (  0.000, -0.010,  0.021)     0.3 mm
+   2  ( -0.000,  0.049,  0.081)   ( -0.000,  0.049,  0.081)     0.1 mm
+   3  (  0.000, -0.010,  0.021)   (  0.000, -0.019,  0.061)    41.1 mm
+   4  (  0.000, -0.010,  0.021)   ( -0.006, -0.069,  0.053)    67.4 mm
+   5  (  0.000, -0.010,  0.021)   (  0.006, -0.069,  0.053)    67.4 mm
+   6  (  0.000, -0.010,  0.021)   (  0.000, -0.072,  0.052)    69.4 mm
+   8  (  0.000, -0.074,  0.062)   (  0.000, -0.074,  0.061)     0.8 mm
+```
+
+Bones 3, 4, 5 and 6 sit at exactly bone 1's position -- bone 3's parent -- and 7
+follows because it is 3's child. Everything else is right to under 2 mm.
+
+**`FUN_002cdb28` drives bones `{3,4,5,6}`.** `DAT_00326650` is that list and
+`DAT_00326640` the roll angles; it is the wing flap on every type `0x62`, it sets
+translation 0 with duration 0, and a bone overridden to zero translation lands on
+its parent. One of them had lived in slot 64 earlier in the scene and left its
+overrides behind.
+
+In the original that cannot happen, because **entity `+0x168`..`+0x191` -- the 42
+per-bone override modes -- are part of the 0x1D8-byte slot**, and
+`FUN_00229c40:20` opens with `FUN_00267e78(param_1, 0x1d8)`: allocating a slot
+zeroes the modes along with everything else. The port keeps them in a side table
+(`EntityBoneOverrides`, so the mode byte and the pose it selects stay together,
+which is still the right call) and `entity = OriginalEntity{}` does not reach it.
+
+`EntityPool` now owns a pointer to that table and clears the entry in `reset`,
+`releaseSlot` and `FUN_00229c40_initialize` -- the three places it clears the
+struct. Reproduced deterministically by planting `{3,4,5,6}` overrides on slot 72
+at frame 14000 before the rig builds: without the clear the armed run collapses
+to the same `(0.000, -0.010, 0.021)` on all four bones, with it the jaw is
+correct to hardware. The armed-stream capture at 15810 is unchanged.
+
+**The lesson is about storage, not animation.** Any per-slot state the port keeps
+outside `OriginalEntity` has to be cleared by whatever clears the slot, because
+in the original it was never outside it. The pose filter bank at `0x003FFE00` is
+the other one, and it is handled separately -- see the `seeded` flag.
+
+### `G`: snapshot the frame you are looking at
+
+The failures worth chasing in this port are increasingly the ones that only
+appear when the scene is **played**. The script reaches them carrying state an
+armed stream never builds -- s01_e012's close-up is reached with the flood's
+subproc 5112 live if you walk in, and not at all under
+`--arm-stream d780:13400` -- so there is no frame number to point `--screenshot`
+at, and a `--frames` capture photographs a different run.
+
+`G` during play dumps the frame you are on: the text goes to stdout **and** to
+`orphen_snapshot_<frame>.txt`, and the framebuffer is written beside it as
+`orphen_snapshot_<frame>.ppm`, both in the working directory. One press is one
+snapshot even when a slow frame drives several simulation steps.
+
+The report carries, per entity in the draw list, the fields that decide a pose:
+`+0xA0` animation, `+0xAC`/`+0xAE` pose column and previous, `+0x13C` blend,
+`+0x04`/`+0x06`/`+0x08`, `+0x192`/`+0x194` parent and bone. Then two derived
+numbers that are the point of it:
+
+- **`span` / `bind` / `ratio`** -- the posed mesh's bounding box against the same
+  model's unposed one. Skinning moves a mesh; it does not treble the size of its
+  box. Rows are sorted worst ratio first, so a broken entity is line one rather
+  than somewhere in the middle of sixty static props, and anything past 3.0 with
+  a real bind box is marked `<<< DEFORMED`. The bind box has to be real for the
+  ratio to mean anything: a rope (`grp_001e`, the bandana) is authored with every
+  bone stacked at the origin and takes its shape from the simulation, so its bind
+  box is 0.044 and it reads 6.06 while posed correctly to 4 mm against hardware.
+- **the bone table**, for every attached entity and everything something is
+  attached to. Origins are printed relative to bone 0 so they diff straight
+  against `0x00357E00 + slot * 0xA80` in an EE dump without subtracting a world
+  position first.
+
+A `live but not drawn` line closes it, with `+0x04`/`+0x08`/parent for each, so a
+child that `FUN_0020c5a8`'s queue dropped can be told from one that was hidden.
+
 `FUN_0025b778:38-58` has a second loop behind the same printf — the
 "SCEN WORK DISP" submenu. Four words of mask at `DAT_0031e770`, one bit per work
 word, each set bit printing ` %02d:%d(%X)` (`0x0034CA78`) for

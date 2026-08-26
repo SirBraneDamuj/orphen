@@ -21,6 +21,10 @@ namespace orphen::port
     bool toggleSubprocDisplayRequested = false;
     bool previousMapRequested = false;
     bool nextMapRequested = false;
+    // 'G': dump a pose/draw-list snapshot of the current frame to stdout and to
+    // a file, and photograph the frame next to it. For reporting a glitch that
+    // only shows up in play, where there is no frame number to capture at.
+    bool captureSnapshotRequested = false;
 
     // Left click: fire a ray through this pixel and report every entity triangle
     // along it, drawn or not. Window pixels, origin top-left.
