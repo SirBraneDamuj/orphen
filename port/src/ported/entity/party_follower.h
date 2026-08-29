@@ -20,13 +20,19 @@
 //   0x0025ab48           state 10, wait for the floor after a stagger
 //   src/FUN_00259520.c   where the formation spot beside the lead comes from
 //
-// States 4, 5 and 6 are the recovery paths -- navmesh cell walking
-// (FUN_00259ec0 / FUN_00259378 / FUN_00258c70) and the "teleport to a nearby
-// waypoint" bail-out (FUN_0025a0c8 / FUN_0025a298). They read the map's
-// collision cell graph and its waypoint array, neither of which the port
-// publishes, so they are left to the ActorTrace to report rather than guessed
-// at. A follower only reaches them when the flat-ground path has already given
-// up.
+//   src/FUN_00259ec0.c   state 4, walking the navigation graph
+//   src/FUN_0025a298.c   state 6, the bail-out: teleport to a breadcrumb when
+//                        off camera, otherwise retry the pathfinder
+//   src/FUN_00259378.c   the pathfinder itself; see ported/entity/
+//                        follower_navmesh.* for the graph behind it
+//
+// **State 5 is dead code in the retail build.** FUN_00259378 only reaches it
+// through FUN_00258b80, and FUN_00258b80's body is a 511-iteration loop over
+// the breadcrumb ring whose result is discarded, followed by an unconditional
+// `addiu $v0, $zero, -1`. Ghidra shows the same thing ("Removing unreachable
+// block"). The -1 always sends the follower to state 6 instead, so
+// FUN_0025a0c8 is the one part of this subsystem left unported -- deliberately,
+// because nothing can call it.
 
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"

@@ -23,8 +23,8 @@ namespace orphen::port
     constexpr std::uint32_t kFlatHeightBit = 0x200;
 
     // FUN_00228090:11. Dynamic primitives resolve their plane through
-    // FUN_002281a0 against a live transform. The port has no moving collision,
-    // so these fall back to the flat height rather than reading a stale plane.
+    // FUN_002281a0 against the live vertices, which is what makes an animated
+    // collision group answer a ground query correctly while it is moving.
     constexpr std::uint32_t kDynamicPrimitiveBit = 0x10000;
 
     // FUN_00227840 splits the sampled primitives on this bit: it sets the
@@ -152,40 +152,36 @@ namespace orphen::port
                        squaredDistancePointSegment2d(secondEnd, firstStart, firstEnd)});
     }
 
-    bool pointInsideTriangle2d(const Vec2 &point, const Vec2 &first, const Vec2 &second, const Vec2 &third)
+    // FUN_00228058. The 2D edge function every containment test in
+    // FUN_00227d28 is built out of, with the point taken from workspace
+    // +0x24/+0x28.
+    float FUN_00228058_edge(const Vec2 &first, const Vec2 &second, const Vec2 &point)
     {
-      const float v0x = second.x - first.x;
-      const float v0y = second.y - first.y;
-      const float v1x = third.x - first.x;
-      const float v1y = third.y - first.y;
-      const float v2x = point.x - first.x;
-      const float v2y = point.y - first.y;
-      const float denominator = v0x * v1y - v1x * v0y;
-      if (std::abs(denominator) <= kGeometryEpsilon)
-      {
-        return false;
-      }
-
-      const float u = (v2x * v1y - v1x * v2y) / denominator;
-      const float v = (v0x * v2y - v2x * v0y) / denominator;
-      const float w = 1.0f - u - v;
-      return u >= kBarycentricEpsilon && v >= kBarycentricEpsilon && w >= kBarycentricEpsilon;
+      return (second.x - first.x) * (point.y - first.y) -
+             (second.y - first.y) * (point.x - first.x);
     }
 
-
-    // FUN_00227d28. The bbox reject at +0x18..+0x24 followed by a winding test
-    // per half. A triangle (corner 2 == corner 3) is one half over corners
-    // (0,1,2); a quad is split on the 1--3 diagonal into (3,0,1) and (1,2,3),
-    // and which half was hit is what the original stashes in +0xD0 and folds
-    // into entity +0x0A as `primitive | (half << 14)`.
+    // FUN_00227d28. The bbox reject at +0x18..+0x24, then one winding-sensitive
+    // edge test per half.
     //
-    // The original's edge tests are winding-sensitive, and it flips their sense
-    // for kCeilingBit primitives via the +0x22 selector. The port uses a
-    // winding-agnostic point-in-triangle instead: the two are equivalent
-    // wherever a primitive's authored winding agrees with its kCeilingBit,
-    // which is what the +0x22 selector exists to assume, and this way a
-    // primitive whose winding disagrees still reports the containment its flag
-    // claims rather than silently vanishing from collision.
+    // A triangle -- corner 2 == corner 3 -- is the single half (0,1,2). A quad
+    // is split on the 1--3 diagonal, and the diagonal's own edge function
+    // *selects* which half to test rather than both being tried: on or left of
+    // it is half 0 = (3,0,1), right of it is half 1 = (1,2,3). Which half was
+    // hit is +0xD0, and folds into entity +0x0A as `primitive | (half << 14)`.
+    //
+    // The sense of every comparison flips for a kCeilingBit primitive, which is
+    // what FUN_00227840 stages in +0x22 ahead of each call: a front face wants
+    // every edge `>= 0`, a reversed one wants every edge `<= 0`.
+    //
+    // **There is no tolerance anywhere in it.** The port used to run a
+    // winding-agnostic barycentric test with -0.0005 of slack, on the reasoning
+    // that a primitive whose authored winding disagreed with its ceiling bit
+    // should still collide. That slack is a real behavioural difference: at
+    // s01_e012's crates it is 1e-4 of world space, and a party member's
+    // footprint corner grazing a crate edge from *outside* by that much was
+    // enough for the four-corner sample to take the crate top as his ground and
+    // stand him on it.
     bool overlapsPrimitive(const orphen::ported::psm2::Psm2RuntimeState &map,
                            const orphen::ported::psm2::DRecord78 &record78,
                            float x,
@@ -208,19 +204,30 @@ namespace orphen::port
       };
 
       const Vec2 point{x, y};
-      const bool isTriangle = record78.vertexIndices[2] == record78.vertexIndices[3];
-      if (isTriangle)
+      const Vec2 first = corner(0);
+      const Vec2 second = corner(1);
+      const Vec2 third = corner(2);
+      const Vec2 fourth = corner(3);
+
+      const bool reversed = (record78.leadingWord & kCeilingBit) != 0;
+      const auto inside = [reversed, &point](const Vec2 &edgeStart, const Vec2 &edgeEnd) {
+        const float edge = FUN_00228058_edge(edgeStart, edgeEnd, point);
+        return reversed ? !(0.0f < edge) : !(edge < 0.0f);
+      };
+
+      halfOut = 0;
+      if (record78.vertexIndices[2] == record78.vertexIndices[3])
       {
-        halfOut = 0;
-        return pointInsideTriangle2d(point, corner(0), corner(1), corner(2));
+        return inside(first, second) && inside(second, third) && inside(third, first);
       }
 
-      if (pointInsideTriangle2d(point, corner(3), corner(0), corner(1)))
+      const float diagonal = FUN_00228058_edge(second, fourth, point);
+      if (reversed ? !(0.0f < diagonal) : !(diagonal < 0.0f))
       {
-        halfOut = 0;
-        return true;
+        return inside(fourth, first) && inside(first, second);
       }
-      if (pointInsideTriangle2d(point, corner(1), corner(2), corner(3)))
+
+      if (inside(second, third) && inside(third, fourth))
       {
         halfOut = 1;
         return true;
@@ -239,18 +246,55 @@ namespace orphen::port
                             float y)
     {
       const float flatHeight = record78.bounds.valid ? record78.bounds.max.z : 0.0f;
-      if ((record78.leadingWord & (kFlatHeightBit | kDynamicPrimitiveBit)) != 0)
+
+      // FUN_00228090:11-19. A dynamic primitive is tested **before** the flat
+      // bit and never takes the flat path: its stored plane went stale the
+      // moment FUN_00208450 moved its group, so FUN_002281a0 rebuilds the
+      // normal from the live vertices on every query. Falling back to
+      // bounds.max.z here instead -- which is what the port used to do, back
+      // when it had no moving collision -- hands the ground scan a door's
+      // bounding-box lid as if it were floor.
+      orphen::ported::psm2::Vec3 normal = record78.planeNormal[half];
+      std::size_t originCorner = record78.planeOriginCorner[half] & 3u;
+      if ((record78.leadingWord & kDynamicPrimitiveBit) != 0)
+      {
+        // The triple and its anchor, exactly as FUN_002281a0 picks them: a
+        // triangle takes (0,1,2) anchored at 1, a quad's half 0 takes (3,0,1)
+        // anchored at 0 and its half 1 takes (1,2,3) anchored at 2. The anchor
+        // is the middle corner of the triple, which is what +0x124 records.
+        const bool isTriangle = record78.vertexIndices[2] == record78.vertexIndices[3];
+        std::array<std::size_t, 3> triple{0, 1, 2};
+        if (isTriangle)
+        {
+          originCorner = 1;
+        }
+        else if (half == 0)
+        {
+          triple = {3, 0, 1};
+          originCorner = 0;
+        }
+        else
+        {
+          triple = {1, 2, 3};
+          originCorner = 2;
+        }
+
+        const auto &p0 = positionForIndex(map, record78.vertexIndices[triple[0]]);
+        const auto &p1 = positionForIndex(map, record78.vertexIndices[triple[1]]);
+        const auto &p2 = positionForIndex(map, record78.vertexIndices[triple[2]]);
+        normal = cross({p1.x - p0.x, p1.y - p0.y, p1.z - p0.z},
+                       {p2.x - p0.x, p2.y - p0.y, p2.z - p0.z});
+      }
+      else if ((record78.leadingWord & kFlatHeightBit) != 0)
       {
         return flatHeight;
       }
 
-      const auto &normal = record78.planeNormal[half];
       if (normal.z == 0.0f)
       {
         return flatHeight;
       }
 
-      const std::size_t originCorner = record78.planeOriginCorner[half] & 3u;
       const auto &origin = positionForIndex(map, record78.vertexIndices[originCorner]);
       return origin.z - ((x - origin.x) * normal.x + (y - origin.y) * normal.y) / normal.z;
     }
@@ -487,7 +531,15 @@ namespace orphen::port
           break;
         }
 
-        if (groupHitCount == 0 || !groupHit.has_value())
+        // FUN_00227840:176. The merge is gated on the hit **count** alone, and
+        // that count includes ceilings. A group whose only overlapping
+        // primitive is a ceiling at or below the head therefore reaches the
+        // merge having recorded nothing, with its height still seeded to the
+        // 128 sentinel -- and adopts it, wiping whatever floor loop one found.
+        // That is not an edge case: it is how a doorway reads as a hole while
+        // the door is swinging through it, which is what the push-out needs in
+        // order to eject an actor standing in the opening.
+        if (groupHitCount == 0)
         {
           continue;
         }
@@ -499,6 +551,9 @@ namespace orphen::port
         {
           continue;
         }
+        // Adopting an unrecorded group is the original writing +0x50 = +0x60
+        // (128), +0x5C = 0xFFFF and +0x58 = 0 -- every seed it set on entry, so
+        // "nothing found" is exactly the empty optional.
         latchedHit = groupHit;
       }
 
@@ -683,6 +738,8 @@ namespace orphen::port
       const auto hit = runScan(corners[cornerIndex].first, corners[cornerIndex].second);
       const float height = heightOf(hit);
       sample.cornerHeights[cornerIndex] = height;
+      sample.cornerPrimitives[cornerIndex] =
+          hit.has_value() ? static_cast<std::int32_t>(hit->primitiveIndex) : -1;
 
       if (cornerIndex == 0)
       {

@@ -69,6 +69,13 @@ namespace orphen::ported::render
     // port has no equivalent of the boot path that clears these.
     void reset();
 
+    // Diagnostic only. `DAT_00571dc0` / `DAT_00571dd0` +0x00 are one of the two
+    // pieces of state that date an EE dump exactly (the other is the event
+    // scheduler cursor), so a snapshot meant to be compared against one has to
+    // carry them.
+    std::uint16_t DAT_00571dc0_fadeInLevel() const { return DAT_00571dc0_fadeIn_.DAT_00571dd0_level; }
+    std::uint16_t DAT_00571dd0_fadeOutLevel() const { return DAT_00571dd0_fadeOut_.DAT_00571dd0_level; }
+
   private:
     // One block. Field names carry the address of the out block's copy.
     struct Block

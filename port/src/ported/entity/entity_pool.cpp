@@ -129,6 +129,28 @@ namespace orphen::ported::entity
     entity.animationA0 = 0;
     entity.previousSubstateA2 = 0xFFFF;
 
+    // FUN_00229c40:79-87, the block the port had been leaving on the zeroes
+    // FUN_00267e78 wrote. Every one of these is visible in an EE dump, and
+    // `scripts/dump_ee_entities.py --compare` had all 84 occupied slots of
+    // s01_e012 differing on the first two:
+    //
+    //   +0x74  the terrain reject mask. `0x04000000` is seeded here for
+    //          everything, not by the spawn opcodes -- FUN_00266240 only ORs a
+    //          caller's extra bits on top, the player adds `0x08000000` in
+    //          FUN_002cb9a8 and a party member `0x0D000000`. Left at zero the
+    //          query rejects *nothing*, so surface classes the original refuses
+    //          to stand on become walkable floor.
+    //   +0x64  the blocking-entity slot. The original clears the record and
+    //          never writes -1 here; readers gate on +0x0C's 0x60 bits instead,
+    //          which FUN_002262c0 rebuilds every frame.
+    //   +0x0C  starts at 0x1000, not 0.
+    //   +0x98  the placement record index, -1 until a spawn path fills it in.
+    //   +0x7C  100.0.
+    entity.rejectTerrainMask74 = 0x04000000u;
+    entity.blockedBy64 = 0;
+    entity.collisionFlags0c = 0x1000u;
+    entity.placementRecordIndex98 = -1;
+
     // FUN_00229c40's last three lines. Everything whose +0x02 clears 0x200 --
     // which is every type this scene spawns -- starts with the keyframe blend
     // saturated and "not drawn last frame" raised, so the very first pose it

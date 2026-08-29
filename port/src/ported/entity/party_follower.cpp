@@ -14,6 +14,18 @@ namespace orphen::ported::entity
     // DAT_0058befc is +0x4C, DAT_0058bee0/e4 are +0x30/+0x34.
     constexpr std::size_t kLeadSlot = 0;
 
+    // The pathfinder's own constants.
+    constexpr float kDAT_00352a1c_twoPi = 6.28318405f;       // FUN_00259178's spread scale
+    constexpr float kDAT_00352a20_yieldTurn = 1.57079601f;   // a quarter turn off a blocker
+    constexpr float kDAT_00352a24_yieldTurn = 1.57079601f;
+    constexpr float kDAT_00352a28_pathSpeedScale = 1.20000005f;
+    constexpr float kfGpffff8afc_pathArrivalRadius = 1.20000005f;
+    constexpr float kfGpffff8b00_pathSpeedDivisor = 200000.0f;
+    // FUN_0023a0a8's two probe reaches and its step limit, at 0x003525e0.
+    constexpr float kDAT_003525e0_nearProbe = 0.3f;
+    constexpr float kDAT_003525e4_farProbe = 0.8f;
+    constexpr float kDAT_003525e8_probeStepLimit = 0.28f;
+
     // The constant block at 0x00352A28, read straight out of SLUS_200.11.
     constexpr float kDAT_00352a2c_formationDropFloor = -0.6f;
     constexpr float kDAT_00352a30_formationDropCeiling = 0.6f;
@@ -332,6 +344,320 @@ namespace orphen::ported::entity
       return result;
     }
 
+    // FUN_0023a0a8: is a heading clear enough to walk? Two probes ahead, at
+    // 0.3 and 0.8, must both be within 0.28 of the actor's own height, and
+    // their terrain words ANDed together must still satisfy the actor's
+    // required-terrain mask.
+    bool FUN_0023a0a8_heading_is_clear(const OriginalEntity &entity,
+                                       const ActorEnvironment &environment,
+                                       float heading)
+    {
+      const float cosine = std::cos(heading);
+      const float sine = std::sin(heading);
+      const auto probe = [&](float reach) {
+        return FUN_00227798_ground_at(environment, entity.positionX20 + reach * cosine,
+                                      entity.positionZ24 + reach * sine, entity.positionY28);
+      };
+      const PointGround near = probe(kDAT_003525e0_nearProbe);
+      std::uint32_t shared = 0;
+      if (near.found && near.primitive >= 0 && environment.mapPrimitive)
+      {
+        const auto record = environment.mapPrimitive(near.primitive);
+        shared = record.has_value() ? record->terrainFlags : 0;
+      }
+      const PointGround far = probe(kDAT_003525e4_farProbe);
+      if (!near.found || !far.found)
+      {
+        shared = 0;
+      }
+      else if (far.primitive >= 0 && environment.mapPrimitive)
+      {
+        const auto record = environment.mapPrimitive(far.primitive);
+        shared &= record.has_value() ? record->terrainFlags : 0;
+      }
+      if (entity.requiredTerrainMask78 != 0 && (shared & entity.requiredTerrainMask78) == 0)
+      {
+        return false;
+      }
+      return near.height - entity.positionY28 <= kDAT_003525e8_probeStepLimit &&
+             far.height - entity.positionY28 <= kDAT_003525e8_probeStepLimit;
+    }
+
+    // FUN_0023a3a0: straight-line distance from an entity to the lead, in three
+    // dimensions. Ghidra shows this as an empty function because the body ends
+    // in a tail call it could not follow; the disassembly at 0x0023a3a0 is a
+    // dot product against DAT_0058beb0 +0x20..+0x28 followed by `sqrt.s`.
+    float FUN_0023a3a0_distance3_to_lead(const OriginalEntity &entity, const OriginalEntity &lead)
+    {
+      const float dx = entity.positionX20 - lead.positionX20;
+      const float dz = entity.positionZ24 - lead.positionZ24;
+      const float dy = entity.positionY28 - lead.positionY28;
+      return std::sqrt(dx * dx + dz * dz + dy * dy);
+    }
+
+    // FUN_00259178: the shared "something is in the way, do I keep going?" test
+    // that states 4 and 5 run before they commit a step.
+    //
+    //   nothing blocking          keep going
+    //   terrain (0x202)           pick a heading either side of the current one
+    //                             that FUN_0023a0a8 says is clear, hand to
+    //                             state 2 and stop
+    //   another actor (0x60)      one roll in twenty says stand still for 15
+    //                             ticks; otherwise turn a quarter turn away
+    //                             from it and hand to state 2
+    //
+    // Returns 1 to carry on, 0 when it has redirected the follower.
+    int FUN_00259178_yield(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+
+      if ((entity.collisionFlags0c & 0x202u) == 0)
+      {
+        if ((entity.collisionFlags0c & 0x60u) == 0)
+        {
+          return 1;
+        }
+        const std::int32_t blocker = entity.blockedBy64;
+        if (blocker < 0 || static_cast<std::size_t>(blocker) >= kEntitySlotCount)
+        {
+          return 1;
+        }
+        OriginalEntity &other = pool.slot(static_cast<std::size_t>(blocker));
+
+        // +0x02 bit 1 marks an actor worth waiting for rather than walking
+        // round. FUN_00216868 % 1000 > 800 is the one-in-five roll.
+        if ((other.descriptorFlags02 & 2u) != 0 && environment.random &&
+            (environment.random() % 1000u) > 800u &&
+            (other.state60 != 1 || other.fadeRamp62 == 0))
+        {
+          entity.fadeRamp62 = 0x0F;
+          FUN_00225bf0_set_state_and_animation(entity, 1, 0);
+          return 0;
+        }
+
+        const float toBlocker = FUN_0023a4b8_angle_between(entity, other);
+        const float delta = FUN_002166e8_delta(entity.facingRadians5c, toBlocker);
+        entity.desiredFacing1a8 = delta < 0.0f
+                                      ? entity.facingRadians5c + kDAT_00352a20_yieldTurn
+                                      : entity.facingRadians5c - kDAT_00352a24_yieldTurn;
+      }
+      else
+      {
+        // Wedged on geometry: try a wide turn one way, then the other, and
+        // settle for a near-reversal if neither is clear.
+        const std::uint32_t roll = environment.random ? environment.random() : 0;
+        const float spread =
+            (static_cast<float>(static_cast<int>(roll % 0x1E) + 0x4B) * kDAT_00352a1c_twoPi) / 360.0f;
+        entity.desiredFacing1a8 = entity.facingRadians5c + spread;
+        if (!FUN_0023a0a8_heading_is_clear(entity, environment, entity.desiredFacing1a8))
+        {
+          entity.desiredFacing1a8 = entity.facingRadians5c - spread;
+          if (!FUN_0023a0a8_heading_is_clear(entity, environment, entity.desiredFacing1a8))
+          {
+            entity.desiredFacing1a8 =
+                entity.facingRadians5c +
+                (static_cast<float>(static_cast<int>(roll % 0x1E) + 0xA5) * kDAT_00352a1c_twoPi) /
+                    360.0f;
+          }
+        }
+      }
+
+      entity.fadeRamp62 = 5;
+      entity.state60 = 2;
+      entity.animationA0 = 4;
+      entity.desiredHeight1ac = static_cast<float>(entity.followSpeedBase1a2);
+      return 0;
+    }
+
+    // FUN_00259378: ask the navigation graph for a way to +0x1B0.
+    //
+    // Three steps. Sanity-check the target against the floor under it and fall
+    // back to the lead's own position when they disagree by more than half a
+    // unit; flood the graph out from the target into this follower's lane; then
+    // take one step down the gradient from where the follower is standing.
+    //
+    //   a step exists   state 4, animation 0x0E, +0x62 = 1, speed x 1.2
+    //   none, and the target is far enough away to be worth a detour
+    //                   FUN_00258b80, which in the retail build is a loop whose
+    //                   result is discarded and a hard `return -1` -- so this
+    //                   always lands on state 6. State 5 (FUN_0025a0c8, walk to
+    //                   a chosen breadcrumb) is dead code because of it, and is
+    //                   the one piece of this subsystem deliberately not ported.
+    //   none, and it is close                nothing; the caller stays put
+    //
+    // Returns 1 when it has put the follower on a path.
+    int FUN_00259378_pathfind(OriginalEntity &entity,
+                              const ActorEnvironment &environment,
+                              std::size_t slot)
+    {
+      const OriginalEntity &lead = environment.entityPool->slot(kLeadSlot);
+
+      const PointGround under = FUN_00227798_ground_at(
+          environment, entity.followTargetX1b0, entity.followTargetZ1b4, entity.followTargetY1b8);
+      float mismatch = under.height - entity.followTargetY1b8;
+      if (mismatch < 0.0f)
+      {
+        mismatch = -mismatch;
+      }
+      if (0.5f < mismatch)
+      {
+        entity.followTargetX1b0 = lead.positionX20;
+        entity.followTargetZ1b4 = lead.positionZ24;
+      }
+
+      const float toTarget = FUN_00216608_length(entity.positionX20 - entity.followTargetX1b0,
+                                                 entity.positionZ24 - entity.followTargetZ1b4);
+
+      if (environment.followerNavmesh == nullptr || environment.psm2Map == nullptr ||
+          !environment.FUN_00227798_probe)
+      {
+        return 0;
+      }
+
+      environment.followerNavmesh->FUN_002584b0_flood(
+          *environment.psm2Map, environment.FUN_00227798_probe, entity.followTargetX1b0,
+          entity.followTargetZ1b4, entity.followTargetY1b8, entity.followSpot1c6);
+
+      const bool skipCornerCut = environment.DAT_00355030_skipCornerCut != nullptr &&
+                                 *environment.DAT_00355030_skipCornerCut;
+      if (environment.DAT_00355030_skipCornerCut != nullptr)
+      {
+        // FUN_00258c70:102-105 consumes the flag on the way through.
+        *environment.DAT_00355030_skipCornerCut = false;
+      }
+      const NavRecord *step = environment.followerNavmesh->FUN_00258c70_step(
+          *environment.psm2Map, environment.FUN_00227798_probe, &entity, environment.entityPool,
+          entity.positionX20, entity.positionZ24, entity.positionY28, entity.followSpot1c6,
+          skipCornerCut);
+      entity.pathNode198 = step;
+
+      if (step != nullptr)
+      {
+        FUN_00225bf0_set_state_and_animation(entity, 4, 0x0E);
+        entity.fadeRamp62 = 1;
+        entity.desiredHeight1ac =
+            static_cast<float>(entity.followSpeedBase1a2) * kDAT_00352a28_pathSpeedScale;
+        return 1;
+      }
+
+      if (entity.followBlocked1ca != 0)
+      {
+        return 0;
+      }
+      if (0.5f < mismatch || 2.0f < toTarget)
+      {
+        // FUN_00258b80 always answers -1, so this is always the state 6 leg.
+        entity.followPathNode1c0 = -1;
+        FUN_00225bf0_set_state_and_animation(entity, 6, 0);
+      }
+      (void)slot;
+      return 0;
+    }
+
+    // FUN_00259ec0, state 4: walk the graph.
+    //
+    // +0x62 is the "have a step" latch. With it clear the state asks
+    // FUN_00258c70 for the next cell and gives up to state 1 when there is
+    // none; with it set it steers at that cell's centre until it arrives, the
+    // lead moves more than 2 units from the target the path was built for, or
+    // the floor under the cell turns out to be more than a unit away.
+    void FUN_00259ec0_state4_walk_path(OriginalEntity &entity,
+                                       const ActorEnvironment &environment,
+                                       std::size_t slot)
+    {
+      const OriginalEntity &lead = environment.entityPool->slot(kLeadSlot);
+      const auto abandon = [&entity, &lead]() {
+        entity.pathNode198 = nullptr;
+        entity.fadeRamp62 = 0;
+        entity.followPathNode1c0 = -1;
+        entity.state60 = 1;
+        entity.facingRadians5c = FUN_0023a480_angle_to_lead(entity, lead);
+      };
+
+      if (environment.followerNavmesh == nullptr || environment.psm2Map == nullptr ||
+          !environment.FUN_00227798_probe)
+      {
+        abandon();
+        return;
+      }
+
+      if (entity.fadeRamp62 == 0)
+      {
+        const NavRecord *step = environment.followerNavmesh->FUN_00258c70_step(
+            *environment.psm2Map, environment.FUN_00227798_probe, &entity, environment.entityPool,
+            entity.positionX20, entity.positionZ24, entity.positionY28, entity.followSpot1c6,
+            false);
+        entity.pathNode198 = step;
+        if (step == nullptr)
+        {
+          entity.state60 = 1;
+          return;
+        }
+        if ((static_cast<std::uint16_t>(entity.groundPrimitive0a) & 0x3FFFu) ==
+            (static_cast<std::uint16_t>(step->packedPrimitive) & 0x3FFFu))
+        {
+          abandon();
+          return;
+        }
+        entity.fadeRamp62 = 1;
+      }
+
+      // fGpffff8afc: inside 1.2 units of the lead there is nothing left to
+      // route around, so the walk ends and idle takes over.
+      if (FUN_0023a3a0_distance3_to_lead(entity, lead) < kfGpffff8afc_pathArrivalRadius)
+      {
+        return;
+      }
+
+      const float driftX = lead.positionX20 - entity.followTargetX1b0;
+      const float driftZ = lead.positionZ24 - entity.followTargetZ1b4;
+      const float driftY = lead.positionY28 - entity.followTargetY1b8;
+      if (2.0f < std::sqrt(driftX * driftX + driftZ * driftZ + driftY * driftY))
+      {
+        // The lead has walked away from the target this path was built for.
+        entity.fadeRamp62 = 0;
+        entity.state60 = 1;
+        return;
+      }
+
+      if (FUN_00259178_yield(entity, environment) == 0)
+      {
+        return;
+      }
+      const NavRecord *step = entity.pathNode198;
+      if (step == nullptr)
+      {
+        return;
+      }
+      const std::size_t primitive =
+          static_cast<std::size_t>(step->packedPrimitive) & 0x3FFFu;
+      if (primitive >= environment.psm2Map->DAT_003556ac_dRecords80.size())
+      {
+        return;
+      }
+      const auto &center = environment.psm2Map->DAT_003556ac_dRecords80[primitive].center;
+
+      const float toCenterX = center.x - entity.positionX20;
+      const float toCenterZ = center.y - entity.positionZ24;
+      const float heading = std::atan2(toCenterZ, toCenterX);
+      const float step2d = (entity.desiredHeight1ac * static_cast<float>(environment.frameTicks)) /
+                           kfGpffff8b00_pathSpeedDivisor;
+      if (FUN_00216608_length(toCenterX, toCenterZ) < step2d)
+      {
+        entity.fadeRamp62 = 0; // arrived: ask for the next cell next frame
+      }
+      entity.desiredDeltaX30 += step2d * std::cos(heading);
+      entity.facingRadians5c = heading;
+      entity.desiredDeltaZ34 += step2d * std::sin(heading);
+
+      if (std::abs(entity.groundHeight4c - center.z) <= 1.0f)
+      {
+        return;
+      }
+      abandon();
+      (void)slot;
+    }
+
     void FUN_0025a500_state8_follow(OriginalEntity &entity,
                                     const ActorEnvironment &environment,
                                     std::size_t slot,
@@ -351,6 +677,7 @@ namespace orphen::ported::entity
                                       const ActorEnvironment &environment,
                                       ActorTrace &trace)
     {
+      (void)trace;
       const OriginalEntity &lead = environment.entityPool->slot(kLeadSlot);
 
       const float ring = FUN_00216690_wrap(lead.facingRadians5c + entity.followFormationAngle1bc);
@@ -374,13 +701,21 @@ namespace orphen::ported::entity
       if (drop < kDAT_00352a2c_formationDropFloor || kDAT_00352a30_formationDropCeiling < drop ||
           entity.followBlocked1ca != 0)
       {
-        // FUN_00259378: walk the collision cell graph from the lead's own cell
-        // (DAT_003556AC + (lead +0x0A & 0x3FFF) * 0x80) instead of going
-        // straight at the formation spot. The port does not publish that graph,
-        // so this reports rather than guesses -- see the header note on states
-        // 4, 5 and 6.
-        trace.recordStateDispatch(entity.typeId00, entity.state60, 0x00259378u, false);
-        return 0;
+        // The formation spot is unreachable in a straight line, so aim at the
+        // centre of the primitive the *lead* is standing on and let the graph
+        // work out the way there. Returning 2 rather than 1 is how the caller
+        // knows the follower has been put on a path instead of sent at a spot.
+        if (environment.mapPrimitive)
+        {
+          const auto leadCell = environment.mapPrimitive(lead.groundPrimitive0a);
+          if (leadCell.has_value())
+          {
+            entity.followTargetX1b0 = leadCell->centerX;
+            entity.followTargetZ1b4 = leadCell->centerZ;
+            entity.followTargetY1b8 = leadCell->centerY;
+          }
+        }
+        return FUN_00259378_pathfind(entity, environment, environment.currentSlot) != 0 ? 2 : 0;
       }
 
       if (kDAT_00352a34_formationDeadZone < flat &&
@@ -886,11 +1221,25 @@ namespace orphen::ported::entity
           if ((entity.collisionFlags0c & 0x60u) == 0)
           {
             // Wedged against geometry rather than an actor: aim straight at the
-            // lead and let the navmesh take it from there.
+            // lead and let the graph take it from there. DAT_00355030 is raised
+            // across the call so this first step is the plain neighbour, not a
+            // corner cut past the thing that is in the way.
             entity.followTargetX1b0 = lead.positionX20;
             entity.followTargetZ1b4 = lead.positionZ24;
             entity.followTargetY1b8 = lead.positionY28;
-            trace.recordStateDispatch(entity.typeId00, entity.state60, 0x00259378u, false);
+            if (environment.DAT_00355030_skipCornerCut != nullptr)
+            {
+              *environment.DAT_00355030_skipCornerCut = true;
+            }
+            const int routed = FUN_00259378_pathfind(entity, environment, slot);
+            if (environment.DAT_00355030_skipCornerCut != nullptr)
+            {
+              *environment.DAT_00355030_skipCornerCut = false;
+            }
+            if (routed != 0)
+            {
+              return;
+            }
             FUN_00225bf0_set_state_and_animation(entity, 6, 0);
             return;
           }
@@ -1079,6 +1428,9 @@ namespace orphen::ported::entity
       break;
     case 3:
       FUN_00259e50_state3_turn(entity, environment, slot);
+      break;
+    case 4:
+      FUN_00259ec0_state4_walk_path(entity, environment, slot);
       break;
     case 6:
       FUN_0025a298_state6_recover(entity, environment, slot, trace);

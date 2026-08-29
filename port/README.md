@@ -260,42 +260,144 @@ It is not map data: it is a 512-entry ring of where the lead has actually been,
 appended to whenever it moves a quarter unit. State 6 walks it backwards for
 somewhere off camera to reappear, which is a follower's only way out of a wedge.
 
+#### The navigation graph
+
+`ported/entity/follower_navmesh.*` is `DAT_00355038`: one 0x34-byte record per
+map primitive, holding four neighbours, a BFS depth per follower lane, and a
+depth per lane per edge. `FUN_00257fc0` seeds it, `FUN_002582d0` builds it,
+`FUN_002584b0` floods it, `FUN_00258c70` steps down it.
+
+**Adjacency is discovered by probing, not by reading a stored graph.** There is
+no navmesh in the map file. `FUN_00258080` stands at the midpoint of each of a
+primitive's four edges, steps 0.2 sideways -- once to each side, because the
+winding is not known -- from 0.3 above the primitive's centre, and asks the
+ordinary single-point ground query what is underfoot. Whatever answers, if it is
+a different primitive under 50 degrees and not one of the rejected surface
+classes, is the neighbour. `FUN_002582d0` runs that as a flood fill from the
+lead's spawn, so the graph is exactly the floor reachable from where the scene
+starts.
+
+That costs about eight ground queries per primitive at load. It is the 65537
+`FUN_00227840` calls the PS2Recomp spike sees during a map load, and it is why
+it runs once rather than per frame -- 0.2 s of load time for `s01_e012`,
+unmeasurable against the rest.
+
+It is rebuilt by **opcode 0xAB** (`FUN_00263148`, teleport the lead) and nowhere
+else. A scene that opens a door does not rebuild it, and does not need to: the
+probe's body band is the floor's own height plus 0.3, so a door panel standing
+on that floor is above the band and the query answers with the floor behind it.
+Doorways link whether the door is open or shut.
+
+`[nav] follower graph 159/3948 primitives reachable from (-0.12, -2.699, -1.5)`
+is printed once per load. The second number is every collision primitive in the
+map -- walls, ceilings, props -- so a small first number is normal. A first
+number of 0 or 1 means the seed missed the floor, and every follower in that
+scene will fall back to `FUN_00259178`'s blind turns.
+
 #### What is still missing
 
-`FUN_00259378` and the cell-graph flood fill behind it (`FUN_002584b0`,
-`FUN_00258c70`) are **not ported**. That is the follower's pathfinder: the thing
-that routes it *around* an obstacle rather than into it. A follower that gets
-wedged against geometry while the player can see it therefore has no recovery --
-state 6 refuses to teleport on camera, exactly as the original does, and the
-original's other exit is the pathfinder. `--actor-report` names it:
+`FUN_0025a0c8`, state 5, and only because **nothing can reach it**.
+`FUN_00259378` gets there through `FUN_00258b80`, whose retail body is a
+511-iteration loop over the breadcrumb ring that discards every distance it
+computes and then returns `-1` unconditionally (`addiu $v0, $zero, -1` at
+0x00258c48; Ghidra reports the same thing as an unreachable block). The `-1`
+always routes to state 6 instead.
+
+#### Leaving the party releases two bones
+
+`FUN_002589c0` -- the thing opcodes 0xAD/0xAE reach, and what a cutscene runs to
+take a follower back under script control -- ends with more than a type
+restore:
 
 ```
-type=0x37 state=6 -> 0x259378 ticks=6568  UNIMPLEMENTED
+FUN_00251db8();                                  // the follower re-sort
+FUN_00267e78(entity + 0x198, 0x40);              // the whole follower block
+FUN_0020d9c8(entity, FUN_0020dd78(entity, 2));   // the bust bone
+FUN_0020d9c8(entity, FUN_0020dd78(entity, 1));   // the head bone
 ```
 
-That only shows up under `--hold-stick`, which pins the lead into a wall for
-thousands of frames; normal play walks out of it.
+Those last two are the overrides `FUN_00257c78`'s look-at was holding. While
+`+0x168 + bone` is non-zero `FUN_0020d9d8`'s filter takes the override over the
+sampled pose, so an animation played afterwards cannot move that bone at all.
+The port restored the type and left the overrides installed, which pinned
+Magnus' torso upright through the flooding shot in `s01_e012` with his bust
+still aimed at where Orphen had been standing. The block clear is ported with
+them; `FUN_00251db8` is not.
 
-#### The gate that had never been needed before
+#### Falling
+
+`FUN_002262c0:99-113` integrates gravity into `+0x38` for every actor, and the
+only thing gating it is **`+0x04` bit 3**:
+
+```
+dt     = DAT_003555bc * 0.125
++0x38 += v * dt - (g * dt) * dt * 0.5
+v     -= g * dt        (nudged to -1e-05 if it lands on exact zero)
+```
+
+The port used to skip this outright, on the reasoning that the EE dump shows the
+six type `0x62` enemies with `+0x44` at zero. They do -- because they read
+`+0x04 = 0x000b`, bit 3 set, so gravity never touches them. Every *character* in
+the same dump reads `+0x48 = 0.00075` and `+0x44 = 0`, the latter because the
+landing clamp zeroes it once they are resting. `+0x48`'s default in
+`OriginalEntity` was a 24.0 placeholder that nothing ever integrated; it is now
+that 0.00075.
+
+The settle at `:481-520` is not symmetric. A rise is provisional -- it is taken,
+tested against the headroom query, and given back whole if the query refuses. A
+fall is simply clamped at the cached `+0x4C`, which is also the only thing that
+raises `+0x28` for a stationary actor.
+
+Without the fall half, a follower that stepped onto anything never came down:
+the port's clamp only ever raised. The small bumps in the floor of `s01_e012`'s
+chest room left Cleo and Magnus hovering a tenth of a unit up for the rest of
+the scene.
+
+#### Walls: the retry ladder, not an axis split
 
 The party follower is the port's first ground-*walking* non-player actor, and it
-immediately found the gap `integrateNonPlayerMovement` had been carrying a note
-about. That step committed a move and then raised the actor onto whatever the
-ground scan answered with, so a follower walking into the shop counter ratcheted
-up it about a tenth of a unit per frame and finished the scene standing in the
-air.
+found two things `integrateNonPlayerMovement` had invented.
 
-`FUN_002262c0` gates that on the destination's slope against the entity's
-`+0x80`, the same test the lead's copy has carried since the hull-climbing bug.
-It is now applied to non-player actors too, with the same one-axis-at-a-time
-slide and the same refusal bits written into `+0x0C` -- which the follower's own
-stuck detection reads, and which nothing had ever been setting for a non-player.
+**A refused move is retried on rotated headings.** `FUN_002262c0`'s velocity
+section is one `do { } while (true)`, and the wall case falls into a ladder at
+0x00226b58 that re-runs the entity clamps and `FUN_00227390` in full on five
+headings derived from the request's own -- constants from the block at
+0x0035243c:
 
-**This moves `s01_e024`.** The type `0x62` enemies now get blocked by the hull
-where they used to pass through it, so their positions after 3000 frames differ
-and the shared RNG stream shifts with them. `s01_e012` is byte-identical at 3000
-frames. The change is toward the original, not away from it -- `FUN_002262c0` is
-one function and every actor goes through it -- but it is a visible change to a
+| attempt | heading | speed |
+|---|---|---|
+| 0 | as requested | x 0.3 |
+| 1 | +20 degrees | x 0.7 |
+| 2 | -20 degrees | unchanged |
+| 3 | +60 degrees | x 0.5 |
+| 4 | -60 degrees | unchanged |
+| 5 | give up |
+
+Each retry does `flags & 0xffff7ffd | 0x4000`, so the refusal bit comes back
+down and a graze the fan-out resolves does not count as a block at all. The port
+used to try X alone and then Z alone, which is a different shape and grinds
+along a wall instead of going round it.
+
+**`0x20` and `0x40` are entity bits, not terrain bits.** `FUN_00228380` /
+`FUN_002285d8` (the X sweeps) write `0x20`; `FUN_00228838` / `FUN_00228a90` (Z)
+write `0x40`. The axis fallback was minting them from geometry, and the follower
+reads `+0x0C & 0x60` as "an actor is in my way, queue behind it" and `& 0x262`
+as its stuck counter -- so a wall was being reported as a person, and every
+graze counted toward giving up. The port had also collapsed all four blockers
+onto `0x20`; they are now split by axis.
+
+**`+0x0C` is rebuilt every frame.** `FUN_002262c0` seeds a workspace word to
+zero at :37 and stores it over `+0x0C` at :628; nothing ORs into the entity's
+copy in place. The port only ever OR-ed, so once a follower was blocked the bits
+never came down again -- it counted to five standing on open floor and sat in
+state 6 for the rest of the scene. That was the bug behind "the party stays in
+its cutscene positions and never follows again".
+
+**This moves `s01_e024`.** The type `0x62` enemies read the same `+0x0C & 0x202`
+for their scatter branch, so their positions after 3000 frames differ and the
+shared RNG stream shifts with them. `s01_e012` is byte-identical at 3000 frames.
+The change is toward the original, not away from it -- `FUN_002262c0` is one
+function and every actor goes through it -- but it is a visible change to a
 scene that was tuned without it, so it is called out here rather than buried.
 
 ### State of play
@@ -2211,12 +2313,112 @@ word, each set bit printing ` %02d:%d(%X)` (`0x0034CA78`) for
 mask, so it stays zero and the loop prints nothing until a slot is turned on.
 Ported and inert, which is what the original does.
 
-### Two names in the dispatch tables that are wrong
+### A hidden parent must stay "queued", not "posed"
+
+`FUN_0020c5a8`'s second pass has four outcomes per slot, and the status byte it
+writes -- or does not write -- is what the *children* read:
+
+```
++0x08 bit 0 set        clear +0x0C bits 0x3000, raise +0x08 bit 0x10,
+                       **leave the status byte at 0**
+parent < 0             pose and draw, status = 1
+status[parent] == 0    push this slot on the back of the queue
+status[parent] == 1    pose and draw, status = 1
+status[parent] == 0xFF neither; dropped this frame
+```
+
+The port had the hidden test inside its publish helper, which returned early --
+and then the walk wrote `status = 1` over the top anyway. A hidden slot
+therefore read as *posed*, and every child bound to it was drawn.
+
+In s01_e012 that child is **slot 61**, a type `0x2C4` parented to slot 83
+(Dortin, `+0x08 = 0x0133`, hidden from the first frame). With no parent palette
+to resolve against it fell back to its own `+0x20`, which for a bone-local
+attachment is near enough the world origin -- putting the sack Dortin is
+supposed to be carrying on the floor of the middle doorway for the whole scene,
+and then again in his hand once he was drawn. The EE dump agrees with the port
+on every field of slots 61-64, so this was never a spawn or placement problem;
+only the draw walk's bookkeeping.
+
+The hidden branch's third write, `+0xB0 = 0`, is the pose blend's "no previous
+column" (`FUN_0020e840:60` reads it next to `+0xAA`). The port's pose filter
+keeps that in its own state, so there is no field to write.
+
+### Three names in the dispatch tables that are wrong
 
 `analyzed/opcode_dispatch_tables.md` calls opcodes **0xDC** and **0xDD**
 "audio_dispatch". They reach `FUN_0023baf8`, which is an **empty stub in the
 retail build** -- they do nothing at all. **0xDE** is not audio either: it is a
 four-channel timer over `DAT_00571b50`, parallel to the event scheduler.
+
+**0x94 is the camera shake**, not "set_audio_position_normalized". It picked up
+the audio name from the same stub: `FUN_002612e0` divides its first expression
+by `DAT_00352c34` (100000, the ordinary world-space scale), truncates its
+second to a halfword, and hands both to `FUN_0022dcf0` -- which stores them in
+`fGpffffb6f4` / `uGpffffb6f8` and then tail-calls `FUN_0023baf8`. On a devkit
+that last call drove the pad actuators; in retail it is `jr $ra; nop`, so the
+two globals are the whole of what the opcode does.
+
+`FUN_0020bec8` spends them, and that is the only place they are read. At
+0x0020bf78 it has just written the eye height (`DAT_0058C0B0 + 0.4`) into the
+translation it is about to build; at 0x0020bfc4 it adds
+
+```
+min(remaining * 0.0003125, magnitude) * sinf(remaining / 40.0)
+```
+
+to it and subtracts the frame tick from `remaining`. So the shake is **one
+axis, vertical, applied to the eye only** -- the camera rises and falls in
+place and nothing else about the shot moves. The magnitude is a cap on an
+envelope rather than an amplitude: at 200 ticks the ramp term is 0.0625 and the
+scripted 0.3 never bites, which is why every shake in the game fades out on its
+own without the script asking it to.
+
+Two details worth keeping:
+
+- **The request is refused while a shake is running.** 0x0022dd08 compares the
+  incoming *magnitude* against the remaining *tick count* as a float
+  (`c.olt.s $f12, $f0`). That is not a Ghidra artefact -- the disassembly reads
+  the same -- and since magnitudes are fractions and tick counts are hundreds,
+  it means first one wins until the current shake expires.
+- **The spend is 16-bit.** `remaining - frameTicks` is truncated to a halfword
+  and the exhaustion test is that halfword's sign, so an overshoot clamps to 0
+  instead of wrapping to 65000-odd ticks.
+
+`FUN_0022a418:287` clears `uGpffffb6f8` on scene load and leaves the magnitude
+standing; the port does the same.
+
+s01_e012 is the scene that shows it. Subproc **4174** (body 0x9FDF) is four
+opcodes -- cue 702, an `0xDE`, `0x94 0.3 200`, retire -- and the scheduler
+stream at **0xD860** pays it out four times, at 60/60/60/30 frame delays,
+interleaved with Dortin's "Ahhhhh!" and Volcan's "Wha-what's that!?" at the end
+of the ship. Six frames of a decaying vertical jolt, about +/-6 cm at the peak.
+`--arm-stream d860:30` reaches it from a standing start.
+
+### A cue's bank byte can name a music slot
+
+Chasing the rumble that goes with that shake turned up a second gap. Cue 702
+was resolving and then reporting **"bank not loaded"**, because the engine held
+three banks and the cue asked for bank 4.
+
+There are eleven. `FUN_002057c8:44` indexes one table for every cue --
+`(&DAT_003567d4)[bank * 0xb]` -- and `FUN_00205938` loads **music slot N's bank
+into entry N + 3** (`FUN_00205310(desc, param_1 + 3, ...)`). `FUN_00205118`
+fills 0..2 from SND.BIN resources 1/2/3 at boot; slots 0..7 fill 3..10. The
+`slot + 3` that `FUN_00205778` returns is an index into that same table, not a
+slot number, which is the tell.
+
+The port modelled only the indirect route: a cue's **+0x07** alternate id
+through `FUN_00205778` to a music slot. But a cue's **+0x00** bank byte reaches
+the same table directly, and cue 702 uses it -- bank 4 is music slot 1, SND.BIN
+resource 66, which s01_e012 loads at scene start. `bankFor` now maps any bank
+at or above the three boot banks to slot `bank - 3`.
+
+After the fix all four rumbles play (waveform 2, 18536 samples at 14.7 kHz,
+about 1.3 s each), and no cue in either regression scene reports a missing
+bank. Cue 702 is aimed at selector 1, the camera entity, so it plays
+unattenuated at the listener -- the same "not positional" idiom the storm's
+thunder uses.
 
 ### Checking it
 
@@ -2472,6 +2674,195 @@ something, and `+0x84..+0x90` publish the four heights.
 
 Still missing, and named: `FUN_00228cf0` (riding another entity),
 `FUN_002281a0` (the dynamic `0x10000` plane resolve), and `FUN_00208450` itself.
+
+#### The frame's order: behaviours, then groups, then physics
+
+`FUN_002239c8:116-135` is explicit about this and the port had it wrong:
+
+```
+FUN_0025b778   script tick -- 0x55 placements, 0x7E collision-group moves
+FUN_00251ed8   lead player
+FUN_00239ce0   actor behaviours
+FUN_00208450   collision groups          -> sets DAT_003555d0
+FUN_002261e0   physics, FUN_002262c0     -> reads DAT_003555d0
+```
+
+Two separate walks of the pool, and `FUN_00208450` sits **between** them. The
+port fused physics into the behaviour loop (`FUN_00239ce0_update_actors` called
+`integrateNonPlayerMovement` at the bottom of each iteration) and ran the groups
+afterwards. That is wrong twice over: entity A's physics ran before entity B's
+behaviour, and `DAT_003555d0` was always a **frame stale**.
+
+The stale frame is what kept Magnus on the crates. A cutscene `0x55` that drops
+an actor inside scenery gets exactly one physics pass to push it out before the
+vertical settle stands it on top -- so the flag has to be readable on the same
+frame the script raised it, which is precisely why the original puts
+`FUN_00208450` immediately in front of `FUN_002261e0`. The port now has
+`FUN_002261e0_update_physics` as its own pass in that slot.
+
+Confirmed on hardware by forcing `DAT_003555d0` to 0 through the door-close
+animation: the game then leaves Magnus at `(5.546, 0.128, -0.500)` on primitive
+1114 -- the port's exact output, to the last decimal.
+
+**This moves both regression scenes, and two props get worse.** `s01_e024`'s type
+`0x62` enemies shift, because all behaviours now run before any physics. In
+`s01_e012`, slots 35 and 40 now settle onto a floor 0.04 and 0.25 above where
+hardware has them. That is not the reorder's fault -- their `+0x4C` was already
+wrong, and the reorder merely gives the landing snap a chance to act on it. The
+cause is the placement-grounding rule named below: `FUN_0025e7c0:115-120` grounds
+a placed record **only** when its `FUN_0025ba98` record carries `0x8000`, and the
+port grounds every one. Fixing that needs the `uGpffffadf4` archive, which the
+port does not load yet -- `FUN_0025ba98` fills the same 0x28-byte record as
+`FUN_0025bae8` but out of a different file. Against `eeMemory.bin` at frame 1091
+this is 2 position divergences in 84 slots, where before it was 0.
+
+**A diagnostic worth keeping.** Opcode `0x55` now prints when a placement lands
+inside geometry -- the query answered above the authored z -- along with
+`DAT_003555d0` as the script saw it:
+
+```
+[embed] frame 90 slot 81 placed at (5.546, 0.128, -1.5) but the floor there is -0.5 -- DAT_003555d0=0
+```
+
+That one line is what turned "the push never fires" into "the flag is one frame
+late", after three rounds of static reading had failed to.
+
+#### `DAT_003555d0` is not dead, it is transient
+
+Recorded here because it cost most of a session and the wrong conclusion was
+written down twice. `FUN_002262c0:112` has a branch that lets a **stationary**
+actor resample the floor, gated on `DAT_003555d0 != 0 && (entity +0x08 & 0x20)`.
+Three EE dumps all read `0` there, and that was taken as proof the branch never
+runs. It is a **per-frame flag**: `FUN_00208450` clears it at the top of every
+frame and raises it for any collision group with a live dirty byte -- so it is up
+only while a door is swinging or the sea is rolling, and a save state almost
+never lands on one of those frames.
+
+What the branch does is eject an actor from scenery it is standing inside.
+Sample the four footprint corners where the actor already is; set bit `n` when
+corner `n`'s ground is **above** `+0x28`; index `DAT_00318ad0`, sixteen `(x, z)`
+pairs of `0` and `±0.18`:
+
+```
++0x30 = +0x30 * 0.5 + table[mask].x
++0x34 = +0x34 * 0.5 + table[mask].z
+```
+
+It is a movement *request*, spent the same frame by the velocity section, so the
+ejection still obeys walls and step height. Mask `0xF` -- every corner buried, no
+"away" to push toward -- probes 0.5 back along the facing instead, rotating by
+`pi/2` up to four times. The lead additionally gets the same push every 64 frames
+(`DAT_003555b4 & 0x3F`) with no group needed.
+
+**It has exactly one frame to work.** A cutscene `0x55` leaves the actor's feet
+at the authored z with `+0x4C` up on the obstacle, and the vertical settle lifts
+him onto it that same frame. After that the corners are level with the feet, the
+mask reads 0, and he is standing on the crate for good.
+
+That is "Magnus stands on the crates". `0x55` puts him at `(5.546, 0.128)` with a
+`0.15` radius, burying corners 1 and 2 in crate primitive 1114 at `-0.5`. Mask 6,
+table entry `(-0.18, 0.00)`, and hardware ends at `5.366` -- which is where his
+corner clears the crate's edge by 1e-4 and the mask goes to zero. The same 1e-4
+is why the overlap test below must carry no tolerance: with slack the mask never
+clears and the push never stops.
+
+Found by putting a PCSX2 write breakpoint on entity `+0x20`
+(`0x0058beb0 + slot*0x1D8 + 0x20`) and reading the storing PC. Static reading had
+run out three times over; the breakpoint took one hit. Reach for it earlier.
+
+#### The overlap test has no tolerance, and inventing one moves people
+
+`FUN_00227d28` decides whether a query point is on a primitive, and the port had
+been answering that question with a winding-agnostic barycentric test carrying
+`-0.0005` of slack. Both halves of that were invented.
+
+The original is an ordered set of `FUN_00228058` edge functions with plain `<`
+and `>` against zero:
+
+- A **triangle** (corner 2 == corner 3) wants `(0,1)`, `(1,2)` and `(2,0)` all
+  `>= 0`.
+- A **quad** is split on the `1--3` diagonal, and `cross(v1, v3)` *selects* the
+  half rather than both being tried. On or left of it, test half 0 = `(3,0,1)`;
+  right of it, half 1 = `(1,2,3)`, which is also the only path that writes
+  `+0xD0 = 1`.
+- Every comparison **reverses** when `+0x22` is set, which `FUN_00227840` does
+  for `kCeilingBit` primitives. A primitive whose authored winding disagrees
+  with its ceiling bit therefore does not collide at all — that is the hardware
+  behaviour, not an omission to paper over.
+
+The slack is what put Magnus on the crates in the middle of `s01_e012`. He
+stands at `(5.366, 0.128)` with a `0.15` radius, and four-corner sampling asks
+at `(5.516, -0.022)` among others. Crate top 1114 is a quad whose `v1--v2` edge
+runs through `x = 5.5161` at that `y`: the corner is **outside it by 1e-4 of
+world space**, or `-0.00048` in barycentric units. That cleared `-0.0005` by a
+hair, so the corner "hit" the crate at `-0.500`, the four-corner max took it
+over the floor at `-1.500`, and `FUN_002262c0`'s landing snap stood him on top.
+
+With the edge functions the query returns `-1.500` on primitive `1734` —
+`eeMemory.bin`'s `+0x4C` and `+0x0A` for that slot, exactly. Twelve of the
+sixteen entities in the `magnus_floor` save state that carry a queried `+0x0A`
+now reproduce both fields; three of the other four are bandana rope nodes whose
+`+0x4C` is not a ground answer (their primitive index matches), and the fourth
+is the corridor chest sitting on group primitive `3292`, which carries the
+`0x10000` dynamic bit and needs `FUN_002281a0`.
+
+Both regression scenes are byte-identical over 3000 frames, so nothing in the
+opening of either was leaning on the tolerance.
+
+### Diffing the entity pool against hardware, field by field
+
+`G` (or `--snapshot-at <frame>` headless) now ends its report with the entity
+pool laid out in fixed-width columns at the original's own offsets, and
+`scripts/dump_ee_entities.py` prints the identical table out of an EE dump:
+
+```
+python scripts/dump_ee_entities.py <dump-or-savestate-dir> --compare orphen_snapshot_<frame>.txt
+```
+
+`--compare` aligns the two by slot and prints only the fields that differ, which
+a whole-block `diff` cannot do -- one field wrong on eighty slots is one bug,
+twenty fields wrong on one slot is a different one. The snapshot also carries the
+scheduler cursors and both fade levels, which is what dates it against a dump
+instead of eyeballing the camera.
+
+Run against `eeMemory.bin` at frame 1091 it immediately found two fields wrong on
+**all 84 occupied slots**, both from an incompletely ported `FUN_00229c40`:
+
+- **`+0x74`, the terrain reject mask, was zero everywhere.** `0x04000000` is
+  seeded at :79 for every entity; `FUN_00266240` only ORs a caller's extra bits
+  on top, the player adds `0x08000000` (`FUN_002cb9a8`) and a party member
+  `0x0D000000`. A zero mask rejects *nothing*, so every surface class the
+  original refuses to stand on was walkable floor in the port.
+- **`+0x64` cleared to -1 instead of 0.** `FUN_002262c0:40` writes
+  `*(undefined4 *)(iVar12 + 100) = 0` -- decimal 100 is `+0x64`. Zero is a real
+  blocker (slot 0 is the lead), which is why the original's readers gate on
+  `+0x0C & 0x60` rather than on a sentinel.
+
+Both regression scenes stayed byte-identical at 3000 frames across both fixes.
+
+#### Still wrong, and named
+
+The same comparison leaves three gaps standing. None is guesswork -- each is a
+specific line of the decompilation the port does not run:
+
+- **The ground query's writeback.** Hardware carries `+0x0A` (the packed
+  `primitive | (half << 14)`) and `+0x6C` / `+0x70` (the winning and ANDed
+  terrain flags) on every entity that has been queried; the port leaves all
+  three at their spawn values. `FUN_002262c0`'s resample block reads `+0x0A`,
+  and `0` for every s01_e012 primitive's `+0x13` is the only reason that has not
+  bitten yet.
+- **`+0x0C` on a static prop.** Hardware reads `0x0005` / `0x3015`; the port
+  reads `0`, because it does not tick `FUN_002262c0` for entities that never
+  move. The original does, every frame, and rebuilds the word from scratch.
+- **Placement does not always ground.** `FUN_0025e7c0:115-120` samples the floor
+  **only** when the type's record carries `0x8000`, and then through
+  `FUN_00227798` -- the single-point, body-less probe -- clearing `+0x04` bit 8
+  on the same branch. Everything else keeps the authored z that `FUN_002662e0`
+  mirrored into `+0x4C`. The port grounds every placed record unconditionally,
+  which is why a dozen props read `-1.500` against hardware's `-1.250` and the
+  shop clutter reads `0.250` against `0.259`. Since `+0x4C` is exactly what
+  `FUN_002262c0`'s landing snap raises an actor to, this is the first place to
+  look when something stands on scenery it should be beside.
 
 ### `eeMemory.bin` is frame ~1091, and Volcan was never a bug
 
@@ -3243,3 +3634,93 @@ The current lead player is drawn in magenta, and its current ground triangle is 
 9. Drive header word 3 from a player interaction probe (`FUN_00252828`), which is
    what actually opens a chest and is the only thing that moves a type `0x3A`
    past animation 4.
+
+## A moving collision group's primitives need their plane rebuilt per query
+
+`FUN_00228090:11` checks the dynamic bit `0x10000` **before** the flat bit
+`0x200`, so a primitive owned by an animated group never answers with a
+constant. It goes through `FUN_002281a0`, which rebuilds the normal from the
+live vertices -- `(P1-P0) x (P2-P0)` over the same triple the static plane uses,
+triangle `(0,1,2)` anchored at 1, quad half 0 `(3,0,1)` anchored at 0, half 1
+`(1,2,3)` anchored at 2 -- and evaluates the plane normally. The stored plane is
+stale the moment the group moves.
+
+`heightOnPrimitive` used to return `bounds.max.z` for these, under a comment
+saying the port had no moving collision. That was accurate when written and
+stopped being accurate when `FUN_00208450` was ported; nothing rechecked it.
+Every door primitive was handing the ground scan its bounding-box lid as if it
+were floor.
+
+s01_e012, Volcan closing the door at (5.353, -2.019), r 0.15, feet -1.5:
+
+| corner | point | hardware | port (before) |
+|---|---|---|---|
+| 2 | (5.503, -1.869) | `128` (no ground) | `-1.5` |
+| 3 | (5.203, -1.869) | `-1.5` | `0` |
+
+mask 4 -> `(-0.18, -0.18)` -> 5.173 on hardware; mask 8 -> `(+0.18, -0.18)` ->
+5.533 in the port. Note that `128` is the no-ground sentinel and it *sets* the
+mask bit -- the test is `feet < corner`, so the push-out ejects an actor away
+from a hole as readily as out of geometry.
+
+s01_e024 is byte-identical across the fix; s01_e012 moves one line, the player's
+height on primitive 3248 (`leading=0x10804`, dynamic) going from the bounding
+box's -1.18997 to the plane's -1.194.
+
+### Two instruments worth reusing
+
+`--push-probe` logs every embedded-corner push: slot, position, feet, the four
+corner heights, the per-corner primitive, the mask and the table entry. Those
+are the same fields a PCSX2 **execute breakpoint at `0x002265E4`** shows, where
+`$v1` is the mask, `$s1` the entity (`0x0058BEB0 + slot*0x1D8`) and `$s0` the
+workspace.
+
+Better still: a PCSX2 save state taken at that breakpoint carries the live
+workspace in `Scratchpad.bin`. `DAT_70000000` (scratchpad +0) minus `0x170` is
+`FUN_002261e0`'s frame; `ws[0x4a]` names the entity, `ws+0x34..0x40` are the
+corner heights and `ws+0x162` is the mask. A save state at a breakpoint answers
+a register question without needing the registers.
+
+## Known open: placement records sit one ULP below the floor
+
+`DAT_003556e8`'s records author z as `0xBFC00001` where the floor plane is
+exactly `0xBFC00000` -- in the map file and in every dump. Hardware entities all
+read the exact `-1.5`; the port keeps the authored value, and `feet < corner`
+then reads all four corners as embedded (mask 15 on five s01_e012 NPCs at frame
+1). Not yet established as a bug: `FUN_002262c0:112`'s push test runs before the
+landing snap at `:502`, so hardware would see the same value if `DAT_003555d0`
+were raised that early. Needs a breakpoint hit at scene load to settle.
+
+## A ceiling-only collision group adopts the no-ground sentinel
+
+`FUN_00227840:176`'s merge is gated on the group's hit **count** alone
+(`+0x6E`), and that count is incremented for ceilings as well as floors. A group
+whose only overlapping primitive is a ceiling at or below the head therefore
+reaches the merge having recorded nothing, with its height still seeded to
+`0x43000000` = 128 -- and adopts it, overwriting whatever loop one found and
+resetting `+0x5C` to `0xFFFF`.
+
+That is not a curiosity. It is how a doorway reads as a **hole** while the door
+is swinging through it, and the embedded-corner push-out depends on it: the mask
+test is `feet < corner`, so a corner that finds no ground sets its bit and the
+actor is ejected out of the opening.
+
+The port had an extra `!groupHit.has_value()` guard on that merge, which skipped
+it whenever nothing had been recorded -- exactly the ceiling-only case. Removing
+it is the fix.
+
+Confirmed against `magnus_floor` and `volcan_bug`: the two door entities, slots
+18 and 19 at (5.50, +/-1.20), read `+0x0A = -1` and `+0x6C = +0x70 = 0` on
+hardware -- no primitive ever found. The port used to report a floor at -1.50
+there and now reports none. s01_e024 is byte-identical across the change.
+
+### The door itself was never wrong
+
+Worth recording because two rounds were spent on it. The port's door leaf sits
+at the correct pivot with radii identical to hardware's to five decimals; the
+only difference was phase. `0x7D` writes an **absolute** angle, so there is no
+ramp to get wrong, and the logged sequence (`--push-probe` now prints every
+group rotation write) opens at 2 deg/frame to 90, jumps to 45, then closes at
+0.5 deg/frame. Hardware's push fires on the 45 deg frame; the port's fired eight
+frames later at 41 deg, because at 45 deg its mask was still 0 -- the missing
+ceiling merge, not the animation.

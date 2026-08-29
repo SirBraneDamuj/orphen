@@ -1858,9 +1858,7 @@ namespace orphen::ported::script
   // bound it, drops the bone attachments it was holding, empties the slot and
   // clears the slot's event flag. It is a party member leaving the group.
   //
-  // Not modelled here: FUN_00251db8 (the follower re-sort) and the two
-  // FUN_0020d9c8 bone releases, which need the attachment side the port only
-  // has for the bandana.
+  // Not modelled here: FUN_00251db8, the follower re-sort.
   void SceneCommandInterpreter::FUN_002589c0_release_party_slot(std::size_t slot)
   {
     auto &state = *environment_.state;
@@ -1880,6 +1878,33 @@ namespace orphen::ported::script
         entity.typeId00 = entity.partyOriginalType1a0;
         entity.descriptorFlags02 &= static_cast<std::uint16_t>(0xFFFDu);
         entity.halfword04 &= static_cast<std::uint16_t>(0xDFEEu);
+
+        // FUN_00267e78(entity + 0x198, 0x40): the whole follower block goes
+        // back to zero, so nothing it was carrying survives into whatever the
+        // entity becomes next.
+        entity.pathNode198 = nullptr;
+        entity.followTargetX1b0 = 0.0f;
+        entity.followTargetZ1b4 = 0.0f;
+        entity.followTargetY1b8 = 0.0f;
+        entity.followFormationAngle1bc = 0.0f;
+        entity.followPathNode1c0 = -1;
+        entity.followSpot1c6 = 0;
+        entity.followPartySlot1c7 = 0;
+        entity.followBumpCount1c8 = 0;
+        entity.followStuckCount1c9 = 0;
+        entity.followBlocked1ca = 0;
+
+        // **And the two bone overrides the look-at was holding.** Without
+        // these the torso stays wherever FUN_00257c78 last twisted it, and the
+        // animation the cutscene plays next cannot move it: FUN_0020d9d8's
+        // filter takes the override over the sampled pose while +0x168 + bone
+        // is non-zero. That is what pinned Magnus upright through the flooding
+        // shot in s01_e012 -- the release put him back under script control
+        // with his bust bone still aimed at Orphen.
+        if (environment_.FUN_0020d9c8_release_look_bones)
+        {
+          environment_.FUN_0020d9c8_release_look_bones(static_cast<std::size_t>(poolIndex));
+        }
       }
     }
 
@@ -3103,6 +3128,20 @@ namespace orphen::ported::script
       {
         entity->groundHeight4c = *height;
         grounded = true;
+
+        // The placement landed inside something: the query answered above the
+        // authored z, so the vertical settle will stand this entity on top of
+        // it this very frame. FUN_002262c0's embedded-corner push-out is the
+        // only thing that undoes it, and it needs DAT_003555d0 up on *this*
+        // frame -- one frame later is already too late. Report both so a
+        // missed ejection can be told from a mis-timed one.
+        if (*height > z + 0.001f)
+        {
+          std::cout << "[embed] frame " << environment_.frameNumber << " slot "
+                    << currentEntity_ << " placed at (" << x << ", " << y << ", " << z
+                    << ") but the floor there is " << *height << " -- DAT_003555d0="
+                    << (environment_.DAT_003555d0_collisionGroupMoved ? 1 : 0) << '\n';
+        }
       }
     }
 
@@ -3668,11 +3707,37 @@ namespace orphen::ported::script
       return static_cast<std::uint32_t>(static_cast<std::int32_t>(delta * kScriptCoordinateScale));
     }
 
-    // 0x94 (FUN_002612e0): two expressions into FUN_0022dcf0, audio
-    // positioning. Same story as 0xDE.
+    // 0x94 (FUN_002612e0): the camera shake, not audio positioning -- the
+    // dispatch table's name came from FUN_0022dcf0 sitting in the sound file
+    // and tail-calling FUN_0023baf8, which is `jr $ra; nop` in retail.
+    //
+    // Magnitude first, divided by DAT_00352c34 (100000, the same scale every
+    // other world-space operand uses), then the duration in ticks. The second
+    // expression is read back as a **halfword** at 0x00261304 (`lhu 4($sp)`)
+    // and sign-extended, so only its low 16 bits reach FUN_0022dcf0.
+    //
+    // s01_e012 fires it from subproc 4174 alongside cue 702, four times on the
+    // scheduler stream at 0xD860, with magnitude 0.3 and 200 ticks -- about
+    // six frames of a decaying vertical jolt under the "Wha-what's that!?"
+    // exchange at the end of the scene.
     case 0x94:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 2);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t magnitudeRaw = FUN_0025c258_evaluate();
+      const std::uint32_t durationRaw = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      const float magnitude =
+          static_cast<float>(static_cast<std::int32_t>(magnitudeRaw)) / kScriptCoordinateScale;
+      const auto duration = static_cast<std::int16_t>(static_cast<std::uint16_t>(durationRaw));
+      if (environment_.FUN_0022dcf0_shake_camera)
+      {
+        environment_.FUN_0022dcf0_shake_camera(magnitude, duration);
+      }
+      return 0;
+    }
 
     // 0xDE (FUN_00264f50): two expressions -- a channel id and a level -- into
     // FUN_0023bbd8, which sets audio channel state. The mixer does not model

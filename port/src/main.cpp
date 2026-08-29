@@ -2,6 +2,8 @@
 #include "harness/map_viewer.h"
 #include "harness/audio_device.h"
 #include "runtime/port_runtime.h"
+#include "ported/entity/actor_frame_update.h"
+#include "ported/psm2/psm2_collision_groups.h"
 
 #include <algorithm>
 #include <chrono>
@@ -31,6 +33,8 @@ namespace
                  "                  line of dialogue holds. Defaults to searching the\n"
                  "                  disc root for either.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
+                 "  --scr-dump <p>  write the decoded scene script blob out, exactly as\n"
+                 "                  the interpreter sees it.\n"
                  "  --no-scr-tick   stop running the scene script's per-frame entry\n"
                  "                  and its object-script slots. On by default.\n"
                  "  --actor-report  print which actor behavior each spawned entity\n"
@@ -43,6 +47,11 @@ namespace
                  "                  draw each frame N times before presenting, so the\n"
                  "                  render cost can be measured past the compositor's\n"
                  "                  refresh pacing. Implies --frame-stats.\n"
+                 "  --push-probe\n"
+                 "  --snapshot-at <frame>\n"
+                 "                  write the 'G' diagnostic snapshot at <frame>\n"
+                 "                  without a keypress, so a headless run can\n"
+                 "                  produce one and two builds can be diffed.\n"
                  "  --screenshot <path>[:<frame>]\n"
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
@@ -239,6 +248,15 @@ namespace
         config.entityBoundTextureOnly = true;
         continue;
       }
+      if (argument == "--scr-dump")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--scr-dump needs a path");
+        }
+        config.scrDumpPath = argv[++argumentIndex];
+        continue;
+      }
       if (argument == "--dump-map-textures")
       {
         if (argumentIndex + 1 >= argc)
@@ -335,6 +353,22 @@ namespace
           }
           start = comma + 1;
         }
+        continue;
+      }
+      if (argument == "--push-probe")
+      {
+        orphen::ported::entity::gPushProbe = true;
+        orphen::ported::psm2::gGroupProbe = true;
+        continue;
+      }
+      if (argument == "--snapshot-at")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--snapshot-at needs a frame number");
+        }
+        config.snapshotFrame =
+            static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
         continue;
       }
       if (argument == "--arm-stream")

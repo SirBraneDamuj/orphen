@@ -100,6 +100,15 @@ namespace orphen::ported::render
     inline constexpr float kHalfPi = 1.57079601f;            // fGpffff8094 / -fGpffff8098
     inline constexpr float kEyeHeightOffset = 0.400000036f;  // fGpffff808c, 0x00351FFC
 
+    // fGpffff8090, 0x00352000. The shake's amplitude envelope: the offset is
+    // scaled by `remainingTicks * this`, capped at the requested magnitude, so
+    // a shake fades out on its own and the magnitude only bites for requests
+    // longer than 1/kShakeRampPerTick ticks.
+    inline constexpr float kShakeRampPerTick = 0.000312499993f;
+    // 0x0020bfa8's `lui $at, 0x4220`. The sine's argument is the remaining
+    // tick count over this, so a 200-tick shake is about a cycle and a half.
+    inline constexpr float kShakeTicksPerRadian = 40.0f;
+
     // The GS geometry the projection lands in, measured from the repo's GS
     // dump: SCISSOR_1 = 640x224 and XYOFFSET_1 OFX=1728 OFY=1936, so the
     // visible half-extents about the 2048 px centre are 320 and 112.
@@ -110,6 +119,39 @@ namespace orphen::ported::render
     // viewport is letterboxed to this rather than filling the window.
     inline constexpr float kDisplayAspect = 4.0f / 3.0f;
   } // namespace constants
+
+  // fGpffffb6f4 / uGpffffb6f8 (0x00355664 / 0x00355668): the camera shake.
+  //
+  // FUN_0022dcf0 arms it and FUN_0020bec8 spends it, and the spending is the
+  // whole of the effect -- there is no separate shake update. Opcode 0x94 is
+  // the only script route in; the dispatch table calls it
+  // "set_audio_position_normalized" because its one visible callee,
+  // FUN_0023baf8, sits next to the sound code. FUN_0023baf8 is `jr $ra; nop`
+  // in the retail build -- the pad actuators were cut -- so the camera offset
+  // is all that survives.
+  //
+  // The displacement is one axis: FUN_0020bec8:0x0020bfc4 adds it to the eye
+  // height that has already had fGpffff808c's +0.4 folded in, so the camera
+  // rises and falls in place and nothing else about the shot moves.
+  struct CameraShake
+  {
+    float fGpffffb6f4_magnitude = 0.0f;    // 0x00355664
+    std::uint16_t uGpffffb6f8_remaining = 0; // 0x00355668, in frame ticks
+
+    // FUN_0022dcf0. `magnitude` is already divided by DAT_00352c34 (100000),
+    // `durationTicks` is the raw halfword -- 32 ticks to a nominal frame.
+    //
+    // The guard is the odd part and it is not a Ghidra artefact: 0x0022dd08 is
+    // `c.olt.s $f12, $f0` against the *remaining tick count* converted to
+    // float, so a request is refused while a shake is running unless its
+    // magnitude -- a number like 0.3 -- exceeds the ticks left. In practice
+    // that means "one shake at a time, first one wins".
+    void FUN_0022dcf0_request(float magnitude, std::int16_t durationTicks);
+
+    // FUN_0020bec8:0x0020bf70-0x0020bfd8. Returns this frame's displacement
+    // and spends `frameTicks` off the remaining count.
+    float FUN_0020bec8_step(std::uint32_t frameTicks);
+  };
 
   // What FUN_0020bec8 reads out of the camera globals each frame.
   struct FieldCameraView
@@ -124,6 +166,11 @@ namespace orphen::ported::render
     // cGpffffb66e. The port does not use this -- see glCameraFor() -- but it
     // is carried so the shipped value stays visible.
     bool widescreen = false;
+
+    // The shake globals, which FUN_0020bec8 reads *and writes*. Null leaves
+    // the eye where the camera driver put it.
+    CameraShake *shake = nullptr;
+    std::uint32_t DAT_003555bc_frameTicks = 32; // uGpffffb64c, the tick spend
   };
 
   struct ViewProjection

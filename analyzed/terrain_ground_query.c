@@ -98,6 +98,34 @@
  * the 1--3 diagonal into (3,0,1) and (1,2,3); which half hit goes to workspace
  * +0xD0 and ends up in entity +0x0A as `primitive | (half << 14)`.
  *
+ * The winding test is built entirely out of FUN_00228058:
+ *
+ *     edge(a, b) = (b.x - a.x) * (P.y - a.y) - (b.y - a.y) * (P.x - a.x)
+ *
+ * with P the query point at workspace +0x24/+0x28. There is NO tolerance in it
+ * -- every comparison is a plain < or > against 0.0, and the sense of all of
+ * them flips when the workspace's +0x22 selector is set:
+ *
+ *     front face (+0x22 == 0)          ceiling (+0x22 == 0xFF)
+ *     triangle: edge(v0,v1) >= 0       edge(v0,v1) <= 0
+ *            && edge(v1,v2) >= 0    && edge(v1,v2) <= 0
+ *            && edge(v2,v0) >= 0    && edge(v2,v0) <= 0
+ *
+ * For a quad the diagonal SELECTS the half rather than both being tried:
+ *
+ *     d = edge(v1, v3);
+ *     if (front ? d >= 0 : d <= 0)     // half 0, +0xD0 stays 0
+ *         hit = edge(v3,v0) and edge(v0,v1) both on the right side;
+ *     else                             // half 1, the only path writing +0xD0=1
+ *         hit = edge(v1,v2) and edge(v2,v3) both on the right side;
+ *
+ * A primitive whose authored winding disagrees with its 0x100 bit therefore
+ * fails the test outright and is skipped -- the scan walks past it to the next
+ * entry in the cell run. Any tolerance added here is a real behaviour change:
+ * 0.0005 of barycentric slack is ~1e-4 of world space on a crate-sized quad,
+ * and that is enough for a party member's footprint corner to "hit" a crate top
+ * it is standing beside and be snapped up onto it.
+ *
  * FUN_00228090's plane form:
  *     h = origin.z - ((x - origin.x) * n.x + (y - origin.y) * n.y) / n.z
  * with n.z == 0 falling back to the +0x2C constant. `origin` is the MIDDLE

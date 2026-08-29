@@ -86,6 +86,10 @@ namespace orphen::port
     bool hasArmStream = false;
     std::uint32_t armStreamOffset = 0;
     std::uint32_t armStreamFrame = 1;
+    // --snapshot-at <frame>: fire the 'G' diagnostic snapshot from a headless
+    // run instead of a keypress, so the same report can be produced at a frame
+    // number and diffed between builds. 0 means never.
+    std::uint32_t snapshotFrame = 0;
     // --hide-slots: pool slots to drop from the published draw list. Triage
     // only -- it answers "which entity is that" for on-screen geometry, which
     // no report can, because a report names entities and a screenshot names
@@ -110,6 +114,9 @@ namespace orphen::port
     bool mapBaseSlotOnly = false;
     // --entity-bound-texture: ignore each PSC3 subdraw's texture selector.
     bool entityBoundTextureOnly = false;
+    // --scr-dump <path>: write the scene script blob out exactly as the
+    // interpreter sees it, so its bytecode can be read outside the runtime.
+    std::string scrDumpPath;
     // --dump-map-textures <dir>: write the decoded map texture pages out as PAM
     // and stop caring about them. Empty means no dump.
     std::string dumpMapTexturesPath;
@@ -215,6 +222,9 @@ namespace orphen::port
     OriginalLeadPlayer leadPlayer_;
     orphen::ported::camera::OriginalFieldCamera fieldCamera_;
     orphen::ported::render::ViewProjection renderCamera_;
+    // fGpffffb6f4 / uGpffffb6f8. Opcode 0x94 arms it, FUN_0020bec8_build
+    // spends it, and FUN_0022a418:287 clears it on scene load.
+    orphen::ported::render::CameraShake DAT_00355664_cameraShake_;
     orphen::ported::render::MapVisibilityReport visibilityReport_;
     std::uint32_t frameCount_ = 0;
     std::uint64_t trackedMapGeneration_ = 0;
@@ -287,6 +297,18 @@ namespace orphen::port
     bool drawDistanceOverridden_ = false;
     bool suppressPointLights_ = false;
     int poseReportSlot_ = -1;
+    std::string scrDumpPath_;
+
+    // DAT_00355038 and DAT_00355030: the follower navigation graph, and the
+    // one-shot "no corner cut on this step" flag FUN_0025a500 raises around
+    // its FUN_00259378 call.
+    orphen::ported::entity::FollowerNavmesh followerNavmesh_;
+    bool DAT_00355030_skipCornerCut_ = false;
+
+    // FUN_002582d0. Called once per map load with the lead's spawn point, and
+    // again from opcode 0xAB, which is how a scene that has opened a door or
+    // swapped an area gets the new geometry into the graph.
+    void FUN_002582d0_build_follower_navmesh();
     void printPoseReport(std::size_t slot) const;
 
     // 'G' in play. One frame's worth of everything the pose pipeline decided,
@@ -315,6 +337,14 @@ namespace orphen::port
     orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;
     bool printModelReport_ = false;
+    std::uint32_t snapshotFrame_ = 0;
+    // DAT_003555d0, republished into ActorEnvironment each frame.
+    bool DAT_003555d0_collisionGroupMoved_ = false;
+    // Frames DAT_003555d0 has been up, and times the embedded-corner push-out
+    // has produced a request. Both go in the 'G' snapshot: they separate "the
+    // gate never opened" from "it opened and found nothing embedded".
+    std::uint32_t DAT_003555d0_liveFrames_ = 0;
+    std::uint32_t pushOutCount_ = 0;
     bool armStreamPending_ = false;
     std::uint32_t armStreamOffset_ = 0;
     std::uint32_t armStreamFrame_ = 1;
@@ -361,7 +391,9 @@ namespace orphen::port
     void printModelReport() const;
     void printEntityModelBindings() const;
     void printPrimitiveProbe(const orphen::ported::psm2::Vec3 &centre, float radius) const;
-    void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map, const PlayerViewState &leadState);
+    void updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map,
+                             const PlayerViewState &leadState,
+                             std::uint32_t frameTicks);
     void reportTickHalt(const char *what) const;
     bool runInteractionProbe();
     orphen::ported::script::ScriptEnvironment scriptEnvironment(

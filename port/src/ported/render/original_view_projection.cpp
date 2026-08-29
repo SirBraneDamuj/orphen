@@ -124,6 +124,49 @@ namespace orphen::ported::render
     return constants::kScreenHalfHeightPixels * 16.0f / scale;
   }
 
+  // FUN_0022dcf0 (0x0022dcf0).
+  void CameraShake::FUN_0022dcf0_request(float magnitude, std::int16_t durationTicks)
+  {
+    // 0x0022dcf8-0x0022dd0c: a running shake refuses the request unless the
+    // new magnitude outranks the ticks it has left. The comparison really is
+    // float-against-tick-count; see the header.
+    if (uGpffffb6f8_remaining != 0 &&
+        magnitude < static_cast<float>(static_cast<std::int16_t>(uGpffffb6f8_remaining)))
+    {
+      return;
+    }
+    fGpffffb6f4_magnitude = magnitude;
+    uGpffffb6f8_remaining = static_cast<std::uint16_t>(durationTicks);
+    // The rest of FUN_0022dcf0 converts the duration into a pad-actuator
+    // request and tail-calls FUN_0023baf8, which retail leaves empty.
+  }
+
+  // FUN_0020bec8:0x0020bf70-0x0020bfd8.
+  float CameraShake::FUN_0020bec8_step(std::uint32_t frameTicks)
+  {
+    if (uGpffffb6f8_remaining == 0)
+    {
+      return 0.0f;
+    }
+    const float remaining = static_cast<float>(static_cast<std::int16_t>(uGpffffb6f8_remaining));
+
+    float amplitude = remaining * constants::kShakeRampPerTick;
+    if (fGpffffb6f4_magnitude < amplitude)
+    {
+      amplitude = fGpffffb6f4_magnitude;
+    }
+    const float wave = std::sin(remaining / constants::kShakeTicksPerRadian);
+
+    // The spend is a 16-bit subtract and the exhaustion test is the sign of
+    // its low halfword, so a shake that overshoots zero clamps rather than
+    // wrapping to 65000-odd ticks.
+    const std::uint16_t spent =
+        static_cast<std::uint16_t>(uGpffffb6f8_remaining - static_cast<std::uint16_t>(frameTicks));
+    uGpffffb6f8_remaining = static_cast<std::int16_t>(spent) < 0 ? 0 : spent;
+
+    return amplitude * wave;
+  }
+
   ViewProjection FUN_0020bec8_build(const FieldCameraView &camera)
   {
     // FUN_0020bec8:0x0020bf20-0x0020c078. Five component matrices, each
@@ -134,7 +177,15 @@ namespace orphen::ported::render
     Matrix4 roll = FUN_0020bc38_identity();
     Matrix4 axisFlip = FUN_0020bc38_identity();
 
-    const float eyeZ = camera.eye.z + constants::kEyeHeightOffset;
+    // 0x0020bf78 then 0x0020bfc4: the eye height, then the shake on top of it.
+    // The order matters only in that the shake is *not* part of what the audio
+    // listener or DAT_0058BE88 read before it is applied -- the original writes
+    // the shaken value to both.
+    float eyeZ = camera.eye.z + constants::kEyeHeightOffset;
+    if (camera.shake != nullptr)
+    {
+      eyeZ += camera.shake->FUN_0020bec8_step(camera.DAT_003555bc_frameTicks);
+    }
     FUN_0020bb48_setTranslation(translation, -camera.eye.x, -camera.eye.y, -eyeZ);
     FUN_0020bae0_setRotationZ(yaw, camera.yawRadians + constants::kHalfPi);
     FUN_0020ba30_setRotationX(pitch, -constants::kHalfPi - camera.pitchRadians);

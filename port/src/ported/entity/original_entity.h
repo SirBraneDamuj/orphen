@@ -5,6 +5,8 @@
 namespace orphen::ported::entity
 {
 
+  struct NavRecord;
+
   // One slot of the original's entity pool at DAT_0058beb0.
   //
   // The pool is 256 slots of 0x1D8 bytes each, immediately followed by the
@@ -46,7 +48,11 @@ namespace orphen::ported::entity
     float velocityX3c = 0.0f;                // +0x3C: per-frame X velocity published by FUN_00256ab0.
     float velocityZ40 = 0.0f;                // +0x40: per-frame Z velocity published by FUN_00256ab0.
     float verticalVelocity44 = 0.0f;         // +0x44: vertical velocity/jump vector field.
-    float verticalAcceleration48 = 24.0f;    // +0x48: downward acceleration used by FUN_002262c0.
+    // +0x48: downward acceleration, FUN_002262c0:100. eeMemory.bin reads
+    // 0.00075 for the lead, for all four party members and for the type 0x16
+    // in s01_e012 -- the same value the player controller has always used.
+    // The 24.0 that used to sit here was a placeholder nothing integrated.
+    float verticalAcceleration48 = 0.000750000007f;
     float groundHeight4c = 0.0f;             // +0x4C: sampled ground height; opcode 0x55 writes here.
     float previousGroundHeight50 = 0.0f;     // +0x50: previous sampled ground height.
     // Defaults are type id 1's static descriptor (DAT_00318b68 + 0x00, the
@@ -267,6 +273,11 @@ namespace orphen::ported::entity
     // +150 degrees and every later one the negation of the previous one's, so
     // two followers end up on opposite shoulders.
     float followFormationAngle1bc = 0.0f;
+    // +0x198 again, this time as the follower's current path node: the
+    // FUN_00355038 record FUN_00258c70 last handed back. The original keeps a
+    // raw pointer there; so does this, for the same reason the other +0x198
+    // aliases exist.
+    const struct NavRecord *pathNode198 = nullptr;
     std::int16_t followPathNode1c0 = -1; // +0x1C0: waypoint index states 5 and 6 walk to.
     std::int8_t followSpot1c6 = 0;       // +0x1C6: which of three collision lanes this follower paths in.
     std::int8_t followPartySlot1c7 = 0;  // +0x1C7: the party slot it was bound to.

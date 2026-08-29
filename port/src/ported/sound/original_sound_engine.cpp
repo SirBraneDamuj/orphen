@@ -235,7 +235,27 @@ namespace orphen::ported::sound
       }
       return &musicSlots_[slot].bank();
     }
-    if (request.bank >= kBankCount || !banks_[request.bank].valid())
+    // FUN_002057c8:44 indexes one table, `(&DAT_003567d4)[bank * 0xb]`, with
+    // whichever bank number it ended up with -- and that table is 11 entries,
+    // not three. FUN_00205118 fills 0..2 from SND.BIN resources 1/2/3 at boot;
+    // FUN_00205938 loads music slot N's bank into entry **N + 3**
+    // (`FUN_00205310(desc, param_1 + 3, ...)`), which is also why FUN_00205778
+    // returns `slot + 3` rather than the slot.
+    //
+    // So a cue's +0x00 byte can name a scene's own bank directly, without the
+    // +0x07 alternate-id indirection. s01_e012's rumble, cue 702, is bank 4 --
+    // music slot 1 -- and was reported as "bank not loaded" while this only
+    // looked at the three boot banks.
+    if (request.bank >= kBankCount)
+    {
+      const std::size_t slot = static_cast<std::size_t>(request.bank) - kBankCount;
+      if (slot >= kMusicSlotCount || !musicSlots_[slot].bank().valid())
+      {
+        return nullptr;
+      }
+      return &musicSlots_[slot].bank();
+    }
+    if (!banks_[request.bank].valid())
     {
       return nullptr;
     }

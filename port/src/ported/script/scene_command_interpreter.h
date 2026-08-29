@@ -405,6 +405,17 @@ namespace orphen::ported::script
                                        std::uint32_t rejectTerrainMask)>
         FUN_00227070_sample_ground;
 
+    // FUN_002589c0:14-17. Leaving the party drops the two bone overrides the
+    // follower's look-at was holding -- role 2 (the bust) and role 1 (the
+    // head). They live in DAT_004a7e00, which the script layer has no view of,
+    // so the release arrives as a callback the same way everything else does.
+    std::function<void(std::size_t slot)> FUN_0020d9c8_release_look_bones;
+
+    // FUN_0022dcf0: arm the camera shake. `magnitude` has already been divided
+    // by DAT_00352c34 and `durationTicks` is the raw halfword. The state lives
+    // in the render layer's CameraShake, which FUN_0020bec8 spends.
+    std::function<void(float magnitude, std::int16_t durationTicks)> FUN_0022dcf0_shake_camera;
+
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
 
@@ -569,6 +580,13 @@ namespace orphen::ported::script
 
     // DAT_003555bc, the per-frame tick count. The fade steps by it.
     std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks;
+
+    // Diagnostics only. The frame number, and DAT_003555d0 as the actor pass
+    // will see it. Opcode 0x55 reports here when a placement lands *inside*
+    // geometry -- the situation the embedded-corner push-out exists to undo,
+    // and which only gets one frame to be undone in.
+    std::uint32_t frameNumber = 0;
+    bool DAT_003555d0_collisionGroupMoved = false;
 
     // DAT_003555b8 (iGpffffb648), the tick *accumulator* -- FUN_002239c8:189
     // adds DAT_003555bc to it once per frame. It is the phase every native

@@ -150,6 +150,7 @@ namespace orphen::port
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
     suppressPointLights_ = config.suppressPointLights;
     poseReportSlot_ = config.poseReportSlot;
+    scrDumpPath_ = config.scrDumpPath;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
     mapViewer_.setMapBaseSlotOnly(config.mapBaseSlotOnly);
     mapViewer_.setEntityBoundTextureOnly(config.entityBoundTextureOnly);
@@ -170,6 +171,7 @@ namespace orphen::port
     printScriptReport_ = config.printScriptReport;
     printModelReport_ = config.printModelReport;
     hideSlots_ = config.hideSlots;
+    snapshotFrame_ = config.snapshotFrame;
     armStreamPending_ = config.hasArmStream;
     armStreamOffset_ = config.armStreamOffset;
     armStreamFrame_ = config.armStreamFrame;
@@ -329,6 +331,34 @@ namespace orphen::port
     environment.entityPool = &entityPool_;
     environment.dispatchTable = &actorDispatchTable_;
     environment.frameTicks = frameTicks;
+    environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
+    environment.pushOutCounter = &pushOutCount_;
+    environment.frameNumber = frameCount_;
+    environment.terrainPrimitiveCorners =
+        [this](std::size_t primitiveIndex)
+        -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainPrimitiveCorners> {
+      const auto *map = mapViewer_.loadedMap();
+      if (map == nullptr || primitiveIndex >= map->DAT_003556b0_dRecords78.size())
+      {
+        return std::nullopt;
+      }
+      const auto &record78 = map->DAT_003556b0_dRecords78[primitiveIndex];
+      orphen::ported::entity::ActorEnvironment::TerrainPrimitiveCorners out;
+      out.leadingWord = record78.leadingWord;
+      for (std::size_t corner = 0; corner < 4; ++corner)
+      {
+        const std::size_t index = record78.vertexIndices[corner];
+        if (index >= map->DAT_0035569c_sectionCRecords.size())
+        {
+          return std::nullopt;
+        }
+        const auto &position = map->DAT_0035569c_sectionCRecords[index].position;
+        out.corner[corner][0] = position.x;
+        out.corner[corner][1] = position.y;
+        out.corner[corner][2] = position.z;
+      }
+      return out;
+    };
     environment.boneOverrides = DAT_004a7e00_boneOverrides_;
     // FUN_00266368 reads the flag bank that lives in the script state, so the
     // actor tick borrows it rather than owning a second copy.
@@ -345,14 +375,39 @@ namespace orphen::port
     // FUN_0023ae60: the point's bearing from pool slot 1 against the camera's
     // yaw (uGpffffb6d4), inside the cone at DAT_00352600/604 -- +/- 40 degrees.
     environment.FUN_0023ae60_on_camera_axis = [this](float x, float z) {
-      constexpr float kfGpffff8690_coneLow = -0.6981316f;
-      constexpr float kfGpffff8694_coneHigh = 0.6981316f;
+      // 0x00352600 / 0x00352604: -pi/4 and +pi/4. The port had +-0.6981316
+      // (40 degrees) here, which is a narrower cone, so a follower counted as
+      // off camera sooner and took state 6's teleport more readily than the
+      // original allows.
+      constexpr float kfGpffff8690_coneLow = -0.785398006f;
+      constexpr float kfGpffff8694_coneHigh = 0.785398006f;
       const auto &reference = entityPool_.slot(1);
       const float bearing = std::atan2(z - reference.positionZ24, x - reference.positionX20);
       const float delta =
           orphen::ported::model::FUN_002166e8_angle_delta(fieldCamera_.yawRadians(), bearing);
       return delta > kfGpffff8690_coneLow && delta < kfGpffff8694_coneHigh;
     };
+
+    // FUN_00227798 and the graph it feeds. The probe is the single-point form
+    // of the ground query -- entity flags 2, no body band, no reject mask --
+    // and it hands back DAT_00354d4e as well as the height, because the graph
+    // is built out of *which primitive answered*, not out of how high it was.
+    environment.followerNavmesh = &followerNavmesh_;
+    environment.psm2Map = mapViewer_.loadedMap();
+    environment.DAT_00355030_skipCornerCut = &DAT_00355030_skipCornerCut_;
+    if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
+    {
+      environment.FUN_00227798_probe =
+          [loadedMap](float x, float y, float z) -> orphen::ported::entity::NavGroundProbe
+      {
+        const auto sample = FUN_00227070_sample_ground(*loadedMap, x, y, z, 0.0f, 0.0f, 2u, 0u);
+        orphen::ported::entity::NavGroundProbe probe;
+        probe.height = sample.height;
+        probe.DAT_00354d4e_packedPrimitive =
+            static_cast<std::int16_t>(sample.found ? sample.packedPrimitive : -1);
+        return probe;
+      };
+    }
 
     environment.mapPrimitive = [this](std::int32_t packedPrimitive)
         -> std::optional<orphen::ported::entity::ActorEnvironment::MapPrimitive>
@@ -475,6 +530,7 @@ namespace orphen::port
         surface.terrainFlagsAll = sample.terrainFlagsAll;
         surface.primitiveIndex = sample.packedPrimitive;
         surface.cornerHeights = sample.cornerHeights;
+        surface.cornerPrimitives = sample.cornerPrimitives;
         surface.sampledFourCorners = sample.sampledFourCorners;
         surface.slopeAngle = sample.slopeAngle;
         return surface;
@@ -515,6 +571,40 @@ namespace orphen::port
       return bandana;
     };
     return environment;
+  }
+
+  // FUN_002582d0, driven from FUN_0022a418:374 and from opcode 0xAB.
+  //
+  // The graph is discovered by probing, so it costs one ground query per
+  // primitive edge per side -- about eight per primitive. That is the 65537
+  // FUN_00227840 calls the recompiler spike sees during a map load, and it is
+  // why this runs once rather than per frame.
+  void PortRuntime::FUN_002582d0_build_follower_navmesh()
+  {
+    const auto *map = mapViewer_.loadedMap();
+    if (map == nullptr)
+    {
+      return;
+    }
+    const auto probe = [map](float x, float y, float z) -> orphen::ported::entity::NavGroundProbe
+    {
+      const auto sample = FUN_00227070_sample_ground(*map, x, y, z, 0.0f, 0.0f, 2u, 0u);
+      orphen::ported::entity::NavGroundProbe result;
+      result.height = sample.height;
+      result.DAT_00354d4e_packedPrimitive =
+          static_cast<std::int16_t>(sample.found ? sample.packedPrimitive : -1);
+      return result;
+    };
+
+    const auto &lead = entityPool_.leadPlayer();
+    followerNavmesh_.FUN_00257fc0_reset(
+        std::min(map->DAT_003556b0_dRecords78.size(), map->DAT_003556ac_dRecords80.size()));
+    followerNavmesh_.FUN_002582d0_build(*map, probe, lead.positionX20, lead.positionZ24,
+                                        lead.positionY28);
+    std::cout << "[nav] follower graph " << followerNavmesh_.reachedCount() << "/"
+              << followerNavmesh_.size() << " primitives reachable from ("
+              << lead.positionX20 << ", " << lead.positionZ24 << ", " << lead.positionY28
+              << ")\n";
   }
 
   // FUN_0022a418:318-321. Every entry starts at the lead's spawn position; only
@@ -598,6 +688,8 @@ namespace orphen::port
   orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment(std::uint32_t frameTicks)
   {
     orphen::ported::script::ScriptEnvironment environment;
+    environment.frameNumber = frameCount_;
+    environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
     environment.frameTicks = frameTicks;
     environment.DAT_003555b8_tickCounter = DAT_003555b8_tickCounter_;
     environment.entityPool = &entityPool_;
@@ -651,6 +743,30 @@ namespace orphen::port
       };
     }
 
+    // FUN_002589c0's pair of FUN_0020d9c8 calls. Roles 2 and 1 are the bust and
+    // the head, the two bones FUN_00257c78 drives when a follower looks at the
+    // lead. The role lookup runs against the entity's *restored* type, which is
+    // the order the original has it in.
+    environment.FUN_0020d9c8_release_look_bones = [this](std::size_t slot)
+    {
+      if (slot >= DAT_004a7e00_boneOverrides_.size() || slot >= entityPool_.slotCount())
+      {
+        return;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return;
+      }
+      auto &overrides = DAT_004a7e00_boneOverrides_[slot];
+      for (const std::uint8_t role : {std::uint8_t{2}, std::uint8_t{1}})
+      {
+        orphen::ported::model::FUN_0020d9c8_clear_bone_override(
+            overrides, orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role));
+      }
+    };
+
     environment.teleportLead = [this](float x, float y, float z)
     {
       const auto *map = mapViewer_.loadedMap();
@@ -661,6 +777,13 @@ namespace orphen::port
       leadPlayer_.resetToMap(*map, orphen::ported::psm2::Vec3{x, y, z});
       FUN_0022a418_stamp_lead_player_flags();
       fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+
+      // FUN_00263148:16-18. The teleport is followed by a graph rebuild from
+      // wherever the lead has landed -- with a full reset first when the mode
+      // byte is 0. Both run every time here, because the port's build already
+      // resets when the primitive count changes and a second pass over the same
+      // seed is idempotent.
+      FUN_002582d0_build_follower_navmesh();
     };
 
     environment.FUN_002661a8_preload_model = [this](std::uint16_t typeId)
@@ -799,6 +922,10 @@ namespace orphen::port
     environment.DAT_003555dd_debugDisplay = DAT_003555dd_debugDisplay_;
     environment.FUN_002681c0_subprocLine = [this](int slot, std::int32_t subprocId)
     { DAT_00572c38_debugText_.FUN_002681c0_printf("Subproc:%3d [%5d]\n", slot, subprocId); };
+    // FUN_0022dcf0 by way of opcode 0x94.
+    environment.FUN_0022dcf0_shake_camera = [this](float magnitude, std::int16_t durationTicks)
+    { DAT_00355664_cameraShake_.FUN_0022dcf0_request(magnitude, durationTicks); };
+
     environment.FUN_002681c0_sceneWorkLine = [this](int index, std::uint32_t value)
     {
       DAT_00572c38_debugText_.FUN_002681c0_printf(" %02d:%d(%X)\n", index,
@@ -1314,6 +1441,11 @@ namespace orphen::port
 
     resetLeadPlayerForLoadedMap();
 
+    // FUN_0022a418:287, `DAT_00355668 = 0`. Only the tick count is cleared --
+    // the magnitude is left standing, exactly as the original leaves it, and
+    // is overwritten by the next FUN_0022dcf0 that gets past the guard.
+    DAT_00355664_cameraShake_.uGpffffb6f8_remaining = 0;
+
     // FUN_0022a418:256, immediately after the pool clear and before the scene
     // script runs. The lead player's model has to be bound first because the
     // anchor bone is looked up by role out of grp_0001.
@@ -1395,6 +1527,13 @@ namespace orphen::port
     }
 
     const std::vector<std::uint8_t> decoded = resources->decodeRecord(*record);
+    if (!scrDumpPath_.empty())
+    {
+      std::ofstream dump(scrDumpPath_, std::ios::binary);
+      dump.write(reinterpret_cast<const char *>(decoded.data()),
+                 static_cast<std::streamsize>(decoded.size()));
+      std::cout << "[scr] dumped " << decoded.size() << " bytes to " << scrDumpPath_ << "\n";
+    }
     if (!sceneScript_.load(decoded))
     {
       std::cout << "[scr] script blob too small to hold a header (" << decoded.size() << " bytes)\n";
@@ -1433,6 +1572,11 @@ namespace orphen::port
     reportSceneEnvironment();
 
     applySceneMarkerSpawn();
+
+    // FUN_0022a418:372-375, right after the start entry has run and the lead is
+    // wherever the scene put it.
+    FUN_002582d0_build_follower_navmesh();
+
     advanceEntityAnimations(orphen::ported::kNominalFrameTicks);
     publishSceneObjectViews(orphen::ported::kNominalFrameTicks);
 
@@ -1917,6 +2061,21 @@ namespace orphen::port
     {
       return (entity.descriptorFlags02 & 0x0200u) != 0;
     }
+
+    // FUN_0020c5a8:66-99, the +0x08 bit 0 branch. A hidden slot gets three
+    // writes and **no status byte**, which is the part that matters: the
+    // original leaves it on 0 ("queued"), so every child of it keeps deferring
+    // and is never drawn. Writing 1 here instead would publish the children of
+    // something that is not on screen.
+    //
+    // The `+0xB0 = 0` the original also does is the pose blend's "no previous
+    // column" -- FUN_0020e840:60 reads it beside +0xAA -- which the port's pose
+    // filter tracks in its own state, so there is no field to write here.
+    void FUN_0020c5a8_hide(orphen::ported::entity::OriginalEntity &entity)
+    {
+      entity.collisionFlags0c &= 0xFFFFCFFFu;
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x0010u);
+    }
   } // namespace
 
   void PortRuntime::publishSceneObjectViews(std::uint32_t frameTicks)
@@ -1980,7 +2139,7 @@ namespace orphen::port
       }
       else if ((lead.halfword08 & 1) != 0)
       {
-        lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 0x0010);
+        FUN_0020c5a8_hide(lead);
         // The original's `& 1` branch never writes the status byte, so the slot
         // stays *queued* -- children keep deferring against it until the byte
         // counter wraps and the walk ends. Not drawn, by a different route.
@@ -1988,6 +2147,8 @@ namespace orphen::port
       }
       else
       {
+        // LAB_0020c73c, on the way into FUN_0020c810.
+        lead.collisionFlags0c &= 0xFFFFCFFFu;
         views.push_back(view);
         drawStatus[0] = kPosed;
       }
@@ -2032,10 +2193,22 @@ namespace orphen::port
       const std::size_t slot = queue[cursor];
       auto &entity = entityPool_.slot(slot);
 
+      // FUN_0020c5a8:66. The hidden test is the outer `if`, ahead of the parent
+      // logic, and it leaves the status byte alone -- so this has to happen
+      // here rather than inside the publish helper, where the loop was writing
+      // "posed" over it afterwards. That is what put slot 61, the sack bound to
+      // Dortin's hand, in the middle of s01_e012 at the world origin while its
+      // parent was hidden.
+      if ((entity.halfword08 & 1) != 0)
+      {
+        FUN_0020c5a8_hide(entity);
+        continue;
+      }
+
       // The parent test comes before everything else the original does per
       // slot, because a deferred slot must not be hidden or drawn yet.
       const std::int16_t parent = entity.parentSlot192;
-      if (parent >= 0 && (entity.halfword08 & 1) == 0)
+      if (parent >= 0)
       {
         const std::uint8_t parentStatus = drawStatus[static_cast<std::size_t>(parent)];
         if (parentStatus == kQueued)
@@ -2077,15 +2250,12 @@ namespace orphen::port
             return;
           }
 
-          // FUN_0020c5a8:69. Entity +0x08 bit 0 is "hidden": the draw walk
-          // skips the slot outright and raises bit 0x10 so the pose sampler
-          // knows there is no previous frame to blend out of. The chest
-          // cutscene is what raises it, on every slot from 2 up.
-          if ((entity.halfword08 & 1) != 0)
-          {
-            entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x0010);
-            return;
-          }
+          // The +0x08 bit 0 test used to live here. It belongs in the walk --
+          // see FUN_0020c5a8_hide -- because the status byte it must *not*
+          // write is the walk's, not this helper's.
+          //
+          // LAB_0020c73c, immediately before FUN_0020c810.
+          entity.collisionFlags0c &= 0xFFFFCFFFu;
 
           SceneObjectView view;
           view.slot = slot;
@@ -2931,6 +3101,70 @@ namespace orphen::port
             << " parent=" << entity.parentSlot192 << ")";
       }
     }
+    // ---- the entity pool, laid out for a byte-level diff against an EE dump --
+    //
+    // Every field here is read straight out of `DAT_0058beb0 + slot * 0x1D8` in
+    // a dump by `scripts/dump_ee_entities.py`, which prints these exact columns
+    // in this exact order. `diff` the two and the divergence is the answer.
+    //
+    // Two columns are worth a caveat. `+6C` and `+70` carry the ground query's
+    // winning / ANDed terrain flags in the original, but the port also uses
+    // them as opcode 0x61's flag words, so they agree only for an entity whose
+    // last write came from FUN_00227070. `+0A` is `primitive | (half << 14)`
+    // and is the sharpest single field in the row: if it matches, the query
+    // walked the same cell run to the same place.
+    out << "\nentities (offsets are into the original's 0x1D8 record):\n";
+    out << "slot  +00    +02    +04    +08  +0C        +0A     "
+           "pos                              +4C      +54    +58    +5C      "
+           "+60 +62  +64  +6C        +70        +74        +A0  +192\n";
+    for (std::size_t slot = 0; slot < orphen::ported::entity::kEntitySlotCount; ++slot)
+    {
+      const auto &entity = entityPool_.slot(slot);
+      if (entity.typeId00 == 0 && entity.halfword08 == 0 && entity.halfword04 == 0)
+      {
+        continue;
+      }
+      std::ostringstream row;
+      row << std::fixed << std::setprecision(4);
+      row << std::setw(4) << slot << " 0x" << std::hex << std::setw(4) << std::setfill('0')
+          << static_cast<std::uint16_t>(entity.typeId00) << " 0x" << std::setw(4)
+          << entity.descriptorFlags02 << " 0x" << std::setw(4) << entity.halfword04 << " 0x"
+          << std::setw(4) << entity.halfword08 << " 0x" << std::setw(8) << entity.collisionFlags0c
+          << std::dec << std::setfill(' ') << std::setw(7) << entity.groundPrimitive0a << " ("
+          << std::setw(9) << entity.positionX20 << "," << std::setw(9) << entity.positionZ24 << ","
+          << std::setw(9) << entity.positionY28 << ")" << std::setw(9) << entity.groundHeight4c
+          << std::setw(7) << entity.radius54 << std::setw(7) << entity.height58 << std::setw(9)
+          << entity.facingRadians5c << std::setw(4) << entity.state60 << std::setw(4)
+          << entity.fadeRamp62 << std::setw(5) << entity.blockedBy64 << " 0x" << std::hex
+          << std::setw(8) << std::setfill('0') << entity.flagWord6c << " 0x" << std::setw(8)
+          << entity.flagWord70 << " 0x" << std::setw(8) << entity.rejectTerrainMask74 << std::dec
+          << std::setfill(' ') << std::setw(5) << entity.animationA0 << std::setw(5)
+          << entity.parentSlot192 << "\n";
+      out << row.str();
+    }
+
+    // The two pieces of state that date a moment exactly, so a snapshot can be
+    // matched to an EE dump instead of guessed at by eye. See "eeMemory.bin is
+    // frame ~1091" in the README -- eyeballing the camera cost a whole session.
+    {
+      const auto &state = sceneScript_.state();
+      out << "scheduler:";
+      for (std::size_t channel = 0;
+           channel < orphen::ported::script::SceneScriptState::kEventChannelCount; ++channel)
+      {
+        const auto &record = state.DAT_00571e40_eventChannels[channel];
+        out << "  " << channel << "{cursor=0x" << std::hex << record.cursor << std::dec
+            << " timer=" << record.timer << " consumed=" << record.consumed << "}";
+      }
+      out << "\n";
+      out << "groups: DAT_003555d0=" << (DAT_003555d0_collisionGroupMoved_ ? 1 : 0)
+          << " liveFrames=" << DAT_003555d0_liveFrames_ << " pushOuts=" << pushOutCount_ << "\n";
+      out << "fade: in=0x" << std::hex << DAT_00571dc0_screenFade_.DAT_00571dc0_fadeInLevel()
+          << " out=0x" << DAT_00571dc0_screenFade_.DAT_00571dd0_fadeOutLevel() << " overlay=0x"
+          << DAT_00571dc0_screenFade_.overlay().colour << "/"
+          << static_cast<unsigned>(DAT_00571dc0_screenFade_.overlay().alpha) << std::dec << "\n";
+    }
+
     out << "\n=== end snapshot ===\n";
 
     const std::string text = out.str();
@@ -3973,7 +4207,8 @@ namespace orphen::port
                               (static_cast<float>(frameTicks) / static_cast<float>(orphen::ported::kNominalFrameTicks));
     mapViewer_.update(stepSeconds, input);
 
-    if (input.captureSnapshotRequested)
+    if (input.captureSnapshotRequested ||
+        (snapshotFrame_ != 0 && frameCount_ == snapshotFrame_))
     {
       writeDiagnosticSnapshot();
     }
@@ -4070,7 +4305,17 @@ namespace orphen::port
       // 0x10000 dynamic bit that FUN_00227840's second loop reads.
       if (auto *loadedMapForGroups = mapViewer_.loadedMap())
       {
-        orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups);
+        // The return value is DAT_003555d0: how many collision groups had a
+        // live dirty byte this frame. FUN_002262c0:112 reads it as a flag, and
+        // it is what lets a stationary actor resample the floor and be pushed
+        // out of anything a moving door or the sea has swallowed.
+        DAT_003555d0_collisionGroupMoved_ =
+            orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups) != 0;
+        if (DAT_003555d0_collisionGroupMoved_)
+        {
+          ++DAT_003555d0_liveFrames_;
+        }
+
 
         // FUN_00208F28: step the map's UV animation, gated on iGpffffb788
         // (DAT_003556F8) being non-null, immediately before FUN_00209140 walks
@@ -4080,6 +4325,12 @@ namespace orphen::port
         orphen::ported::psm2::FUN_00225940_step_uv_animation(
             loadedMapForGroups->DAT_003556f4_uvAnimation, frameTicks);
       }
+
+      // FUN_002239c8:135. FUN_002261e0 is the very next call after
+      // FUN_00208450, so the physics walk reads DAT_003555d0 on the same frame
+      // it was set. It runs unconditionally -- the original does not gate it on
+      // a map being present.
+      orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
 
       // FUN_002239c8:134-138 -- FUN_00208450, the physics pass, FUN_00224060,
       // then the late slots. The lead's breadcrumb goes down after it has
@@ -4123,7 +4374,7 @@ namespace orphen::port
 
       mapViewer_.setLeadPlayerView(leadState);
       mapViewer_.setFollowCameraPose(fieldCamera_.pose());
-      updateMapVisibility(*loadedMap, leadState);
+      updateMapVisibility(*loadedMap, leadState, frameTicks);
     }
     else
     {
@@ -4185,7 +4436,8 @@ namespace orphen::port
   // is per-frame state -- the original's 0x80-record +0x2E -- and stepping it
   // at the render rate would make it frame-rate dependent.
   void PortRuntime::updateMapVisibility(orphen::ported::psm2::Psm2RuntimeState &map,
-                                        const PlayerViewState &leadState)
+                                        const PlayerViewState &leadState,
+                                        std::uint32_t frameTicks)
   {
     orphen::ported::render::FieldCameraView cameraView;
     cameraView.eye = fieldCamera_.pose().eye;
@@ -4195,6 +4447,11 @@ namespace orphen::port
     // path moves them, which for this scene is the chest's contents swing.
     cameraView.rollRadians = fieldCamera_.uGpffffb6dc_roll();
     cameraView.zoomLog2 = fieldCamera_.fGpffffb6e8_zoomLog2();
+    // FUN_0020bec8 spends the shake as a side effect of building the view, so
+    // this has to stay on the simulation step -- one build a frame, like the
+    // original -- rather than moving to render().
+    cameraView.shake = &DAT_00355664_cameraShake_;
+    cameraView.DAT_003555bc_frameTicks = frameTicks;
     renderCamera_ = orphen::ported::render::FUN_0020bec8_build(cameraView);
 
     orphen::ported::render::MapVisibilityInput visibilityInput;

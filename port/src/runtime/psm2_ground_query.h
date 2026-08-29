@@ -84,6 +84,8 @@ namespace orphen::port
 
     // entity +0x84..+0x90, written only on the four-corner path.
     std::array<float, 4> cornerHeights{};
+    // Diagnostics only: which primitive answered at each corner.
+    std::array<std::int32_t, 4> cornerPrimitives{{-1, -1, -1, -1}};
     bool sampledFourCorners = false;
   };
 

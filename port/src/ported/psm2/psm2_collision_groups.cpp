@@ -1,3 +1,4 @@
+#include <iostream>
 #include "ported/psm2/psm2_collision_groups.h"
 
 #include "ported/model/psc3_skeleton.h"
@@ -41,12 +42,19 @@ namespace orphen::ported::psm2
     CollisionGroup &record = state.DAT_003556e0_collisionGroups[group];
     float *const channels = &record.rotation.x;
     channels[channel] = radians;
+    if (gGroupProbe)
+    {
+      std::cout << "[group] rot g" << group << " ch" << channel << " = " << radians
+                << " rad (" << (radians * 57.2957795f) << " deg)" << "\n";
+    }
     // The original is `status < 2 ? 2 : status | 2` on a *signed* char. That
     // signed compare is what makes a write after FUN_00208450 left 0xFF behind
     // re-arm the pass instead of sticking at "already applied".
     record.dirty5a = record.dirty5a < 2 ? static_cast<std::int8_t>(2)
                                         : static_cast<std::int8_t>(record.dirty5a | 2);
   }
+
+  bool gGroupProbe = false;
 
   void FUN_00260738_set_group_translation(Psm2RuntimeState &state,
                                           std::size_t group,
@@ -74,6 +82,13 @@ namespace orphen::ported::psm2
       {
         continue;
       }
+      // FUN_00208450:77, `DAT_003555d0 = 1`. The flag is raised for **any**
+      // group with a live dirty byte, and it is raised *before* the bit-7 test
+      // below -- so the frame a group settles on still counts. That one frame
+      // of grace matters: it is the last chance the push-out gets to eject
+      // anything the group swallowed on its way to a stop.
+      ++moved;
+
       // FUN_00208450:80-84. Bit 7 means "applied last frame": clear and stop.
       if ((static_cast<std::uint8_t>(group.dirty5a) & 0x80u) != 0)
       {
@@ -82,7 +97,6 @@ namespace orphen::ported::psm2
       }
       const std::uint8_t applied = static_cast<std::uint8_t>(group.dirty5a);
       group.dirty5a = static_cast<std::int8_t>(0xFF);
-      ++moved;
 
       // FUN_0020cf28(1, 1, rot.xyz, trans.xyz + pivot.xyz, matrix, 0). Order 0
       // is the bone path's ZXY, not the entity root's XYZ.

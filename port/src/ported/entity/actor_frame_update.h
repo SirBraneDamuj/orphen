@@ -5,6 +5,7 @@
 #include "ported/entity/actor_trace.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/entity/follower_navmesh.h"
 #include "ported/entity/original_entity.h"
 #include "ported/entity/player_bandana.h"
 #include "ported/model/psc3_skeleton.h"
@@ -72,6 +73,7 @@ namespace orphen::ported::entity
 
       // entity +0x84..+0x90, written only when the four-corner path ran.
       std::array<float, 4> cornerHeights{};
+      std::array<std::int32_t, 4> cornerPrimitives{{-1, -1, -1, -1}};
       bool sampledFourCorners = false;
 
       // The winning corner's stored slope, in radians. FUN_002262c0 gates the
@@ -116,6 +118,33 @@ namespace orphen::ported::entity
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
+
+    // DAT_003555d0. FUN_00208450 clears it at the top of every frame and raises
+    // it for any collision group whose dirty byte is live -- i.e. "movable
+    // collision moved this frame". FUN_002262c0:112 reads it, and it is the
+    // only thing that lets a *stationary* actor resample the floor. See the
+    // embedded-corner push-out in the .cpp.
+    bool DAT_003555d0_collisionGroupMoved = false;
+
+    // Diagnostics for the push-out above: how many times it has produced a
+    // request. Non-owning, may be null. It is the only way to tell "the gate
+    // never opened" from "the gate opened and the mask was empty".
+    std::uint32_t *pushOutCounter = nullptr;
+
+    // Diagnostics only: the frame this pass belongs to, so the `[push]` probe
+    // can be lined up against a PCSX2 breakpoint log.
+    std::uint32_t frameNumber = 0;
+
+    // Diagnostics only: a map primitive's live corner positions and leading
+    // word, so the --push-probe log can be diffed against an EE dump's
+    // record78 array while a collision group is mid-animation.
+    struct TerrainPrimitiveCorners
+    {
+      std::uint32_t leadingWord = 0;
+      float corner[4][3]{};
+    };
+    std::function<std::optional<TerrainPrimitiveCorners>(std::size_t primitiveIndex)>
+        terrainPrimitiveCorners;
 
     // Everything type 0x19 -- the player's bandana -- needs. Supplied by the
     // runtime because the rope reads a matrix palette and two frame counters,
@@ -183,6 +212,20 @@ namespace orphen::ported::entity
       std::uint32_t terrainFlags = 0;
     };
     std::function<std::optional<MapPrimitive>(std::int32_t packedPrimitive)> mapPrimitive;
+
+    // The follower's navigation graph, and the two things it needs to run:
+    // FUN_00227798 (the single-point ground query, which is what discovers
+    // adjacency and locates an actor in the graph) and the loaded map.
+    //
+    // DAT_00355030 lives here too. FUN_0025a500 raises it around its own
+    // FUN_00259378 call so the step out of a stuck spot is the plain
+    // neighbour rather than a corner cut past it, and FUN_00258c70 clears it
+    // on the way through -- so it is one flag shared by the whole actor pass,
+    // not per entity.
+    FollowerNavmesh *followerNavmesh = nullptr;
+    const orphen::ported::psm2::Psm2RuntimeState *psm2Map = nullptr;
+    NavProbeFn FUN_00227798_probe;
+    bool *DAT_00355030_skipCornerCut = nullptr;
 
     // FUN_0020da68: one bone's pose out of an animation, in FUN_0020d8c0's
     // field order (rotation xyz, translation xyz, scale). The look-at reads the
@@ -265,5 +308,12 @@ namespace orphen::ported::entity
 
   // FUN_00239ce0: slots 2..255, three guards, then the type dispatch.
   void FUN_00239ce0_update_actors(const ActorEnvironment &environment, ActorTrace &trace);
+
+  // FUN_002261e0, the physics walk. Must run **after** FUN_00208450 and in the
+  // same frame -- see the comment on the definition.
+  // Diagnostics: --push-probe logs every embedded-corner push-out.
+  extern bool gPushProbe;
+
+  void FUN_002261e0_update_physics(const ActorEnvironment &environment);
 
 } // namespace orphen::ported::entity

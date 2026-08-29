@@ -41,6 +41,9 @@ namespace orphen::ported::psm2
 
   // FUN_00260738's two writes. `channel` is 0..2; the original diagnoses
   // anything higher and then indexes with it anyway, so the port clamps.
+  // Diagnostics: --push-probe logs every group rotation write.
+  extern bool gGroupProbe;
+
   void FUN_00260738_set_group_rotation(Psm2RuntimeState &state,
                                        std::size_t group,
                                        std::size_t channel,

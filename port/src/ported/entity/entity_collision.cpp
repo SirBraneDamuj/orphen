@@ -62,14 +62,22 @@ namespace orphen::ported::entity
     // heading, not along the contact normal, and only when the gap has already
     // closed to within 0.01. Suppressed if the mover carries +0x04 bit 0x40 or
     // the blocker carries bit 0x80 -- "I do not push" and "I am not pushed".
-    void applyContact(Solve &solve, std::size_t index, OriginalEntity &other, float gap)
+    void applyContact(Solve &solve, std::size_t index, OriginalEntity &other, float gap,
+                      std::uint32_t axisBit)
     {
       const bool touching = gap <= kTouchDAT_00352484;
       ++g_stats.clamps;
       solve.self->blockedBy64 = static_cast<std::int32_t>(index);
-      // The original ORs 0x20 into the workspace's result word at +0x12C and
-      // merges it into the entity later; the port has nowhere else to put it.
-      solve.self->collisionFlags0c |= 0x20u;
+      // The original ORs into the workspace's result word at +0x12C and merges
+      // it into the entity later; the port has nowhere else to put it.
+      //
+      // **The two axes use different bits.** FUN_00228380 and FUN_002285d8 --
+      // the +X and -X sweeps -- write 0x20; FUN_00228838 and FUN_00228a90 --
+      // +Z and -Z -- write 0x40. Collapsing both onto 0x20 loses nothing a
+      // caller tests for on its own (`& 0x60` is the pair), but it is the
+      // original's shape and the follower's `& 0x262` stuck counter reads one
+      // of them.
+      solve.self->collisionFlags0c |= axisBit;
       if (touching && (solve.flags04 & 0x40) == 0 && (other.halfword04 & 0x80) == 0)
       {
         other.desiredDeltaX30 += std::cos(solve.heading) * kShoveDAT_0035247c;
@@ -126,7 +134,7 @@ namespace orphen::ported::entity
             gap = 0.0f;
           }
           allowed = gap;
-          applyContact(solve, index, other, gap);
+          applyContact(solve, index, other, gap, 0x20u);
         }
       }
 
@@ -182,7 +190,7 @@ namespace orphen::ported::entity
             gap = 0.0f;
           }
           allowed = gap;
-          applyContact(solve, index, other, gap);
+          applyContact(solve, index, other, gap, 0x20u);
         }
       }
 
@@ -237,7 +245,7 @@ namespace orphen::ported::entity
             gap = 0.0f;
           }
           allowed = gap;
-          applyContact(solve, index, other, gap);
+          applyContact(solve, index, other, gap, 0x40u);
         }
       }
 
@@ -292,7 +300,7 @@ namespace orphen::ported::entity
             gap = 0.0f;
           }
           allowed = gap;
-          applyContact(solve, index, other, gap);
+          applyContact(solve, index, other, gap, 0x40u);
         }
       }
 
@@ -307,9 +315,13 @@ namespace orphen::ported::entity
   {
     OriginalEntity &entity = pool.slot(slot);
 
-    // FUN_002262c0:37 clears +0x64 before anything else runs, whether or not a
-    // clamp fires this frame.
-    entity.blockedBy64 = -1;
+    // FUN_002262c0:40, `*(undefined4 *)(iVar12 + 100) = 0` -- decimal 100 is
+    // +0x64. It clears to **zero**, not -1, whether or not a clamp fires this
+    // frame. Zero is a legitimate blocker (pool slot 0 is the lead), which is
+    // why the original's readers gate on +0x0C's 0x60 bits rather than on a
+    // sentinel, and why FUN_00259378's state machine has an explicit
+    // "the blocker is the lead" branch.
+    entity.blockedBy64 = 0;
 
     // The clamp block sits behind `if (+0x30 != 0) ... else if (+0x34 != 0)`,
     // so a stationary entity never walks the pool. That matters: this is an

@@ -113,6 +113,7 @@ target_sources(orphen_port
     src/ported/entity/actor_dispatch_table.h
     src/ported/entity/actor_frame_update.cpp
     src/ported/entity/entity_collision.cpp
+    src/ported/entity/follower_navmesh.cpp
     src/ported/entity/party_follower.cpp
     src/ported/entity/entity_path_follow.cpp
     src/ported/entity/player_bandana.cpp

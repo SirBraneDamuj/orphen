@@ -2,9 +2,13 @@
 
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/party_follower.h"
+#include "ported/original_frame_timing.h"
 #include "ported/script/object_registers.h"
 
 #include <algorithm>
+#include <bit>
+#include <iomanip>
+#include <iostream>
 #include <array>
 #include <cmath>
 
@@ -50,6 +54,31 @@ namespace orphen::ported::entity
     // DAT_00352434: the step an actor will climb in one move, 0.26. A global,
     // not a per-entity field -- +0x80 is the slope limit, not this.
     constexpr float kDAT_00352434_stepHeight = 0.26f;
+
+    // DAT_00318ad0. Sixteen (x, z) pairs indexed by the embedded-corner mask,
+    // read straight out of the executable. Corner order is FUN_00227070's:
+    // 0 = (x-r, z-r), 1 = (x+r, z-r), 2 = (x+r, z+r), 3 = (x-r, z+r), so bit
+    // `n` means "corner n has ground above the feet". Every non-zero entry is
+    // +/-0.18 -- the push is a fixed step away from the buried side, not a
+    // penetration-depth resolve.
+    struct PushOut
+    {
+      float x;
+      float z;
+    };
+    constexpr PushOut kDAT_00318ad0_pushOut[16] = {
+        {0.00f, 0.00f},  {0.18f, 0.18f},   {-0.18f, 0.18f},  {0.00f, 0.18f},
+        {-0.18f, -0.18f}, {-0.18f, 0.18f}, {-0.18f, 0.00f},  {-0.18f, 0.18f},
+        {0.18f, -0.18f}, {0.18f, 0.00f},   {0.18f, 0.18f},   {0.18f, 0.18f},
+        {0.00f, -0.18f}, {0.18f, -0.18f},  {-0.18f, -0.18f}, {0.00f, 0.00f},
+    };
+
+    // DAT_0035242c, the quarter turn the mask-0xF fallback rotates by.
+    constexpr float kDAT_0035242c_quarterTurn = 1.570796012878418f;
+
+    // DAT_00352428. FUN_002262c0:107 substitutes it whenever the vertical
+    // velocity lands on exactly zero, so the sign survives the next subtract.
+    constexpr float kDAT_00352428_velocityFloor = -1.0e-05f;
   } // namespace
 
   bool FUN_0023a068_freeze_gate(OriginalEntity &entity, std::uint32_t frameTicks)
@@ -626,6 +655,8 @@ namespace orphen::ported::entity
   // fallback that the lead player's path does. Slot 0 still runs the real thing.
   // Porting FUN_002262c0 properly for slots 1..255 is the outstanding work, and
   // until then a non-player actor can pass through walls.
+  bool gPushProbe = false;
+
   void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment,
                                   std::size_t slot)
   {
@@ -638,6 +669,27 @@ namespace orphen::ported::entity
     {
       return;
     }
+
+    // FUN_002262c0:93. A frozen actor returns before anything else happens, so
+    // +0x0C, +0x30 and +0x34 all keep the values last frame left them. The
+    // original's workspace clear at :37 is ahead of this return, but the only
+    // write-back to +0x0C is at :628, past it, so the entity's own copy is
+    // untouched either way.
+    if (entity.freezeTimerBd != 0)
+    {
+      return;
+    }
+
+    // **+0x0C is rebuilt every frame, not accumulated into.** FUN_002262c0
+    // seeds a workspace word to zero at :37 and stores it over +0x0C at :628;
+    // nothing ever ORs into the entity's copy in place. Leaving the bits to
+    // pile up made them permanent, and the party follower is the reader that
+    // notices: FUN_0025a500 counts consecutive stuck frames off +0x0C bits
+    // 0x262 and gives up to the recovery state at five. Once a follower had
+    // been blocked once -- by the walls either side of a cutscene pose, say --
+    // the flags never came down again, so it counted to five standing on open
+    // floor and stayed in state 6 for the rest of the scene.
+    entity.collisionFlags0c = 0;
 
     // FUN_002262c0's entity-vs-entity clamps, before the request is spent.
     // They only narrow +0x30/+0x34, so an entity that asked for nothing is
@@ -652,26 +704,202 @@ namespace orphen::ported::entity
     // it as a velocity is what sent these enemies into orbit: the hover nudge
     // accumulated every frame instead of being spent.
     //
-    // **Gravity is deliberately not integrated here.** The EE dump shows all six
-    // type 0x62 entities with +0x44 (vertical velocity) at exactly 0.000000
-    // while +0x48 holds 0.00025, so FUN_002262c0 is not feeding gravity into
-    // them at all -- their only vertical motion is the behavior's own
-    // DAT_0035452c / DAT_00354534 nudge, which is why they sit just inside the
-    // dead band below their target height. Adding gravity here pins them to the
-    // floor, which the dump says is wrong.
+    // Gravity is integrated above, gated on +0x04 bit 3 -- see the note there.
+    // The type 0x62 flyers carry that bit, which is why they still sit in the
+    // dead band below their target height rather than on the floor.
     //
-    // Which flag in FUN_002262c0 gates that is not identified yet. It matters
-    // the moment a ground-walking non-player actor is ported; it does not matter
-    // for a flyer, and inventing a gate would be worse than naming the gap.
-    const float startX = entity.positionX20;
-    const float startZ = entity.positionZ24;
-    entity.positionX20 += entity.desiredDeltaX30;
-    entity.positionZ24 += entity.desiredDeltaZ34;
-    entity.positionY28 += entity.desiredDeltaY38;
-
     // FUN_002262c0:482. +0x50 takes the previous +0x4C every frame, whether or
     // not the ground was resampled.
     entity.previousGroundHeight50 = entity.groundHeight4c;
+
+    // FUN_002262c0:99-113, the gravity integrator. It is gated on **+0x04 bit
+    // 3** and nothing else -- that is the flag the port had a note about not
+    // having identified. eeMemory.bin settles it: the six type 0x62 enemies
+    // read +0x04 = 0x000b, bit 3 set, so they never fall; every character in
+    // the scene reads +0x48 = 0.00075 and +0x44 = 0, which is what the landing
+    // clamp below leaves behind once they are resting on the floor.
+    //
+    //   dt  = DAT_003555bc * 0.125
+    //   +0x38 += v * dt - (g * dt) * dt * 0.5
+    //   v     -= g * dt,  and is nudged off exact zero so it stays signed
+    //
+    // Without this a non-player actor that stepped onto anything never came
+    // down again: the landing clamp only ever raised it.
+    if ((entity.halfword04 & 0x0008u) == 0)
+    {
+      const float physicsStep = orphen::ported::physicsStepForFrameTicks(environment.frameTicks);
+      const float delta = entity.verticalAcceleration48 * physicsStep;
+      entity.desiredDeltaY38 += entity.verticalVelocity44 * physicsStep - delta * physicsStep * 0.5f;
+      float velocity = entity.verticalVelocity44 - delta;
+      if (velocity == 0.0f)
+      {
+        velocity = kDAT_00352428_velocityFloor;
+      }
+      entity.verticalVelocity44 = velocity;
+    }
+
+    // ---- FUN_002262c0:111-205, the embedded-corner push-out ----------------
+    //
+    // This is how an actor that a cutscene drops *inside* scenery gets back
+    // out, and it was the last missing piece of "Magnus stands on the crates".
+    //
+    // It is reached from :112 on either of two gates:
+    //
+    //   DAT_003555d0 != 0 && (entity +0x08 & 0x20)   any actor, any frame a
+    //                                                collision group moved
+    //   the entity is the lead && (DAT_003555b4 & 0x3F) == 0   every 64 frames
+    //
+    // and the whole thing is skipped when DAT_003555d1 is set. The first gate
+    // is the interesting one: `DAT_003555d0` is raised by FUN_00208450 for any
+    // group with a live dirty byte, so it means **movable collision moved this
+    // frame** -- a door swinging, s01_e012's sea rolling. That is exactly when
+    // something may have been swallowed and needs ejecting, and it is why an
+    // EE dump almost always reads 0 here: the flag is transient, up for the
+    // frames a group is animating and down again after. A previous pass read
+    // that zero out of three dumps and concluded the branch was dead. It is
+    // not; it is just rarely sampled.
+    //
+    // What it does: sample the four footprint corners where the actor already
+    // stands, and note which of them have ground *above* the feet -- those are
+    // embedded in something. The 4-bit mask indexes DAT_00318ad0, sixteen
+    // (x, z) pairs of 0 and +/-0.18 that point away from the embedded side:
+    //
+    //     entity +0x30 = +0x30 * 0.5 + table[mask].x
+    //     entity +0x34 = +0x34 * 0.5 + table[mask].z
+    //
+    // It is a movement *request*, not a teleport, so the velocity section below
+    // spends it the same frame with the full wall and step logic -- the actor
+    // is pushed out legally or not at all. Worked example, confirmed against
+    // hardware: opcode 0x55 puts Magnus at (5.546, 0.128) with a 0.15 radius,
+    // which buries corners 1 and 2 in crate primitive 1114 at -0.5. Mask 6,
+    // table entry (-0.18, 0.00), and he lands at 5.366 -- where his corner
+    // clears the crate's edge by 1e-4 and the mask reads 0. That 1e-4 is also
+    // why FUN_00227d28 must have no tolerance: with slack he never stops.
+    //
+    // Mask 0xF -- every corner buried, so there is no "away" -- takes the
+    // fallback at :160-195 instead: probe half a unit back along the facing,
+    // rotating by pi/2 up to four times, and take the first heading whose
+    // corners are all at or below the feet.
+    // (This function is the non-player path, so the lead's every-64-frames leg
+    // of the same branch is not reachable here -- slot 0 runs its own copy.)
+    if (environment.terrainSurface && environment.DAT_003555d0_collisionGroupMoved &&
+        (entity.halfword08 & 0x0020u) != 0)
+    {
+      const auto cornersAt = [&entity, &environment](float x, float z) {
+        return environment.terrainSurface(x, z, entity.positionY28, entity.height58,
+                                          entity.radius54, entity.halfword04,
+                                          entity.rejectTerrainMask74);
+      };
+      const auto maskAt = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
+        unsigned mask = 0;
+        // A single-point entity (+0x04 bit 1) never fills the four corner
+        // slots. The original reads them anyway -- it just gets whatever the
+        // last four-corner caller left in the shared workspace -- but the port
+        // has no such residue, so reading zeroes here would call every corner
+        // embedded and take the mask-0xF fallback on an actor standing on open
+        // floor. Treat "not sampled" as "nothing embedded", which is what the
+        // stale workspace amounts to in practice.
+        if (!at.has_value() || !at->sampledFourCorners)
+        {
+          return mask;
+        }
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          if (entity.positionY28 < at->cornerHeights[corner])
+          {
+            mask |= 1u << corner;
+          }
+        }
+        return mask;
+      };
+
+      const auto sampled = cornersAt(entity.positionX20, entity.positionZ24);
+      const unsigned mask = maskAt(sampled);
+      if (gPushProbe && mask != 0)
+      {
+        // Mirrors a PCSX2 execute breakpoint at 0x002265E4, where $v1 is this
+        // mask, $s1 the entity and $s0 the workspace whose +0x34..+0x40 are
+        // these four corner heights. Same fields, same order, so the two logs
+        // diff directly.
+        const auto savedPrecision = std::cout.precision(9);
+        std::cout << "[push] frame " << environment.frameNumber << " slot " << slot
+                  << " pos (" << entity.positionX20 << ", " << entity.positionZ24
+                  << ") feet " << entity.positionY28 << " (0x" << std::hex
+                  << std::bit_cast<std::uint32_t>(entity.positionY28) << std::dec
+                  << ") g4c " << entity.groundHeight4c << " (0x" << std::hex
+                  << std::bit_cast<std::uint32_t>(entity.groundHeight4c) << std::dec
+                  << ") r " << entity.radius54
+                  << " h " << entity.height58 << " corners";
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          std::cout << ' '
+                    << (sampled.has_value() && sampled->sampledFourCorners
+                            ? sampled->cornerHeights[corner]
+                            : 0.0f);
+        }
+        std::cout << " prims";
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          std::cout << ' '
+                    << (sampled.has_value() ? sampled->cornerPrimitives[corner] : -1);
+        }
+        if (environment.terrainPrimitiveCorners)
+        {
+          for (std::size_t corner = 0; corner < 4; ++corner)
+          {
+            const std::int32_t primitive =
+                sampled.has_value() ? sampled->cornerPrimitives[corner] : -1;
+            if (primitive < 0) continue;
+            const auto quad = environment.terrainPrimitiveCorners(
+                static_cast<std::size_t>(primitive));
+            if (!quad.has_value()) continue;
+            std::cout << "\n" << "        prim " << primitive << " lead 0x" << std::hex
+                      << quad->leadingWord << std::dec;
+            for (std::size_t v = 0; v < 4; ++v)
+            {
+              std::cout << " (" << quad->corner[v][0] << ", " << quad->corner[v][1]
+                        << ", " << quad->corner[v][2] << ")";
+            }
+            std::cout << "\n" << "       ";
+          }
+        }
+        std::cout << " mask " << mask << " table (" << kDAT_00318ad0_pushOut[mask].x
+                  << ", " << kDAT_00318ad0_pushOut[mask].z << ") delta ("
+                  << entity.desiredDeltaX30 << ", " << entity.desiredDeltaZ34 << ")"
+                  << "\n";
+        std::cout.precision(savedPrecision);
+      }
+      if (mask == 0xFu)
+      {
+        // FUN_002262c0:160-195. DAT_0035242c is pi/2, and the step back is half
+        // a unit against the facing.
+        float heading = entity.facingRadians5c;
+        for (int attempt = 0; attempt < 4; ++attempt)
+        {
+          const float offsetX = -(std::cos(heading) * 0.5f);
+          const float offsetZ = -(std::sin(heading) * 0.5f);
+          if (maskAt(cornersAt(entity.positionX20 + offsetX, entity.positionZ24 + offsetZ)) == 0)
+          {
+            entity.desiredDeltaX30 = offsetX;
+            entity.desiredDeltaZ34 = offsetZ;
+            break;
+          }
+          heading += kDAT_0035242c_quarterTurn;
+        }
+      }
+      else if (mask != 0)
+      {
+        entity.desiredDeltaX30 = entity.desiredDeltaX30 * 0.5f + kDAT_00318ad0_pushOut[mask].x;
+        entity.desiredDeltaZ34 = entity.desiredDeltaZ34 * 0.5f + kDAT_00318ad0_pushOut[mask].z;
+        if (environment.pushOutCounter != nullptr)
+        {
+          ++*environment.pushOutCounter;
+        }
+      }
+    }
+
+    const float startX = entity.positionX20;
+    const float startZ = entity.positionZ24;
 
     // A non-player actor resamples the ground **only when it is moving**.
     //
@@ -693,11 +921,14 @@ namespace orphen::ported::entity
     // requires the cached primitive's +0x13 to be non-zero. It is 0 for every
     // primitive in s01_e012, so that block never fires here either.)
     const bool movedHorizontally = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f;
+    std::optional<ActorEnvironment::TerrainSurface> surface;
     if (movedHorizontally && environment.terrainSurface)
     {
-      auto surface = environment.terrainSurface(
-          entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
-          entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+      const auto sampleAt = [&entity, &environment](float x, float z) {
+        return environment.terrainSurface(x, z, entity.positionY28, entity.height58,
+                                          entity.radius54, entity.halfword04,
+                                          entity.rejectTerrainMask74);
+      };
 
       // FUN_002262c0:0x00226cb4, the gate in front of the whole upward-step
       // branch: `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))`, where
@@ -709,66 +940,123 @@ namespace orphen::ported::entity
       // Without it the step below raises the actor onto whatever the scan
       // answered with, so a follower walking into the shop's counter ratcheted
       // up it a tenth of a unit per frame and ended the scene standing in the
-      // air. The refusal is the original's shape too: the move is rolled back
-      // one axis at a time and the refused axes are recorded in +0x0C, which is
-      // what FUN_0025a500's stuck detection reads.
+      // air.
       const auto walkable = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
         return at.has_value() && at->slopeAngle <= entity.slopeLimit80 &&
                at->height - entity.positionY28 < kDAT_00352434_stepHeight;
       };
 
-      if (!walkable(surface))
+      // **A refused move is retried on a rotated heading, not split per axis.**
+      //
+      // FUN_002262c0's whole velocity section is one `do { } while (true)` and
+      // the wall case falls through to the ladder at 0x00226b58: five headings
+      // derived from the request's own, each re-running the entity clamps and
+      // FUN_00227390 in full. `$s4` is the attempt index and the constants come
+      // straight out of the block at 0x0035243c:
+      //
+      //   0   heading            speed x 0.3
+      //   1   heading + 20 deg   speed x 0.7
+      //   2   heading - 20 deg   speed unchanged -- case 2 writes the heading
+      //                          register and leaves the speed one alone
+      //   3   heading + 60 deg   speed x 0.5
+      //   4   heading - 60 deg   speed unchanged
+      //   5   give up
+      //
+      // That is how an actor gets around a wall: not by keeping one axis, but by
+      // fanning out either side of where it wanted to go. The port used to try X
+      // alone and then Z alone, which is a different shape *and* recorded itself
+      // in the wrong bits -- 0x20 and 0x40 belong to the entity blockers
+      // (FUN_00228380 / FUN_00228838), not to terrain. A follower reads
+      // `+0x0C & 0x60` as "an actor is in my way, queue behind it" and `& 0x262`
+      // as its stuck counter, so inventing those two bits both sent it down the
+      // wrong branch and made every wall graze count toward giving up.
+      constexpr float kDAT_0035243c_firstRetryScale = 0.3f;
+      constexpr float kDAT_00352440_narrowScale = 0.7f;
+      constexpr float kDAT_00352444_narrowTurn = 0.3490658f; // +20 degrees
+      constexpr float kDAT_00352448_narrowTurnBack = 0.3490658f;
+      constexpr float kWideScale = 0.5f; // inline `lui $at, 0x3f00`
+      constexpr float kDAT_0035244c_wideTurn = 1.047197f; // +60 degrees
+      constexpr float kDAT_00352450_wideTurnBack = 1.047197f;
+      constexpr int kLastRetry = 4;
+
+      // puVar11[0x55] / [0x56]: the request's heading and length, taken once
+      // before the loop and never recomputed.
+      const float requestHeading = std::atan2(entity.desiredDeltaZ34, entity.desiredDeltaX30);
+      const float requestSpeed = std::sqrt(entity.desiredDeltaX30 * entity.desiredDeltaX30 +
+                                           entity.desiredDeltaZ34 * entity.desiredDeltaZ34);
+
+      float stepX = entity.desiredDeltaX30;
+      float stepZ = entity.desiredDeltaZ34;
+      float retrySpeed = requestSpeed;
+      int attempt = 0;
+
+      for (;;)
       {
+        auto destination = sampleAt(startX + stepX, startZ + stepZ);
+        if (walkable(destination))
+        {
+          entity.positionX20 = startX + stepX;
+          entity.positionZ24 = startZ + stepZ;
+          surface = destination;
+          break;
+        }
+
         entity.collisionFlags0c |= 0x0002u;
 
-        // X alone, then Z alone from wherever X ended up -- the same slide the
-        // lead's copy does, and the same order.
-        std::optional<ActorEnvironment::TerrainSurface> slid;
-        if (entity.desiredDeltaX30 != 0.0f)
+        // FUN_002262c0:0x00226b00. +0x04 bit 2 is what admits an actor to the
+        // ladder at all; without it the refusal stands as it is.
+        if ((entity.halfword04 & 0x0004u) == 0 || attempt > kLastRetry)
         {
-          auto xOnly = environment.terrainSurface(
-              entity.positionX20, startZ, entity.positionY28, entity.height58,
-              entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
-          if (walkable(xOnly))
-          {
-            entity.positionZ24 = startZ;
-            slid = xOnly;
-          }
-          else
-          {
-            entity.collisionFlags0c |= 0x0020u;
-          }
+          break;
         }
-        if (!slid.has_value() && entity.desiredDeltaZ34 != 0.0f)
+
+        float heading = requestHeading;
+        switch (attempt)
         {
-          auto zOnly = environment.terrainSurface(
-              startX, entity.positionZ24, entity.positionY28, entity.height58,
-              entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
-          if (walkable(zOnly))
-          {
-            entity.positionX20 = startX;
-            slid = zOnly;
-          }
-          else
-          {
-            entity.collisionFlags0c |= 0x0040u;
-          }
+        case 0:
+          retrySpeed = requestSpeed * kDAT_0035243c_firstRetryScale;
+          break;
+        case 1:
+          retrySpeed = requestSpeed * kDAT_00352440_narrowScale;
+          heading += kDAT_00352444_narrowTurn;
+          break;
+        case 2:
+          heading -= kDAT_00352448_narrowTurnBack;
+          break;
+        case 3:
+          retrySpeed = requestSpeed * kWideScale;
+          heading += kDAT_0035244c_wideTurn;
+          break;
+        default:
+          heading -= kDAT_00352450_wideTurnBack;
+          break;
         }
-        if (!slid.has_value())
+        ++attempt;
+
+        stepX = retrySpeed * std::cos(heading);
+        stepZ = retrySpeed * std::sin(heading);
+        if (stepX == 0.0f && stepZ == 0.0f)
         {
-          // Nothing was walkable: stay put and re-sample where we already were,
-          // so +0x4C and the terrain words still describe the actor's own spot.
-          entity.positionX20 = startX;
-          entity.positionZ24 = startZ;
-          slid = environment.terrainSurface(startX, startZ, entity.positionY28, entity.height58,
-                                            entity.radius54, entity.halfword04,
-                                            entity.rejectTerrainMask74);
-          if (!walkable(slid))
-          {
-            slid.reset();
-          }
+          break;
         }
-        surface = slid;
+
+        // `puVar11[0x4b] = puVar11[0x4b] & 0xffff7ffd | 0x4000` -- the refusal is
+        // provisional until the ladder runs out, so bit 1 comes back down and
+        // 0x4000 marks an actor working its way around something.
+        entity.collisionFlags0c = (entity.collisionFlags0c & 0xFFFF7FFDu) | 0x4000u;
+      }
+
+      if (!surface.has_value())
+      {
+        // Nothing was walkable: stay put and re-sample where we already were,
+        // so +0x4C and the terrain words still describe the actor's own spot.
+        entity.positionX20 = startX;
+        entity.positionZ24 = startZ;
+        surface = sampleAt(startX, startZ);
+        if (!walkable(surface))
+        {
+          surface.reset();
+        }
       }
 
       if (surface.has_value())
@@ -794,15 +1082,47 @@ namespace orphen::ported::entity
       }
     }
 
-    // FUN_002262c0:502-520. The landing snap, and the only thing that raises
-    // +0x28 for a stationary actor: falling to or through the cached ground
-    // pins the actor to it and kills the vertical velocity. This is what lifts
-    // Magnus onto the bed -- his 0x55 wrote -1.200 into +0x4C while leaving him
-    // at the -1.500 the script authored, and the next frame snaps him up.
-    if (entity.positionY28 <= entity.groundHeight4c)
+    // FUN_002262c0:481-520, the vertical settle. Rising and falling are not
+    // symmetric: a rise has to clear the headroom test and is rolled back
+    // whole if it does not, while a fall is simply clamped at the cached
+    // ground -- which is also the only thing that raises +0x28 for a
+    // stationary actor. That clamp is what lifts Magnus onto the bed: his 0x55
+    // wrote -1.200 into +0x4C while leaving him at the -1.500 the script
+    // authored, and the next frame snaps him up.
+    const float verticalDelta = entity.desiredDeltaY38;
+    if (verticalDelta > 0.0f)
     {
-      entity.positionY28 = entity.groundHeight4c;
-      entity.verticalVelocity44 = 0.0f;
+      const float before = entity.positionY28;
+      entity.positionY28 = before + verticalDelta;
+      entity.collisionFlags0c |= 0x0008u;
+      bool cleared = false;
+      if (environment.terrainSurface)
+      {
+        const auto headroom = environment.terrainSurface(
+            entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
+            entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+        cleared = headroom.has_value() && headroom->height <= entity.positionY28;
+      }
+      if (!cleared)
+      {
+        entity.positionY28 = before;
+        entity.verticalVelocity44 = 0.0f;
+        entity.collisionFlags0c |= 0x000Cu;
+      }
+    }
+    else
+    {
+      if (verticalDelta < 0.0f)
+      {
+        entity.collisionFlags0c |= 0x0010u;
+      }
+      entity.positionY28 += verticalDelta;
+      if (entity.positionY28 <= entity.groundHeight4c)
+      {
+        entity.positionY28 = entity.groundHeight4c;
+        entity.verticalVelocity44 = 0.0f;
+        entity.collisionFlags0c |= 0x0005u;
+      }
     }
 
     entity.desiredDeltaX30 = 0.0f;
@@ -1036,14 +1356,56 @@ namespace orphen::ported::entity
         break;
       }
 
-      // An attached entity's +0x20..+0x28 is an offset in its parent bone's
-      // space, not a world position -- FUN_0020cdc0's middle branch is what
-      // says so. Integrating a movement request into it would drag the
-      // attachment point off the bone.
-      if (entity.parentSlot192 < 0)
+    }
+  }
+
+  // FUN_002261e0. **A second, separate walk of the pool.**
+  //
+  // The original's frame function (FUN_002239c8:116-135) is:
+  //
+  //     FUN_0025b778   script tick -- 0x55 placements, 0x7E group moves
+  //     FUN_00251ed8   lead player
+  //     FUN_00239ce0   actor behaviours
+  //     FUN_00208450   collision groups, which sets DAT_003555d0
+  //     FUN_002261e0   physics, which reads it
+  //
+  // Two things fall out of that and the port had neither. Every behaviour runs
+  // before any physics -- not behaviour-then-physics per entity -- and, more
+  // sharply, **FUN_00208450 and FUN_002261e0 are adjacent**, so a collision
+  // group dirtied by this frame's script is seen by this frame's physics. The
+  // port used to fuse physics into the behaviour loop and run the groups after
+  // it, which left DAT_003555d0 a frame stale. One frame is the entire window:
+  // a cutscene 0x55 that drops an actor inside scenery gets exactly one physics
+  // pass to push it out before the vertical settle stands it on top, and a
+  // stale flag misses it every time. That is why Magnus stood on the crates.
+  //
+  // The gates are FUN_002261e0:18-19: a positive status byte, +0x02 bit 0x800
+  // clear, and no parent -- an attached entity's +0x20..+0x28 is an offset in
+  // its parent bone's space, so integrating a movement request into it would
+  // drag the attachment point off the bone.
+  void FUN_002261e0_update_physics(const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    for (std::size_t slot = kFirstTickedSlot; slot < kEntitySlotCount; ++slot)
+    {
+      if (pool.status(slot) != SlotStatus::ScriptSpawned)
       {
-        integrateNonPlayerMovement(entity, environment, slot);
+        continue;
       }
+      OriginalEntity &entity = pool.slot(slot);
+      if ((entity.descriptorFlags02 & kHidden02) != 0)
+      {
+        continue;
+      }
+      if (entity.parentSlot192 >= 0)
+      {
+        continue;
+      }
+      integrateNonPlayerMovement(entity, environment, slot);
     }
   }
 
