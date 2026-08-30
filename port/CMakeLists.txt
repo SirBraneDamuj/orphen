@@ -84,6 +84,8 @@ target_sources(orphen_port
         src/ported/render/original_letterbox.h
         src/ported/render/original_fade_track.cpp
         src/ported/render/original_fade_track.h
+        src/ported/render/original_frame_feedback.cpp
+        src/ported/render/original_frame_feedback.h
         src/ported/render/original_light_table.cpp
         src/ported/render/original_light_table.h
         src/platform/gl_extensions.cpp

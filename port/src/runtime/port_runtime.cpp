@@ -152,6 +152,7 @@ namespace orphen::port
     poseReportSlot_ = config.poseReportSlot;
     scrDumpPath_ = config.scrDumpPath;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
+    mapViewer_.setScreenSmearDisabled(config.suppressScreenSmear);
     mapViewer_.setMapBaseSlotOnly(config.mapBaseSlotOnly);
     mapViewer_.setEntityBoundTextureOnly(config.entityBoundTextureOnly);
     if (printGleamReport_)
@@ -704,6 +705,7 @@ namespace orphen::port
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
     environment.DAT_00571dc0_screenFade = &DAT_00571dc0_screenFade_;
+    environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
     environment.DAT_00355054_letterbox = &DAT_00355054_letterbox_;
     environment.map = mapViewer_.loadedMap();
 
@@ -2793,6 +2795,30 @@ namespace orphen::port
       }
     }
 
+    if (const auto &smear = scriptTrace_.frameFeedback(); smear.alphaWrites != 0)
+    {
+      // Alpha is a GS blend factor over 128, not 255, so 0x80 is a full
+      // replacement of the frame by its predecessor.
+      std::cout << "screen smear (0xC8 alpha / 0xC9 alpha+transform, FUN_00201a38):\n"
+                << "  writes=" << smear.alphaWrites
+                << " non-zero=" << smear.nonZeroAlphaWrites
+                << " peak alpha=0x" << std::hex << smear.peakAlpha << std::dec
+                << " (" << (smear.peakAlpha * 100) / 128 << "% of the previous frame)\n";
+      if (smear.transformWrites != 0)
+      {
+        std::cout << "  0xC9 transform writes=" << smear.transformWrites
+                  << " last: offset=(" << smear.lastTransform[0] << ","
+                  << smear.lastTransform[1] << ")"
+                  << " scale=(" << smear.lastTransform[2] << ","
+                  << smear.lastTransform[3] << ")"
+                  << " rotation=" << smear.lastTransform[4] << " tenths of a degree\n";
+      }
+      else
+      {
+        std::cout << "  no 0xC9: the copy is drawn 1:1, so this is a ghost and not a zoom\n";
+      }
+    }
+
     if (!scriptTrace_.objectRegisters().empty())
     {
       std::cout << "object registers touched (opcodes 0x76..0x7C reach entity fields):\n";
@@ -4586,6 +4612,20 @@ namespace orphen::port
     soundEngine_.setListener({fieldCamera_.pose().eye.x, fieldCamera_.pose().eye.y,
                               fieldCamera_.pose().eye.z, fieldCamera_.yawRadians()});
 
+    // FUN_002000c0:214, which runs the smear once per frame between the world
+    // and the bars. The step is here rather than in render() because it owns
+    // the ramp in DAT_00354B88; render() takes the quad it produced.
+    if (const std::optional<int> feedbackAlpha = DAT_00343878_frameFeedback_.FUN_00201a38_step();
+        feedbackAlpha.has_value())
+    {
+      mapViewer_.setFrameFeedbackQuad(orphen::ported::render::FUN_00201a38_build_quad(
+          DAT_00343878_frameFeedback_, *feedbackAlpha));
+    }
+    else
+    {
+      mapViewer_.setFrameFeedbackQuad(std::nullopt);
+    }
+
     mapViewer_.setScreenFadeOverlay(DAT_00571dc0_screenFade_.overlay().colour,
                                     DAT_00571dc0_screenFade_.overlay().alpha);
     mapViewer_.setLetterboxBarHeight(DAT_00355054_letterbox_.barHeight());
@@ -4718,6 +4758,9 @@ namespace orphen::port
     DAT_00355700_globalFadeCap_ = 0;
     itemSceneRenderState_ = false;
     DAT_00571dc0_screenFade_.reset();
+    // FUN_0022a418:294 clears both smear alphas on a scene load.
+    DAT_00343878_frameFeedback_.reset();
+    mapViewer_.setFrameFeedbackQuad(std::nullopt);
     // FUN_00271220 / FUN_0022b300 / FUN_00225340 all clear DAT_00355054 on a
     // scene change, so the bars never survive one.
     DAT_00355054_letterbox_.reset();

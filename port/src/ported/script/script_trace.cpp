@@ -119,6 +119,29 @@ namespace orphen::ported::script
     fadesArmed_.push_back({bank, rate, packedRgb, 1});
   }
 
+  void ScriptTrace::recordFrameFeedback(std::uint8_t alpha,
+                                        bool withTransform,
+                                        const std::int16_t *transform)
+  {
+    ++frameFeedback_.alphaWrites;
+    if (alpha != 0)
+    {
+      ++frameFeedback_.nonZeroAlphaWrites;
+    }
+    if (alpha > frameFeedback_.peakAlpha)
+    {
+      frameFeedback_.peakAlpha = alpha;
+    }
+    if (withTransform && transform != nullptr)
+    {
+      ++frameFeedback_.transformWrites;
+      for (std::size_t index = 0; index < frameFeedback_.lastTransform.size(); ++index)
+      {
+        frameFeedback_.lastTransform[index] = transform[index];
+      }
+    }
+  }
+
   void ScriptTrace::noteFadeTrackArmed(std::uint32_t track, std::int32_t durationFrames)
   {
     auto &entry = fadeTracksArmed_[track];

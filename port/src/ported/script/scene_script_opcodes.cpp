@@ -1341,6 +1341,57 @@ namespace orphen::ported::script
                : 0u;
   }
 
+  // 0xC8 (FUN_00264448) and 0xC9 (FUN_00264470): the screen smear's alpha, and
+  // for 0xC9 the five shorts that stretch, spin and shift the copy of the
+  // previous frame FUN_00201a38 draws back over this one.
+  //
+  //   FUN_00264448:  DAT_00355661 = expr
+  //   FUN_00264470:  DAT_00355661 = expr, then five more into
+  //                  (&DAT_00343878)[0..4] -- offsetX, offsetY, scaleX,
+  //                  scaleY, rotation
+  //
+  // Both take the *low byte* of the alpha expression: the original stores
+  // through an `undefined1` and DAT_00355661 is one byte wide. The transform
+  // shorts are stored through an `undefined2` array, so those keep 16 bits.
+  //
+  // 0xC8 is the one scripts drive per frame; s01_e012 snaps it to 0x7E and
+  // then feeds it a 0x90/0x91/0x92 parameter ramp decaying to zero, which is
+  // the fade out. 0xC9 is how a caller that wants a zoom or a spin rather than
+  // a plain ghost sets the shape up first.
+  std::uint32_t SceneCommandInterpreter::FUN_00264448_set_frame_feedback()
+  {
+    // Read before any operand: an operand expression can contain another
+    // opcode and overwrite currentOpcode_.
+    const bool withTransform = currentOpcode_ == 0xC9;
+
+    const std::uint32_t alpha = FUN_0025c258_evaluate();
+    std::int16_t transform[5] = {0, 0, 0, 0, 0};
+    if (withTransform)
+    {
+      for (std::int16_t &value : transform)
+      {
+        value = static_cast<std::int16_t>(FUN_0025c258_evaluate());
+      }
+    }
+    if (halted_ || environment_.DAT_00343878_frameFeedback == nullptr)
+    {
+      return 0;
+    }
+
+    const auto alphaByte = static_cast<std::uint8_t>(alpha & 0xFFu);
+    if (withTransform)
+    {
+      environment_.DAT_00343878_frameFeedback->FUN_00264470_set_alpha_and_transform(
+          alphaByte, transform[0], transform[1], transform[2], transform[3], transform[4]);
+    }
+    else
+    {
+      environment_.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(alphaByte);
+    }
+    trace_.recordFrameFeedback(alphaByte, withTransform, transform);
+    return 0;
+  }
+
   // 0xBC (FUN_00263e30): increment a byte counter, capped at 99, and return
   // whether it still had room. Event scripts use it as a one-shot gate.
   std::uint32_t SceneCommandInterpreter::FUN_00263e30_increment_event_counter()
@@ -4210,13 +4261,11 @@ namespace orphen::ported::script
 
     // Single-value stores into globals the port has no consumer for.
     //
-    //   0xC8 FUN_00264448  text colour index
     //   0xCA FUN_00264500  the dialogue speaker byte
     //   0xD6 FUN_00264d68  renderer byte uGpffffb08c
     //   0xDA FUN_00264ea0  uGpffffb6f0
     //   0xE2 FUN_002650e0  DAT_003556fc
     //   0xE3 FUN_00265120  DAT_00355641, which s01_e012 clears on its way out
-    case 0xC8:
     case 0xCA:
     case 0xD6:
     case 0xDA:
@@ -4225,10 +4274,16 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 1);
 
-    // 0xC9 FUN_00264470  six values: a colour index and a palette triple.
+    // 0xC8 (FUN_00264448) and 0xC9 (FUN_00264470): the screen smear.
+    //
+    // Neither is a text or palette opcode, which is what the dispatch table
+    // used to call them. They write DAT_00355661 and the five transform shorts
+    // at DAT_00343878, which is FUN_00201a38's whole input -- see
+    // ported/render/original_frame_feedback.h.
+    case 0xC8:
     case 0xC9:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 6);
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00264448_set_frame_feedback();
 
     // 0xD7 FUN_00264d90  a palette slot and its byte.
     case 0xD7:

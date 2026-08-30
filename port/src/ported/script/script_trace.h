@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -134,6 +135,22 @@ namespace orphen::ported::script
     };
     void recordFadeArmed(std::uint32_t bank, std::uint32_t rate, std::uint32_t packedRgb);
     const std::vector<FadeArmed> &fadesArmed() const { return fadesArmed_; }
+
+    // Opcodes 0xC8 / 0xC9 driving the screen smear. Summarised rather than
+    // listed for the reason the colour ramps below are: a script holds the
+    // effect by rewriting the alpha every frame, so the interesting numbers
+    // are how many frames it was up for, how strong it got, and whether any
+    // caller reached for the transform at all.
+    struct FrameFeedbackUse
+    {
+      std::uint32_t alphaWrites = 0;
+      std::uint32_t transformWrites = 0;
+      std::uint32_t nonZeroAlphaWrites = 0;
+      std::uint32_t peakAlpha = 0;
+      std::array<std::int16_t, 5> lastTransform{};
+    };
+    void recordFrameFeedback(std::uint8_t alpha, bool withTransform, const std::int16_t *transform);
+    const FrameFeedbackUse &frameFeedback() const { return frameFeedback_; }
 
     // Opcode 0x9A arming one of the sixteen colour ramps. Counted per track
     // rather than listed: the ping-pong ones re-arm for the whole scene, so a
@@ -277,6 +294,7 @@ namespace orphen::ported::script
     std::uint32_t traceRangeLow_ = 0;
     std::uint32_t traceRangeHigh_ = 0;
     std::vector<FadeArmed> fadesArmed_;
+    FrameFeedbackUse frameFeedback_;
     std::map<std::uint32_t, FadeTrackArmed> fadeTracksArmed_;
     std::map<std::int32_t, std::uint32_t> playerLocks_;
     std::uint32_t battleBootCount_ = 0;

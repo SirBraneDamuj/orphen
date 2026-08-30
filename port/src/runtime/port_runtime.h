@@ -15,6 +15,7 @@
 #include "ported/text/original_dialogue_stream.h"
 #include "ported/resource/character_stats.h"
 #include "ported/resource/item_database.h"
+#include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/entity/actor_dispatch_table.h"
@@ -109,6 +110,10 @@ namespace orphen::port
     // --map-no-blend: draw every map primitive opaque, the way the port did
     // before FUN_00211230's ABE block was ported. Diagnostic only.
     bool suppressMapBlend = false;
+    // --no-screen-smear: skip FUN_00201a38's quad while still capturing
+    // the source, so two captures of the same frame isolate exactly what
+    // the smear contributes.
+    bool suppressScreenSmear = false;
     // --map-base-slot: draw only material slot 0, the way the port did before
     // FUN_00211230's slot loop was ported. Diagnostic only.
     bool mapBaseSlotOnly = false;
@@ -462,6 +467,13 @@ namespace orphen::port
     // field camera.
     std::uint32_t DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
     orphen::ported::render::ScreenFade DAT_00571dc0_screenFade_;
+
+    // DAT_00355661 / DAT_00354B88 / DAT_00343878.., the screen smear that
+    // FUN_002000c0:214 draws through FUN_00201a38. Opcodes 0xC8 and 0xC9 write
+    // it, so it lives on the simulation side and the renderer only reads the
+    // quad the step produced -- render() can run more than once per step
+    // (--render-bench) and the ramp must not advance with it.
+    orphen::ported::render::FrameFeedback DAT_00343878_frameFeedback_;
     // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them,
     // FUN_0025b778's tail steps them, the renderer draws them and the dialogue
     // window reads the mode to move its text clear -- one object, the way the

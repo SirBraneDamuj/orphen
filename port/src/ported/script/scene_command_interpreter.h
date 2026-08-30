@@ -6,6 +6,7 @@
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/render/original_fade_track.h"
 #include "ported/render/original_light_table.h"
+#include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/resource/character_stats.h"
@@ -371,6 +372,12 @@ namespace orphen::ported::script
     // fight over a screen only one of them is drawn on.
     orphen::ported::render::ScreenFade *DAT_00571dc0_screenFade = nullptr;
 
+    // DAT_00355661 / DAT_00354B88 / DAT_00343878.., the screen smear. Opcodes
+    // 0xC8 and 0xC9 write it and FUN_002000c0 draws it; the renderer reads the
+    // same object rather than keeping a copy, for the reason the fade above
+    // has to.
+    orphen::ported::render::FrameFeedback *DAT_00343878_frameFeedback = nullptr;
+
     // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them
     // and FUN_0025b778 steps them at the end of every tick, so like the fade
     // this is one object the renderer also reads rather than a second copy.
@@ -717,6 +724,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_00260318_read_object_register();    // 0x76
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
     std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
+    std::uint32_t FUN_00264448_set_frame_feedback();      // 0xC8 / 0xC9
     std::uint32_t FUN_00263ee0_call_function_table_entry(); // 0xBE
     void FUN_00263d10_set_global_color();                // 0xB9, 0xBA
     void FUN_00263db0_set_fade_radius_pair();            // 0xBB

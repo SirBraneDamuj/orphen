@@ -7,6 +7,7 @@
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_map_visibility.h"
 #include "ported/render/original_view_projection.h"
 #include "ported/render/scene_lighting.h"
@@ -142,6 +143,7 @@ namespace orphen::harness
     // --map-no-blend. Draws every map primitive opaque, the way the port did
     // before FUN_00211230's ABE block was ported. Diagnostic only.
     void setMapBlendDisabled(bool disabled) { mapBlendDisabled_ = disabled; }
+    void setScreenSmearDisabled(bool disabled) { screenSmearDisabled_ = disabled; }
     // --map-base-slot. Draws only material slot 0, the way the port did before
     // FUN_00211230's slot loop was ported. Diagnostic only.
     void setMapBaseSlotOnly(bool baseOnly) { mapBaseSlotOnly_ = baseOnly; }
@@ -181,6 +183,18 @@ namespace orphen::harness
     // the bucket order the two share, and under both text overlays. Zero hides
     // them.
     void setLetterboxBarHeight(int height) { letterboxBarHeight_ = height; }
+
+    // FUN_00201a38's screen smear: the previous frame blended back over this
+    // one. The quad is built on the simulation step (it owns a ramp) and only
+    // drawn here. nullopt draws nothing, which is also what stops the capture
+    // from costing anything on the vast majority of frames.
+    //
+    // Bucket 0x1006, so it goes over the world and *under* the bars, the fade
+    // and both text overlays.
+    void setFrameFeedbackQuad(std::optional<orphen::ported::render::FeedbackQuad> quad)
+    {
+      frameFeedbackQuad_ = std::move(quad);
+    }
 
     void setHudLines(std::vector<std::string> lines);
     // FUN_00268270's placed glyphs for this frame, drained from the ported
@@ -267,6 +281,20 @@ namespace orphen::harness
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
     // FUN_0025cfb8's `iGpffffbd8c >> 5`, 0..60.
     int letterboxBarHeight_ = 0;
+    std::optional<orphen::ported::render::FeedbackQuad> frameFeedbackQuad_;
+    // The previous frame, captured out of the back buffer at the end of the
+    // game's own composite. The original samples the *other* framebuffer, which
+    // on a double-buffered console is the finished frame the player is looking
+    // at; this is the same picture.
+    //
+    // Power-of-two and larger than the window, with the used fraction tracked
+    // separately, because a fixed-function context is not promised
+    // GL_ARB_texture_non_power_of_two.
+    mutable unsigned int frameFeedbackTexture_ = 0;
+    mutable int frameFeedbackTextureWidth_ = 0;
+    mutable int frameFeedbackTextureHeight_ = 0;
+    mutable int frameFeedbackCapturedWidth_ = 0;
+    mutable int frameFeedbackCapturedHeight_ = 0;
     // H: the harness's own screen-space text. Off by default -- it covers the
     // game's picture, and the game has a debug overlay of its own.
     bool hudVisible_ = false;
@@ -277,6 +305,7 @@ namespace orphen::harness
     bool debugOverlayVisible_ = false;
     bool wireframe_ = false;
     bool mapBlendDisabled_ = false;
+    bool screenSmearDisabled_ = false;
     bool mapBaseSlotOnly_ = false;
     bool entityBoundTextureOnly_ = false;
 
@@ -294,6 +323,8 @@ namespace orphen::harness
       int height = 0;
     };
     static ViewportRect gameViewportRect(int framebufferWidth, int framebufferHeight);
+    void captureFrameFeedbackSource(const ViewportRect &gameView) const;
+    void drawFrameFeedbackQuad(const ViewportRect &gameView) const;
 
     // Where the original's 640x448 virtual screen lands in the window.
     //

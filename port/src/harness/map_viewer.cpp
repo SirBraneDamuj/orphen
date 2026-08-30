@@ -2653,6 +2653,171 @@ namespace orphen::harness
     return {(framebufferWidth - width) / 2, (framebufferHeight - height) / 2, width, height};
   }
 
+  // The source half of FUN_00201a38: keep a copy of the frame the player is
+  // looking at, so the next one can blend it back in.
+  //
+  // The original gets this for free -- it names the other framebuffer in TEX0
+  // and the GS reads it in place. There is no equivalent here, so the game's
+  // picture is copied out of the back buffer once per presented frame.
+  //
+  void MapViewer::captureFrameFeedbackSource(const ViewportRect &gameView) const
+  {
+    if (screenSmearDisabled_ || gameView.width <= 0 || gameView.height <= 0)
+    {
+      return;
+    }
+
+    const auto nextPowerOfTwo = [](int value) {
+      int result = 1;
+      while (result < value)
+      {
+        result <<= 1;
+      }
+      return result;
+    };
+    const int wantWidth = nextPowerOfTwo(gameView.width);
+    const int wantHeight = nextPowerOfTwo(gameView.height);
+
+    if (frameFeedbackTexture_ == 0)
+    {
+      GLuint texture = 0;
+      glGenTextures(1, &texture);
+      frameFeedbackTexture_ = texture;
+      frameFeedbackTextureWidth_ = 0;
+      frameFeedbackTextureHeight_ = 0;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, frameFeedbackTexture_);
+    if (wantWidth != frameFeedbackTextureWidth_ || wantHeight != frameFeedbackTextureHeight_)
+    {
+      // RGBA, not RGB. The back buffer is RGBA8, and a three-channel target
+      // makes glCopyTexSubImage2D convert every pixel on the way in. Measured
+      // on s01_e024 at 1280x960, --render-bench 8: 4.0 ms a render with no
+      // capture at all, 4.4 ms with this, 5.15 ms with GL_RGB.
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, wantWidth, wantHeight, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, nullptr);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      // The transformed quad can reach past the source rectangle. TEX0's CLAMP
+      // is cleared to REPEAT by FUN_00201a38, but the original's texture *is*
+      // the framebuffer and its wrap lands on the neighbouring page rather than
+      // on the opposite edge of the picture; clamping is the closer of the two
+      // wrong answers, and it is what a zoom-in never reaches anyway.
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      frameFeedbackTextureWidth_ = wantWidth;
+      frameFeedbackTextureHeight_ = wantHeight;
+    }
+
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gameView.x, gameView.y, gameView.width,
+                        gameView.height);
+    frameFeedbackCapturedWidth_ = gameView.width;
+    frameFeedbackCapturedHeight_ = gameView.height;
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+
+  // The draw half. One alpha-blended textured quad over the game's picture,
+  // with the vertex positions FUN_00201a38 computed and the source rectangle it
+  // never moves.
+  void MapViewer::drawFrameFeedbackQuad(const ViewportRect &gameView) const
+  {
+    if (screenSmearDisabled_ || !frameFeedbackQuad_.has_value() || frameFeedbackTexture_ == 0 ||
+        frameFeedbackCapturedWidth_ <= 0 || frameFeedbackCapturedHeight_ <= 0 ||
+        gameView.width <= 0 || gameView.height <= 0)
+    {
+      return;
+    }
+
+    const orphen::ported::render::FeedbackQuad &quad = *frameFeedbackQuad_;
+
+    // The quad's UVs are in the original's 640x224 frame and the capture is the
+    // whole of that frame, so the first step is a plain ratio. The second is
+    // the used fraction of the power-of-two texture.
+    //
+    // v flips. GS v counts down from the top row; a texture copied out of the
+    // back buffer has its origin at the bottom.
+    const float usedU = static_cast<float>(frameFeedbackCapturedWidth_) /
+                        static_cast<float>(frameFeedbackTextureWidth_);
+    const float usedV = static_cast<float>(frameFeedbackCapturedHeight_) /
+                        static_cast<float>(frameFeedbackTextureHeight_);
+    const auto textureU = [usedU](float u) {
+      return (u / orphen::ported::render::kFeedbackScreenWidth) * usedU;
+    };
+    const auto textureV = [usedV](float v) {
+      return (1.0f - v / orphen::ported::render::kFeedbackScreenHeight) * usedV;
+    };
+
+    // Scissored to the game's picture for the reason the fade quad is: a
+    // rotated or zoomed-out quad would otherwise spill the picture onto the
+    // letterbox bars, which are outside the frame the GS sprite lives in.
+    const GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLint previousScissor[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_SCISSOR_BOX, previousScissor);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(gameView.x, gameView.y, gameView.width, gameView.height);
+
+    GLint previousViewport[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glViewport(gameView.x, gameView.y, gameView.width, gameView.height);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    // Straight into the original's own units: x across 640, y down 224.
+    glOrtho(0.0, orphen::ported::render::kFeedbackScreenWidth,
+            orphen::ported::render::kFeedbackScreenHeight, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_FOG);
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    // ALPHA_1 = 0x44 is (Cs - Cd) * As + Cd, which is this.
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glBindTexture(GL_TEXTURE_2D, frameFeedbackTexture_);
+
+    // RGBAQ is `alpha << 24 | 0x808080` under MODULATE, and 0x80 is unity on
+    // the GS -- so the colour is the texture's own and only alpha does work.
+    glColor4f(1.0f, 1.0f, 1.0f, quad.blendFactor);
+    glBegin(GL_TRIANGLE_FAN);
+    for (const auto &vertex : quad.vertices)
+    {
+      glTexCoord2f(textureU(vertex.u), textureV(vertex.v));
+      glVertex2f(vertex.x, vertex.y);
+    }
+    glEnd();
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_TEXTURE_2D);
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
+
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    glScissor(previousScissor[0], previousScissor[1], previousScissor[2], previousScissor[3]);
+    if (scissorWasEnabled != GL_TRUE)
+    {
+      glDisable(GL_SCISSOR_TEST);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
   void MapViewer::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
   {
     if (input.toggleHudRequested)
@@ -2906,6 +3071,17 @@ namespace orphen::harness
 
     glViewport(0, 0, framebufferWidth, framebufferHeight);
 
+    // The 4:3 box the game's picture occupies. Both halves of the smear work in
+    // it: the quad is drawn inside it and the next frame's source is copied out
+    // of it.
+    const ViewportRect gameView =
+        useOriginalCamera ? gameViewportRect(framebufferWidth, framebufferHeight)
+                          : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
+
+    // FUN_00201a38, sort bucket 0x1006: over the world, under the bars and the
+    // fade below.
+    drawFrameFeedbackQuad(gameView);
+
     // FUN_0025cfb8's bars. They and the fade share GS sort bucket 0x1007, and
     // both FUN_002239c8 and FUN_00224320 submit the fade first -- insertion is
     // LIFO within a bucket, so the bars are the earlier draw and the fade tints
@@ -2923,9 +3099,6 @@ namespace orphen::harness
       // for it to cover. The port's frame is the letterboxed 4:3 box, so the
       // quad is scissored to it and the bars stay the window's own colour --
       // drawn full-window, the fade to white washed the bars out too.
-      const ViewportRect gameView =
-          useOriginalCamera ? gameViewportRect(framebufferWidth, framebufferHeight)
-                            : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
       const GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
       GLint previousScissor[4] = {0, 0, 0, 0};
       glGetIntegerv(GL_SCISSOR_BOX, previousScissor);
@@ -2990,6 +3163,24 @@ namespace orphen::harness
     {
       drawDialogueSprites(framebufferWidth, framebufferHeight);
     }
+
+    // The game's picture is finished here, so this is the frame the next one
+    // samples: world, smear, bars, fade and subtitles, and nothing from the
+    // harness. On the console the buffer would also hold FUN_00268270's debug
+    // text, but the port's overlays are the harness's own and would smear a HUD
+    // the game never drew.
+    //
+    // Note the ordering: the capture happens *after* this frame's own quad, so
+    // each frame samples a picture that already contains the last blend. That
+    // compounding is the effect -- capture before the quad and it degrades to a
+    // one-frame ghost.
+    //
+    // Unconditional, not gated on the effect being up. The console always has
+    // the other framebuffer sitting there, so the frame a script arms the smear
+    // on already has its source; gating the copy on the quad would leave that
+    // first frame with nothing to sample, or worse, with whatever the last
+    // burst left in the texture.
+    captureFrameFeedbackSource(gameView);
 
     {
       PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->hudMicros : nullptr);

@@ -41,6 +41,8 @@ namespace
                  "                  dispatches to, and which of them are ported.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
                  "                  print its geometry counts.\n"
+                 "  --no-screen-smear  skip FUN_00201a38's feedback quad, so the same\n"
+                 "                  frame can be captured with and without the smear.\n"
                  "  --frame-stats   print where each frame's time goes, once per\n"
                  "                  second. Windowed runs only.\n"
                  "  --render-bench <N>\n"
@@ -239,6 +241,11 @@ namespace
       if (argument == "--map-no-blend")
       {
         config.suppressMapBlend = true;
+        continue;
+      }
+      if (argument == "--no-screen-smear")
+      {
+        config.suppressScreenSmear = true;
         continue;
       }
       if (argument == "--map-base-slot")

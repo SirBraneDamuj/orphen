@@ -1912,6 +1912,142 @@ whose behavior moved it is the nearest test it has. A script-placed cutscene
 actor never qualifies, so its authored height survives, which is the point:
 `s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
 
+## The screen smear
+
+`FUN_00201a38` draws the *previous* frame back over the current one,
+alpha-blended. It is what makes the camera look distorted and blurry on
+impacts — the lightning strikes in the ship scenes, Volcan's sword swing, a
+falling crate. Ported into
+`ported/render/original_frame_feedback.{h,cpp}`.
+
+The two opcodes that drive it were documented as something else entirely.
+`analyzed/opcode_dispatch_tables.md` called `0xC8` `set_text_color_index` and
+`0xC9` `set_text_color_index_and_palette`, and the port consumed both as
+`operands-only` on that basis. Neither touches text:
+
+```
+0xC8 FUN_00264448  DAT_00355661 = expr                       blend alpha
+0xC9 FUN_00264470  same, plus five shorts at DAT_00343878    dx, dy, sx, sy, rot
+```
+
+Nothing in the dialogue or menu renderer reads `DAT_00355661`. Its only readers
+are `FUN_002000c0:214`, which gates the whole effect on it —
+
+```c
+if ((DAT_00355661 != '\0') || (DAT_00354b88 != 0)) FUN_00201a38();
+```
+
+— and `FUN_00201a38` itself, which uses it as the blend alpha. The global wears
+four different Ghidra names across the decompilation (`DAT_00355661`,
+`uGpffffb6f1`, `bGpffffb6f1`, `cGpffffb6f1`), which is part of why the
+connection was easy to miss.
+
+### The source is a framebuffer, not a copy
+
+`FUN_002f9620` builds `TEX0` with `TBP0 = DAT_00354C2C * 0x8C0`, `TBW` 10,
+`PSM` 1 (`PSMCT24`). `DAT_00354C2C` is the parity of the buffer *not* being
+drawn into, so `TBP0` names the frame the player is currently looking at. `TBW`
+10 is 640 pixels and the two bases (0 and `0x8C000`) are `640*224*4` apart, so
+the frame is one 224-line field. `FUN_00201a38` then clears `TCC` out of the
+word it was handed, so the sampled alpha is discarded and `RGBAQ`'s is used.
+
+The primitive is one alpha-blended textured tri-fan over the whole screen:
+
+| register | value | meaning |
+|---|---|---|
+| `PRIM` | `0x155` | `TRI_FAN \| TME \| ABE \| FST` |
+| `ALPHA_1` | `0x44` | `(Cs - Cd) * As + Cd` |
+| `RGBAQ` | `alpha << 24 \| 0x808080` | `0x80` is unity under `MODULATE`, so only alpha does work |
+
+Alpha is a GS blend factor over **128**, not 255. `0x80` replaces the frame
+outright; the `0x7E` the ship scenes use is 98%. And because each frame
+re-samples a frame that already contains the previous blend, it compounds — the
+trail is exponential, not a single ghost. That compounding is the effect, and
+reproducing it is the one ordering constraint on the port: the capture has to
+happen *after* the frame's own quad.
+
+The packet head-inserts at `DAT_7000000C + 0x10064`. `FUN_00207de8`'s tail shows
+the bucket stride is `0x10` with the head pointer at `+4`, so that is sort
+bucket **`0x1006`** — under the letterbox bars and the fullscreen fade (both
+`0x1007`) and under every text overlay (`0x1009`). The smear covers the world,
+and the fade tints the smear.
+
+### The ramp that almost never runs
+
+`DAT_00355661` is the target and `DAT_00354B88` the current level, and the head
+of `FUN_00201a38` steps one toward the other by 1 a frame, drawing nothing below
+2. Except that the very first test is `if (current == 0)`, and that branch takes
+the target verbatim and never ramps. Only opcode `0xBE`'s table entry 12
+(`sh a0,-0x53e8(gp)`) ever seeds a non-zero current level, so **every script use
+of `0xC8` gets exactly the alpha it wrote**. `s01_e012` snaps it to `0x7E`, then
+re-issues `0xC8` every frame with the current value of an `0x90`/`0x91`/`0x92`
+parameter ramp decaying to zero, and writes 0 to clear. The script's own ramp is
+the fade-out; `FUN_00201a38`'s is dead code for it.
+
+### Only the destination moves
+
+The base quad is ±5104 × ±1776 in GS 12.4 fixed point (±319 × ±111 pixels) and
+carries UVs for the 1..639 × 1..223 rectangle of the source. Untransformed that
+is a 1:1 copy, which pins the two origin constants the function adds last:
+`0x7FF8` and `0x7FFE` *are* the screen centre, and the `0x7FF6` variant is the
+same point half a line up for the other interlace field. The port never needs
+the GS `XYOFFSET` — centre plus `X/16` is the same answer with one fewer
+constant to be wrong about.
+
+`0xC9`'s five shorts then transform that quad, and **not** the source rectangle:
+
+| global | step | effect |
+|---|---|---|
+| `DAT_0034387C/E` | `v * (s + 1024) >> 10` | zoom blur |
+| `DAT_00343880` | rotate by `v/10` degrees | swirl |
+| `DAT_00343878/A` | translate | directional smear |
+
+All zero gives a plain ghost. `fGpffff8010` is `0.017453289` — π/180 — so the
+rotation is in tenths of a degree. The `y` term is doubled going into the
+rotation and halved coming out: the quad is 224 lines over 640 pixels, so a line
+is worth two pixels and a 90° spin would otherwise come out squashed to the
+field's aspect. `FUN_0023c340`, the battle/spell path, writes these globals
+directly with scales of `0x32`, `0x78` and `-70` — that is the impact punch.
+
+### What the port does instead
+
+There is no framebuffer to name in `TEX0`, so the game's picture is copied out
+of the back buffer into a texture once per presented frame, at the end of the
+composite — after the world, the smear, the bars, the fade and the subtitles,
+and before the harness's own overlays. On the console the buffer would also hold
+`FUN_00268270`'s debug text, but the port's overlays are the harness's and would
+smear a HUD the game never drew.
+
+Three things that are easy to get wrong here, all of which cost a build:
+
+- **The capture is unconditional.** Gating it on the effect being up leaves the
+  frame a script *arms* the smear on with nothing to sample — the console always
+  has the other framebuffer sitting there, and there is no lookahead that would
+  let the port know one frame early.
+- **Match the framebuffer format.** `glTexImage2D` with `GL_RGB` makes
+  `glCopyTexSubImage2D` convert every pixel. Measured on `s01_e024` at
+  1280×960, `--render-bench 8`: 4.0 ms a render with no capture at all, 4.4 ms
+  with `GL_RGBA8`, 5.15 ms with `GL_RGB`. Same pixels out of all three.
+- **`v` flips.** GS `v` counts down from the top row; a texture copied out of
+  the back buffer has its origin at the bottom.
+
+The texture is power-of-two and larger than the window with the used fraction
+tracked separately, because a fixed-function context is not promised
+`GL_ARB_texture_non_power_of_two`.
+
+`--no-screen-smear` skips both the quad and the capture, so the same frame can
+be captured with and without it — which is how this was confirmed to reach
+pixels at all rather than merely to be "implemented". On `s01_e012` frame 2060,
+during Volcan's sword swing, 483,516 of 691,200 pixels differ between the two;
+on frame 1900, outside both bursts, the two captures are byte-identical. The
+difference image is a fan of ghosted blades trailing the sword and nothing at
+all on the static geometry, which is the signature a 1:1 feedback blend should
+have.
+
+`--scr-report` prints a `screen smear` section: how many frames the alpha was
+written on, how many were non-zero, the peak, and whether any caller reached for
+`0xC9`'s transform.
+
 ## The dynamic point lights
 
 The sixteen-slot table at `DAT_00343888` and the falloff that consumes it are
