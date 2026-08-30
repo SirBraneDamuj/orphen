@@ -959,6 +959,81 @@ than in the transition:
   divergence that predates this and is what stops the arrival being black while
   the script above cannot run.
 
+### Arriving: what a group-0xE scene needs that no field scene did
+
+`s14_e045` — where `s01_e024`'s floor panel goes — halted on its *first*
+statement and again on frame 2. Four opcodes and two missing lines of
+`FUN_0025b6d0` later it runs with **zero unimplemented opcodes**, and three of
+the six are things only a scene reached this way ever exercises.
+
+**`0x3C` (`FUN_0025daf8`) is the other half of the handoff.** Its whole body is
+`FUN_0025c258(&gp0xffffb298)`, and gp 0xffffb298 against the 0x00359F70 base is
+**0x00355208 — the map-prop bank**. Ghidra renders that one address as
+`iGpffffb298` inside `FUN_00229980` and as `DAT_00355208` inside `FUN_0022a418`,
+which is why `opcode_dispatch_tables.md` names it an "entity descriptor counter"
+on the strength of the gp spelling alone. It is the bank type ids
+`0x272..0x371` resolve against, and since `0x8E` never writes `DAT_003551f4`, a
+scene arrived at through `0x8E` inherits the *departing* stage's bank. `0x3C` is
+how it names its own: `s14_e045`'s init opens with it and asks for bank 10.
+Without it the scene spawned nothing at all; with it, 19 entities.
+
+**`0xE7`/`0xE8` (`FUN_00265290`) are a handle on the scheduler's own gate.**
+`DAT_00355064` is `uGpffffb0f4`: 0x00359F70 − 0x355064 = 0x4F0C, and gp
+0xffffb0f4 is −0x4F0C. So this pair is not an unrelated global the way
+`analyzed/ops/0xE7_0xE8_*.c` reads it — it is the word a scheduler record with
+bit 15 set in its gate waits on, and `0xE8` lets a body open its own gate.
+`s14_e045`'s stream is built out of that: 52 records, most gated on a bit, and
+each body ends by setting the bit the next record wants.
+
+**And `FUN_0025b6d0` was missing two of its five statements**, both invisible
+until now:
+
+- `DAT_00355064 |= 0x6000` — a scene *starts* with the text gate open. Every
+  scene the port ran before opened with dialogue, which raises those bits as a
+  side effect, so nothing noticed. A scene whose first gated record is not
+  dialogue has nothing to open it and the channel never advances.
+- `if (DAT_003555d3) *(u32 *)(DAT_00355060 + 0x68) = 0x32` — the group-0xE
+  branch, which had never been reachable. That is a *byte* offset into a dword
+  array, so it is work word 0x1A. It shows up as `[26]=50` in `--scr-report`'s
+  work dump on the transitioned run and is absent from a cold
+  `--scene s14_e045`, which is the cheapest confirmation that `DAT_003555d3` is
+  being carried correctly across the handoff.
+
+The other two are ordinary: **`0x46`** (`FUN_0025dff0`) is the camera *cut* to
+0x41/0x43's move — six expressions, an eye triplet and a look-at triplet, into
+the already-ported `FUN_00217d70`; and **`0x62`** (`FUN_0025f548`) finds a pool
+slot by its `+0x95` tag. `analyzed/ops/0x62_*.c` reads that one as a second
+entity pool at `DAT_0058d120` with indices 80..324, and it is neither:
+`DAT_0058beb0 + 10 * 0x1D8` is `0x58D120` exactly, so it is slot 10 of the one
+pool, and the `>> 3` on a counter that runs in eighths returns an ordinary slot
+index.
+
+#### Where it stops now, and why that is the battle system
+
+`s14_e045` reaches record 4 of its 52 and holds. Subproc `0x7E1` at `0x379e`
+selects `work[0x28]` — pool slot 11 — and spins on `objreg(current, 5) & 0x10`,
+which is entity `+0x06` bit 0x10.
+
+Slot 11 will never set it, and that is not a port bug:
+
+- The script spawns slots 11 and 12 as types 4 and 6, then **writes their type
+  ids negative** (−4 and −6) through object register 0. `FUN_00239ce0`'s
+  dispatch ends `if (0 < sVar1) (*(code *)(&PTR_FUN_0031c6c0)[sVar1 - 1])(...)`,
+  so a negative type is skipped outright — the original does not tick them
+  either. They are cutscene props, posed by the script.
+- `+0x06` bit 0x10 is a pure *input* to the animation walk: `FUN_00225c90`
+  returns early on it and never sets it. (Its own end-of-timeline flags are
+  1/2/4/5, and the `& 0x10` in its tail reads `+0x08`, a different field.)
+- Every write of `+0x06 |= 0x10` in the executable is in `FUN_0022ff20` or the
+  **0x24xxxx block** — `FUN_0024a870`, `FUN_0024ac88`, `FUN_0024b410`,
+  `FUN_0024b7d0`, `FUN_0024bae0`, `FUN_0024bd30`, `FUN_0024c058`,
+  `FUN_0024c538`, and `FUN_00242df0` behind object method 2. None of them has a
+  caller in `src/`, so they are reached only through the battle actor vtables.
+
+So `s14_e045`'s opening is not a field cutscene that leads to a battle; it is
+already being driven by the battle module, and the first thing needed to get
+past record 4 is a slice of that module rather than another opcode.
+
 #### The floor panels are a 4-bit code
 
 `--scr-report` used to print a centroid per panel bit. It is grouped by the whole

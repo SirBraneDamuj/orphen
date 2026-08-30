@@ -810,9 +810,23 @@ namespace orphen::port
       DAT_003551ec_sceneRequest_ = 0x20001;
     };
 
+    // FUN_0025daf8, opcode 0x3C. One assignment in the original; here it has to
+    // reach both readers of DAT_00355208.
+    environment.FUN_0025daf8_set_map_prop_bank = [this](std::int32_t bank)
+    {
+      applyMapPropBank(static_cast<int>(bank));
+      std::cout << "[props] scene script set the map-prop bank to " << bank << " (0x3C)\n";
+    };
+
     environment.FUN_00217e18_release_camera = [this](bool restore)
     {
       fieldCamera_.FUN_00217e18_release_manual_camera(restore);
+    };
+
+    environment.FUN_00217d70_set_manual_camera = [this](const orphen::ported::psm2::Vec3 &eye,
+                                                       const orphen::ported::psm2::Vec3 &lookAt)
+    {
+      fieldCamera_.FUN_00217d70_set_manual_camera(eye, lookAt);
     };
 
     // FUN_00261fd8's loop, opcode 0xA7. iGpffffb718 is the record count and
@@ -939,6 +953,7 @@ namespace orphen::port
     // FUN_0025b778's two debug lines. The gate byte travels with the
     // environment so the check stays where the original makes it.
     environment.DAT_003555dd_debugDisplay = DAT_003555dd_debugDisplay_;
+    environment.DAT_003555d3_groupEScene = DAT_003555d3_groupEScene_;
     environment.FUN_002681c0_subprocLine = [this](int slot, std::int32_t subprocId)
     { DAT_00572c38_debugText_.FUN_002681c0_printf("Subproc:%3d [%5d]\n", slot, subprocId); };
     // FUN_0022dcf0 by way of opcode 0x94.
@@ -1502,6 +1517,18 @@ namespace orphen::port
     DAT_003551ec_sceneRequest_ = 0;
   }
 
+  // DAT_00355208's two readers in the port: FUN_00229980's streamed branch,
+  // which the descriptor table owns, and the model binding that follows it.
+  void PortRuntime::applyMapPropBank(int bank)
+  {
+    DAT_00355208_mapPropBank_ = bank;
+    modelStore_.setMapPropTable(&mapPropTable_, bank);
+    // The same banks reach the descriptor path, which is what lets a streamed
+    // type id spawn from a real descriptor instead of struct defaults. Must be
+    // before the script runs: the scene bootstrap spawns props immediately.
+    descriptorTable_.setMapPropTable(&mapPropTable_, bank);
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // Models bind before the script runs, so the spawn path can report a
@@ -1525,12 +1552,10 @@ namespace orphen::port
       DAT_003551f4_sceneSection_ = loadedScene.has_value() ? static_cast<int>(loadedScene->section) : -1;
       DAT_003551f0_sceneEntry_ = loadedScene.has_value() ? static_cast<int>(loadedScene->entry) : -1;
     }
-    const int stageBank = DAT_003551f4_sceneSection_;
-    modelStore_.setMapPropTable(&mapPropTable_, stageBank);
-    // The same banks reach the descriptor path, which is what lets a streamed
-    // type id spawn from a real descriptor instead of struct defaults. Must be
-    // before the script runs: the scene bootstrap spawns props immediately.
-    descriptorTable_.setMapPropTable(&mapPropTable_, stageBank);
+    //
+    // Only the seed, though: opcode 0x3C writes DAT_00355208 outright, and a
+    // group-0xE scene uses it to replace exactly this inheritance.
+    applyMapPropBank(DAT_003551f4_sceneSection_);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
     FUN_0022a178_bind_map_textures();

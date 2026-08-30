@@ -458,6 +458,116 @@ namespace orphen::ported::script
     return passed ? 1u : 0u;
   }
 
+  // 0x62 (FUN_0025f548): find an occupied pool slot by its `+0x95` tag.
+  //
+  //   FUN_0025c258(acStack_20);
+  //   puVar3 = &DAT_0058d120; pcVar4 = &DAT_005a96ba; iVar1 = 0xf5; iVar2 = 0x50;
+  //   while (*pcVar4 == '\0' || *(char *)(puVar3 + 0x95) != acStack_20[0]) {
+  //     iVar2 += 8; puVar3 += 0xec; --iVar1; ++pcVar4;
+  //     if (iVar1 == -1) return 0;
+  //   }
+  //   return iVar2 >> 3;
+  //
+  // `analyzed/ops/0x62_*.c` reads this as a second, separate entity pool. It is
+  // not. `DAT_0058beb0` + 10 * 0x1D8 is `0x58D120` exactly, and the eight
+  // FUN_00265ec0 calls in FUN_0022a418 walk `0x58c260`..`0x58cf48` at the same
+  // 0x1D8 stride to land right in front of it -- this is slot 10 of the one
+  // pool, and `DAT_005a96ba` is its occupancy array. The same file also reads
+  // the return as an index in 80..324 by dropping the `>> 3`: the counter runs
+  // in eighths so that `0x50 >> 3` is 10, and what comes back is an ordinary
+  // pool slot index that 0x58 will select on.
+  //
+  // The comparison is `char` on both sides in the original, so only the low byte
+  // of the expression takes part. A tag of 0 can never match, because a slot
+  // holding 0 is indistinguishable from the miss return.
+  std::uint32_t SceneCommandInterpreter::FUN_0025f548_find_entity_by_tag()
+  {
+    const std::uint32_t tag = FUN_0025c258_evaluate();
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+
+    const auto &pool = *environment_.entityPool;
+    const auto wanted = static_cast<std::int8_t>(tag & 0xFFu);
+    for (std::size_t slot = orphen::ported::entity::kFirstScriptSlot; slot < pool.slotCount(); ++slot)
+    {
+      if (pool.status(slot) == orphen::ported::entity::SlotStatus::Free)
+      {
+        continue;
+      }
+      if (static_cast<std::int8_t>(pool.slot(slot).byte95) == wanted)
+      {
+        return static_cast<std::uint32_t>(slot);
+      }
+    }
+    return 0;
+  }
+
+  // 0xE7 / 0xE8 (FUN_00265290): read or write `DAT_00355064`.
+  //
+  //   if (DAT_00355cd8 == 0xe8) { FUN_0025c258(v); DAT_00355064 = (ushort)v[0]; }
+  //   else                        v[0] = (uint)DAT_00355064;
+  //   return v[0];
+  //
+  // So 0xE8 takes an expression and 0xE7 takes none, and both return the value
+  // that ended up in the word. It is stored and returned as a **halfword**.
+  //
+  // `DAT_00355064` is `uGpffffb0f4`: 0x00359F70 - 0x355064 = 0x4F0C, and gp
+  // 0xffffb0f4 is -0x4F0C. That makes this pair a direct handle on **the
+  // scheduler's second gate** -- the one a record with bit 15 set in its gate
+  // waits on -- rather than some unrelated global, which is what
+  // `analyzed/ops/0xE7_0xE8_*.c` reads it as. A scene can therefore open its own
+  // gates rather than waiting for the dialogue driver to do it: s14_e045's
+  // opening body ends `0x125 cue 621; 0xE8 1; 0x9E -1`, which drops the 0x6000
+  // the init raised and leaves bit 0 up for whatever waits on it next.
+  std::uint32_t SceneCommandInterpreter::FUN_00265290_get_or_set_gate_mask()
+  {
+    const std::uint16_t opcode = currentOpcode_;
+    if (opcode != 0xE8)
+    {
+      return environment_.state->uGpffffb0f4_gateMask & 0xFFFFu;
+    }
+
+    const std::uint32_t value = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    environment_.state->uGpffffb0f4_gateMask = value & 0xFFFFu;
+    return value & 0xFFFFu;
+  }
+
+  // 0x3C (FUN_0025daf8): `FUN_0025c258(&gp0xffffb298)` and nothing else --
+  // evaluate one expression straight into a global.
+  //
+  // gp 0xffffb298 against the 0x00359F70 base is **0x00355208**, the map-prop
+  // bank. Ghidra renders the same address as `iGpffffb298` in FUN_00229980 and
+  // FUN_0025ba98 and as `DAT_00355208` in FUN_0022a418 and FUN_0025e7c0, which
+  // is what hid it: `analyzed/opcode_dispatch_tables.md` calls this an "entity
+  // descriptor counter" on the strength of the gp name alone. It is the bank
+  // FUN_00229980 resolves type ids 0x272..0x371 against.
+  //
+  // Which makes this opcode the other half of the group-0xE handoff. FUN_0022a418
+  // seeds DAT_00355208 from DAT_003551f4, and opcode 0x8E never writes
+  // DAT_003551f4 -- so a scene arrived at through 0x8E inherits the *departing*
+  // stage's bank and would resolve every streamed prop against the wrong one.
+  // 0x3C is how such a scene names its own: it is the first statement of
+  // s14_e045's init, at 0x17a3, and it asks for bank 10.
+  std::uint32_t SceneCommandInterpreter::FUN_0025daf8_set_map_prop_bank()
+  {
+    const std::uint32_t bank = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (environment_.FUN_0025daf8_set_map_prop_bank)
+    {
+      environment_.FUN_0025daf8_set_map_prop_bank(static_cast<std::int32_t>(bank));
+    }
+    return 0;
+  }
+
   // 0x9D (FUN_00261cb8): install an object script into a slot. The operand is a
   // raw dword offset from the script base, which the original turns into an
   // absolute pointer; the port keeps it as a blob offset. Note the bound is
@@ -1347,6 +1457,44 @@ namespace orphen::ported::script
     if (environment_.FUN_00217e18_release_camera)
     {
       environment_.FUN_00217e18_release_camera(restore != 0);
+    }
+    return 0;
+  }
+
+  // 0x46 (FUN_0025dff0): the cut, as opposed to 0x41/0x43's move. Six
+  // expressions -- an eye triplet then a look-at triplet -- each divided by
+  // fGpffff8c04 and handed straight to FUN_00217d70.
+  //
+  // The original writes the six through the PS2 scratchpad (`DAT_70000000`,
+  // bumped by 8 quadwords and put back), which is allocation, not meaning: the
+  // two triplets are 0xC apart and go out as `FUN_00217d70(p[0], p[1], p[2],
+  // p[3], p[4], p[5])`.
+  //
+  // fGpffff8c04 is a *different* global from fGpffff8c00, which 0x43 divides by,
+  // and both hold 100000.0 in the retail ELF -- as do fGpffff8bfc, fGpffff8c08
+  // and the two the object registers use. Same reading as
+  // `object_registers.h`'s note: separate globals, one value, so
+  // kScriptCoordinateScale covers them all.
+  //
+  // s14_e045 uses it at 0x3718 to place its opening shot, and because
+  // FUN_00217d70 only installs when nothing else has the camera, that shot
+  // survives until an 0x45 gives it back.
+  std::uint32_t SceneCommandInterpreter::FUN_0025dff0_set_manual_camera()
+  {
+    float component[6]{};
+    for (float &value : component)
+    {
+      value = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+              kScriptCoordinateScale;
+    }
+    if (halted_)
+    {
+      return 0;
+    }
+    if (environment_.FUN_00217d70_set_manual_camera)
+    {
+      environment_.FUN_00217d70_set_manual_camera({component[0], component[1], component[2]},
+                                                  {component[3], component[4], component[5]});
     }
     return 0;
   }
@@ -3617,9 +3765,26 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025dfc8_release_camera();
 
+    case 0x46:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025dff0_set_manual_camera();
+
+    case 0x3C:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025daf8_set_map_prop_bank();
+
+    case 0xE7:
+    case 0xE8:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00265290_get_or_set_gate_mask();
+
     case 0x61:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025f4b8_test_lead_flag_word();
+
+    case 0x62:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025f548_find_entity_by_tag();
 
     case 0x63:
       noteOpcode(opcode, OpcodeSupport::Modelled);

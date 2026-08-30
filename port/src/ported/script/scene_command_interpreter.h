@@ -425,9 +425,27 @@ namespace orphen::ported::script
     // top of the next frame.
     std::function<void(std::int32_t destination)> FUN_002610a8_request_scene_change;
 
+    // FUN_0025daf8, opcode 0x3C: `DAT_00355208 = expr`, the map-prop bank. The
+    // banks live on the runtime's model store and descriptor table, so the write
+    // has to reach both.
+    std::function<void(std::int32_t bank)> FUN_0025daf8_set_map_prop_bank;
+
+    // DAT_003555d3, set from bit 0x20000 of the scene-change request: this scene
+    // came out of the group-0xE list. FUN_0025b6d0 branches on it before it runs
+    // anything, so the script layer needs to see it.
+    bool DAT_003555d3_groupEScene = false;
+
     // FUN_00217e18: drop an installed script camera, restoring the saved pose
     // when the argument is non-zero. Opcode 0x45's whole effect.
     std::function<void(bool restore)> FUN_00217e18_release_camera;
+
+    // FUN_00217d70: pin the camera to one explicit eye and look-at, with no
+    // curve behind it. Opcode 0x46's whole effect. The install-once guard
+    // (cGpffffad2f) lives inside the camera, so a second call while a script
+    // camera is up is dropped there rather than here.
+    std::function<void(const orphen::ported::psm2::Vec3 &eye,
+                       const orphen::ported::psm2::Vec3 &lookAt)>
+        FUN_00217d70_set_manual_camera;
 
     // FUN_00218158: sample the installed camera path at elapsed/duration and
     // publish the eye, look-at, roll and zoom. Opcode 0x44 steps it.
@@ -712,6 +730,10 @@ namespace orphen::ported::script
     void FUN_00263148_teleport_lead();           // 0xAB
     std::uint32_t FUN_0025f120_get_slot_index(); // 0x59
     std::uint32_t FUN_0025f4b8_test_lead_flag_word(); // 0x61
+    std::uint32_t FUN_0025f548_find_entity_by_tag();  // 0x62
+    std::uint32_t FUN_0025dff0_set_manual_camera();   // 0x46
+    std::uint32_t FUN_00265290_get_or_set_gate_mask(); // 0xE7 / 0xE8
+    std::uint32_t FUN_0025daf8_set_map_prop_bank();   // 0x3C
     std::uint32_t FUN_002601f8_entity_distance_or_angle(); // 0x74, 0x75
 
     // The choreography family. See the block comment in the .cpp: every one of

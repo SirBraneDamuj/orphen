@@ -250,6 +250,11 @@ namespace orphen::port
     // DAT_003551f8: the entry within the group-0xE list, which is what 0x8E's
     // operand actually is.
     int DAT_003551f8_groupEntry_ = 0;
+    // DAT_00355208 (iGpffffb298), the map-prop bank FUN_00229980 resolves type
+    // ids 0x272..0x371 against. Seeded from DAT_003551f4 at load and then
+    // writable by opcode 0x3C, which is how a group-0xE scene replaces the bank
+    // it inherited from whichever stage sent it there.
+    int DAT_00355208_mapPropBank_ = -1;
     // DAT_003555d3, set from bit 0x20000 of the request. Sticky for the whole
     // time a group-0xE scene is loaded: FUN_0022a238 and FUN_0022a288 both read
     // it to decide which descriptor list they are walking.
@@ -397,6 +402,10 @@ namespace orphen::port
     // FUN_002239c8:22-33: spend a pending scene-change request, if this frame is
     // allowed to. Runs at the top of the frame, before the pad is published.
     void FUN_002239c8_service_scene_change();
+    // Push DAT_00355208 into the two places that answer with it. Both setters
+    // are plain assignments, so the write is safe mid-scene -- which it has to
+    // be, because opcode 0x3C makes it from inside the init.
+    void applyMapPropBank(int bank);
     // The whole per-scene load: model bindings, player reset, scene script.
     // Shared by initialize and the map-cycle path so they cannot drift.
     void loadSceneForCurrentMap();

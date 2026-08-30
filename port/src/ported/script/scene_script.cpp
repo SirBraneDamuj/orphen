@@ -540,11 +540,27 @@ namespace orphen::ported::script
     // FUN_0025b6d0 clears 0x30 bytes at 0x571E40 -- which is exactly the four
     // 12-byte scheduler channels -- and resets DAT_0035504c, the 0x4E lookup
     // counter, before running the entry.
+    //
+    // Ahead of all of that is a branch nothing used to reach: when DAT_003555d3
+    // is set -- the scene came out of the group-0xE list -- it writes 0x32 into
+    // the work array. `*(u32 *)(DAT_00355060 + 0x68)` is a *byte* offset into a
+    // dword array, so it is work word 0x1A.
+    if (environment.DAT_003555d3_groupEScene)
+    {
+      state_.DAT_00355060_work[kGroupESceneWorkWord] = 0x32;
+    }
     for (auto &channel : state_.DAT_00571e40_eventChannels)
     {
       channel = SceneScriptState::EventChannel{};
     }
     state_.DAT_0035504c_lookupCount = 0;
+    // `DAT_00355064 |= 0x6000`. Same word as uGpffffb0f4, the scheduler's second
+    // gate: a scene *starts* with the text gate open, and only a running
+    // dialogue stream closes it. Without this a first record gated on 0x6000 has
+    // nothing to open it and the channel never advances -- which cost nothing
+    // while every scene the port ran opened with dialogue, and stops a scene
+    // that opens with a gated record dead.
+    state_.uGpffffb0f4_gateMask |= 0x6000u;
     return runEntry(SceneScriptEntry::Init, environment, trace);
   }
 

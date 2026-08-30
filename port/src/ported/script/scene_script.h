@@ -35,6 +35,10 @@ namespace orphen::ported::script
   // DAT_00355060, cleared as 128 dwords.
   // DAT_00355060 is 128 words; see SceneScriptState::kWorkWordCount.
 
+  // FUN_0025b6d0's group-0xE write, `*(u32 *)(DAT_00355060 + 0x68) = 0x32`.
+  // The 0x68 is a byte offset into that dword array.
+  constexpr std::size_t kGroupESceneWorkWord = 0x68 / 4;
+
   enum class SceneScriptEntry : std::size_t
   {
     Init = 0,             // FUN_0025b6d0, at load
