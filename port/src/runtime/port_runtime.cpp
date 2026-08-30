@@ -248,6 +248,19 @@ namespace orphen::port
                 << " cellList=" << stats.collisionCellListLength
                 << " descriptors=" << mapViewer_.loadedMap()->DAT_003556d8_collisionDescriptors.size()
                 << " groups=" << mapViewer_.loadedMap()->DAT_003556e0_collisionGroups.size() << '\n';
+      if (orphen::ported::psm2::gGroupProbe)
+      {
+        std::size_t index = 0;
+        for (const auto &group : mapViewer_.loadedMap()->DAT_003556e0_collisionGroups)
+        {
+          std::cout << "[group] " << index++ << " type=" << group.type
+                    << " firstVertex=" << group.firstVertex
+                    << " vertexCount=" << group.vertexCount
+                    << " rest=" << group.restVertices.size()
+                    << " firstPrim=" << group.firstPrimitive
+                    << " primCount=" << group.primitiveCount << '\n';
+        }
+      }
 
       // Section G. Worth printing because a map that silently parsed no tracks
       // looks exactly like a map with no animated textures.
@@ -334,31 +347,6 @@ namespace orphen::port
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
     environment.pushOutCounter = &pushOutCount_;
     environment.frameNumber = frameCount_;
-    environment.terrainPrimitiveCorners =
-        [this](std::size_t primitiveIndex)
-        -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainPrimitiveCorners> {
-      const auto *map = mapViewer_.loadedMap();
-      if (map == nullptr || primitiveIndex >= map->DAT_003556b0_dRecords78.size())
-      {
-        return std::nullopt;
-      }
-      const auto &record78 = map->DAT_003556b0_dRecords78[primitiveIndex];
-      orphen::ported::entity::ActorEnvironment::TerrainPrimitiveCorners out;
-      out.leadingWord = record78.leadingWord;
-      for (std::size_t corner = 0; corner < 4; ++corner)
-      {
-        const std::size_t index = record78.vertexIndices[corner];
-        if (index >= map->DAT_0035569c_sectionCRecords.size())
-        {
-          return std::nullopt;
-        }
-        const auto &position = map->DAT_0035569c_sectionCRecords[index].position;
-        out.corner[corner][0] = position.x;
-        out.corner[corner][1] = position.y;
-        out.corner[corner][2] = position.z;
-      }
-      return out;
-    };
     environment.boneOverrides = DAT_004a7e00_boneOverrides_;
     // FUN_00266368 reads the flag bank that lives in the script state, so the
     // actor tick borrows it rather than owning a second copy.
@@ -524,6 +512,26 @@ namespace orphen::port
           return std::nullopt;
         }
 
+        orphen::ported::entity::ActorEnvironment::TerrainSurface surface;
+        surface.height = sample.height;
+        surface.terrainFlags = sample.terrainFlagsWinning;
+        surface.terrainFlagsAll = sample.terrainFlagsAll;
+        surface.primitiveIndex = sample.packedPrimitive;
+        surface.cornerHeights = sample.cornerHeights;
+        surface.cornerPrimitives = sample.cornerPrimitives;
+        surface.sampledFourCorners = sample.sampledFourCorners;
+        surface.slopeAngle = sample.slopeAngle;
+        return surface;
+      };
+
+      // The same scan without the `found` gate. See the declaration.
+      environment.FUN_00227390_corner_sample =
+          [loadedMap](float x, float y, float feetHeight, float bodyHeight, float radius,
+                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask)
+          -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
+      {
+        const auto sample = FUN_00227070_sample_ground(*loadedMap, x, y, feetHeight, bodyHeight,
+                                                       radius, entityFlags04, rejectTerrainMask);
         orphen::ported::entity::ActorEnvironment::TerrainSurface surface;
         surface.height = sample.height;
         surface.terrainFlags = sample.terrainFlagsWinning;

@@ -782,13 +782,13 @@ namespace orphen::ported::entity
     // corners are all at or below the feet.
     // (This function is the non-player path, so the lead's every-64-frames leg
     // of the same branch is not reachable here -- slot 0 runs its own copy.)
-    if (environment.terrainSurface && environment.DAT_003555d0_collisionGroupMoved &&
+    if (environment.FUN_00227390_corner_sample && environment.DAT_003555d0_collisionGroupMoved &&
         (entity.halfword08 & 0x0020u) != 0)
     {
       const auto cornersAt = [&entity, &environment](float x, float z) {
-        return environment.terrainSurface(x, z, entity.positionY28, entity.height58,
-                                          entity.radius54, entity.halfword04,
-                                          entity.rejectTerrainMask74);
+        return environment.FUN_00227390_corner_sample(x, z, entity.positionY28, entity.height58,
+                                                      entity.radius54, entity.halfword04,
+                                                      entity.rejectTerrainMask74);
       };
       const auto maskAt = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
         unsigned mask = 0;
@@ -815,7 +815,7 @@ namespace orphen::ported::entity
 
       const auto sampled = cornersAt(entity.positionX20, entity.positionZ24);
       const unsigned mask = maskAt(sampled);
-      if (gPushProbe && mask != 0)
+      if (gPushProbe)
       {
         // Mirrors a PCSX2 execute breakpoint at 0x002265E4, where $v1 is this
         // mask, $s1 the entity and $s0 the workspace whose +0x34..+0x40 are
@@ -842,26 +842,6 @@ namespace orphen::ported::entity
         {
           std::cout << ' '
                     << (sampled.has_value() ? sampled->cornerPrimitives[corner] : -1);
-        }
-        if (environment.terrainPrimitiveCorners)
-        {
-          for (std::size_t corner = 0; corner < 4; ++corner)
-          {
-            const std::int32_t primitive =
-                sampled.has_value() ? sampled->cornerPrimitives[corner] : -1;
-            if (primitive < 0) continue;
-            const auto quad = environment.terrainPrimitiveCorners(
-                static_cast<std::size_t>(primitive));
-            if (!quad.has_value()) continue;
-            std::cout << "\n" << "        prim " << primitive << " lead 0x" << std::hex
-                      << quad->leadingWord << std::dec;
-            for (std::size_t v = 0; v < 4; ++v)
-            {
-              std::cout << " (" << quad->corner[v][0] << ", " << quad->corner[v][1]
-                        << ", " << quad->corner[v][2] << ")";
-            }
-            std::cout << "\n" << "       ";
-          }
         }
         std::cout << " mask " << mask << " table (" << kDAT_00318ad0_pushOut[mask].x
                   << ", " << kDAT_00318ad0_pushOut[mask].z << ") delta ("

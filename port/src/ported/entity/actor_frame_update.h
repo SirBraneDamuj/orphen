@@ -95,6 +95,22 @@ namespace orphen::ported::entity
                                                 std::uint32_t rejectTerrainMask)>
         terrainSurface;
 
+    // FUN_00227390's corner fill, which is what the embedded-corner push-out
+    // in FUN_002262c0 actually reads. Deliberately **not** gated on "found":
+    // a corner over a hole stores the 128 sentinel, and `feet < 128` is what
+    // sets that corner's mask bit. Routing the push-out through
+    // `terrainSurface` instead loses exactly that case, because FUN_00227070
+    // returns the max of the four corners -- so one no-ground corner makes the
+    // whole sample read as no-ground and the mask collapses to 0.
+    std::function<std::optional<TerrainSurface>(float x,
+                                                float y,
+                                                float feetHeight,
+                                                float bodyHeight,
+                                                float radius,
+                                                std::uint16_t entityFlags04,
+                                                std::uint32_t rejectTerrainMask)>
+        FUN_00227390_corner_sample;
+
     // iGpffffb650, the slot FUN_00239ce0 is currently ticking. Behaviors deeper
     // in the tree read it; the clone loop needs it to point a clone back at its
     // leader.
@@ -135,16 +151,6 @@ namespace orphen::ported::entity
     // can be lined up against a PCSX2 breakpoint log.
     std::uint32_t frameNumber = 0;
 
-    // Diagnostics only: a map primitive's live corner positions and leading
-    // word, so the --push-probe log can be diffed against an EE dump's
-    // record78 array while a collision group is mid-animation.
-    struct TerrainPrimitiveCorners
-    {
-      std::uint32_t leadingWord = 0;
-      float corner[4][3]{};
-    };
-    std::function<std::optional<TerrainPrimitiveCorners>(std::size_t primitiveIndex)>
-        terrainPrimitiveCorners;
 
     // Everything type 0x19 -- the player's bandana -- needs. Supplied by the
     // runtime because the rope reads a matrix palette and two frame counters,

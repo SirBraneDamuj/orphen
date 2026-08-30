@@ -3724,3 +3724,53 @@ group rotation write) opens at 2 deg/frame to 90, jumps to 45, then closes at
 0.5 deg/frame. Hardware's push fires on the 45 deg frame; the port's fired eight
 frames later at 41 deg, because at 45 deg its mask was still 0 -- the missing
 ceiling merge, not the animation.
+
+## The push-out must not go through the "found" gate
+
+`FUN_00227070` returns the **max** of the four corners, so a single corner over
+a hole (128) makes the whole sample read as 128, and the runtime's
+`terrainSurface` lambda turns that into `nullopt`. The push-out's mask builder
+then saw no surface and produced mask 0 -- discarding four perfectly good corner
+heights because one of them was the sentinel.
+
+The original never asks that question. `FUN_002262c0:118-152` calls
+**`FUN_00227390`**, whose corner array at workspace `+0x34..+0x40` is always
+filled (128 for a miss), and tests each corner independently:
+`entity +0x28 < corner`. `-1.5 < 128` is true, so **a no-ground corner sets its
+bit** -- that is the entire point, and it is how an actor gets ejected from a
+doorway.
+
+Fixed by giving the push-out its own `FUN_00227390_corner_sample` callback: the
+same scan, without the `found` gate. `terrainSurface` keeps its old contract for
+every other consumer.
+
+This was the last of three separate faults stacked on one symptom in s01_e012's
+door close, all of which had to go before the next became visible:
+
+1. dynamic primitives answered with their bounding box instead of a rebuilt
+   plane (`FUN_002281a0`);
+2. a ceiling-only collision group never adopted the 128 sentinel, because of an
+   extra `!groupHit.has_value()` guard on `FUN_00227840`'s merge;
+3. the push-out read that sentinel through the `found` gate and lost it.
+
+### `--push-probe`
+
+Kept, because all three faults above were invisible without it. It turns on:
+
+- `[push]` -- **every** gated push-out evaluation, including `mask 0`. Logging
+  the zero case is what found the third fault: the interesting frame was the one
+  where nothing happened. It prints position, feet and `+0x4C` with raw float
+  bits, the four corner heights, each corner's answering primitive index, the
+  mask, and the table entry.
+- `[group]` -- the collision-group table once at load (first vertex, vertex
+  count, first primitive, primitive count, so it can be diffed against a dump's
+  descriptors), then every rotation write as it happens.
+
+The fields match a PCSX2 execute breakpoint at `0x002265E4`, where `$v1` is the
+mask, `$s1` the entity (`0x0058BEB0 + slot*0x1D8`) and `$s0` the workspace, so
+the two logs diff directly. Correlating the door's logged angle against the push
+mask is what localised this; the port's door leaf matched hardware's to four
+decimals at 45 degrees, so the animation was never the problem.
+
+Both regression scenes stay byte-identical with the probe compiled in -- it is
+inert unless the flag is passed.
