@@ -65,10 +65,54 @@ namespace orphen::ported::model
            std::equal(kPsc3Magic.begin(), kPsc3Magic.end(), bytes.begin());
   }
 
+  // Header +0x00/+0x02 counts, +0x08 sprite records, +0x0C animation table.
+  // Validated rather than assumed: a blob that fails any of these is reported
+  // as an unrecognised model, not silently accepted as an empty one.
+  Psc3Model loadSpriteStripModel(std::span<const std::uint8_t> bytes)
+  {
+    if (!fits(bytes, 0, 0x10))
+    {
+      return failure("truncated sprite-strip header");
+    }
+    const std::uint16_t spriteCount = u16At(bytes, 0x00);
+    const std::uint16_t animationCount = u16At(bytes, 0x02);
+    const std::uint32_t spriteOffset = u32At(bytes, 0x08);
+    const std::uint32_t animationOffset = u32At(bytes, 0x0C);
+    if (spriteCount == 0 || animationCount == 0)
+    {
+      return failure("sprite strip has no sprites or no animations");
+    }
+    constexpr std::size_t kSpriteRecordStride = 0x10;
+    if (!fits(bytes, spriteOffset, static_cast<std::size_t>(spriteCount) * kSpriteRecordStride))
+    {
+      return failure("sprite record table outside buffer");
+    }
+    if (!fits(bytes, animationOffset, static_cast<std::size_t>(animationCount) * 4))
+    {
+      return failure("sprite animation table outside buffer");
+    }
+
+    Psc3Model model;
+    model.valid = true;
+    model.spriteStrip = true;
+    model.blob.assign(bytes.begin(), bytes.end());
+    model.animationTableOffset = animationOffset;
+    model.animationCount = animationCount;
+    return model;
+  }
+
   Psc3Model loadPsc3Model(std::span<const std::uint8_t> bytes)
   {
     if (!hasPsc3Magic(bytes))
     {
+      // The other model kind in the same table. Effect types -- the magic
+      // projectile's grp_017e is the one this scene reaches -- are strips of
+      // billboard sprites rather than skinned meshes, and carry no magic.
+      Psc3Model strip = loadSpriteStripModel(bytes);
+      if (strip.valid)
+      {
+        return strip;
+      }
       return failure("missing PSC3 magic");
     }
     if (!fits(bytes, 0, 0x30))

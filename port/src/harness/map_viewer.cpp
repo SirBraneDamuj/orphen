@@ -2868,6 +2868,134 @@ namespace orphen::harness
     }
   }
 
+  // FUN_0020f3e0's draw, the second entity pass.
+  //
+  // The quads arrive in the original's view space, so the modelview goes to
+  // identity and the scene's own projection does the perspective divide. That
+  // is what makes a sprite depth-test against the world without this pass
+  // knowing anything about the camera.
+  //
+  // Depth *writes* stay off for every mode. The original's sprites are drawn
+  // after the world with their own ordering and never occlude each other
+  // through the buffer -- back-to-front within a strip is the record order
+  // FUN_0020f510 walks, and across entities it is the pool order, both of which
+  // are already baked into the list.
+  void MapViewer::drawSpriteQuads() const
+  {
+    if (spriteQuads_.empty() || textureSlots_ == nullptr)
+    {
+      return;
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    glDisable(GL_CULL_FACE);
+    // PRIM's FGE bit is clear in both of FUN_0020f510's PRIM words (0x0D and
+    // 0x1D), so a sprite is never fogged however far away it is.
+    glDisable(GL_FOG);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+    unsigned int boundTexture = 0;
+    int currentMode = -1;
+    bool depthTestOn = true;
+    for (const auto &quad : spriteQuads_)
+    {
+      const auto slot = static_cast<std::size_t>(quad.textureSlot);
+      if (quad.textureSlot < 0 || slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
+      {
+        continue;
+      }
+      const auto &texture = textureSlots_->slot(slot).texture;
+      if (texture.width == 0 || texture.height == 0)
+      {
+        continue;
+      }
+
+      if (slotTextureIds_[slot] != boundTexture)
+      {
+        boundTexture = slotTextureIds_[slot];
+        glBindTexture(GL_TEXTURE_2D, boundTexture);
+      }
+      if (quad.blendMode != currentMode)
+      {
+        currentMode = quad.blendMode;
+        // The same 0..3 the map and PSC3 paths use. Mode 0 leaves ABE off, so
+        // it is the one that does not blend at all.
+        if (currentMode == 0)
+        {
+          glDisable(GL_BLEND);
+        }
+        else
+        {
+          setMapBlendMode(currentMode);
+        }
+        // setMapBlendMode also touches the depth mask; this pass never writes.
+        glDepthMask(GL_FALSE);
+      }
+
+      if (quad.depthTest != depthTestOn)
+      {
+        // The 0x1005 bucket reaches the GS with a z of 0xFFFF, which is nearer
+        // than anything the world can write, so it never fails the test.
+        depthTestOn = quad.depthTest;
+        if (depthTestOn)
+        {
+          glEnable(GL_DEPTH_TEST);
+        }
+        else
+        {
+          glDisable(GL_DEPTH_TEST);
+        }
+      }
+
+      glColor4f(quad.colour[0], quad.colour[1], quad.colour[2], quad.colour[3]);
+
+      // The UVs are the ones the GS packet carries. FUN_0020f510 writes
+      // `u + (width1 - 1)` for the far corner and the GS samples [u0, u1), so
+      // the span is the record's real extent with nothing added here.
+      const float u0 = quad.u0 / static_cast<float>(texture.width);
+      const float u1 = quad.u1 / static_cast<float>(texture.width);
+      const float v0 = quad.v0 / static_cast<float>(texture.height);
+      const float v1 = quad.v1 / static_cast<float>(texture.height);
+
+      glBegin(GL_QUADS);
+      glTexCoord2f(u0, v0);
+      glVertex3f(quad.x0, quad.y0, quad.viewZ);
+      glTexCoord2f(u1, v0);
+      glVertex3f(quad.x1, quad.y0, quad.viewZ);
+      glTexCoord2f(u1, v1);
+      glVertex3f(quad.x1, quad.y1, quad.viewZ);
+      glTexCoord2f(u0, v1);
+      glVertex3f(quad.x0, quad.y1, quad.viewZ);
+      glEnd();
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (cullWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_CULL_FACE);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+  }
+
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
     const auto prologueStart = std::chrono::steady_clock::now();
@@ -3045,6 +3173,9 @@ namespace orphen::harness
         drawObjectModels(sceneObjectViews_, slotTextureIds_);
       }
     }
+    // FUN_0020f3e0 runs after FUN_0020c5a8's pass, on the entities it refused.
+    drawSpriteQuads();
+
     glDisable(GL_FOG);
     glDisable(GL_CULL_FACE);
     if (debugOverlayVisible_)

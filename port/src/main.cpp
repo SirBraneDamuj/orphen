@@ -520,6 +520,30 @@ namespace
         }
         continue;
       }
+      if (argument == "--press-magic")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a frame number");
+        }
+        // Triangle, on the listed frames. The magic cast, state 0x1D.
+        const std::string frames{argv[++argumentIndex]};
+        for (std::size_t start = 0; start < frames.size();)
+        {
+          const std::size_t comma = frames.find(',', start);
+          const std::string one = frames.substr(start, comma - start);
+          if (!one.empty())
+          {
+            config.pressMagicFrames.push_back(static_cast<std::uint32_t>(std::stoul(one)));
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        continue;
+      }
       if (argument == "--cycle-map-every")
       {
         if (argumentIndex + 1 >= argc)
@@ -691,11 +715,16 @@ int main(int argc, char **argv)
             std::find(config.pressConfirmFrames.begin(), config.pressConfirmFrames.end(),
                       frameIndex + 1) != config.pressConfirmFrames.end();
         constexpr std::uint16_t kRawPadCircle = 0x0020;
+        constexpr std::uint16_t kRawPadTriangle = 0x0010;
         const bool attackThisFrame =
             std::find(config.pressAttackFrames.begin(), config.pressAttackFrames.end(),
                       frameIndex + 1) != config.pressAttackFrames.end();
+        const bool magicThisFrame =
+            std::find(config.pressMagicFrames.begin(), config.pressMagicFrames.end(),
+                      frameIndex + 1) != config.pressMagicFrames.end();
         input.rawPressedPad = static_cast<std::uint16_t>((pressThisFrame ? kRawPadCross : 0) |
-                                                         (attackThisFrame ? kRawPadCircle : 0));
+                                                         (attackThisFrame ? kRawPadCircle : 0) |
+                                                         (magicThisFrame ? kRawPadTriangle : 0));
         input.rawHeldPad = input.rawPressedPad;
 
         if (config.holdStick.has_value())
@@ -882,6 +911,15 @@ int main(int argc, char **argv)
         constexpr std::uint16_t kRawPadCircle = 0x0020;
         stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCircle);
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCircle);
+      }
+
+      // --press-magic, for Triangle.
+      if (std::find(config.pressMagicFrames.begin(), config.pressMagicFrames.end(),
+                    renderedFrames + 1) != config.pressMagicFrames.end())
+      {
+        constexpr std::uint16_t kRawPadTriangle = 0x0010;
+        stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadTriangle);
+        stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadTriangle);
       }
 
       // Never while capturing: --screenshot promises one step per frame at a

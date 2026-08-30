@@ -7,6 +7,7 @@
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_sprite_pass.h"
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_map_visibility.h"
 #include "ported/render/original_view_projection.h"
@@ -178,6 +179,15 @@ namespace orphen::harness
     // fade, out of the texture slots, in the order given. Empty hides it.
     void setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites);
 
+    // FUN_0020f3e0's output: the billboard quads of every entity the skeletal
+    // pass refused. Already in the original's view space and already in draw
+    // order, so this pass only has to bind and submit.
+    void setSpriteQuads(std::vector<orphen::ported::render::SpriteQuad> quads)
+    {
+      spriteQuads_ = std::move(quads);
+    }
+    std::size_t spriteQuadCount() const { return spriteQuads_.size(); }
+
     // FUN_0025cfb8's cinematic bars: the height of each one, in units of the
     // original's 640x448 virtual screen, 0..60. Drawn under the fade, which is
     // the bucket order the two share, and under both text overlays. Zero hides
@@ -227,6 +237,10 @@ namespace orphen::harness
     // --load-only. The alpha channel is the point: a page read as RGB alone
     // says nothing about which parts of it a blended pass will actually show.
     std::size_t dumpTexturePages(const std::filesystem::path &directory) const;
+
+    // The billboard pass, FUN_0020f3e0/FUN_0020f510. Drawn after the world so
+    // it tests against the depth already there.
+    void drawSpriteQuads() const;
 
   private:
     std::optional<orphen::ported::psm2::Psm2RuntimeState> map_;
@@ -279,6 +293,7 @@ namespace orphen::harness
     std::uint32_t screenFadeRgb_ = 0;
     std::uint8_t screenFadeAlpha_ = 0;
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
+    std::vector<orphen::ported::render::SpriteQuad> spriteQuads_;
     // FUN_0025cfb8's `iGpffffbd8c >> 5`, 0..60.
     int letterboxBarHeight_ = 0;
     std::optional<orphen::ported::render::FeedbackQuad> frameFeedbackQuad_;

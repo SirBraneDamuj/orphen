@@ -128,12 +128,14 @@ namespace orphen::ported::entity
     // actor behaviour that owns a light rather than reading one.
     orphen::ported::render::LightTable *DAT_00343888_lights = nullptr;
 
-    // FUN_0020dc88(entity, 0, DAT_003266f8, out): the world point 0.65 units up
-    // the entity's own bone 0. It reads the matrix palette, which the entity
-    // layer has no view of, so it arrives as a callback. Falls back to the
-    // entity's own position when the slot has no palette -- the original's
-    // "+0x0C has no 0x2000 bit" branch.
-    std::function<orphen::ported::psm2::Vec3(std::size_t slot)> FUN_0020dc88_bone0_point;
+    // FUN_0020dc88(entity, bone, localOffset, out): a point in one of an
+    // entity's own bones' space, in world space. It reads the matrix palette,
+    // which the entity layer has no view of, so it arrives as a callback. Falls
+    // back to the root of the attachment chain's own position when the slot has
+    // no palette -- the original's "+0x0C has no 0x2000 bit" branch.
+    std::function<orphen::ported::psm2::Vec3(std::size_t slot, std::size_t bone,
+                                             const orphen::ported::psm2::Vec3 &localOffset)>
+        FUN_0020dc88_bone_point;
 
     // FUN_0020dd78: the bone carrying a semantic role on an entity's model.
     // FUN_002d2f40 needs it three times to hang its rig together, and the
@@ -144,6 +146,13 @@ namespace orphen::ported::entity
     // rather than through the animation -- FUN_002cdb28 is the one this scene
     // exercises -- write their override here. Empty when the runtime has none.
     std::span<orphen::ported::model::EntityBoneOverrides> boneOverrides;
+
+    // FUN_002d2470:0x002d2818's detonation burst, which fills the global
+    // particle pool at DAT_00355620. The pool is one array shared by the whole
+    // frame and lives above the entity layer, so it arrives as a callback the
+    // way the light table would if it were not already a pointer.
+    std::function<void(const OriginalEntity &source, std::size_t slot)>
+        FUN_002d2470_spawn_impact_burst;
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
@@ -328,6 +337,15 @@ namespace orphen::ported::entity
   std::int32_t FUN_00256130_spawn_sword_effect(const OriginalEntity &owner,
                                                std::size_t ownerSlot,
                                                const ActorEnvironment &environment);
+
+  // FUN_002d2e00's spawn block, type 0x44: the homing magic projectile, placed
+  // at a world point the caller has already resolved off the caster's role-4
+  // bone. Exposed for the same reason the sword blade's is -- the player
+  // controller owns pool slot 0 and nothing else. Returns the pool slot, or -1
+  // when the pool is full or the floor is above the hand.
+  std::int32_t FUN_002d2e00_spawn_magic_projectile(const OriginalEntity &owner,
+                                                   const orphen::ported::psm2::Vec3 &handPoint,
+                                                   const ActorEnvironment &environment);
 
   // A readable name for a handler address, for the report. Returns nullptr for
   // addresses with no name yet.

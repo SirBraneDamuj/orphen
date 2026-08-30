@@ -104,6 +104,8 @@ namespace orphen::ported::entity
       entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x20);
     }
     entity.flags06 = static_cast<std::uint16_t>(static_cast<std::int16_t>(descriptor->byte0x14));
+    // FUN_00229c40:75. The billboard pass is the only reader; see +0x133.
+    entity.depthBias133 = static_cast<std::int8_t>(descriptor->byte0x02);
     entity.radius54 = descriptor->radius0x08;
     entity.height58 = descriptor->height0x0c;
     entity.modelIndex = descriptor->modelIndex0x00;

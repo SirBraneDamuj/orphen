@@ -179,6 +179,12 @@ namespace orphen::ported::entity
     // at zero -- but the spawn paths copy it onto the effect entity that carries
     // the hit, so it is modelled rather than dropped.
     std::uint16_t attackPower12c = 0;
+    // +0x133: a signed depth bias, copied from descriptor +0x02 by
+    // FUN_00229c40:75. FUN_0020f510 scales it by DAT_003520a0 (0.08) and adds it
+    // to the view depth before keying the GS z, so an effect descriptor carrying
+    // the usual -12 pulls its sprite very nearly a whole unit toward the camera
+    // without moving it on screen. Nothing else reads it.
+    std::int8_t depthBias133 = 0;
     std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
     std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
 
@@ -193,15 +199,19 @@ namespace orphen::ported::entity
     // stores a slot index, not a pointer, and the two uses never overlap -- the
     // chest is never the one interacting.
     std::int32_t interactTarget198 = -1;
-    // +0x198 a third time, still on the lead player: the sword blade
-    // FUN_00256130 spawns for state 0x1C, as a pool slot. The original stores
-    // it in the same word the interaction candidate uses and does not clear the
-    // one before writing the other -- it re-reads the word through a type test
-    // (`*effect == 0x42`) instead, which is the only thing keeping a stale
-    // interaction target from being mistaken for a blade. That test is
-    // reproduced where the slot is consumed, so the two readings are kept in
-    // separate fields here the way eventFlagId198 and interactTarget198 are.
-    std::int32_t swordEffect198 = -1;
+    // +0x198 a third time, still on the lead player: whatever the current
+    // action state has spawned, as a pool slot. State 0x1C (FUN_00256130) puts
+    // the sword blade here and state 0x1D (FUN_002562b0) puts the magic
+    // projectile here; the two states are exclusive, so one field covers both.
+    //
+    // The original stores it in the same word the interaction candidate uses
+    // and does not clear the one before writing the other -- it re-reads the
+    // word through a type test (`*effect == 0x42`) instead, which is the only
+    // thing keeping a stale interaction target from being mistaken for a blade.
+    // That test is reproduced where the slot is consumed, so the two readings
+    // are kept in separate fields here the way eventFlagId198 and
+    // interactTarget198 are.
+    std::int32_t actionEffect198 = -1;
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     // +0x19C on the *lead player*: the entity holding the item a chest just
@@ -230,6 +240,32 @@ namespace orphen::ported::entity
     std::int32_t rigHair198 = -1;  // +0x198: the type 0x27 (hair) on the bust's role-1 bone
     std::int32_t rigBust19c = -1;  // +0x19C: the type 0x26 bust on this entity's role-1 bone
     std::int32_t rigCloth1a0 = -1; // +0x1A0: the type 0x19 cloth on the bust's role-2 bone
+
+    // Type 0x44's block, the homing magic projectile. FUN_002d2e00 seeds it and
+    // FUN_002d2470 spends it. Held apart from the readings above for the same
+    // reason those are held apart from each other: the original reuses the
+    // storage per type and an entity is never two of these things at once.
+    //
+    // +0x198: the entity it is chasing, as a pool slot, chosen once at spawn by
+    // FUN_002d2ca8 and never revisited -- so the projectile locks on and stays
+    // locked, which is why it can be dodged by moving after it is cast.
+    std::int32_t homingTarget198 = -1;
+    // +0x19C: units per tick. uGpffffa740, 0.0018 -- about 0.058 per frame.
+    float projectileSpeed19c = 0.0f;
+    // +0x1A0: the elevation it is travelling at, in radians. The yaw is the
+    // ordinary +0x5C; this is the second angle a homing projectile needs and
+    // the reason it can climb to something standing above it.
+    float projectilePitch1a0 = 0.0f;
+    // +0x1A4: how far it may turn per frame, ramped from 0 by 0.005 up to
+    // 0.349 (20 degrees). It starts unable to turn at all, which is what makes
+    // the first half of its flight look aimed rather than guided.
+    float projectileTurnRate1a4 = 0.0f;
+    // +0x1A8: ticks of homing left, 0x2580. Once it runs out the projectile
+    // flies straight.
+    std::uint16_t homingTimer1a8 = 0;
+    // +0x1AA: ticks before the hit test is allowed to run, 0xA0 -- five frames,
+    // so a projectile cannot hit whatever it was just launched out of.
+    std::uint16_t hitCooldown1aa = 0;
     std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
     float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
     float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.

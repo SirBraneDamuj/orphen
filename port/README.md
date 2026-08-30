@@ -2048,6 +2048,386 @@ each, all recycling the same pool slot -- and one light slot allocated and
 released. `s01_e024` is the scene to use: the lead is controllable within a
 frame or two of load, where `s01_e012` opens on cutscenes.
 
+## The magic cast, and the sprite-strip model kind
+
+Triangle, grounded, throws a homing magic projectile. It is the *use* branch of
+`FUN_00256bb8`, not a second attack branch -- the same `FUN_002298d0` type-id
+lookup, the same weapon class 0, and for the lead player that is state `0x1D`
+with animation `0x14`. `PTR_FUN_0031e160[1]` is `FUN_002562b0`.
+
+The cast cue `0xA5` plays on entry, from `FUN_00257b50`, rather than partway
+through the animation the way the sword's `0xA4` does.
+
+### The projectile exists for the gap between two keyframes
+
+`FUN_002562b0` has the same shape as the sword's state -- `FUN_002560e8` at the
+top, then points in the timeline -- but the projectile is alive between them:
+
+| when | what |
+|---|---|
+| cursor reaches 6 | `FUN_002d2e00` spawns it, charging, at the caster's role-4 bone |
+| every frame while its `+0x60` is 0 | its `+0x20` is rewritten to that bone |
+| cursor reaches 10 | launch: `+0x60 = 1`, `+0x04` bit `0x100` cleared, cue `0xA6` |
+| the animation completes | back to idle |
+
+**It is not attached through `+0x192`.** The caster writes its position every
+frame instead, which is a different thing: an attachment rides the bone matrix,
+this is a copy. That is why interrupting the cast leaves the charge where it was
+rather than dragging it, and why `FUN_002d2470`'s state 0 has to delete itself by
+watching `DAT_0058BF10` for the caster leaving state `0x1D`.
+
+`FUN_002d2e00` refuses to spawn at all if `FUN_00227798` says the floor is above
+the hand, which is the guard against casting while clipped into geometry. The
+original treats that refusal and a full pool identically: drop the cast.
+
+### The homing is two angles and a ramp
+
+`FUN_002d2ca8` picks the target **once**, at spawn, and nothing ever revisits it
+-- so the projectile locks on and can be dodged by moving afterwards. It scans
+pool slots 10 upward, so it can never choose the caster, and takes the nearest
+candidate within ten units whose `+0x02` has bit `0x08` and whose `+0x04` does
+not have bit `0x10`. The elevation gate reads backwards from what you would
+expect: a candidate more than two units away *vertically* is accepted on
+distance alone, and only one within two units also has to sit inside a
+60-degree cone (`fGpffffa738`).
+
+In flight, the yaw at `+0x5C` and the elevation at `+0x1A0` each step toward the
+target through `FUN_0023a320`, capped by `+0x1A4` -- which starts at **zero** and
+ramps by 0.005 a frame to 0.349 (20 degrees). The projectile leaves the hand
+travelling dead straight and only tightens later. That ramp is most of why it
+reads as a guided missile rather than a tracking beam, and it is the reason a
+cast at something close often misses.
+
+Three things detonate it: the swept hit test, `+0x0C` picking up any of `0x266`,
+or outliving `0x2580` ticks. Then `+0x60 = 4`, and state 4 fades its light down
+by two a frame until it is out.
+
+Every other frame it drops a ghost of itself -- same type, same position, same
+scale, `+0x60 = 2`, physics off -- which shrinks by 0.05 a frame and dies when
+*its* animation ends. That is the trail, and it is what made the sprite-strip
+work below unavoidable.
+
+### `+0x02` bit `0x200`: the other model kind
+
+`FUN_00225c90`'s very first line branches on entity `+0x02` bit `0x200`, and the
+port only ever had the `== 0` half. Type `0x44` is the first thing to carry the
+bit, and its model, `grp_017e`, is 324 bytes with **no PSC3 magic**:
+
+```
++0x00 u16  sprite record count   (12)
++0x02 u16  animation count       (2)
++0x08 u32  sprite record table, 16 bytes each
++0x0C u32  animation table, one u32 offset per animation
+```
+
+The animation table sits at the same header offset a PSC3's does, which is what
+lets `FUN_00225c90` read `+0x9C` the same way for both. Its entries are **four**
+bytes rather than six -- a column and a duration, and no trailing event halfword,
+so a sprite strip cannot carry the keyframe events the sword swing is driven by.
+Duration bit `0x8000` is still "last entry"; bit `0x4000` is new, a conditional
+entry skipped unless `+0x06` bit `0x20` is set. The blend at `+0x13C` is left at
+1.0 throughout: sprite frames cut, they do not interpolate.
+
+`grp_017e` animation 1, the one the trail ghosts play, is ten entries of two
+frames on columns 2..11.
+
+This was not optional. The ghost's lifetime is owned by `flags06` bit 0, which
+only the animation stepper sets; without the branch every ghost the projectile
+dropped lived forever and the pool filled in a few seconds.
+
+### What is drawn
+
+The projectile is drawn by the **second** entity pass, `FUN_0020f3e0`, not the
+skeletal one -- `FUN_0020c5a8` refuses a `0x200` entity outright, so `NODRAW` in
+the actor report is the correct answer for that pass and always was. That second
+pass is ported now; see The billboard pass, below. `grp_017e` is a strip of
+billboard sprite records rather than a mesh, and the bolt is a two-column looping
+glow with a trail of shrinking copies behind it.
+
+It also carries a light of its own: `FUN_002d2e00` allocates a `DAT_00343888`
+slot through `FUN_00266050`, state 0 brightens it four a frame while the charge
+grows, `FUN_002660d0` carries it along the flight, and state 4 fades it out. That
+light is what the homing was originally verified against, before there was
+anything to see.
+
+Not ported: `FUN_00215ac8`, the swept hit test, and with it
+`FUN_00216078(1, 1, ...)`, which fills the `+0x1AC` parameters it is the only
+reader of. The hundred-particle impact burst `FUN_002d2470` builds into
+`DAT_00355620` before entering state 4 *is* ported now -- see The spark shower,
+below -- and so is state 4 itself, so the lifetime is complete.
+
+One caveat that is not the projectile's fault. `integrateNonPlayerMovement` is
+not `FUN_002262c0` -- see the note on it -- so where a flying actor is stopped is
+approximate, and the detonation point with it.
+
+### Checking it
+
+`--press-magic <frames>`, alongside `--press-attack` and `--press-confirm`.
+Homing needs a target inside ten units, and `s01_e024`'s spawn is about eleven
+from the nearest enemy, so the plain cast flies straight -- which is correct, and
+also not a test of anything. Move first:
+
+```sh
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+    --no-audio --frames 900 --spawn -2.5,-8,0 --press-magic 60,200,340,480 \
+    --actor-report --scr-report
+```
+
+`type=0x44 entities=24 ticks=5137` over four casts, `live actors: 20` -- the same
+as the same run with no casts at all, which is the check that the trail is being
+collected. The light report ends with the slot released at the enemy cluster
+rather than at the caster, which is the homing having worked.
+
+## The billboard pass, and why there are two entity draws
+
+`FUN_0020c5a8` -- the skeletal entity pass -- refuses any entity whose `+0x02`
+carries bit `0x200`. `FUN_0020f3e0` then walks the same 256 slots for exactly
+those. The two passes **partition** the pool rather than filtering it: an effect
+entity is never a candidate for the skinned path, and a character is never a
+candidate for this one. The port had only ever had the first, which is why every
+sprite effect was invisible.
+
+`FUN_0020f3e0`'s guards are the mirror image: a live type id, `+0x02` bit
+`0x200` set, `+0x08` bit 0 clear. It also clears `+0x0C` bit `0x1000` on the way
+in, and `FUN_0020f510` sets it back on anything it submits -- a "was drawn this
+frame" latch nothing else reads.
+
+### The model is a strip of sprite records
+
+Parsed by `loadSpriteStripModel`. No PSC3 magic, and the header's `+0x00` is a
+**column** count, not a record count:
+
+```
++0x00 u16  column count
++0x02 u16  animation count
++0x04 u32  column table:  {u16 firstRecord, u16 recordCount} per column
++0x08 u32  sprite record table, 16 bytes each
++0x0C u32  animation table, one u32 timeline offset per animation
+```
+
+The animation picks a column (entity `+0xAC`) and the column names a run of
+records, drawn **back to front** -- `FUN_0020f510` seeds its cursor at the last
+record of the run and walks down. `grp_017e`, the magic projectile's, is twelve
+columns of one record each.
+
+Each record:
+
+| off | what |
+|---|---|
+| `+0x00` | bits 0-1 blend mode, `0x10` flip X, `0x20` flip Y |
+| `+0x01`/`+0x02` | texel origin |
+| `+0x03`/`+0x04` | extent, **one more** than the real width and height |
+| `+0x05` | twice the alpha byte |
+| `+0x06`/`+0x07` | offset in whole sprite units, signed |
+| `+0x08` | depth bias, over 100, added to the view depth |
+| `+0x0C` | float scale |
+
+The blend mode is the same 0..3 the map and PSC3 paths already use, so it goes
+straight into `setMapBlendMode`. That is not a guess: `FUN_0020f510` packs the
+GS PRIM word as `0x0D` or `0x1D` (untextured / textured triangle strip) and ORs
+bit `0x40` -- **ABE** -- for any non-zero mode. Mode 0 does not blend at all,
+which is also why its alpha byte is forced to `0x80` and never read.
+
+### The quad is built on the projected origin
+
+`FUN_0020b600` projects the entity origin to an integer GS screen position, and
+**every corner is an offset from it**, in GS units:
+
+```
+projScaleX = trunc(entity+0x14C * 280.0 * G / viewZ)      G = 2 * DAT_00355658
+gsX = originX + (spriteX * projScaleX >> 8)               spriteX in 1/16 units
+gsY = originY + (spriteY * projScaleY >> 9)               note the extra shift
+```
+
+The quad is axis-aligned in screen space, which is why a sprite never rotates
+with the camera. Both `projScale`s are truncated to integers before being used
+as fixed point, so a distant sprite's size quantises in visible steps rather
+than shrinking smoothly; the record's own scale at `+0x0C` truncates the same
+way. The extra shift on Y is not a bug to correct: the GS output is 640x224
+shown at 4:3, so its pixels are 2:1 and a square sprite has to be twice as wide
+in pixels. `X` uses `+0x14C` and `Y` uses `+0x150`, which is why a non-uniform
+entity scale stretches the sprite.
+
+The port runs that arithmetic in GS integers and then un-projects the four
+finished corners back to view space, because it draws through the same
+projection the world does instead of writing GIF packets. Re-projecting them
+gives back the same GS numbers -- it is the inverse of the transform above, at
+the depth the GS z was keyed off. That is the only adaptation in the function,
+and `drawSpriteQuads` accordingly runs with the modelview at identity, the
+scene's own projection, and depth writes off. PRIM's `FGE` bit is clear in both
+of `FUN_0020f510`'s words, so a sprite is never fogged however far away it is.
+
+> The first cut of this pass emitted the offsets *without* the origin, on the
+> reasoning that the perspective divide made the quad a fixed size in view space
+> and the origin would come out in the wash. It does not: the offsets are
+> relative to a point that has to be added back. Every sprite landed dead centre
+> of the screen at its own depth, so the bolt sat on Orphen and vanished behind
+> him as it flew away. Reformulating the maths is how that got missed; the port
+> now follows `FUN_0020f510`'s own shape and adapts only at the last step.
+
+### Depth is keyed off a different number than the position
+
+```
+depth = viewZ + (char)entity+0x133 * DAT_003520a0        (0.08)
+              + (char)record+0x08 / 100.0
+gsZ   = trunc(DAT_003555a4 / depth + DAT_003555a0)       floored at 0
+```
+
+Both biases move the sprite in depth only -- the position and size came out of
+`projScale`, which used the unbiased `viewZ`. Entity `+0x133` is copied from
+descriptor `+0x02` by `FUN_00229c40`, and most effect descriptors carry `-12`, so
+the usual effect sits about a unit nearer the camera than it stands. Entity
+`+0x08` bit `0x40` throws all of it away for a flat `0xFFFF`, nearer than
+anything the world writes.
+
+Submission is a 4096-bucket display list on `gsZ >> 4` clamped to `1..0xFFF`,
+plus the `0x1005` bucket above it for the `bit 0x40` sprites. `gsZ` rises as a
+sprite comes nearer, so ascending bucket is back to front, and the port sorts
+the same way. The one thing it does not reproduce is that the original links
+each packet in at the *head* of its bucket, so co-bucketed sprites come out
+reversed among themselves -- invisible for the additive blending everything
+drawn so far uses.
+
+### The colour
+
+`FUN_0020f3e0` stages `max(DAT_0035566c, DAT_00355670)` per channel -- the scene
+ambient against light 0's colour -- and `FUN_0020f510` averages that with the VU0
+point-light contribution at the sprite's own position, saturating. `+0x08` bit
+`0x4000` skips the whole thing for a flat `0x80`. GS bytes throughout, `0x80` for
+1.0, so a sprite can be brighter than white before the blend.
+
+The near clip here is `DAT_0035209c`, **0.3** -- not the `0.4` the geometry path
+uses. The far one is the scene's draw distance.
+
+### What is still missing
+
+Two things in `FUN_0020f510`, both flagged at their sites:
+
+- **The rotation branch**, `+0x08` bit `0x400`. It rebuilds the quad as four
+  independently rotated corners off a per-entity angle table at `+0x168`, and
+  only for runs of fewer than nine records. Nothing in `s01_e024` or `s01_e012`
+  sets the bit.
+- **The HUD branch**, `+0x08` bit `0x1000`, which takes a position that is
+  already in screen space rather than projecting one. That is the 2D overlay
+  path; the port's dialogue sprites already cover the same ground by a different
+  route.
+
+`publishSpriteQuads` rejects an entity carrying either bit outright rather than
+drawing it wrong. No descriptor in `s01_e024` or `s01_e012` sets one; type `0x44`
+reads `+0x08 = 0` and `+0x133 = 0`.
+
+### Checking it
+
+```sh
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+    --no-audio --spawn -2.5,-8,0 --press-magic 60 --screenshot shot.png:112
+```
+
+catches the bolt as a glowing orb in Orphen's hands; frames 124 onward have it
+clear of him and travelling with its trail. Four casts over 900 frames still
+report `live actors: 20`, and `--render-bench 6` reports the same primitive and
+batch counts as it did before the pass existed -- which is the check worth
+making, because absolute frame times on this machine move by 30% run to run for
+reasons that have nothing to do with the port. Compare the counts, not the
+milliseconds.
+
+## The spark shower, and the pool behind it
+
+When the magic projectile ends it throws a hundred sparks. They come out of a
+**global particle pool**, `DAT_00355620` — 0x18000 bytes at 0x01C69A00, so 1536
+entries of 0x40 — with a single behaviour pointer, `DAT_00355e0c`, that every
+entry is stepped through. `FUN_002d3218` walks all 1536 once a frame, from the
+slot `FUN_002239c8` gives it immediately after the actor loop. A null behaviour
+skips the pool entirely, however much of it is marked alive.
+
+`FUN_0022a418` resets the pool at scene init. **That reset draws from the RNG
+once per entry** — 1536 draws — and writes each into `+0x22` as a stagger. Only
+the unported ambient-dust behaviour reads that stagger; the spark path
+overwrites `+0x22` on spawn. So for sparks the reset's only observable effect is
+the advance of the shared generator, and porting it faithfully moved this
+port's `--actor-report` baseline. Runs remain reproducible; the numbers are just
+1536 draws further along than they were.
+
+### The entry
+
+```
++0x00 f32  x, y, z            world, the axes an entity's +0x20 uses
++0x10 f32  vertical velocity
++0x14 f32  horizontal speed
++0x18 u32  GS RGBA, alpha in the high byte
++0x1C s16  alive -- the spawn loop tests this and nothing else
++0x1E s16  quad width  in units of 40 GS 12.4 units at unit depth
++0x20 s16  quad height in units of 20 -- the 2:1 GS pixel again
++0x22 s16  ticks before the fade starts; allowed to go negative
++0x24 f32  gravity
++0x28 f32  heading, radians
++0x2C s16  the spawning entity's pool slot; written, never read
+```
+
+Every field was read out of a PCSX2 save state taken with the sparks live:
+exactly 100 alive, all tagged with the projectile's slot, headings stepping by
+0.0349066 rad, colours with red in `{0, 0xFF}`, green and blue each in
+`[0xC0, 0xFF]`, alpha `0xE0`.
+
+### The burst
+
+`FUN_002d2470` fills up to a hundred entries, fanning out from the projectile's
+own facing plus `DAT_00354690` (π/2, so the first spark leaves square to the
+flight) and stepping two degrees per particle. The fan advances once per
+particle *seeded*, not once per slot examined, so a burst landing in a
+fragmented pool still gets an even spread — and simply gets fewer than a hundred
+rather than waiting.
+
+Red is all-or-nothing on a coin flip while green and blue are each a random
+`0xC0..0xFF`, which is why the shower reads as half white and half cyan and
+never dim. Width and height take the *same* draw, 1 or 3, so a spark is either
+one pixel or three times that with nothing in between.
+
+`FUN_002d2348` then flies each one outward along its heading, bleeding
+`DAT_00354678` off the speed a frame until it reaches that value, on a properly
+integrated ballistic arc — the position takes the old velocity plus half the
+acceleration term and the velocity updates from the same old value. Two
+different tick scalings are in play and they are not the same quantity: the
+vertical integration works in ticks/8 and the horizontal step in ticks/2. Once
+`+0x22` runs out the alpha falls by two a frame until the particle frees itself,
+so a spark lives about 30-59 frames plus 112 of fade.
+
+### The quad
+
+`FUN_0020b600`'s `vftoi0` is masked to `.xyz`, so lane W survives as a float
+holding `Q = 1 / max(viewZ, eps)`. `FUN_002d3058` multiplies its two literals by
+that directly, which means **a particle's size is a plain 1/z with no projection
+term in it** — one to three pixels at any normal depth. The projected point is
+the quad's top-left corner, not its centre.
+
+The texture is the boot sheet in slot `0x2A`, which the port already binds: the
+packet carries `0x2B` and that field is slot + 1, the same encoding
+`FUN_0020f510` uses for entity `+0x136`. The UV rectangle is fixed at texels
+(65,177)-(79,191), and `DAT_10008080`'s bit `0x8000` selects blend mode 2,
+additive. `FUN_00207de8(0x1000)` puts every particle in one display-list bucket,
+above all of `FUN_0020f510`'s depth-sorted `1..0xFFF` and below its `0x1005`, so
+the port emits them into the same list with that bucket.
+
+Unlike the sprite pass, `FUN_002d3058` has **no near, far or window cull** — its
+only guard is the clip flags. The port rejects a particle behind the eye, which
+`FUN_0020b600`'s `w` clamp cannot save and which would otherwise smear across
+the screen, and nothing else.
+
+### What is not ported
+
+`FUN_002d3320`, the ambient dust `FUN_002d36f8` installs into the same pool. It
+reseeds its own particles off the player's bones through `FUN_0020dc88` and
+reads a per-character colour table at `DAT_00326708`; it is a separate effect
+that happens to share the storage.
+
+### Checking it
+
+`--actor-report` ends with a `particles:` line giving the live count and the
+installed behaviour. On `s01_e024` with `--spawn -2.5,-8,0 --press-magic 60` the
+projectile detonates around frame 165, the pool reads `alive=100` from there
+through frame 250, and it is empty again by 340. Screenshots are a poor check
+here: the bolt homes on the enemy cluster and leaves frame before it ends.
+
 ## The screen smear
 
 `FUN_00201a38` draws the *previous* frame back over the current one,
@@ -3933,6 +4313,7 @@ Game inputs -- these reach the ported code as raw pad bits and nothing else:
 - `W/A/S/D` moves the runtime lead player relative to the current camera yaw.
 - `Space`, or gamepad X / face west (Square), jumps when the lead player is grounded.
 - `C`, or gamepad B (Circle), swings the sword when the lead player is grounded. See The sword attack, above.
+- `V`, or gamepad Y / face north (Triangle), casts the homing magic projectile, also only when grounded. See The magic cast, above.
 - Holding `C` re-arms the jump in mid-air. This one is a harness debug affordance, not something the original's airborne state does; it restarts state 2 / animation `0x0C` through the same startup and `+0x44` seed as a grounded jump, which is how you get up to a ceiling to test against. It shares Circle with the attack because the original's own gate on it is `input_flags & 0x20` (`FUN_00251ed8`, `uGpffffbd54`).
 - `Return`, or gamepad A (Cross), confirms -- the interaction probe, and dialogue advance.
 - `J/L` orbits the player camera, mapped onto the original's L1/R1 raw pad bits (0x04/0x08). With no player active they rotate the free viewer camera instead.

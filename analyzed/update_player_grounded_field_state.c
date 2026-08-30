@@ -80,7 +80,8 @@
  * `< 7` test on an equipped item's class refuses a jump while holding one of
  * the six recognised things.
  *
- * State 0x1C is analysed in analyzed/player_states/sword_attack_0x1C.c.
+ * State 0x1C is analysed in analyzed/player_states/sword_attack_0x1C.c and
+ * state 0x1D in analyzed/player_states/magic_cast_0x1D.c.
  *
  * UNVERIFIED / open:
  * - The +0x1BA lock byte's writers have not been traced. Value 0x1D is special:
@@ -218,7 +219,9 @@ undefined4 update_player_grounded_field_state(entity *e)
     /* any other class falls through to locomotion */
   }
 
-  /* --- 5. interact / use -------------------------------------------------- */
+  /* --- 5. use ------------------------------------------------------------
+   * Mapped action 0x10 is Triangle. This is not the interact button -- that
+   * is Cross, tested out of uGpffffb68a at step 3 above. */
   else if ((mappedActions & 0x10) != 0)
   {
     weaponClass = FUN_002298d0(e->typeId_00);
@@ -231,9 +234,14 @@ undefined4 update_player_grounded_field_state(entity *e)
     }
     if (weaponClass == 0)
     {
+      /* The lead player's homing magic projectile. The +0x198 clear matters:
+       * that word is shared with state 0x1C's sword blade and with the
+       * interaction candidate, and FUN_002562b0 tests it against zero to decide
+       * whether the cast produced anything.
+       * See analyzed/player_states/magic_cast_0x1D.c. */
       e->spawnedEffect_198 = 0;
       FUN_00225bf0(e, 0x1d, 0x14);
-      FUN_00257b50(e);
+      FUN_00257b50(e); /* FUN_00267d38(0xA5, e), the cast cue */
       return 2;
     }
     if (weaponClass == 4)

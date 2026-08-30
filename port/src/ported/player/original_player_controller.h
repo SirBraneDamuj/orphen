@@ -14,7 +14,10 @@ namespace orphen::ported::player
 
   constexpr std::uint32_t kOriginalMappedActionJump = 0x80;
   constexpr std::uint32_t kOriginalMappedActionAttack = 0x20;
-  constexpr std::uint32_t kOriginalMappedActionInteract = 0x10;
+  // Mapped action 0x10 is Triangle. FUN_00256bb8 calls this branch the *use*
+  // path; it is not the interact button, which is Cross (0x40) and is tested
+  // out of uGpffffb68a a step earlier.
+  constexpr std::uint32_t kOriginalMappedActionUse = 0x10;
 
   // FUN_00256bb8 animation ids written by the grounded path, and the airborne
   // ids from FUN_002534d8. Entity +0xA0 is an animation id, not a substate.
@@ -30,6 +33,11 @@ namespace orphen::ported::player
   // (FUN_00256130) owns the frame from there until the animation ends.
   constexpr std::uint16_t kStateSwordAttack = 0x1c;
 
+  // FUN_00256bb8's *use* branch, mapped action 0x10 -- Triangle. Weapon class 0
+  // again, so for the lead player it is state 0x1D with animation 0x14:
+  // PTR_FUN_0031e160[1], FUN_002562b0, the homing magic projectile.
+  constexpr std::uint16_t kStateMagicCast = 0x1d;
+
   constexpr std::uint16_t kAnimationStand = 0x01;
   constexpr std::uint16_t kAnimationWalk = 0x0b;
   constexpr std::uint16_t kAnimationRun = 0x0e;
@@ -38,10 +46,14 @@ namespace orphen::ported::player
   constexpr std::uint16_t kAnimationLand = 0x10;
   constexpr std::uint16_t kAnimationIdleFidget = 0x17;
   constexpr std::uint16_t kAnimationSwordAttack = 0x33;
+  constexpr std::uint16_t kAnimationMagicCast = 0x14;
 
   // The type id FUN_00256130 spawns for the blade, and the animations
   // FUN_002d21b8 drives it through: 1 is the swing, 2 the dissipate.
   constexpr std::int32_t kSwordEffectTypeId = 0x42;
+
+  // The type FUN_002d2e00 spawns for the magic projectile.
+  constexpr std::int32_t kMagicProjectileTypeId = 0x44;
 
   struct OriginalTerrainSample
   {
@@ -98,21 +110,37 @@ namespace orphen::ported::player
   // is exclusive.
   using OriginalScriptedStateStep = std::function<bool(std::uint32_t frameTicks)>;
 
-  // FUN_00256130's two pool-side operations. The controller owns pool slot 0
-  // and nothing else, so the blade -- which needs the pool, the type
-  // descriptors, the player's bone palette and the DAT_00343888 light table --
-  // is reached the same way the chest cutscene is.
-  struct OriginalSwordEffectHooks
+  // The pool-side operations of the two action states, 0x1C and 0x1D. The
+  // controller owns pool slot 0 and nothing else, so everything that needs the
+  // pool, the type descriptors, the player's bone palette or the DAT_00343888
+  // light table is reached the same way the chest cutscene is.
+  struct OriginalActionEffectHooks
   {
+    // -- state 0x1C, FUN_00256130 ----------------------------------------
     // FUN_00265e28(0x42) and the setup block that follows it. Returns the pool
     // slot it landed in, or -1 when the pool is full -- which the original
     // treats as "return to idle", not as an error.
-    std::function<std::int32_t()> spawn;
+    std::function<std::int32_t()> spawnSwordBlade;
     // FUN_00225bc8(effect, 2): start the blade's dissipate animation. The
     // original guards this with `*effect == 0x42`, so a slot that has since
     // been recycled is ignored; the callback carries that test because it is
     // the side that can see the pool.
-    std::function<void(std::int32_t slot)> retire;
+    std::function<void(std::int32_t slot)> retireSwordBlade;
+
+    // -- state 0x1D, FUN_002562b0 ----------------------------------------
+    // FUN_002d2e00 at the caster's role-4 bone. -1 when the pool is full *or*
+    // when the floor is above the hand, and the original treats both the same
+    // way: drop the cast and return to idle.
+    std::function<std::int32_t()> spawnMagicProjectile;
+    // The launch. Sets the projectile's +0x60 to 1 and clears +0x04 bit 0x100,
+    // which is what hands it to the physics. False when the slot no longer
+    // holds the projectile, which is the original's `+0x198 == 0` case and also
+    // ends the cast.
+    std::function<bool(std::int32_t slot)> launchMagicProjectile;
+    // Every frame the projectile is still charging, FUN_002562b0 writes the
+    // hand point straight into its +0x20. That -- not a parent link -- is how
+    // it stays in the caster's palm.
+    std::function<void(std::int32_t slot)> holdMagicProjectileAtHand;
   };
 
 
@@ -176,7 +204,7 @@ namespace orphen::ported::player
 
     void setScriptedStateStep(OriginalScriptedStateStep step) { scriptedStateStep_ = std::move(step); }
 
-    void setSwordEffectHooks(OriginalSwordEffectHooks hooks) { swordEffect_ = std::move(hooks); }
+    void setActionEffectHooks(OriginalActionEffectHooks hooks) { actionEffect_ = std::move(hooks); }
 
     // FUN_00267d38. The controller reaches the sound engine the same way an
     // actor behaviour does -- see ported/entity/original_entity_sound.h -- so
@@ -190,7 +218,7 @@ namespace orphen::ported::player
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
     OriginalScriptedStateStep scriptedStateStep_;
-    OriginalSwordEffectHooks swordEffect_;
+    OriginalActionEffectHooks actionEffect_;
     orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;
 
     orphen::ported::entity::OriginalEntity &entity() { return *entityStorage_; }
@@ -215,6 +243,8 @@ namespace orphen::ported::player
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     // PTR_FUN_0031e160[0], state 0x1C: the grounded sword swing.
     void FUN_00256130_update_sword_attack();
+    // PTR_FUN_0031e160[1], state 0x1D: the magic cast.
+    void FUN_002562b0_update_magic_cast();
     // FUN_002560e8. Returns true when it ended the state.
     bool FUN_002560e8_end_on_animation_complete();
     void FUN_00253468_finish_landing();

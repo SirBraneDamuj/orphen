@@ -139,15 +139,15 @@ namespace orphen::port
     // the controller because the blade needs the entity pool, the descriptor
     // table, the player's bone palette and the light table, and the controller
     // is bound to slot 0 alone.
-    orphen::ported::player::OriginalSwordEffectHooks swordHooks;
-    swordHooks.spawn = [this]() -> std::int32_t
+    orphen::ported::player::OriginalActionEffectHooks actionHooks;
+    actionHooks.spawnSwordBlade = [this]() -> std::int32_t
     {
       // The spawn reads no timing, only the pool, the descriptors, the bone
       // roles and the light table, so the nominal tick is enough here.
       return orphen::ported::entity::FUN_00256130_spawn_sword_effect(
           entityPool_.leadPlayer(), 0, actorEnvironment(orphen::ported::kNominalFrameTicks));
     };
-    swordHooks.retire = [this](std::int32_t slot)
+    actionHooks.retireSwordBlade = [this](std::int32_t slot)
     {
       // The original's guard is `*effect == 0x42` on the raw pointer at +0x198:
       // a slot that has been recycled since is left alone.
@@ -167,7 +167,65 @@ namespace orphen::port
       effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xff38);
       effect.timelineCursorA8 = 0;
     };
-    leadPlayer_.setSwordEffectHooks(std::move(swordHooks));
+
+    // FUN_002562b0's three. The hand point is the lead's role-4 bone -- the
+    // right hand -- plus DAT_0031e0a8, and all three share it.
+    const auto castHandPoint = [this]() -> orphen::ported::psm2::Vec3
+    {
+      // DAT_0031e0a8, read out of the EE dump.
+      constexpr orphen::ported::psm2::Vec3 kDAT_0031e0a8{0.0709999949f, -0.00999999978f,
+                                                         -0.105999976f};
+      const auto environment = actorEnvironment(orphen::ported::kNominalFrameTicks);
+      const std::size_t bone =
+          environment.FUN_0020dd78_bone_for_role ? environment.FUN_0020dd78_bone_for_role(0, 4) : 0;
+      return environment.FUN_0020dc88_bone_point
+                 ? environment.FUN_0020dc88_bone_point(0, bone, kDAT_0031e0a8)
+                 : orphen::ported::psm2::Vec3{};
+    };
+
+    actionHooks.spawnMagicProjectile = [this, castHandPoint]() -> std::int32_t
+    {
+      return orphen::ported::entity::FUN_002d2e00_spawn_magic_projectile(
+          entityPool_.leadPlayer(), castHandPoint(),
+          actorEnvironment(orphen::ported::kNominalFrameTicks));
+    };
+
+    actionHooks.launchMagicProjectile = [this](std::int32_t slot) -> bool
+    {
+      if (slot < 0 || static_cast<std::size_t>(slot) >= entityPool_.slotCount())
+      {
+        return false;
+      }
+      auto &projectile = entityPool_.slot(static_cast<std::size_t>(slot));
+      if (projectile.typeId00 != orphen::ported::player::kMagicProjectileTypeId)
+      {
+        return false;
+      }
+      projectile.state60 = 1;
+      // +0x04 bit 0x100 off: the physics pass owns it from here.
+      projectile.halfword04 = static_cast<std::uint16_t>(projectile.halfword04 & 0xfeffu);
+      return true;
+    };
+
+    actionHooks.holdMagicProjectileAtHand = [this, castHandPoint](std::int32_t slot)
+    {
+      if (slot < 0 || static_cast<std::size_t>(slot) >= entityPool_.slotCount())
+      {
+        return;
+      }
+      auto &projectile = entityPool_.slot(static_cast<std::size_t>(slot));
+      if (projectile.typeId00 != orphen::ported::player::kMagicProjectileTypeId ||
+          projectile.state60 != 0)
+      {
+        return;
+      }
+      const orphen::ported::psm2::Vec3 hand = castHandPoint();
+      projectile.positionX20 = hand.x;
+      projectile.positionZ24 = hand.y;
+      projectile.positionY28 = hand.z;
+    };
+
+    leadPlayer_.setActionEffectHooks(std::move(actionHooks));
 
     reset();
     spawnOverride_ = config.spawnOverride;
@@ -504,11 +562,10 @@ namespace orphen::port
     // after the actor loop, exactly as FUN_0020c810 does after FUN_00239ce0 --
     // and on the first frame there is none at all, which is the case the
     // original answers by walking +0x192 to the root and using its position.
-    environment.FUN_0020dc88_bone0_point =
-        [this](std::size_t slot) -> orphen::ported::psm2::Vec3
+    environment.FUN_0020dc88_bone_point =
+        [this](std::size_t slot, std::size_t bone,
+               const orphen::ported::psm2::Vec3 &localOffset) -> orphen::ported::psm2::Vec3
     {
-      // DAT_003266f8, read out of the EE dump: (0, 0, 0.65).
-      constexpr orphen::ported::psm2::Vec3 kDAT_003266f8{0.0f, 0.0f, 0.649999976f};
       if (slot >= entityPool_.slotCount())
       {
         return {};
@@ -526,8 +583,8 @@ namespace orphen::port
       {
         return fallback;
       }
-      return orphen::ported::model::FUN_0020dc88_bone_point(DAT_00357e00_bonePalettes_[slot], 0,
-                                                            kDAT_003266f8, fallback);
+      return orphen::ported::model::FUN_0020dc88_bone_point(DAT_00357e00_bonePalettes_[slot], bone,
+                                                            localOffset, fallback);
     };
 
     // The same lookup the script environment gets. FUN_002d2f40 hangs its rig
@@ -555,6 +612,14 @@ namespace orphen::port
     {
       sceneScript_.FUN_0025bf20_run_npc_body(bodyOffset, scriptEnvironment(frameTicks),
                                              scriptTrace_, slot);
+    };
+    // FUN_002d2470's detonation burst. The pool is the runtime's, so the
+    // behaviour reaches it the same way it reaches the light table.
+    environment.FUN_002d2470_spawn_impact_burst =
+        [this](const orphen::ported::entity::OriginalEntity &source, std::size_t slot)
+    {
+      DAT_00355620_particles_.FUN_002d2470_spawn_impact_burst(
+          source, slot, [this] { return FUN_00216868_random(); });
     };
     environment.FUN_00267d38_playSound =
         [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
@@ -2455,6 +2520,223 @@ namespace orphen::port
 
     mapViewer_.setSceneObjectViews(std::move(views));
     mapViewer_.setTextureSlotCache(&modelStore_.textureSlots());
+
+    // FUN_0020f3e0, the second pass. It runs off the same poses this one just
+    // published, so it belongs here rather than beside the draw.
+    publishSpriteQuads();
+  }
+
+  // FUN_0020f3e0: the *other* pass over the pool, for the entities
+  // FUN_0020c5a8 refused.
+  //
+  // Its guards are the mirror image of the first pass's -- a live type id,
+  // +0x02 bit 0x200 **set**, and +0x08 bit 0 clear -- so between them the two
+  // passes partition all 256 slots. It also clears +0x0C bit 0x1000 on the way
+  // in, which FUN_0020f510 sets back on anything it actually submits; nothing
+  // else reads that bit, so it is a "was drawn this frame" latch.
+  //
+  // Ordering is the pool's, not a depth sort. The original submits into a
+  // depth-bucketed display list at the tail of FUN_0020f510 rather than sorting
+  // here, and this port leans on the depth buffer plus back-to-front within a
+  // strip instead -- which is the same answer for the additive sprites that are
+  // all this scene has.
+  void PortRuntime::publishSpriteQuads()
+  {
+    std::vector<orphen::ported::render::SpriteQuad> quads;
+    const auto &viewProjection = renderCamera_;
+
+    // FUN_0020f3e0:0x0020f42c stages `max(DAT_0035566c, DAT_00355670)` per
+    // channel, reversed -- the scene ambient against light 0's colour. Both are
+    // GS bytes where 0x80 is 1.0, and the port keeps them as floats in the same
+    // units, so they scale back by 128.
+    const auto &lighting = mapViewer_.sceneLighting();
+    std::uint8_t ambient[3];
+    for (int channel = 0; channel < 3; ++channel)
+    {
+      const float ambientChannel = lighting.ambient[channel];
+      const float lightChannel = lighting.lightColour[0][channel];
+      const float best = ambientChannel > lightChannel ? ambientChannel : lightChannel;
+      // SceneLighting::unpack keeps the raw GS bytes, so this is already in the
+      // units FUN_0020f510 averages in.
+      const int level = static_cast<int>(best);
+      ambient[channel] = static_cast<std::uint8_t>(level < 0 ? 0 : (level > 0xFF ? 0xFF : level));
+    }
+
+    entityPool_.forEachActiveMutable(
+        [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
+        {
+          if (entity.typeId00 == 0 || (entity.descriptorFlags02 & 0x0200u) == 0 ||
+              (entity.halfword08 & 1) != 0)
+          {
+            return;
+          }
+          entity.collisionFlags0c &= 0xFFFFEFFFu;
+
+          const EntityModelBinding *binding =
+              modelStore_.bindingForTypeId(entity.effectiveTypeId());
+          if (binding == nullptr || binding->model == nullptr || !binding->model->spriteStrip)
+          {
+            return;
+          }
+
+          // FUN_0020f510:0x0020f594. Bit 0x1000 takes the screen-space branch
+          // and bit 0x400 the rotated-corner one; neither is ported, and no
+          // descriptor either scene spawns sets them. Rejecting here rather
+          // than drawing the wrong thing.
+          if ((entity.halfword08 & 0x1400u) != 0)
+          {
+            return;
+          }
+
+          // FUN_0020f510:0x0020f56c. The near clip is DAT_0035209c and the far
+          // one is the scene's draw distance; both are strict.
+          const orphen::ported::psm2::Vec3 world{entity.positionX20, entity.positionZ24,
+                                                 entity.positionY28};
+          const auto viewSpace = viewProjection.toViewSpace(world);
+          if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip ||
+              viewSpace.z >= mapViewer_.drawDistance())
+          {
+            return;
+          }
+
+          const float projectionScaleX = viewProjection.projection.at(0, 0);
+          const float projectionScaleY = viewProjection.projection.at(1, 1);
+          const float screenCentreX = viewProjection.projection.at(2, 0);
+          const float screenCentreY = viewProjection.projection.at(2, 1);
+
+          // FUN_0020b600 (0x0020b600): the VU0 transform-and-project, whose
+          // vftoi0 truncates the result to integer GS 12.4 units. This is the
+          // origin every corner of every quad is built on top of.
+          const int gsOriginX = static_cast<int>(
+              viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+          const int gsOriginY = static_cast<int>(
+              viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+
+          // 0x0020f594-0x0020f5cc: a generous window about the GS centre, so a
+          // sprite whose origin has left the screen but whose quad has not is
+          // still drawn.
+          if (gsOriginX < orphen::ported::render::kSpriteCullMinX ||
+              gsOriginX > orphen::ported::render::kSpriteCullMaxX ||
+              gsOriginY < orphen::ported::render::kSpriteCullMinY ||
+              gsOriginY > orphen::ported::render::kSpriteCullMaxY)
+          {
+            return;
+          }
+
+          orphen::ported::render::SpriteBuildInputs inputs;
+          inputs.scaleX14c = entity.scale14c;
+          inputs.scaleY150 = entity.scaleZ150;
+          inputs.gsOriginX = gsOriginX;
+          inputs.gsOriginY = gsOriginY;
+          inputs.projectionScaleX = projectionScaleX;
+          inputs.projectionScaleY = projectionScaleY;
+          inputs.screenCentreX = screenCentreX;
+          inputs.screenCentreY = screenCentreY;
+          // FUN_0020f3e0:0x0020f4a0 stages G = 2 * DAT_00355658 at workspace
+          // +0x84 -- the camera zoom, not a constant.
+          inputs.projectionG = 2.0f * fieldCamera_.fGpffffb6e8_zoomLog2();
+          inputs.viewZ = viewSpace.z;
+          // 0x0020f6f8: entity +0x133 scaled by DAT_003520a0, staged at +0x88.
+          inputs.entityDepthBias =
+              static_cast<float>(entity.depthBias133) *
+              orphen::ported::render::kDAT_003520a0_entityDepthBiasScale;
+          // FUN_0020f510:0x0020f544 latches +0x08 bit 0x40 into the workspace;
+          // the record loop reads it back to pin the GS z at 0xFFFF.
+          inputs.forceFront = (entity.halfword08 & 0x0040u) != 0;
+          inputs.textureSlot = binding->textureSlot;
+          inputs.ambient[0] = ambient[0];
+          inputs.ambient[1] = ambient[1];
+          inputs.ambient[2] = ambient[2];
+          // +0x08 bit 0x4000 takes FUN_0020f510's flat-0x80 branch and skips
+          // the lighting entirely.
+          inputs.flatColour = (entity.halfword08 & 0x4000u) != 0;
+          if (!inputs.flatColour)
+          {
+            // The VU0 point-light contribution at the sprite's own position,
+            // the same call the map draw makes per vertex.
+            const auto &sceneLighting = mapViewer_.sceneLighting();
+            float additive[3] = {0.0f, 0.0f, 0.0f};
+            if (sceneLighting.pointLightCount != 0)
+            {
+              sceneLighting.FUN_0020b430_pointLightBytes(world, 0, additive);
+            }
+            for (int channel = 0; channel < 3; ++channel)
+            {
+              const int level = static_cast<int>(additive[channel]);
+              inputs.dynamic[channel] =
+                  static_cast<std::uint8_t>(level < 0 ? 0 : (level > 0xFF ? 0xFF : level));
+            }
+          }
+
+          orphen::ported::render::FUN_0020f510_build_quads(*binding->model, entity.poseColumnAc,
+                                                           inputs, quads);
+          entity.collisionFlags0c |= 0x1000u;
+        });
+
+    // FUN_002d3218:11 draws each live particle through FUN_002d3058 in the same
+    // walk that steps it, in pool order. The port steps during the sim and
+    // collects here instead, which puts the same particles in the same order in
+    // the same bucket -- FUN_002d3058's own guard is only FUN_0020b600's clip
+    // flags, with no near, far or window test of the kind the sprites get.
+    if (DAT_00355620_particles_.DAT_00355e0c_behaviour() !=
+        orphen::ported::entity::ParticleBehaviour::None)
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+
+      for (const auto &particle : DAT_00355620_particles_.particles())
+      {
+        if (particle.alive1c == 0)
+        {
+          continue;
+        }
+        const orphen::ported::psm2::Vec3 world{particle.x00, particle.y04, particle.z08};
+        const auto viewSpace = viewProjection.toViewSpace(world);
+        // FUN_0020b600 clamps w rather than rejecting it, and FUN_002d3058 only
+        // drops the particle on the clip flags. Behind the eye is the one case
+        // the clamp cannot save, and drawing it would smear a spark across the
+        // screen, so it is the one thing rejected here.
+        if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+        {
+          continue;
+        }
+
+        orphen::ported::render::ParticleQuadInputs inputs;
+        inputs.gsOriginX = static_cast<int>(
+            viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        inputs.gsOriginY = static_cast<int>(
+            viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        inputs.viewZ = viewSpace.z;
+        inputs.projectionScaleX = projectionScaleX;
+        inputs.projectionScaleY = projectionScaleY;
+        inputs.screenCentreX = screenCentreX;
+        inputs.screenCentreY = screenCentreY;
+        inputs.widthUnits = particle.widthUnits1e;
+        inputs.heightUnits = particle.heightUnits20;
+        inputs.colour = particle.colour18;
+
+        quads.push_back(orphen::ported::render::FUN_002d3058_build_particle_quad(inputs));
+      }
+    }
+
+    // FUN_0020f510:0x00210170 pushes each finished packet into one of 4096
+    // depth buckets, or into 0x1005 when the entity asked to be drawn over
+    // everything, and the list is walked in ascending bucket order -- back to
+    // front. A stable sort on the bucket reproduces that, and keeps the
+    // back-to-front order the record loop already established within a strip.
+    //
+    // The one thing it does not reproduce is that the original links each
+    // packet in at the *head* of its bucket, so co-bucketed sprites come out
+    // reversed among themselves. That is invisible for additive blending, which
+    // is what every sprite this port draws so far uses.
+    std::stable_sort(quads.begin(), quads.end(),
+                     [](const orphen::ported::render::SpriteQuad &a,
+                        const orphen::ported::render::SpriteQuad &b)
+                     { return a.displayListBucket < b.displayListBucket; });
+
+    mapViewer_.setSpriteQuads(std::move(quads));
   }
 
   void PortRuntime::publishOneSceneObjectView(SceneObjectViewList &views,
@@ -4269,6 +4551,16 @@ namespace orphen::port
       std::cout << "entity collision: sweeps=" << collision.sweeps
                 << " clamps=" << collision.clamps << " shoves=" << collision.shoves << '\n';
     }
+    // DAT_00355620. Zero alive with a behaviour installed means every particle
+    // a burst seeded has since faded out, which is the normal resting state.
+    std::cout << "particles: alive=" << DAT_00355620_particles_.aliveCount()
+              << " behaviour="
+              << (DAT_00355620_particles_.DAT_00355e0c_behaviour() ==
+                          orphen::ported::entity::ParticleBehaviour::FUN_002d2348_sparks
+                      ? "FUN_002d2348"
+                      : "none")
+              << "\n";
+
     std::cout << "=== end actor report ===\n\n";
   }
 
@@ -4567,6 +4859,11 @@ namespace orphen::port
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 
+      // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
+      // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
+      // its first step on the next one rather than on the frame it was seeded.
+      DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+
       // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and
       // before FUN_0025b918's late slots. It spends whatever the tick wrote
       // into the collision groups' channels -- the doors of opcodes 0x7D/0x7E,
@@ -4809,6 +5106,9 @@ namespace orphen::port
     }
 
     entityPool_.reset();
+    // FUN_002d3290. Clearing the pool also drops DAT_00355e0c, so nothing from
+    // the previous map keeps stepping.
+    DAT_00355620_particles_.FUN_002d3290_reset([this] { return FUN_00216868_random(); });
     for (auto &filter : DAT_003ffe00_poseFilters_)
     {
       filter.reset();

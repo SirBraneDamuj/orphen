@@ -43,6 +43,26 @@ namespace orphen::ported::entity
     // The radius FUN_00256130 gives the blade's light slot, 0x40000000.
     constexpr float kBladeLightRadius = 2.0f;
 
+    // ---- type 0x44, the homing magic projectile ---------------------------
+    // The constant block at 0x0035467C, plus the two gp-relative values
+    // FUN_002d2e00 seeds the entity from. Every one read out of s01_e24.bin.
+    constexpr float kDAT_0035467c_chargeOrbitBias = 3.14159250259399414f; // pi
+    constexpr float kDAT_00354680_chargeOrbitStep = 0.000099999997f;
+    constexpr float kDAT_00354684_chargeGrowth = 0.100000001f;
+    constexpr float kDAT_00354688_trailShrink = 0.0500000007f;
+    constexpr float kDAT_003546a0_turnRamp = 0.00499999989f;
+    constexpr float kDAT_003546a4_turnMax = 0.349065989f; // 20 degrees
+    constexpr float kuGpffffa73c_projectileExtent = 0.00999999978f;
+    constexpr float kuGpffffa740_projectileSpeed = 0.00179999997f;
+    constexpr float kProjectileLightRadius = 2.0f;
+    // FUN_002d2ca8's search: ten units, and a 60-degree elevation cone
+    // (fGpffffa738) for anything within two units of the projectile's height.
+    constexpr float kDAT_002d2ca8_searchRadius = 10.0f;
+    constexpr float kfGpffffa738_elevationCone = 1.04719734191894531f;
+    constexpr std::uint16_t kProjectileHitCooldown = 0x00a0;
+    constexpr std::uint16_t kProjectileHomingTicks = 0x2580;
+    constexpr std::int16_t kProjectileMaxLifetime = 0x2580;
+
     // FUN_002d1ea8's camera flourish, from the constant block at 0x00354668.
     constexpr float fGpffffa6f8_firstSwing = 1.570796012878418f;   // pi/2
     constexpr float fGpffffa6fc_secondSwing = 0.785398006439209f;  // pi/4
@@ -1381,9 +1401,11 @@ namespace orphen::ported::entity
     if (lightSlot >= 0 && environment.DAT_00343888_lights != nullptr)
     {
       auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot));
-      if (environment.FUN_0020dc88_bone0_point)
+      if (environment.FUN_0020dc88_bone_point)
       {
-        const orphen::ported::psm2::Vec3 point = environment.FUN_0020dc88_bone0_point(slot);
+        // DAT_003266f8, read out of the EE dump: (0, 0, 0.65), up bone 0.
+        const orphen::ported::psm2::Vec3 point =
+            environment.FUN_0020dc88_bone_point(slot, 0, {0.0f, 0.0f, 0.649999976f});
         light.x = point.x;
         light.y = point.y;
         light.z = point.z;
@@ -1426,6 +1448,436 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_00229ef0: set an entity's size scale and rescale its collision volume
+  // from its descriptor. The two size fields are *derived*, not stored, so
+  // writing +0x14C without this leaves the radius and height at their spawn
+  // values and the entity grows only visually.
+  void FUN_00229ef0_set_scale(OriginalEntity &entity, float scale,
+                              const EntityDescriptorTable *descriptors)
+  {
+    entity.scale14c = scale;
+    entity.scaleZ150 = scale;
+    if (descriptors == nullptr)
+    {
+      return;
+    }
+    const auto descriptor =
+        descriptors->FUN_00229980_resolve(static_cast<std::uint32_t>(entity.effectiveTypeId()));
+    if (descriptor.has_value())
+    {
+      entity.radius54 = scale * descriptor->radius0x08;
+      entity.height58 = scale * descriptor->height0x0c;
+    }
+  }
+
+  // FUN_002d2ca8: pick what the magic projectile will chase.
+  //
+  // One pass over pool slots 10 upward -- **not** slot 0, so it can never lock
+  // onto the caster -- taking the nearest candidate inside ten units. A
+  // candidate is any live entity whose +0x02 has bit 0x08 and whose +0x04 does
+  // not have bit 0x10; on type 0x62 that pair means "an enemy that is not
+  // already dying".
+  //
+  // The elevation gate is the interesting half. A candidate more than two units
+  // away vertically is taken on distance alone, but one *within* two units has
+  // to also sit inside a 60-degree cone (fGpffffa738 = 1.0472 rad) measured
+  // from the projectile to the candidate's waist. Read the branch carefully:
+  // the far-in-height case skips the cone test rather than failing it.
+  //
+  // The choice is made once, at spawn, and never revisited -- so the projectile
+  // locks on and stays locked.
+  std::int32_t FUN_002d2ca8_find_homing_target(const ActorEnvironment &environment,
+                                               const OriginalEntity &projectile)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return -1;
+    }
+    const EntityPool &pool = *environment.entityPool;
+
+    std::int32_t best = -1;
+    float bestDistance = kDAT_002d2ca8_searchRadius;
+
+    for (std::size_t slot = kFirstScriptSlot; slot < kEntitySlotCount; ++slot)
+    {
+      if (pool.status(slot) != SlotStatus::ScriptSpawned)
+      {
+        continue;
+      }
+      const OriginalEntity &candidate = pool.slot(slot);
+      if ((candidate.descriptorFlags02 & 0x0008u) == 0 ||
+          (candidate.halfword04 & 0x0010u) != 0)
+      {
+        continue;
+      }
+
+      // FUN_0023a4e8: horizontal distance only.
+      const float dx = candidate.positionX20 - projectile.positionX20;
+      const float dz = candidate.positionZ24 - projectile.positionZ24;
+      const float distance = std::sqrt(dx * dx + dz * dz);
+      if (distance >= bestDistance)
+      {
+        continue;
+      }
+
+      const float heightDelta = candidate.positionY28 - projectile.positionY28;
+      if (std::fabs(heightDelta) < 2.0f)
+      {
+        // FUN_00305408 is atan2. The waist, not the feet.
+        const float elevation = std::atan2(
+            (candidate.positionY28 + candidate.height58 * 0.5f) - projectile.positionY28, distance);
+        if (std::fabs(elevation) >= kfGpffffa738_elevationCone)
+        {
+          continue;
+        }
+      }
+
+      bestDistance = distance;
+      best = static_cast<std::int32_t>(slot);
+    }
+
+    return best;
+  }
+
+  // FUN_002d2e00: spawn the magic projectile, type 0x44, at a world point.
+  //
+  // The point is the caster's role-4 bone -- the right hand, where a held
+  // weapon goes -- plus DAT_0031e0a8, and the spawn is *refused* if the floor
+  // under that point is above it. That is the only guard, and it is what stops
+  // a cast started while clipping into geometry putting a projectile inside the
+  // world.
+  //
+  // Two flags go in at +0x04: bit 0x02 puts the ground query on the
+  // single-point path, and bit 0x100 turns physics off entirely, which is what
+  // lets FUN_002562b0 hold the projectile in the caster's hand by writing +0x20
+  // directly. The launch clears 0x100 and the projectile starts flying.
+  std::int32_t FUN_002d2e00_spawn_magic_projectile(const OriginalEntity &owner,
+                                                   const orphen::ported::psm2::Vec3 &handPoint,
+                                                   const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr ||
+        !environment.FUN_00227798_probe)
+    {
+      return -1;
+    }
+
+    // FUN_00227798 at the hand. `groundHeight <= handHeight` or nothing spawns.
+    const float groundHeight =
+        environment.FUN_00227798_probe(handPoint.x, handPoint.y, handPoint.z).height;
+    if (groundHeight > handPoint.z)
+    {
+      return -1;
+    }
+
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t slot = pool.FUN_00265e28_allocate_and_initialize(
+        orphen::ported::player::kMagicProjectileTypeId, *environment.descriptors);
+    if (slot >= kEntitySlotCount)
+    {
+      return -1;
+    }
+
+    OriginalEntity &projectile = pool.slot(slot);
+    projectile.positionX20 = handPoint.x;
+    projectile.positionZ24 = handPoint.y;
+    projectile.positionY28 = handPoint.z;
+    projectile.groundHeight4c = groundHeight;
+    projectile.facingRadians5c = owner.facingRadians5c;
+    projectile.rejectTerrainMask74 = 0;
+    projectile.requiredTerrainMask78 = 0;
+    projectile.halfword04 = static_cast<std::uint16_t>(projectile.halfword04 | 0x0102u);
+    // uGpffffa73c, 0.01, written over the radius and the height *and* their two
+    // mirrors at +0x11C/+0x120. FUN_00229ef0 rebuilds them from the descriptor
+    // every time the scale changes, so this is only the starting size.
+    projectile.radius54 = kuGpffffa73c_projectileExtent;
+    projectile.height58 = kuGpffffa73c_projectileExtent;
+    projectile.projectileSpeed19c = kuGpffffa740_projectileSpeed;
+
+    // FUN_00266050 again -- the projectile carries its own light the whole way,
+    // and the trail ghosts it drops do not. Colour 0x00040404, almost black:
+    // state 0's charge ramp is what brings it up.
+    projectile.lightSlot195 = -1;
+    if (environment.DAT_00343888_lights != nullptr)
+    {
+      const std::int32_t lightSlot =
+          environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+      projectile.lightSlot195 = static_cast<std::int8_t>(lightSlot);
+      if (lightSlot >= 0)
+      {
+        auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot));
+        light.red = 4;
+        light.green = 4;
+        light.blue = 4;
+        light.alpha = 0;
+        light.radius = kProjectileLightRadius;
+        environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(lightSlot),
+                                                    kProjectileLightRadius);
+        // FUN_002660d0: put the light where the projectile already is, before
+        // anything gets a chance to draw it at the origin.
+        light.x = projectile.positionX20;
+        light.y = projectile.positionZ24;
+        light.z = projectile.positionY28;
+      }
+    }
+
+    projectile.homingTarget198 = FUN_002d2ca8_find_homing_target(environment, projectile);
+    projectile.hitCooldown1aa = kProjectileHitCooldown;
+    projectile.homingTimer1a8 = kProjectileHomingTicks;
+
+    // FUN_00216078(1, 1, projectile + 0x1AC) fills the hit test's parameters
+    // from the caster type's table. FUN_00215ac8 is its only reader and is not
+    // ported; see FUN_002d2470 below.
+
+    return static_cast<std::int32_t>(slot);
+  }
+
+  // FUN_002d2470, type 0x44: the magic projectile's own frame.
+  //
+  // Four states on +0x60, and they are a lifetime rather than a machine -- each
+  // one only ever moves forward:
+  //
+  //   0  charging in the caster's hand. FUN_002562b0 pins the position; this
+  //      grows the scale to 2.0 by a tenth a frame, brightens the light by 4 a
+  //      frame, and orbits a hair. It deletes itself the moment the caster
+  //      leaves state 0x1D, so an interrupted cast takes the charge with it.
+  //   1  flying. Homing, then movement, then a trail ghost every other frame.
+  //   2  a trail ghost: shrink by 0.05 a frame and die when the animation ends.
+  //   4  the impact. Fade the light down by 0x20202 a frame and delete.
+  //
+  // The homing is two angles. The yaw at +0x5C and the elevation at +0x1A0 each
+  // step toward the target through FUN_0023a320, capped by +0x1A4 -- which
+  // starts at zero and ramps by 0.005 a frame to 0.349. So the projectile
+  // leaves the hand travelling dead straight and only tightens later, which is
+  // most of why it reads as a guided missile rather than a tracking beam.
+  //
+  // NOT PORTED, and both are called out at their sites below: FUN_00215ac8, the
+  // swept hit test, and the hundred-particle impact burst FUN_002d2470 builds
+  // into DAT_00355620 before it enters state 4. The burst has its own renderer
+  // installed at DAT_00355e0c (FUN_002d2348) and is a separate slice; state 4
+  // itself is here, so the lifetime is complete and the light still flares out.
+  void FUN_002d2470_magic_projectile(OriginalEntity &projectile,
+                                     std::size_t slot,
+                                     const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    // FUN_0023a068, and the original discards the result -- so the projectile
+    // ticks its freeze timer but is not gated on it.
+    FUN_0023a068_freeze_gate(projectile, environment.frameTicks);
+
+    const auto light = [&]() -> orphen::ported::render::LightTable::Slot * {
+      if (projectile.lightSlot195 < 0 || environment.DAT_00343888_lights == nullptr)
+      {
+        return nullptr;
+      }
+      return &environment.DAT_00343888_lights->slot(
+          static_cast<std::uint32_t>(projectile.lightSlot195));
+    };
+
+    // ---- state 0: charging in the hand ------------------------------------
+    if (projectile.state60 == 0)
+    {
+      // DAT_0058bf10 again, pool slot 0's +0x60.
+      if (pool.leadPlayer().state60 != orphen::ported::player::kStateMagicCast)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+        return;
+      }
+
+      // A movement request the physics never spends -- +0x04 bit 0x100 is on
+      // for the whole of this state. It is here because the launch clears that
+      // bit, and whatever has piled up is the projectile's first push.
+      const float orbit = projectile.facingRadians5c + kDAT_0035467c_chargeOrbitBias;
+      projectile.desiredDeltaX30 += std::cos(orbit) * kDAT_00354680_chargeOrbitStep;
+      projectile.desiredDeltaZ34 += std::sin(orbit) * kDAT_00354680_chargeOrbitStep;
+
+      if (projectile.scale14c < 2.0f)
+      {
+        FUN_00229ef0_set_scale(projectile, projectile.scale14c + kDAT_00354684_chargeGrowth,
+                               environment.descriptors);
+      }
+
+      if (auto *slotLight = light())
+      {
+        const int level = std::min(static_cast<int>(slotLight->red) + 4, 0xFF);
+        slotLight->red = static_cast<std::uint8_t>(level);
+        slotLight->green = static_cast<std::uint8_t>(level);
+        slotLight->blue = static_cast<std::uint8_t>(level);
+      }
+      return;
+    }
+
+    // ---- state 2: a trail ghost -------------------------------------------
+    if (projectile.state60 == 2)
+    {
+      if ((projectile.flags06 & kAnimationComplete06) != 0)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+        return;
+      }
+      FUN_00229ef0_set_scale(projectile, projectile.scale14c - kDAT_00354688_trailShrink,
+                             environment.descriptors);
+      return;
+    }
+
+    // ---- state 4: the impact ----------------------------------------------
+    if (projectile.state60 == 4)
+    {
+      auto *slotLight = light();
+      if (slotLight == nullptr)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+        return;
+      }
+      // The original compares and decrements the packed rgb word at +0x0C as a
+      // single u32 (`0x80808 < w`, then `w -= 0x20202`), which is only the same
+      // as three independent ramps because the three bytes stay equal. They do:
+      // nothing ever writes them apart.
+      if (slotLight->red > 0x08)
+      {
+        slotLight->red = static_cast<std::uint8_t>(slotLight->red - 2);
+        slotLight->green = static_cast<std::uint8_t>(slotLight->green - 2);
+        slotLight->blue = static_cast<std::uint8_t>(slotLight->blue - 2);
+        return;
+      }
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    // ---- state 1: flying ---------------------------------------------------
+
+    // +0x1AA, the hit-test cooldown. FUN_00215ac8 -- the swept box test against
+    // the entity pool, using the parameters at +0x1AC -- would run here once it
+    // reaches zero, and its hit is one of the three things that detonate the
+    // projectile. It is not ported, so only the other two can.
+    if (projectile.hitCooldown1aa != 0)
+    {
+      const std::int16_t remaining = static_cast<std::int16_t>(
+          projectile.hitCooldown1aa - static_cast<std::uint16_t>(environment.frameTicks));
+      projectile.hitCooldown1aa = static_cast<std::uint16_t>(remaining < 0 ? 0 : remaining);
+    }
+
+    projectile.fadeRamp62 =
+        static_cast<std::uint16_t>(projectile.fadeRamp62 + static_cast<std::uint16_t>(environment.frameTicks));
+    const std::int16_t lifetime = static_cast<std::int16_t>(projectile.fadeRamp62);
+
+    // +0x04 bit 0 disables the entity-vs-entity clamp. The projectile carries it
+    // for its first 0x140 ticks -- ten frames -- so it can leave the caster.
+    if ((projectile.halfword04 & 0x0001u) != 0 && lifetime > 0x13f)
+    {
+      projectile.halfword04 = static_cast<std::uint16_t>(projectile.halfword04 & 0xfffeu);
+    }
+
+    // Detonate: hit something solid, or outlived 0x2580 ticks (five seconds).
+    //
+    // The wall case does not currently fire. `integrateNonPlayerMovement` is not
+    // FUN_002262c0 -- see the note on it -- so a non-player actor passes through
+    // geometry and +0x0C never picks up the blocked bits. Until that is the real
+    // thing, the projectile always ends on the timeout.
+    if ((projectile.collisionFlags0c & 0x0266u) != 0 || lifetime > kProjectileMaxLifetime)
+    {
+      // 0x002d2818: up to a hundred particles into DAT_00355620, fanning out
+      // from the projectile's own facing, and FUN_002d2348 installed as their
+      // stepper. The burst happens before the state change, and it reads the
+      // projectile's position and facing, so it has to come first.
+      if (environment.FUN_002d2470_spawn_impact_burst)
+      {
+        environment.FUN_002d2470_spawn_impact_burst(projectile, slot);
+      }
+      projectile.state60 = 4;
+      projectile.halfword08 = static_cast<std::uint16_t>(projectile.halfword08 | 0x0001u);
+      return;
+    }
+
+    // Homing, while +0x1A8 has ticks left.
+    if (projectile.homingTimer1a8 != 0)
+    {
+      const float turnRate =
+          std::min(projectile.projectileTurnRate1a4 + kDAT_003546a0_turnRamp, kDAT_003546a4_turnMax);
+      projectile.projectileTurnRate1a4 = turnRate;
+
+      const std::int32_t target = projectile.homingTarget198;
+      bool turned = false;
+      if (target >= 0 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+          (pool.slot(static_cast<std::size_t>(target)).halfword04 & 0x0010u) == 0)
+      {
+        const OriginalEntity &chased = pool.slot(static_cast<std::size_t>(target));
+        const float dx = chased.positionX20 - projectile.positionX20;
+        const float dz = chased.positionZ24 - projectile.positionZ24;
+
+        // FUN_0023a4b8 is atan2 of the horizontal offset; FUN_0023a320 steps
+        // toward it, capped, and returns 0 once inside the dead zone.
+        const float yawStep = FUN_0023a320_approach_angle(
+            projectile.facingRadians5c, std::atan2(dz, dx), turnRate);
+        if (yawStep != 0.0f)
+        {
+          projectile.facingRadians5c += yawStep;
+        }
+
+        const float distance = std::sqrt(dx * dx + dz * dz);
+        const float wantedPitch = std::atan2(
+            (chased.positionY28 + chased.height58 * 0.5f) - projectile.positionY28, distance);
+        const float pitchStep =
+            FUN_0023a320_approach_angle(projectile.projectilePitch1a0, wantedPitch, turnRate);
+        if (pitchStep != 0.0f)
+        {
+          projectile.projectilePitch1a0 += pitchStep;
+          turned = true;
+        }
+      }
+
+      // The original only reaches the timer decrement through the pitch branch's
+      // fall-through or one of the two early exits -- every path arrives here,
+      // so the timer runs down whether or not there is still a target.
+      (void)turned;
+      const std::int16_t remaining = static_cast<std::int16_t>(
+          projectile.homingTimer1a8 - static_cast<std::uint16_t>(environment.frameTicks));
+      projectile.homingTimer1a8 = static_cast<std::uint16_t>(remaining < 0 ? 0 : remaining);
+    }
+
+    // Movement. Speed is per tick, so the frame's ticks scale it; the pitch
+    // splits it into a vertical part and a horizontal one, and the yaw spreads
+    // the horizontal part over X and Z.
+    const float step = projectile.projectileSpeed19c * static_cast<float>(environment.frameTicks);
+    const float horizontal = step * std::cos(projectile.projectilePitch1a0);
+    projectile.desiredDeltaY38 += step * std::sin(projectile.projectilePitch1a0);
+    projectile.desiredDeltaX30 += horizontal * std::cos(projectile.facingRadians5c);
+    projectile.desiredDeltaZ34 += horizontal * std::sin(projectile.facingRadians5c);
+
+    // FUN_002660d0: the light rides the projectile.
+    if (auto *slotLight = light())
+    {
+      slotLight->x = projectile.positionX20;
+      slotLight->y = projectile.positionZ24;
+      slotLight->z = projectile.positionY28;
+    }
+
+    // Every other frame, a ghost of itself left behind at the current position
+    // and scale, in state 2, with physics off so it hangs where it was dropped.
+    // This is the trail.
+    if ((environment.DAT_003555b4_frameCounter & 1u) != 0 && environment.descriptors != nullptr)
+    {
+      const std::size_t ghost = pool.FUN_00265e28_allocate_and_initialize(
+          projectile.typeId00, *environment.descriptors);
+      if (ghost < kEntitySlotCount)
+      {
+        OriginalEntity &trail = pool.slot(ghost);
+        trail.positionX20 = projectile.positionX20;
+        trail.positionZ24 = projectile.positionZ24;
+        trail.positionY28 = projectile.positionY28;
+        trail.groundHeight4c = projectile.groundHeight4c;
+        FUN_00229ef0_set_scale(trail, projectile.scale14c, environment.descriptors);
+        trail.state60 = 2;
+        trail.animationA0 = 1;
+        trail.halfword04 = static_cast<std::uint16_t>(trail.halfword04 | 0x0100u);
+      }
+    }
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -1439,6 +1891,7 @@ namespace orphen::ported::entity
     case 0x0025BF20u: // FUN_0025bf20, type 0x38, the script-driven NPC
     case 0x002D2F40u: // FUN_002d2f40, type 0x28, the close-up rig
     case 0x002D21B8u: // FUN_002d21b8, type 0x42, the sword blade
+    case 0x002D2470u: // FUN_002d2470, type 0x44, the homing magic projectile
       return true;
     default:
       return false;
@@ -1467,6 +1920,8 @@ namespace orphen::ported::entity
       return "FUN_002d2f40 (close-up rig)";
     case 0x002D21B8u:
       return "FUN_002d21b8 (sword blade)";
+    case 0x002D2470u:
+      return "FUN_002d2470 (magic projectile)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -1580,6 +2035,9 @@ namespace orphen::ported::entity
         break;
       case 0x002D21B8u:
         FUN_002d21b8_sword_effect(entity, slot, slotEnvironment);
+        break;
+      case 0x002D2470u:
+        FUN_002d2470_magic_projectile(entity, slot, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

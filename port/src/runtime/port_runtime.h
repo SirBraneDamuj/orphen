@@ -25,6 +25,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/entity/original_particles.h"
 #include "ported/entity/player_bandana.h"
 #include "runtime/entity_model_store.h"
 #include "ported/resource/elf_data_reader.h"
@@ -187,6 +188,8 @@ namespace orphen::port
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
+    // And for Triangle: --press-magic, the cast.
+    std::vector<std::uint32_t> pressMagicFrames;
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -379,8 +382,22 @@ namespace orphen::port
 
   private:
     std::string pendingSnapshotImagePath_;
+    // DAT_00355620, the one global particle pool -- 1536 entries shared by the
+    // whole frame. FUN_002d3290 clears it when the scene loads, FUN_002d3218
+    // steps it after the actor loop, and publishSpriteQuads draws whatever is
+    // alive into the same display list the billboards use.
+    orphen::ported::entity::ParticlePool DAT_00355620_particles_;
+
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;
+    // FUN_00216868, the one draw the three call sites share. A plain LCG rather
+    // than the original's generator, which has not been analysed; what matters
+    // is that it is seeded once and stepped deterministically.
+    std::uint32_t FUN_00216868_random()
+    {
+      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
+      return (actorRandomState_ >> 16) & 0x7FFFu;
+    }
     // Rising-edge state for the live trigger log, so stepping on a panel says
     // so once rather than 60 times a second.
     std::map<std::uint32_t, bool> triggerWasPassing_;
@@ -436,6 +453,8 @@ namespace orphen::port
     void applySceneEnvironment();
     void reportSceneEnvironment() const;
     void publishSceneObjectViews(std::uint32_t frameTicks);
+    // FUN_0020f3e0: the billboard pass's collect half.
+    void publishSpriteQuads();
     // One slot of that walk. Split out so FUN_0020c5a8's deferral queue can
     // call it in dependency order rather than slot order.
     void publishOneSceneObjectView(orphen::port::SceneObjectViewList &views,

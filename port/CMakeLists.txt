@@ -88,6 +88,8 @@ target_sources(orphen_port
         src/ported/render/original_frame_feedback.h
         src/ported/render/original_light_table.cpp
         src/ported/render/original_light_table.h
+        src/ported/render/original_sprite_pass.cpp
+        src/ported/render/original_sprite_pass.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp
@@ -109,6 +111,8 @@ target_sources(orphen_port
     src/ported/entity/entity_descriptor_table.cpp
     src/ported/entity/entity_descriptor_table.h
     src/ported/entity/entity_pool.cpp
+    src/ported/entity/original_particles.cpp
+    src/ported/entity/original_particles.h
     src/ported/entity/entity_pool.h
     src/ported/entity/original_entity.h
     src/ported/entity/actor_dispatch_table.cpp

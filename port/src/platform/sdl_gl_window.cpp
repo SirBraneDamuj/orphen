@@ -250,7 +250,9 @@ namespace orphen::port
     // buttons are positional and line up with the PS2 layout one for one, so
     // an Xbox pad maps by position: Y is Triangle, B is Circle, A is Cross and
     // X ("SDL Face West") is Square. Square is the jump binding.
-    bool triangleHeld = false;
+    // V stands in for Triangle: the magic cast. On a pad it is the north face
+    // button (Y on an Xbox layout), wired below.
+    bool triangleHeld = keys[SDL_SCANCODE_V] != 0;
     // C stands in for Circle on the keyboard: the sword attack, and -- held
     // while pressing jump -- the debug mid-air jump. It was B, which is also
     // the debug bounding-box overlay, so one key was doing two gameplay things

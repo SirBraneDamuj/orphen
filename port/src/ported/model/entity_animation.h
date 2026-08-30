@@ -48,6 +48,12 @@ namespace orphen::ported::model
   // animation id past the count at PSC3 header +0x06, or a timeline offset of
   // zero. The original reports those through FUN_002681c0 and leaves the pose
   // where it was, which is what the caller should do too.
+  // FUN_00225c90's sprite-strip half, entity +0x02 bit 0x200. Exposed for the
+  // tests; FUN_00225c90_advance_animation routes to it on its own.
+  bool FUN_00225c90_advance_sprite_strip(orphen::ported::entity::OriginalEntity &entity,
+                                         const Psc3Model &model,
+                                         std::uint32_t frameTicks);
+
   bool FUN_00225c90_advance_animation(orphen::ported::entity::OriginalEntity &entity,
                                       const Psc3Model &model,
                                       std::uint32_t frameTicks);

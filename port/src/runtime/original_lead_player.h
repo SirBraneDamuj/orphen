@@ -30,10 +30,11 @@ namespace orphen::port
       controller_.setScriptedStateStep(std::move(step));
     }
 
-    // FUN_00256130's blade. See OriginalSwordEffectHooks.
-    void setSwordEffectHooks(orphen::ported::player::OriginalSwordEffectHooks hooks)
+    // The blade of state 0x1C and the projectile of state 0x1D. See
+    // OriginalActionEffectHooks.
+    void setActionEffectHooks(orphen::ported::player::OriginalActionEffectHooks hooks)
     {
-      controller_.setSwordEffectHooks(std::move(hooks));
+      controller_.setActionEffectHooks(std::move(hooks));
     }
 
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,

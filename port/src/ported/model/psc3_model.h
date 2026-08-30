@@ -195,6 +195,16 @@ namespace orphen::ported::model
     std::uint16_t animationCount = 0;
     std::uint32_t keyframePoolOffset = 0;   // header +0x2C
 
+    // A **sprite strip**, not a skeletal model: no magic, no geometry, and a
+    // four-byte animation timeline instead of a six-byte one. `grp_017e`, the
+    // magic projectile's, is 324 bytes of it. See loadSpriteStripModel.
+    //
+    // Which of the two an entity is comes from its descriptor rather than from
+    // the blob: +0x02 bit 0x200. FUN_00225c90 branches on it at its very first
+    // line and FUN_0020c5a8 refuses to put such an entity in the skeletal draw
+    // list at all -- they are drawn by FUN_0020f3e0's separate billboard pass.
+    bool spriteStrip = false;
+
     Bounds3 bounds;
 
     // Counters the report prints. `skippedPrimitives` is the kPrimitiveSkip
@@ -214,5 +224,17 @@ namespace orphen::ported::model
   // Never throws and never partially reports success: on any malformed field the
   // result comes back with valid == false and diagnostic set.
   Psc3Model loadPsc3Model(std::span<const std::uint8_t> bytes);
+
+  // The sprite-strip kind, for a blob with no PSC3 magic. Header, all of it:
+  //
+  //   +0x00 u16  sprite record count
+  //   +0x02 u16  animation count
+  //   +0x04 u32  (unread here)
+  //   +0x08 u32  sprite record table, 16 bytes each
+  //   +0x0C u32  animation table, one u32 offset per animation
+  //
+  // The animation table is at the same header offset a PSC3's is, which is what
+  // lets FUN_00225c90 read `+0x9C` the same way for both.
+  Psc3Model loadSpriteStripModel(std::span<const std::uint8_t> bytes);
 
 } // namespace orphen::ported::model

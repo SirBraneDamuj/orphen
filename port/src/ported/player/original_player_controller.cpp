@@ -46,6 +46,10 @@ namespace orphen::ported::player
 
     // FUN_00257b70 is one call, FUN_00267d38(0xA4, entity) -- the swing.
     constexpr std::uint16_t kSoundCueSwordSwing = 0xa4;
+    // FUN_00257b50 and FUN_00257b40, the two halves of the cast: 0xA5 when the
+    // state starts and 0xA6 when the projectile leaves the hand.
+    constexpr std::uint16_t kSoundCueMagicCast = 0xa5;
+    constexpr std::uint16_t kSoundCueMagicLaunch = 0xa6;
 
     float horizontalMagnitude(const orphen::ported::psm2::Vec3 &value)
     {
@@ -203,6 +207,10 @@ namespace orphen::ported::player
       // attack animation with `stand` on the very next frame.
       FUN_00256130_update_sword_attack();
     }
+    else if (entity().state60 == kStateMagicCast)
+    {
+      FUN_002562b0_update_magic_cast();
+    }
     else
     {
       FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
@@ -323,7 +331,28 @@ namespace orphen::ported::player
       return;
     }
 
-    // 5. Locomotion or idle.
+    // 5. Use. Triangle, and an `else if` on the attack above -- both in the
+    //    same frame is the attack. Class 0 casts the homing magic projectile:
+    //    state 0x1D, animation 0x14, and the cue up front rather than partway
+    //    through the animation the way the sword's is.
+    //
+    //    The +0x198 clear matters. That word is shared with the sword blade and
+    //    with the interaction candidate, and FUN_002562b0 tests it against zero
+    //    to decide whether the cast produced anything; entering with a stale
+    //    slot in it would launch whatever was there.
+    else if ((input.mappedPressedActions & kOriginalMappedActionUse) != 0)
+    {
+      entity().actionEffect198 = -1;
+      FUN_00225bf0_set_entity_state(kStateMagicCast, kAnimationMagicCast);
+      // FUN_00257b50: FUN_00267d38(0xA5, entity), the cast.
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(kSoundCueMagicCast, entity());
+      }
+      return;
+    }
+
+    // 6. Locomotion or idle.
     entity().state60 = 0;
     entity().animationA0 = kAnimationStand;
 
@@ -483,7 +512,7 @@ namespace orphen::ported::player
       // animation 0x33 -- the top of the swing.
       if ((entity().flags06 & kAnimationStepped06) != 0)
       {
-        const std::int32_t effect = swordEffect_.spawn ? swordEffect_.spawn() : -1;
+        const std::int32_t effect = actionEffect_.spawnSwordBlade ? actionEffect_.spawnSwordBlade() : -1;
         if (effect < 0)
         {
           // FUN_00265e28 returning 0. The original abandons the swing rather
@@ -491,7 +520,7 @@ namespace orphen::ported::player
           FUN_00252d88_return_to_idle_state();
           return;
         }
-        entity().swordEffect198 = effect;
+        entity().actionEffect198 = effect;
         return;
       }
       if ((entity().flags06 & kAnimationExpired06) != 0)
@@ -510,10 +539,76 @@ namespace orphen::ported::player
     // left pointing at it -- the original never clears the word, and the type
     // test inside `retire` is what stops a recycled slot being touched.
     if ((entity().flagsAa & kKeyframeEventSwordEnd) != 0 &&
-        (entity().flags06 & kAnimationStepped06) != 0 && entity().swordEffect198 >= 0 &&
-        swordEffect_.retire)
+        (entity().flags06 & kAnimationStepped06) != 0 && entity().actionEffect198 >= 0 &&
+        actionEffect_.retireSwordBlade)
     {
-      swordEffect_.retire(entity().swordEffect198);
+      actionEffect_.retireSwordBlade(entity().actionEffect198);
+    }
+  }
+
+  // FUN_002562b0, PTR_FUN_0031e160[1]: state 0x1D, the magic cast.
+  //
+  // Same shape as the sword swing -- FUN_002560e8 at the top, then two points
+  // in animation 0x14's timeline -- but the two points do more, because the
+  // projectile exists for the gap between them:
+  //
+  //   cursor 6   spawn it, charging, at the caster's role-4 bone
+  //   cursor 10  launch it: state 1, physics on, cue 0xA6
+  //
+  // and on every other frame, while it is still charging, its position is
+  // rewritten to the hand. It is not attached through +0x192 the way the sword
+  // blade is; the caster pushes it, which is why interrupting the cast leaves
+  // it where it was rather than dragging it.
+  void OriginalPlayerController::FUN_002562b0_update_magic_cast()
+  {
+    if (FUN_002560e8_end_on_animation_complete())
+    {
+      return;
+    }
+
+    if (entity().timelineCursorA8 == 6 && (entity().flags06 & kAnimationStepped06) != 0)
+    {
+      const std::int32_t projectile =
+          actionEffect_.spawnMagicProjectile ? actionEffect_.spawnMagicProjectile() : -1;
+      entity().actionEffect198 = projectile;
+      if (projectile < 0)
+      {
+        // FUN_002d2e00 returning 0: the pool was full, or the floor was above
+        // the caster's hand. Either way the cast is dropped.
+        FUN_00252d88_return_to_idle_state();
+        return;
+      }
+    }
+    else if (entity().timelineCursorA8 == 10 && (entity().flags06 & kAnimationStepped06) != 0)
+    {
+      if (entity().actionEffect198 < 0)
+      {
+        FUN_00252d88_return_to_idle_state();
+        return;
+      }
+      const bool launched = actionEffect_.launchMagicProjectile &&
+                            actionEffect_.launchMagicProjectile(entity().actionEffect198);
+      if (!launched)
+      {
+        FUN_00252d88_return_to_idle_state();
+        return;
+      }
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(kSoundCueMagicLaunch, entity());
+      }
+      // FUN_00257ad0 -> FUN_0023bbd8(0, 3) also fires here. That is the sound
+      // engine's priority-channel entry point rather than FUN_00267d38's, and
+      // the port reaches the engine only through the latter, so it is skipped
+      // rather than guessed at.
+    }
+
+    // Every frame, charging or not: the hold. The callback checks the
+    // projectile's own +0x60 -- the original's `+0x60 == 0` gate -- so this is
+    // a no-op once it has launched.
+    if (entity().actionEffect198 >= 0 && actionEffect_.holdMagicProjectileAtHand)
+    {
+      actionEffect_.holdMagicProjectileAtHand(entity().actionEffect198);
     }
   }
 
