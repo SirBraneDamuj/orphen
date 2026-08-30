@@ -9,6 +9,7 @@
 #include "ported/entity/original_entity.h"
 #include "ported/entity/player_bandana.h"
 #include "ported/model/psc3_skeleton.h"
+#include "ported/render/original_light_table.h"
 
 #include <cstdint>
 #include <functional>
@@ -121,6 +122,18 @@ namespace orphen::ported::entity
     // arrives as a callback because the script interpreter lives a layer up --
     // the same reason everything else here does.
     std::function<void(std::size_t slot, std::int16_t bodyOffset)> FUN_0025bf20_run_npc_body;
+
+    // DAT_00343888, the sixteen dynamic light slots. FUN_002d21b8 drives one of
+    // them from the sword blade's position every frame it lives; it is the only
+    // actor behaviour that owns a light rather than reading one.
+    orphen::ported::render::LightTable *DAT_00343888_lights = nullptr;
+
+    // FUN_0020dc88(entity, 0, DAT_003266f8, out): the world point 0.65 units up
+    // the entity's own bone 0. It reads the matrix palette, which the entity
+    // layer has no view of, so it arrives as a callback. Falls back to the
+    // entity's own position when the slot has no palette -- the original's
+    // "+0x0C has no 0x2000 bit" branch.
+    std::function<orphen::ported::psm2::Vec3(std::size_t slot)> FUN_0020dc88_bone0_point;
 
     // FUN_0020dd78: the bone carrying a semantic role on an entity's model.
     // FUN_002d2f40 needs it three times to hang its rig together, and the
@@ -307,6 +320,14 @@ namespace orphen::ported::entity
   void FUN_002d2f40_build_closeup_rig(OriginalEntity &entity,
                                       std::size_t slot,
                                       const ActorEnvironment &environment);
+
+  // FUN_00256130's spawn block, type 0x42: the glowing sword blade, attached to
+  // the swinging entity's role-5 bone and carrying a dynamic light. Exposed
+  // because the player controller -- which owns pool slot 0 and nothing else --
+  // is what triggers it. Returns the pool slot, or -1 when the pool is full.
+  std::int32_t FUN_00256130_spawn_sword_effect(const OriginalEntity &owner,
+                                               std::size_t ownerSlot,
+                                               const ActorEnvironment &environment);
 
   // A readable name for a handler address, for the report. Returns nullptr for
   // addresses with no name yet.

@@ -161,7 +161,7 @@ namespace orphen::port
   void OriginalLeadPlayer::update(std::uint32_t frameTicks,
                                   const orphen::ported::psm2::Vec3 &movementRequest,
                                   float stickMagnitude,
-                                  bool jumpRequested,
+                                  std::uint32_t recentMappedActions,
                                   bool debugMidairJumpHeld,
                                   bool interactPressed,
                                   const orphen::ported::psm2::Psm2RuntimeState *map,
@@ -174,11 +174,14 @@ namespace orphen::port
       return;
     }
 
-    const std::uint32_t jumpAction = jumpRequested ? orphen::ported::player::kOriginalMappedActionJump : 0;
+    // FUN_0023b5d8 packs the frame's mapped words as `held << 16 | pressed`,
+    // and FUN_0023b890 ORs eight of those together without unpacking them, so
+    // splitting the halves is the caller's job. FUN_00256bb8 tests the
+    // newly-pressed half for jump (0x80), attack (0x20) and use (0x10).
     orphen::ported::player::OriginalPlayerFrameInput input{};
     input.cameraRelativeMove = movementRequest;
-    input.mappedHeldActions = jumpAction;
-    input.mappedPressedActions = jumpAction;
+    input.mappedHeldActions = (recentMappedActions >> 16) & 0xFFFFu;
+    input.mappedPressedActions = recentMappedActions & 0xFFFFu;
     input.interactPressed = interactPressed;
     input.stickMagnitude = stickMagnitude;
     input.debugMidairJumpHeld = debugMidairJumpHeld;

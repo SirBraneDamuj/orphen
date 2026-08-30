@@ -167,6 +167,18 @@ namespace orphen::ported::entity
     // (FUN_0020cdc0's middle branch); non-negative means inherit the whole bone
     // matrix. Only meaningful when +0x192 names a parent.
     std::int8_t attachBone194 = 0;
+    // +0x195: the DAT_00343888 light slot this entity owns, -1 when it has
+    // none. FUN_00256130 allocates one with FUN_00266050 when it spawns the
+    // sword blade and FUN_002d21b8 drives the slot's position and colour from
+    // there; nothing releases it explicitly, because the slot's radius is what
+    // frees it and FUN_002d21b8 never zeroes that.
+    std::int8_t lightSlot195 = -1;
+    // +0x12C: attack power, the value FUN_00215670 subtracts the defender's
+    // +0x12E from to get the damage a hit deals. FUN_00251dc0 fills it from the
+    // party stat table (DAT_0034368F), which the port does not load, so it sits
+    // at zero -- but the spawn paths copy it onto the effect entity that carries
+    // the hit, so it is modelled rather than dropped.
+    std::uint16_t attackPower12c = 0;
     std::uint8_t fadeLevel134 = 0;           // +0x134: FUN_0023a568's fade-out level.
     std::uint32_t fadeColor138 = 0;          // +0x138: packed RGB ramp, 0x00FFFFFF when fully in.
 
@@ -181,6 +193,15 @@ namespace orphen::ported::entity
     // stores a slot index, not a pointer, and the two uses never overlap -- the
     // chest is never the one interacting.
     std::int32_t interactTarget198 = -1;
+    // +0x198 a third time, still on the lead player: the sword blade
+    // FUN_00256130 spawns for state 0x1C, as a pool slot. The original stores
+    // it in the same word the interaction candidate uses and does not clear the
+    // one before writing the other -- it re-reads the word through a type test
+    // (`*effect == 0x42`) instead, which is the only thing keeping a stale
+    // interaction target from being mistaken for a blade. That test is
+    // reproduced where the slot is consumed, so the two readings are kept in
+    // separate fields here the way eventFlagId198 and interactTarget198 are.
+    std::int32_t swordEffect198 = -1;
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     // +0x19C on the *lead player*: the entity holding the item a chest just

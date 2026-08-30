@@ -30,6 +30,23 @@ namespace orphen::ported::player
     constexpr std::uint32_t kPhysicsFlagXBlocked = 0x0020;
     constexpr std::uint32_t kPhysicsFlagZBlocked = 0x0040;
 
+    // FUN_00225c90's latches on entity +0x06, the same three the animation
+    // stepper writes in ported/model/entity_animation.cpp.
+    //   0x01  the last timeline entry finished -- the animation is over
+    //   0x04  the current entry's duration ran out this frame
+    //   0x08  a new entry was taken this frame
+    constexpr std::uint16_t kAnimationComplete06 = 0x0001;
+    constexpr std::uint16_t kAnimationExpired06 = 0x0004;
+    constexpr std::uint16_t kAnimationStepped06 = 0x0008;
+
+    // FUN_00256130's test on the current keyframe's third halfword (+0xAA).
+    // The animation's own data is what says when the blade should stop: the
+    // keyframe carrying this bit is the end of the slash.
+    constexpr std::uint16_t kKeyframeEventSwordEnd = 0x0200;
+
+    // FUN_00257b70 is one call, FUN_00267d38(0xA4, entity) -- the swing.
+    constexpr std::uint16_t kSoundCueSwordSwing = 0xa4;
+
     float horizontalMagnitude(const orphen::ported::psm2::Vec3 &value)
     {
       return std::sqrt(value.x * value.x + value.y * value.y);
@@ -178,6 +195,14 @@ namespace orphen::ported::player
     {
       FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
     }
+    else if (entity().state60 == kStateSwordAttack)
+    {
+      // FUN_00251ed8 sends states >= 0x1C through PTR_FUN_0031e160, whose first
+      // entry is FUN_00256130. Without this the swing fell back into the
+      // grounded field branch, which would re-read the pad and overwrite the
+      // attack animation with `stand` on the very next frame.
+      FUN_00256130_update_sword_attack();
+    }
     else
     {
       FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
@@ -283,10 +308,22 @@ namespace orphen::ported::player
       return;
     }
 
-    // Attack (mapped 0x20) dispatches on weapon class in the original and is
-    // not ported; it falls through to locomotion here.
+    // 4. Attack. FUN_00256bb8 dispatches on `FUN_002298d0(*entity)` -- the
+    //    entity's *type id*, not an equipped item -- and type 1, the lead
+    //    player, answers weapon class 0. Class 0 is the plain sword swing:
+    //    state 0x1C, animation 0x33, and nothing else happens here. The blade
+    //    itself is spawned a keyframe later by the state handler.
+    //
+    //    Classes 1..5 are the other things the lead can be holding (a thrown
+    //    item spawns type 0x4E or 0x50 here); none of them are reachable while
+    //    the port has no inventory, so only class 0 is reproduced.
+    if ((input.mappedPressedActions & kOriginalMappedActionAttack) != 0)
+    {
+      FUN_00225bf0_set_entity_state(kStateSwordAttack, kAnimationSwordAttack);
+      return;
+    }
 
-    // 3. Locomotion or idle.
+    // 5. Locomotion or idle.
     entity().state60 = 0;
     entity().animationA0 = kAnimationStand;
 
@@ -402,6 +439,82 @@ namespace orphen::ported::player
     }
 
     FUN_00253488_apply_airborne_control(frameTicks, input);
+  }
+
+  // FUN_002560e8. The one gate on the whole of state 0x1C: when the swing
+  // animation reports complete, drop back to idle. The original also does
+  // `DAT_00355634 = 0` and calls FUN_00215e48, which clear the swing's
+  // already-hit set (eight words at entity +0xCC, plus +0x06 bit 0x40) so the
+  // next swing can hit the same target again. There is no hit test here to
+  // feed, so neither is reproduced.
+  bool OriginalPlayerController::FUN_002560e8_end_on_animation_complete()
+  {
+    if ((entity().flags06 & kAnimationComplete06) == 0)
+    {
+      return false;
+    }
+    FUN_00252d88_return_to_idle_state();
+    return true;
+  }
+
+  // FUN_00256130, PTR_FUN_0031e160[0]: state 0x1C, the grounded sword swing.
+  //
+  // The whole state is driven off the animation rather than off a timer. The
+  // player's own update does nothing but watch three points in the timeline:
+  //
+  //   the frame the cursor first reaches entry 1   spawn the blade
+  //   the frame that entry's duration runs out     play the swing
+  //   the entry carrying +0xAA bit 0x200           dissipate the blade
+  //   the animation completing                     back to idle
+  //
+  // Note what is *not* here: no movement, no facing change and no pad reads.
+  // The swing is committed the moment it starts, which is why it cannot be
+  // steered and why the character slides to a stop rather than turning.
+  void OriginalPlayerController::FUN_00256130_update_sword_attack()
+  {
+    if (FUN_002560e8_end_on_animation_complete())
+    {
+      return;
+    }
+
+    if (entity().timelineCursorA8 == 2)
+    {
+      // +0xA8 steps by two per timeline entry, so 2 is the second keyframe of
+      // animation 0x33 -- the top of the swing.
+      if ((entity().flags06 & kAnimationStepped06) != 0)
+      {
+        const std::int32_t effect = swordEffect_.spawn ? swordEffect_.spawn() : -1;
+        if (effect < 0)
+        {
+          // FUN_00265e28 returning 0. The original abandons the swing rather
+          // than playing it bladeless.
+          FUN_00252d88_return_to_idle_state();
+          return;
+        }
+        entity().swordEffect198 = effect;
+        return;
+      }
+      if ((entity().flags06 & kAnimationExpired06) != 0)
+      {
+        if (FUN_00267d38_playSound_)
+        {
+          FUN_00267d38_playSound_(kSoundCueSwordSwing, entity());
+        }
+      }
+      return;
+    }
+
+    // The blade is retired by the animation, not by this state ending: the
+    // keyframe carrying bit 0x200 puts it into its dissipate animation, and
+    // FUN_002d21b8 frees the slot when that finishes. +0x198 is deliberately
+    // left pointing at it -- the original never clears the word, and the type
+    // test inside `retire` is what stops a recycled slot being touched.
+    if ((entity().flagsAa & kKeyframeEventSwordEnd) != 0 &&
+        (entity().flags06 & kAnimationStepped06) != 0 && entity().swordEffect198 >= 0 &&
+        swordEffect_.retire)
+    {
+      swordEffect_.retire(entity().swordEffect198);
+    }
   }
 
   void OriginalPlayerController::FUN_00253468_finish_landing()

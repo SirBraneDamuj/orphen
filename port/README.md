@@ -1912,6 +1912,142 @@ whose behavior moved it is the nearest test it has. A script-placed cutscene
 actor never qualifies, so its authored height survives, which is the point:
 `s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
 
+## The sword attack, and the input buffer behind it
+
+Circle, grounded, swings a glowing sword. `FUN_00256bb8`'s attack branch
+dispatches on `FUN_002298d0(*entity)` -- the entity's **type id**, not an
+equipped item -- and type 1, the lead player, answers weapon class 0, which is
+`FUN_00225bf0(entity, 0x1C, 0x33)` and nothing else. Everything after that is
+driven by the animation.
+
+`FUN_00251ed8` sends states at or above `0x1C` through a *second* dispatch
+table, `PTR_FUN_0031e160`, whose first entry is `FUN_00256130`. The two tables
+are adjacent in memory -- `0x0031E160` is `0x0031E0E8 + 0x78` -- but they are
+genuinely two tables, offset by two entries, and indices `0x1C`/`0x1D` of the
+first are null. Ported states have to be routed by hand; falling through to the
+grounded field branch, which is what the controller used to do for anything that
+was not state 2 or 10, re-reads the pad and overwrites the swing animation with
+`stand` on the next frame.
+
+### The state is four points in a timeline
+
+`FUN_00256130` reads no input at all. It watches entity `+0xA8`, the timeline
+cursor `FUN_00225c90` steps by two per keyframe, and `+0x06`, the three latches
+that stepper writes:
+
+| when | what |
+|---|---|
+| cursor reaches 2 (`+0x06` bit `0x08`) | spawn the blade, type `0x42` |
+| that keyframe's duration expires (bit `0x04`) | play cue `0xA4`, the swing |
+| a keyframe carrying `+0xAA` bit `0x200` | put the blade on its dissipate animation |
+| the animation completes (bit `0x01`) | `FUN_002560e8` returns to idle |
+
+`+0xAA` is the third halfword of the current keyframe record, and it is where
+the animation data carries its own events. Animation `0x33` on `grp_0001` is
+nine entries totalling 46 frames, and entry 7 is the one holding `0x200`:
+
+```
+[ 0] col= 75 dur=10  trailing=0x0000
+[ 1] col= 76 dur= 6  trailing=0x0000    <- cursor 2, the blade spawns here
+[ 2] col= 77 dur= 4  trailing=0x0d00
+[ 3] col= 78 dur= 2  trailing=0x0400
+[ 4] col= 79 dur= 2  trailing=0x0400
+[ 5] col= 80 dur= 4  trailing=0x0400
+[ 6] col= 81 dur= 4  trailing=0x0000
+[ 7] col= 82 dur= 2  trailing=0x0200    <- the blade is told to dissipate here
+[ 8] col= 83 dur=12  last entry
+```
+
+The swing is committed the moment it starts: no movement, no facing change and
+no pad reads for the whole 46 frames. That is why it cannot be steered, and why
+the character slides to a stop rather than turning into the blow.
+
+### The blade is an entity, and it carries a light
+
+Type `0x42` is `grp_0179` out of the boot bundle -- four bones, three
+animations -- attached to the swinging entity's **role-5** bone. Not role 4:
+role 4 is the right hand, where a held weapon goes, and role 5 on `grp_0001` is
+bone 17, a finger. The blade grows out of the fist rather than being held. Its
+`+0x158` is set to `DAT_00352998`, which is pi -- a roll on the root matrix,
+not a facing; the facing is copied separately into `+0x5C`.
+
+`FUN_002d21b8` runs it. Every frame it drives a `DAT_00343888` light slot from
+its own bone 0, ramping the colour from 128 grey to 255 white as `+0x62` climbs
+`0x1000 -> 0x1FE0` at eight per tick, and steps `+0x134` by a flat 4 until it
+passes `0x78` and then drops it to 0 -- so the blade fades in from `4/128` alpha
+over about thirty frames and then draws solid. Its own animations are the rest
+of its lifetime: 1 is the swing, 0 the idle it falls into when that completes,
+2 the dissipate, and completing 2 deletes it.
+
+It also re-reads `DAT_0058BF10` -- pool slot 0's `+0x60` -- every frame and
+deletes itself the moment the lead is not in state `0x1C`. The blade cannot
+outlive the swing even if its own animation has not finished.
+
+**`FUN_00265ec0` is not `EntityPool::releaseSlot`.** The pool's own release is
+the map-load clear; the original's does three things first, and one of them is
+`FUN_00266098`, which hands the entity's light slot back by writing its radius
+to 0. That is the *only* thing that frees a light slot, so without it every
+swing would leave a two-unit white light burning where it ended and sixteen
+swings would fill the table. `FUN_00265ec0_destroy_entity` in
+`actor_frame_update.cpp` is the full version; `--scr-report` after four swings
+shows slot 0 allocated, driven and released each time.
+
+### `FUN_0023b890(8)` is an input buffer, and it was missing
+
+`FUN_0023b5d8` pushes one word per frame into a 64-entry ring at
+`DAT_00342a70`, packed `held << 16 | pressed`, where both halves are the raw pad
+run through the remap table at `DAT_00571A50`. That table is the **identity** in
+both EE dumps, so a mapped action bit is the raw pad bit: `0x80` Square is jump,
+`0x20` Circle is attack, `0x10` Triangle is use.
+
+`FUN_00256bb8` does not read the current frame's buttons. It calls
+`FUN_0023b890(8)`, which ORs the last eight entries together -- so a press
+counts if it happened at any point in the last eight frames. That window is the
+game's input buffer: an attack pressed during the tail of a jump still fires on
+the frame the player lands. The port had been feeding the controller a single
+instantaneous `jumpRequested` bool; `MappedActionHistory` in
+`ported/input/mapped_action_history.h` is the ring, and jump now goes through it
+as well.
+
+One bug fell out of writing it. `InputSnapshot::rawPressedPad` was not in
+`main.cpp`'s `consumeEdgeTriggered` list, so on a frame that ran several
+catch-up simulation steps every edge-triggered pad read -- the interaction
+probe, the camera's recentre -- saw the same press once per step. The original
+computes it as `held & ~previous` once per tick, which can only be true on one
+of them.
+
+### Not ported
+
+`FUN_002148a8`, the swept hit test the blade runs on its animations 0 and 1, and
+`FUN_002d59c0`, the reaction it triggers. It is several hundred lines of capsule
+sweeps against the entity pool, and nothing in the port takes damage yet.
+`FUN_00216078(ownerType, 0, effect + 0x198)`, which fills the blade's `+0x198`
+from a per-type parameter table, is skipped with it -- that field is the hit
+test's only reader. Entity `+0x12C`, the attack power `FUN_00215670` subtracts
+the defender's `+0x12E` from, *is* modelled and copied onto the blade, but
+nothing fills the player's copy: `FUN_00251dc0` reads it out of the party stat
+table at `DAT_0034368F`, which the port does not load.
+
+Weapon classes 1..5 -- the other things the lead can be holding, two of which
+throw a type `0x4E`/`0x50` projectile from this same branch -- are not
+reproduced, because there is no inventory to reach them through.
+
+### Checking it
+
+`--press-attack <frames>` fires Circle on a comma-separated list of 1-based
+frames, the same shape as `--press-confirm`, so the swing is reachable from a
+headless or captured run:
+
+```sh
+port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+    --no-audio --frames 300 --press-attack 60,120,180,240 --actor-report --scr-report
+```
+
+reports `type=0x42 entities=1 ticks=124 firstSlot=29` -- four swings of 31 ticks
+each, all recycling the same pool slot -- and one light slot allocated and
+released. `s01_e024` is the scene to use: the lead is controllable within a
+frame or two of load, where `s01_e012` opens on cutscenes.
+
 ## The screen smear
 
 `FUN_00201a38` draws the *previous* frame back over the current one,
@@ -3792,18 +3928,31 @@ key always runs.
 
 Controls:
 
+Game inputs -- these reach the ported code as raw pad bits and nothing else:
+
 - `W/A/S/D` moves the runtime lead player relative to the current camera yaw.
 - `Space`, or gamepad X / face west (Square), jumps when the lead player is grounded.
-- Holding `B`, or gamepad B (Circle), re-arms that jump in mid-air. This is a harness debug affordance, not something the original's airborne state does; it restarts state 2 / animation `0x0C` through the same startup and `+0x44` seed as a grounded jump, which is how you get up to a ceiling to test against.
+- `C`, or gamepad B (Circle), swings the sword when the lead player is grounded. See The sword attack, above.
+- Holding `C` re-arms the jump in mid-air. This one is a harness debug affordance, not something the original's airborne state does; it restarts state 2 / animation `0x0C` through the same startup and `+0x44` seed as a grounded jump, which is how you get up to a ceiling to test against. It shares Circle with the attack because the original's own gate on it is `input_flags & 0x20` (`FUN_00251ed8`, `uGpffffbd54`).
+- `Return`, or gamepad A (Cross), confirms -- the interaction probe, and dialogue advance.
 - `J/L` orbits the player camera, mapped onto the original's L1/R1 raw pad bits (0x04/0x08). With no player active they rotate the free viewer camera instead.
-- `I/K` adjusts pitch in free viewer mode.
+- Holding `P`, or the gamepad right trigger (R2), fast forwards. See below.
+
+Harness controls, which the simulation cannot see:
+
 - Left/right arrows cycle maps when running from `--disc-root`.
-- `Q/E` zoom out/in in free viewer mode. The player follow camera currently uses the original normal field camera distance.
 - `R` resets the viewer camera.
 - `F` toggles wireframe.
 - `H` toggles the debug HUD.
-- Holding `P`, or the gamepad right trigger (R2), fast forwards. See below.
+- `B` toggles the in-world debug overlay: collision boxes, entity labels, origin axes.
 - `O` toggles SCR SUBPROC DISP. It was `P` until fast forward took that key.
+- `G` dumps a pose/draw-list snapshot of the current frame and photographs it.
+
+`C` was `B` until the sword attack landed on it, at which point one key was
+firing two gameplay actions and a harness toggle. The free viewer's own pitch
+(`I/K`) and zoom (`Q/E`) are gone with the same tidy-up: they were map-viewer
+holdovers with no pad button behind them, and the free viewer keeps yaw and pan
+off the game's own axes. `R` still restores its default framing.
 
 ### Fast forward
 

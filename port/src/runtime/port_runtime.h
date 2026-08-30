@@ -18,6 +18,7 @@
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
+#include "ported/input/mapped_action_history.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"
@@ -183,6 +184,9 @@ namespace orphen::port
     // A list, because the chest cutscene needs two: one to open the chest and
     // one to dismiss the item caption.
     std::vector<std::uint32_t> pressConfirmFrames;
+    // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
+    // reachable from a headless run any other way.
+    std::vector<std::uint32_t> pressAttackFrames;
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -294,6 +298,12 @@ namespace orphen::port
     std::array<orphen::ported::entity::ActorEnvironment::LeadTrailPoint, kLeadTrailCapacity>
         DAT_00355704_leadTrail_{};
     std::uint16_t DAT_00355708_leadTrailCursor_ = 0;
+
+    // DAT_00342a70, the 64-frame ring of mapped action words FUN_0023b5d8
+    // fills and FUN_0023b890 reads back. It is the game's input buffer: the
+    // grounded player state asks for the last eight frames, so a button
+    // pressed slightly early still fires.
+    orphen::ported::input::MappedActionHistory DAT_00342a70_mappedActions_;
     void FUN_0022a418_reset_lead_trail();
     void FUN_00224060_record_lead_trail();
 

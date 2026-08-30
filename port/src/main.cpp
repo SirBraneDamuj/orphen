@@ -494,6 +494,32 @@ namespace
         }
         continue;
       }
+      if (argument == "--press-attack")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a frame number");
+        }
+        // Circle, on the listed frames. Same shape as --press-confirm: a
+        // headless or captured run has no pad, and the sword swing is the one
+        // player state that cannot be reached any other way.
+        const std::string frames{argv[++argumentIndex]};
+        for (std::size_t start = 0; start < frames.size();)
+        {
+          const std::size_t comma = frames.find(',', start);
+          const std::string one = frames.substr(start, comma - start);
+          if (!one.empty())
+          {
+            config.pressAttackFrames.push_back(static_cast<std::uint32_t>(std::stoul(one)));
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        continue;
+      }
       if (argument == "--cycle-map-every")
       {
         if (argumentIndex + 1 >= argc)
@@ -664,7 +690,12 @@ int main(int argc, char **argv)
         const bool pressThisFrame =
             std::find(config.pressConfirmFrames.begin(), config.pressConfirmFrames.end(),
                       frameIndex + 1) != config.pressConfirmFrames.end();
-        input.rawPressedPad = pressThisFrame ? kRawPadCross : 0;
+        constexpr std::uint16_t kRawPadCircle = 0x0020;
+        const bool attackThisFrame =
+            std::find(config.pressAttackFrames.begin(), config.pressAttackFrames.end(),
+                      frameIndex + 1) != config.pressAttackFrames.end();
+        input.rawPressedPad = static_cast<std::uint16_t>((pressThisFrame ? kRawPadCross : 0) |
+                                                         (attackThisFrame ? kRawPadCircle : 0));
         input.rawHeldPad = input.rawPressedPad;
 
         if (config.holdStick.has_value())
@@ -812,6 +843,13 @@ int main(int argc, char **argv)
       orphen::port::InputSnapshot stepInput = input;
       const auto consumeEdgeTriggered = [](orphen::port::InputSnapshot &stepped) {
         stepped.jumpRequested = false;
+        // DAT_003555F6, the newly-pressed pad word. It was not being consumed,
+        // so on a frame that ran several catch-up steps every edge-triggered
+        // pad read -- the interaction probe, the camera's recentre, and now the
+        // mapped-action ring the attack button goes through -- saw the same
+        // press once per step. The original computes it as `held & ~previous`
+        // once per tick, which can only be true on one of them.
+        stepped.rawPressedPad = 0;
         stepped.captureSnapshotRequested = false;
         stepped.toggleWireframeRequested = false;
         stepped.previousMapRequested = false;
@@ -835,6 +873,15 @@ int main(int argc, char **argv)
         constexpr std::uint16_t kRawPadCross = 0x0040;
         stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCross);
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCross);
+      }
+
+      // --press-attack, the same thing for Circle.
+      if (std::find(config.pressAttackFrames.begin(), config.pressAttackFrames.end(),
+                    renderedFrames + 1) != config.pressAttackFrames.end())
+      {
+        constexpr std::uint16_t kRawPadCircle = 0x0020;
+        stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCircle);
+        stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCircle);
       }
 
       // Never while capturing: --screenshot promises one step per frame at a

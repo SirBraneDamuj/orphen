@@ -135,6 +135,40 @@ namespace orphen::port
         [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
         { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); });
 
+    // FUN_00256130's two pool-side operations. They live here rather than in
+    // the controller because the blade needs the entity pool, the descriptor
+    // table, the player's bone palette and the light table, and the controller
+    // is bound to slot 0 alone.
+    orphen::ported::player::OriginalSwordEffectHooks swordHooks;
+    swordHooks.spawn = [this]() -> std::int32_t
+    {
+      // The spawn reads no timing, only the pool, the descriptors, the bone
+      // roles and the light table, so the nominal tick is enough here.
+      return orphen::ported::entity::FUN_00256130_spawn_sword_effect(
+          entityPool_.leadPlayer(), 0, actorEnvironment(orphen::ported::kNominalFrameTicks));
+    };
+    swordHooks.retire = [this](std::int32_t slot)
+    {
+      // The original's guard is `*effect == 0x42` on the raw pointer at +0x198:
+      // a slot that has been recycled since is left alone.
+      if (slot < 0 || static_cast<std::size_t>(slot) >= entityPool_.slotCount())
+      {
+        return;
+      }
+      auto &effect = entityPool_.slot(static_cast<std::size_t>(slot));
+      if (effect.typeId00 != orphen::ported::player::kSwordEffectTypeId)
+      {
+        return;
+      }
+      // FUN_00225bc8(effect, 2): the dissipate animation.
+      effect.animationA0 = 2;
+      effect.stateResetA4 = 999;
+      effect.previousSubstateA2 = 0xffff;
+      effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xff38);
+      effect.timelineCursorA8 = 0;
+    };
+    leadPlayer_.setSwordEffectHooks(std::move(swordHooks));
+
     reset();
     spawnOverride_ = config.spawnOverride;
     if (spawnOverride_.has_value())
@@ -458,6 +492,42 @@ namespace orphen::port
       }
       return orphen::ported::model::FUN_0020d9d8_read_bone_pose(DAT_003ffe00_poseFilters_[slot],
                                                                 bone)[2];
+    };
+
+    // DAT_00343888. The blade of type 0x42 owns a slot for as long as it
+    // lives, so the actor loop needs write access to the same table the script
+    // opcodes and the renderer read.
+    environment.DAT_00343888_lights = &sceneScript_.state().DAT_00343888_lights;
+
+    // FUN_0020dc88(entity, 0, DAT_003266f8, out): 0.65 up the entity's own bone
+    // 0, in world space. The palette is last frame's -- the pose pass runs
+    // after the actor loop, exactly as FUN_0020c810 does after FUN_00239ce0 --
+    // and on the first frame there is none at all, which is the case the
+    // original answers by walking +0x192 to the root and using its position.
+    environment.FUN_0020dc88_bone0_point =
+        [this](std::size_t slot) -> orphen::ported::psm2::Vec3
+    {
+      // DAT_003266f8, read out of the EE dump: (0, 0, 0.65).
+      constexpr orphen::ported::psm2::Vec3 kDAT_003266f8{0.0f, 0.0f, 0.649999976f};
+      if (slot >= entityPool_.slotCount())
+      {
+        return {};
+      }
+      std::size_t root = slot;
+      while (entityPool_.slot(root).parentSlot192 >= 0)
+      {
+        root = static_cast<std::size_t>(entityPool_.slot(root).parentSlot192);
+      }
+      const auto &rootEntity = entityPool_.slot(root);
+      const orphen::ported::psm2::Vec3 fallback{
+          rootEntity.positionX20, rootEntity.positionZ24,
+          rootEntity.positionY28 + rootEntity.height58 * 0.5f};
+      if (slot >= DAT_00357e00_bonePalettes_.size())
+      {
+        return fallback;
+      }
+      return orphen::ported::model::FUN_0020dc88_bone_point(DAT_00357e00_bonePalettes_[slot], 0,
+                                                            kDAT_003266f8, fallback);
     };
 
     // The same lookup the script environment gets. FUN_002d2f40 hangs its rig
@@ -4463,17 +4533,27 @@ namespace orphen::port
         reportTickHalt("tick");
       }
 
-      // Raw pad 0x0020 is Circle. Held, it gates the debug mid-air jump.
+      // Raw pad 0x0020 is Circle, the attack button -- keyboard `C`. It goes
+      // into the mapped-action ring below as the attack bit; this separate
+      // read is the *held* state, which gates the debug mid-air jump.
       constexpr std::uint16_t kRawPadCircle = 0x0020;
       // Raw pad 0x0040 is Cross, the confirm button. The original tests the
       // same bit in the *mapped* pressed word (uGpffffb68a = DAT_003555fa);
       // Cross maps through to the same position, and the port has no mapping
       // table, so the raw bit stands in.
       constexpr std::uint16_t kRawPadCross = 0x0040;
+      // FUN_0023b5d8's tail. The remap table at DAT_00571A50 is the identity in
+      // both EE dumps, so a mapped action bit *is* the raw pad bit and the pad
+      // word can be pushed as-is: 0x80 Square is jump, 0x20 Circle is attack,
+      // 0x10 Triangle is use. The push has to happen every step, including the
+      // catch-up steps of a slow frame, or the eight-frame window would be
+      // measured in render frames rather than in simulation ones.
+      DAT_00342a70_mappedActions_.FUN_0023b5d8_push(input.rawHeldPad, input.rawPressedPad);
+
       leadPlayer_.update(frameTicks,
                          movementRequest,
                          input.stickMagnitude,
-                         input.jumpRequested,
+                         DAT_00342a70_mappedActions_.FUN_0023b890_recent(8),
                          (input.rawHeldPad & kRawPadCircle) != 0,
                          (input.rawPressedPad & kRawPadCross) != 0,
                          loadedMap,

@@ -24,6 +24,12 @@ namespace orphen::ported::player
   // nothing at all while it is set.
   constexpr std::uint16_t kStateScriptDriven = 10;
 
+  // FUN_00256bb8's attack branch, weapon class 0 -- which is what
+  // FUN_002298d0 answers for type id 1, the lead player. Circle grounded puts
+  // the entity in state 0x1C with animation 0x33, and PTR_FUN_0031e160[0]
+  // (FUN_00256130) owns the frame from there until the animation ends.
+  constexpr std::uint16_t kStateSwordAttack = 0x1c;
+
   constexpr std::uint16_t kAnimationStand = 0x01;
   constexpr std::uint16_t kAnimationWalk = 0x0b;
   constexpr std::uint16_t kAnimationRun = 0x0e;
@@ -31,6 +37,11 @@ namespace orphen::ported::player
   constexpr std::uint16_t kAnimationJumpFall = 0x0d;
   constexpr std::uint16_t kAnimationLand = 0x10;
   constexpr std::uint16_t kAnimationIdleFidget = 0x17;
+  constexpr std::uint16_t kAnimationSwordAttack = 0x33;
+
+  // The type id FUN_00256130 spawns for the blade, and the animations
+  // FUN_002d21b8 drives it through: 1 is the swing, 2 the dissipate.
+  constexpr std::int32_t kSwordEffectTypeId = 0x42;
 
   struct OriginalTerrainSample
   {
@@ -86,6 +97,23 @@ namespace orphen::ported::player
   // to skip its own field branch this frame -- the original's table dispatch
   // is exclusive.
   using OriginalScriptedStateStep = std::function<bool(std::uint32_t frameTicks)>;
+
+  // FUN_00256130's two pool-side operations. The controller owns pool slot 0
+  // and nothing else, so the blade -- which needs the pool, the type
+  // descriptors, the player's bone palette and the DAT_00343888 light table --
+  // is reached the same way the chest cutscene is.
+  struct OriginalSwordEffectHooks
+  {
+    // FUN_00265e28(0x42) and the setup block that follows it. Returns the pool
+    // slot it landed in, or -1 when the pool is full -- which the original
+    // treats as "return to idle", not as an error.
+    std::function<std::int32_t()> spawn;
+    // FUN_00225bc8(effect, 2): start the blade's dissipate animation. The
+    // original guards this with `*effect == 0x42`, so a slot that has since
+    // been recycled is ignored; the callback carries that test because it is
+    // the side that can see the pool.
+    std::function<void(std::int32_t slot)> retire;
+  };
 
 
   struct OriginalPlayerFrameInput
@@ -148,6 +176,8 @@ namespace orphen::ported::player
 
     void setScriptedStateStep(OriginalScriptedStateStep step) { scriptedStateStep_ = std::move(step); }
 
+    void setSwordEffectHooks(OriginalSwordEffectHooks hooks) { swordEffect_ = std::move(hooks); }
+
     // FUN_00267d38. The controller reaches the sound engine the same way an
     // actor behaviour does -- see ported/entity/original_entity_sound.h -- so
     // the footstep path here is the generic one, not a player-specific hook.
@@ -160,6 +190,7 @@ namespace orphen::ported::player
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
     OriginalScriptedStateStep scriptedStateStep_;
+    OriginalSwordEffectHooks swordEffect_;
     orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;
 
     orphen::ported::entity::OriginalEntity &entity() { return *entityStorage_; }
@@ -182,6 +213,10 @@ namespace orphen::ported::player
                                                   const OriginalPlayerFrameInput &input,
                                                   const OriginalInteractionProbe &interactionProbe);
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    // PTR_FUN_0031e160[0], state 0x1C: the grounded sword swing.
+    void FUN_00256130_update_sword_attack();
+    // FUN_002560e8. Returns true when it ended the state.
+    bool FUN_002560e8_end_on_animation_complete();
     void FUN_00253468_finish_landing();
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00256ab0_apply_movement_impulse(float movementStep,

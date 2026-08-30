@@ -38,10 +38,11 @@ namespace orphen::port
     int probeX = 0;
     int probeY = 0;
 
-    // Free-viewer camera, used only when no player is active.
+    // Free-viewer camera yaw, used only when no player is active. It rides the
+    // same J/L keys as the game's L1/R1 rather than having bindings of its own.
+    // Pitch and zoom used to live here on I/K and Q/E; they were map-viewer
+    // holdovers with no pad button behind them and have been removed.
     float rotateX = 0.0f;
-    float rotateY = 0.0f;
-    float zoom = 0.0f;
 
     // Game input.
     bool jumpRequested = false;

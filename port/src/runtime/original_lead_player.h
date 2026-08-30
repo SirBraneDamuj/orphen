@@ -30,12 +30,22 @@ namespace orphen::port
       controller_.setScriptedStateStep(std::move(step));
     }
 
+    // FUN_00256130's blade. See OriginalSwordEffectHooks.
+    void setSwordEffectHooks(orphen::ported::player::OriginalSwordEffectHooks hooks)
+    {
+      controller_.setSwordEffectHooks(std::move(hooks));
+    }
+
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,
                     const std::optional<orphen::ported::psm2::Vec3> &spawnOverride = std::nullopt);
     void update(std::uint32_t frameTicks,
                 const orphen::ported::psm2::Vec3 &movementRequest,
                 float stickMagnitude,
-                bool jumpRequested,
+                // FUN_0023b890(8): the last eight frames of mapped actions
+                // ORed together, held in the high half and newly-pressed in
+                // the low half. This is one word rather than a jump flag
+                // because FUN_00256bb8 reads three different bits out of it.
+                std::uint32_t recentMappedActions,
                 bool debugMidairJumpHeld,
                 bool interactPressed,
                 const orphen::ported::psm2::Psm2RuntimeState *map,

@@ -3,6 +3,7 @@
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/party_follower.h"
 #include "ported/original_frame_timing.h"
+#include "ported/player/original_player_controller.h"
 #include "ported/script/object_registers.h"
 
 #include <algorithm>
@@ -25,6 +26,22 @@ namespace orphen::ported::entity
     constexpr std::uint16_t kHidden02 = 0x0800;    // +0x02
     constexpr std::uint16_t kSuspended04 = 0x4000; // +0x04
     constexpr std::uint16_t kFading04 = 0x0800;    // +0x04
+
+    // FUN_00225c90's "the last timeline entry finished" latch on +0x06. Type
+    // 0x42's whole state machine hangs off it.
+    constexpr std::uint16_t kAnimationComplete06 = 0x0001;
+
+    // DAT_00352998, read out of the EE dump: pi. FUN_00256130 puts it in the
+    // blade's +0x158, the roll of its root matrix.
+    constexpr float kDAT_00352998_bladeRoll = 3.14159250259399414f;
+
+    // The blade's glow ramp, entity +0x62, divided by 32 to get the light's
+    // colour byte: 0x1000 is 128 grey and 0x1FE0 is 255 white.
+    constexpr std::uint16_t kBladeGlowStart = 0x1000;
+    constexpr std::uint16_t kBladeGlowEnd = 0x1fe0;
+
+    // The radius FUN_00256130 gives the blade's light slot, 0x40000000.
+    constexpr float kBladeLightRadius = 2.0f;
 
     // FUN_002d1ea8's camera flourish, from the constant block at 0x00354668.
     constexpr float fGpffffa6f8_firstSwing = 1.570796012878418f;   // pi/2
@@ -1182,6 +1199,233 @@ namespace orphen::ported::entity
     entity.spawnParam94 = 1;
   }
 
+  // FUN_00265ec0: release a pool slot the way the original does, rather than
+  // the way `EntityPool::releaseSlot` does.
+  //
+  // The pool's own release is the map-load clear: it blanks the slot and stops.
+  // FUN_00265ec0 does three more things first, and one of them matters here --
+  // FUN_00266098 gives the entity's DAT_00343888 light slot back by writing its
+  // radius to 0, which is the *only* thing that frees it. Without that, every
+  // sword swing would leave a two-unit white light burning where it ended, and
+  // after sixteen swings the table would be full.
+  //
+  // FUN_00265f70, the second, cascades to anything attached to this entity.
+  // FUN_0020e7e0, the third, releases eight sound handles at +0xB0..+0xB8; the
+  // port's sound path holds no per-entity handles, so there is nothing to free.
+  void FUN_00265ec0_destroy_entity(std::size_t slot, const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    // FUN_00266098.
+    const std::int8_t lightSlot = pool.slot(slot).lightSlot195;
+    if (lightSlot >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot)).radius = 0.0f;
+    }
+    pool.slot(slot).lightSlot195 = -1;
+
+    // FUN_00265f70: everything whose +0x192 names this slot goes with it.
+    for (std::size_t child = 0; child < kEntitySlotCount; ++child)
+    {
+      if (child == slot || pool.status(child) != SlotStatus::ScriptSpawned)
+      {
+        continue;
+      }
+      if (pool.slot(child).parentSlot192 == static_cast<std::int16_t>(slot))
+      {
+        pool.releaseSlot(child);
+      }
+    }
+
+    pool.releaseSlot(slot);
+  }
+
+  // FUN_00256130's spawn block, reached on the frame the swing's timeline
+  // cursor first lands on entry 1. Type 0x42 is the blade: grp_0179, four bones
+  // and three animations, drawn attached to the swinging entity's role-5 bone.
+  //
+  // Two things about it are worth stating, because neither is guessable from
+  // the entity alone:
+  //
+  //   The bone is role **5**, not role 4. Role 4 is the right hand, where a
+  //   held weapon goes; role 5 on grp_0001 is bone 17, one of the fingers. The
+  //   blade is a glow that grows out of the fist, not a sword model in it.
+  //
+  //   +0x158 is set to pi. The blade model is authored pointing the other way,
+  //   and this is the roll that turns it round -- it is not a facing, which is
+  //   copied separately into +0x5C.
+  std::int32_t FUN_00256130_spawn_sword_effect(const OriginalEntity &owner,
+                                               std::size_t ownerSlot,
+                                               const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t slot = pool.FUN_00265e28_allocate_and_initialize(
+        orphen::ported::player::kSwordEffectTypeId, *environment.descriptors);
+    if (slot >= kEntitySlotCount)
+    {
+      return -1;
+    }
+
+    OriginalEntity &effect = pool.slot(slot);
+    effect.animationA0 = 1;
+    effect.parentSlot192 = static_cast<std::int16_t>(ownerSlot);
+    effect.attachBone194 = static_cast<std::int8_t>(
+        environment.FUN_0020dd78_bone_for_role
+            ? environment.FUN_0020dd78_bone_for_role(ownerSlot, 5)
+            : 0);
+    effect.attackPower12c = owner.attackPower12c;
+    effect.facingRadians5c = owner.facingRadians5c;
+    effect.fadeLevel134 = 4;
+    effect.rotationY158 = kDAT_00352998_bladeRoll;
+    effect.fadeRamp62 = kBladeGlowStart;
+
+    // FUN_00266050: the light allocator that can hand out slots 0..2, so the
+    // blade can become a real directional light on a character rather than the
+    // flat tint slots 3 and up get. -1 when all sixteen are taken, which the
+    // original carries on from -- the swing still happens, unlit.
+    effect.lightSlot195 = -1;
+    if (environment.DAT_00343888_lights != nullptr)
+    {
+      const std::int32_t lightSlot =
+          environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+      effect.lightSlot195 = static_cast<std::int8_t>(lightSlot);
+      if (lightSlot >= 0)
+      {
+        auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot));
+        // 0x01000000 stored over +0x0C..+0x0F: colour black, alpha 1. The
+        // colour is overwritten from the glow ramp on this same frame; what
+        // this store is really for is the radius below, which is what makes the
+        // slot live.
+        light.red = 0;
+        light.green = 0;
+        light.blue = 0;
+        light.alpha = 1;
+        light.radius = kBladeLightRadius;
+        environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(lightSlot),
+                                                    kBladeLightRadius);
+      }
+    }
+
+    // FUN_00216078(ownerType, 0, effect + 0x198) fills the effect's +0x198 from
+    // a per-type parameter table, and the only reader is FUN_002148a8 -- the
+    // swept hit test, which is not ported. See FUN_002d21b8 below.
+
+    return static_cast<std::int32_t>(slot);
+  }
+
+  // FUN_002d21b8, type 0x42: the blade's own frame.
+  //
+  // Three jobs, and it does all of them every frame:
+  //
+  //   drive the DAT_00343888 light slot from the blade's own bone 0, ramping
+  //   the colour from 128 grey to white as +0x62 climbs 0x1000 -> 0x1FE0;
+  //
+  //   step the fade level at +0x134 by 4 a frame until it passes 0x78, then
+  //   drop it to 0 -- so the blade materialises over about thirty frames and
+  //   then draws solid;
+  //
+  //   and check that the lead player is still in state 0x1C, deleting itself
+  //   the moment it is not. That last test is read straight off DAT_0058BF10,
+  //   pool slot 0's +0x60, which is why the blade cannot outlive the swing even
+  //   if its own animation has not finished.
+  //
+  // The animation is the other half of its lifetime: animation 1 is the swing,
+  // and on the frame it completes FUN_00225bc8 puts it on animation 0 (the hit
+  // test's idle). Animation 2 is the dissipate FUN_00256130 selects when the
+  // swing's keyframe event fires, and completing *that* deletes the blade.
+  //
+  // Not ported: FUN_002148a8, the swept hit test the blade runs on animations 0
+  // and 1, and FUN_002d59c0, the reaction it triggers. It is several hundred
+  // lines of capsule sweeps against the entity pool, and nothing in the port
+  // yet takes damage.
+  void FUN_002d21b8_sword_effect(OriginalEntity &effect,
+                                 std::size_t slot,
+                                 const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    const std::int16_t animation = static_cast<std::int16_t>(effect.animationA0);
+    const bool animationComplete = (effect.flags06 & kAnimationComplete06) != 0;
+
+    if (animation == 1)
+    {
+      if (animationComplete)
+      {
+        // FUN_00225bc8(effect, 0).
+        effect.animationA0 = 0;
+        effect.stateResetA4 = 999;
+        effect.previousSubstateA2 = 0xffff;
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xff38);
+        effect.timelineCursorA8 = 0;
+      }
+    }
+    else if (animation == 2 && animationComplete)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    const std::int8_t lightSlot = effect.lightSlot195;
+    if (lightSlot >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot));
+      if (environment.FUN_0020dc88_bone0_point)
+      {
+        const orphen::ported::psm2::Vec3 point = environment.FUN_0020dc88_bone0_point(slot);
+        light.x = point.x;
+        light.y = point.y;
+        light.z = point.z;
+      }
+
+      // `(v + 0x1F) >> 5` for negative v, `v >> 5` otherwise: a signed divide
+      // by 32. 0x1000 gives 128 and 0x1FE0 gives 255.
+      const std::int16_t glow = static_cast<std::int16_t>(effect.fadeRamp62);
+      const std::uint8_t level =
+          static_cast<std::uint8_t>((glow < 0 ? (glow + 0x1f) : glow) >> 5);
+      light.red = level;
+      light.green = level;
+      light.blue = level;
+
+      if (glow < static_cast<std::int16_t>(kBladeGlowEnd))
+      {
+        const std::int16_t stepped = static_cast<std::int16_t>(
+            effect.fadeRamp62 + static_cast<std::uint16_t>(environment.frameTicks * 8u));
+        effect.fadeRamp62 = static_cast<std::uint16_t>(stepped);
+        if (stepped > static_cast<std::int16_t>(kBladeGlowEnd - 1))
+        {
+          effect.fadeRamp62 = kBladeGlowEnd;
+        }
+      }
+    }
+
+    // +0x134 is the draw's alpha over 128, and 0 means opaque -- so this ramps
+    // the blade in from 4/128 and then, past 0x78, snaps it to fully solid.
+    // Note the original's tick is a flat 4, not scaled by the frame time.
+    if (effect.fadeLevel134 != 0)
+    {
+      const std::uint8_t stepped = static_cast<std::uint8_t>(effect.fadeLevel134 + 4);
+      effect.fadeLevel134 = stepped > 0x78 ? 0 : stepped;
+    }
+
+    // DAT_0058bf10, pool slot 0's +0x60.
+    if (pool.leadPlayer().state60 != orphen::ported::player::kStateSwordAttack)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -1194,6 +1438,7 @@ namespace orphen::ported::entity
     case 0x00213720u: // FUN_00213720, type 0x19, the player's bandana
     case 0x0025BF20u: // FUN_0025bf20, type 0x38, the script-driven NPC
     case 0x002D2F40u: // FUN_002d2f40, type 0x28, the close-up rig
+    case 0x002D21B8u: // FUN_002d21b8, type 0x42, the sword blade
       return true;
     default:
       return false;
@@ -1220,6 +1465,8 @@ namespace orphen::ported::entity
       return "FUN_0025bf20 (script-driven NPC)";
     case 0x002D2F40u:
       return "FUN_002d2f40 (close-up rig)";
+    case 0x002D21B8u:
+      return "FUN_002d21b8 (sword blade)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -1330,6 +1577,9 @@ namespace orphen::ported::entity
         break;
       case 0x002D2F40u:
         FUN_002d2f40_build_closeup_rig(entity, slot, environment);
+        break;
+      case 0x002D21B8u:
+        FUN_002d21b8_sword_effect(entity, slot, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

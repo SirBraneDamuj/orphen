@@ -56,7 +56,7 @@
  *
  * Callees:
  *   FUN_0023b890   read mapped action bits
- *   FUN_002298d0   weapon class for an equipped item id
+ *   FUN_002298d0   move-set class for an entity type id (see below)
  *   FUN_00252cc0   special-mode availability test
  *   FUN_002686a0   enter the special mode
  *   FUN_00255d88   begin a state transition (arg 2 = jump)
@@ -69,9 +69,20 @@
  *   FUN_00256ff8   locomotion bookkeeping; second arg is "is running"
  *   FUN_00256ab0   apply the movement impulse and facing
  *
+ * FUN_002298d0 IS A TYPE-ID TABLE, not an item lookup. It is a bare switch:
+ *
+ *     type 1 -> 0    type 3 -> 1    type 4 -> 2    type 5 -> 3
+ *     type 6 -> 4    type 7 -> 5    type 0x16 -> 6    anything else -> 7
+ *
+ * Types 1 and 3..7 are the playable cast, so the "class" selects a character's
+ * move set. The lead player is type 1, class 0 -- which is why the attack
+ * branch below reaches state 0x1C, the sword swing, and the jump branch's
+ * `< 7` test on an equipped item's class refuses a jump while holding one of
+ * the six recognised things.
+ *
+ * State 0x1C is analysed in analyzed/player_states/sword_attack_0x1C.c.
+ *
  * UNVERIFIED / open:
- * - FUN_002298d0's weapon-class values are used as 0, 3, 4, 5, and ">= 7" here;
- *   only the branch structure is recovered, not what each class means.
  * - The +0x1BA lock byte's writers have not been traced. Value 0x1D is special:
  *   it is the one nonzero value that does NOT suppress the update.
  * - puVar9[0x50] == 0x2F is treated as a sticky animation that normal
@@ -141,10 +152,13 @@ undefined4 update_player_grounded_field_state(entity *e)
   /* --- 4. attack ---------------------------------------------------------- */
   if ((mappedActions & 0x20) != 0)
   {
-    weaponClass = FUN_002298d0(e->id);
+    weaponClass = FUN_002298d0(e->typeId_00);
 
     if (weaponClass == 0)
     {
+      /* The lead player's sword swing. FUN_00225bf0 is the whole branch: the
+       * blade, the sound and the exit all come out of the state handler,
+       * FUN_00256130. See analyzed/player_states/sword_attack_0x1C.c. */
       FUN_00225bf0(e, 0x1c, 0x33);
       return 2;
     }
@@ -190,7 +204,7 @@ undefined4 update_player_grounded_field_state(entity *e)
         *(undefined2 *)(effect + 8) = 0;
         *(undefined2 *)(effect + 300) = e->field_12C;
         *(undefined2 *)(effect + 0x60) = e->state_60;
-        FUN_00216078(e->id, 0, effect + 0x198);
+        FUN_00216078(e->typeId_00, 0, effect + 0x198);
         e->spawnedEffect_198 = effect;
         return 2;
       }
@@ -207,7 +221,7 @@ undefined4 update_player_grounded_field_state(entity *e)
   /* --- 5. interact / use -------------------------------------------------- */
   else if ((mappedActions & 0x10) != 0)
   {
-    weaponClass = FUN_002298d0(e->id);
+    weaponClass = FUN_002298d0(e->typeId_00);
 
     if (weaponClass == 3)
     {
@@ -265,7 +279,7 @@ undefined4 update_player_grounded_field_state(entity *e)
         return 0;
       }
 
-      fidget = (FUN_002298d0(e->id) == 3) ? 0x6a : 0x17;
+      fidget = (FUN_002298d0(e->typeId_00) == 3) ? 0x6a : 0x17;
 
       if (previousAnimation == fidget)
       {

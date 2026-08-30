@@ -237,9 +237,11 @@ namespace orphen::port
     const Uint8 *keys = SDL_GetKeyboardState(nullptr);
     input.moveX = keyAxis(keys[SDL_SCANCODE_A] != 0, keys[SDL_SCANCODE_D] != 0);
     input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0, keys[SDL_SCANCODE_W] != 0);
+    // J/L are the original's L1/R1, below; the free viewer borrows them for yaw
+    // because it has no camera of its own. I/K pitch and Q/E zoom are gone --
+    // they were map-viewer holdovers with no pad button behind them, and they
+    // were taking four keys the game inputs could use.
     input.rotateX = keyAxis(keys[SDL_SCANCODE_J] != 0, keys[SDL_SCANCODE_L] != 0);
-    input.rotateY = keyAxis(keys[SDL_SCANCODE_K] != 0, keys[SDL_SCANCODE_I] != 0);
-    input.zoom = keyAxis(keys[SDL_SCANCODE_Q] != 0, keys[SDL_SCANCODE_E] != 0);
 
     // Keyboard camera rotate maps onto the shoulder bits the original reads.
     bool cameraLeftHeld = keys[SDL_SCANCODE_J] != 0;
@@ -249,9 +251,11 @@ namespace orphen::port
     // an Xbox pad maps by position: Y is Triangle, B is Circle, A is Cross and
     // X ("SDL Face West") is Square. Square is the jump binding.
     bool triangleHeld = false;
-    // B stands in for Circle on the keyboard so the debug mid-air jump
-    // (hold Circle, press jump) is reachable without a pad.
-    bool circleHeld = keys[SDL_SCANCODE_B] != 0;
+    // C stands in for Circle on the keyboard: the sword attack, and -- held
+    // while pressing jump -- the debug mid-air jump. It was B, which is also
+    // the debug bounding-box overlay, so one key was doing two gameplay things
+    // and a harness toggle at once. B keeps the overlay.
+    bool circleHeld = keys[SDL_SCANCODE_C] != 0;
     // Return stands in for Cross, the confirm button, so the interaction probe
     // is reachable without a pad. On a pad it is the south face button (A on an
     // Xbox layout), which is what the PS2 game uses.

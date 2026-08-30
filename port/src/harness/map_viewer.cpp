@@ -2839,8 +2839,6 @@ namespace orphen::harness
 
     constexpr float kPanSpeed = 0.75f;
     constexpr float kYawSpeed = 70.0f;
-    constexpr float kPitchSpeed = 55.0f;
-    constexpr float kZoomSpeed = 2.25f;
 
     if (input.toggleWireframeRequested)
     {
@@ -2858,15 +2856,15 @@ namespace orphen::harness
 
     if (!leadPlayerView_.has_value())
     {
+      // Yaw and pan only. The pitch and zoom controls this used to have were
+      // bound to I/K and Q/E, which are not pad buttons and were only ever the
+      // old map viewer's; `R` still resets the camera to its default framing.
       cameraYawDegrees_ += input.rotateX * kYawSpeed * deltaSeconds;
-      cameraPitchDegrees_ = std::clamp(cameraPitchDegrees_ + input.rotateY * kPitchSpeed * deltaSeconds, -85.0f, -10.0f);
       const float panDistance = std::max(cameraDistance_, 10.0f) * kPanSpeed * deltaSeconds;
       const auto basis = viewerGroundBasis(cameraYawDegrees_);
 
       cameraTarget_.x += (basis.right.x * input.moveX + basis.forward.x * input.moveY) * panDistance;
       cameraTarget_.z += (basis.right.z * input.moveX + basis.forward.z * input.moveY) * panDistance;
-      cameraDistance_ *= std::exp(-input.zoom * kZoomSpeed * deltaSeconds);
-      cameraDistance_ = std::max(cameraDistance_, 1.0f);
     }
   }
 
