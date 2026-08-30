@@ -728,12 +728,32 @@ int main(int argc, char **argv)
     constexpr float kFixedStepSeconds = orphen::ported::kNominalFrameSeconds;
     constexpr int kMaxStepsPerFrame = 5;
 
+    // Fast forward, the original's R2 debug skip. FUN_002000c0 runs its whole
+    // vsync-wait block only while `DAT_003555db == 0 || (DAT_003555f4 & 2) == 0`,
+    // so holding R2 with the cheat flag set drops both the wait and the present
+    // and the simulation free-runs. Same idea here: keep calling update() with
+    // render and swap skipped, which is the cheap half of a frame -- the
+    // headless --frames path already proves update() does not need render().
+    //
+    // Two bounds the original does not need. Steps run against a wall-clock
+    // budget rather than truly uncapped, so one press cannot stall event
+    // polling; and a frame is still presented every so often, because a window
+    // that goes black for ten seconds is worse to work with than one that
+    // updates at 20 Hz while the scene sprints.
+    constexpr float kFastForwardBudgetSeconds = 0.020f;
+    constexpr int kMaxFastForwardSteps = 240;
+    constexpr float kFastForwardPresentSeconds = 0.033f;
+
     auto previousTick = std::chrono::steady_clock::now();
     float accumulatedSeconds = 0.0f;
     bool running = true;
     LoopStats loopStats;
     const bool capturing = !config.screenshotPath.empty();
     std::uint32_t renderedFrames = 0;
+    bool fastForwarding = false;
+    auto fastForwardStart = previousTick;
+    std::uint32_t fastForwardSteps = 0;
+    auto lastPresentTick = previousTick;
 
     if (!config.vsync && window.swapInterval() != 0)
     {
@@ -783,6 +803,21 @@ int main(int argc, char **argv)
       // Edge-triggered inputs must fire on exactly one simulation step even when
       // a render frame drives several. Held axes carry across every step.
       orphen::port::InputSnapshot stepInput = input;
+      const auto consumeEdgeTriggered = [](orphen::port::InputSnapshot &stepped) {
+        stepped.jumpRequested = false;
+        stepped.captureSnapshotRequested = false;
+        stepped.toggleWireframeRequested = false;
+        stepped.previousMapRequested = false;
+        stepped.nextMapRequested = false;
+        // These reach MapViewer::update, which flips a bool per step. A press
+        // held across a multi-step frame used to land on whichever parity the
+        // step count happened to have; fast forward runs dozens, so it has to
+        // be exactly one.
+        stepped.toggleHudRequested = false;
+        stepped.toggleDebugOverlayRequested = false;
+        stepped.toggleSubprocDisplayRequested = false;
+        stepped.probeRequested = false;
+      };
 
       // --press-confirm, so a capture run can reach the interaction path the
       // same way --frames does. Only meaningful alongside --screenshot, where
@@ -795,36 +830,96 @@ int main(int argc, char **argv)
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCross);
       }
 
-      const auto simStart = std::chrono::steady_clock::now();
-      while (running && accumulatedSeconds >= kFixedStepSeconds)
+      // Never while capturing: --screenshot promises one step per frame at a
+      // named frame number, and a held key must not be able to move it.
+      const bool fastForward = input.fastForwardHeld && !capturing;
+      if (fastForward != fastForwarding)
       {
-        running = runtime.update(stepInput);
-        accumulatedSeconds -= kFixedStepSeconds;
-        ++loopStats.simSteps;
+        if (fastForward)
+        {
+          fastForwardStart = currentTick;
+          fastForwardSteps = 0;
+        }
+        else
+        {
+          const float elapsed =
+              std::chrono::duration<float>(currentTick - fastForwardStart).count();
+          const float rate = elapsed > 0.0f ? static_cast<float>(fastForwardSteps) / elapsed : 0.0f;
+          std::cout << "[ff] " << fastForwardSteps << " steps in " << std::fixed
+                    << std::setprecision(2) << elapsed << " s (" << std::setprecision(1) << rate
+                    << " steps/s, " << (rate * orphen::ported::kNominalFrameSeconds)
+                    << "x)" << std::defaultfloat << '\n';
+        }
+        fastForwarding = fastForward;
+        // The mixer still runs at 1x, so every cue the sprinting simulation
+        // fires would key on over the top of the last one.
+        audio.setMuted(fastForward);
+      }
 
-        stepInput.jumpRequested = false;
-        stepInput.captureSnapshotRequested = false;
-        stepInput.toggleWireframeRequested = false;
-        stepInput.previousMapRequested = false;
-        stepInput.nextMapRequested = false;
+      const auto simStart = std::chrono::steady_clock::now();
+      if (fastForward)
+      {
+        // Real time stops driving the step count here, so drop whatever the
+        // accumulator was holding rather than paying it back on release.
+        accumulatedSeconds = 0.0f;
+        for (int step = 0; running && step < kMaxFastForwardSteps; ++step)
+        {
+          running = runtime.update(stepInput);
+          ++loopStats.simSteps;
+          ++fastForwardSteps;
+          consumeEdgeTriggered(stepInput);
+          // 'G' pressed into a fast-forward batch: stop here so the photograph
+          // below is of the step the text describes and not 200 steps later.
+          if (runtime.hasPendingSnapshotImage())
+          {
+            break;
+          }
+          if (std::chrono::duration<float>(std::chrono::steady_clock::now() - simStart).count() >=
+              kFastForwardBudgetSeconds)
+          {
+            break;
+          }
+        }
+      }
+      else
+      {
+        while (running && accumulatedSeconds >= kFixedStepSeconds)
+        {
+          running = runtime.update(stepInput);
+          accumulatedSeconds -= kFixedStepSeconds;
+          ++loopStats.simSteps;
+          consumeEdgeTriggered(stepInput);
+        }
       }
       loopStats.simMicros += microsSince(simStart);
 
-      const auto renderStart = std::chrono::steady_clock::now();
-      window.beginFrame(0.025f, 0.03f, 0.035f);
-      loopStats.clearMicros += microsSince(renderStart);
-      for (std::uint32_t repeat = 0; repeat < config.rendersPerFrame; ++repeat)
+      // The swap is the expensive half to skip: with vsync on it blocks for the
+      // rest of the refresh interval, which is exactly the wait the original
+      // drops. Present on a timer instead so the window still moves.
+      const bool present =
+          !fastForward ||
+          std::chrono::duration<float>(std::chrono::steady_clock::now() - lastPresentTick).count() >=
+              kFastForwardPresentSeconds ||
+          runtime.hasPendingSnapshotImage();
+      if (present)
       {
-        runtime.render(window.width(), window.height());
+        const auto renderStart = std::chrono::steady_clock::now();
+        window.beginFrame(0.025f, 0.03f, 0.035f);
+        loopStats.clearMicros += microsSince(renderStart);
+        for (std::uint32_t repeat = 0; repeat < config.rendersPerFrame; ++repeat)
+        {
+          runtime.render(window.width(), window.height());
+        }
+        loopStats.renderMicros += microsSince(renderStart);
+
+        const auto swapStart = std::chrono::steady_clock::now();
+        window.swapBuffers();
+        loopStats.swapMicros += microsSince(swapStart);
+        ++loopStats.displayedFrames;
+        lastPresentTick = std::chrono::steady_clock::now();
+
+        ++renderedFrames;
       }
-      loopStats.renderMicros += microsSince(renderStart);
-
-      const auto swapStart = std::chrono::steady_clock::now();
-      window.swapBuffers();
-      loopStats.swapMicros += microsSince(swapStart);
-      ++loopStats.displayedFrames;
-
-      ++renderedFrames;
 
       // 'G' during play. The runtime has already written the text; photograph
       // the frame it describes, after the swap so the buffer still holds it.

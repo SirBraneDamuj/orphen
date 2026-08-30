@@ -321,6 +321,9 @@ namespace orphen::port
     // photograph the same frame next to the text. Returns the .ppm path to
     // write, or empty when no snapshot is pending.
     std::string consumePendingSnapshotImagePath();
+    // Whether one is waiting. Fast forward skips most presents, and a snapshot
+    // has to be photographed on the frame it describes.
+    bool hasPendingSnapshotImage() const { return !pendingSnapshotImagePath_.empty(); }
 
   private:
     std::string pendingSnapshotImagePath_;

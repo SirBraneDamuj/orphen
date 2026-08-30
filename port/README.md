@@ -2218,7 +2218,7 @@ marker in front of every body — the same pattern
 
 The port holds the bit set by default, the same way it holds
 `DAT_00355098_positionDisplay_` set: the menu that writes the byte has no way in
-here, and these lines belong to the same readout as the position display. `P`
+here, and these lines belong to the same readout as the position display. `O`
 toggles it, `--no-scr-subproc-disp` starts it off.
 
 ### `+0x168` is inside the slot, so clearing the slot clears it
@@ -3512,6 +3512,46 @@ Controls:
 - `R` resets the viewer camera.
 - `F` toggles wireframe.
 - `H` toggles the debug HUD.
+- Holding `P`, or the gamepad right trigger (R2), fast forwards. See below.
+- `O` toggles SCR SUBPROC DISP. It was `P` until fast forward took that key.
+
+### Fast forward
+
+Holding `P`, or the pad's right trigger, runs the simulation as fast as the
+machine will carry it. It is the original's own debug affordance: `FUN_002000c0`
+enters its vsync-wait block only while `DAT_003555db == 0 || (DAT_003555f4 & 2)
+== 0`, so with the cheat flag set (see `analyzed/`) holding R2 drops the wait and
+the present together and the game free-runs.
+
+The port does the same thing in the same place -- `main()` keeps calling
+`PortRuntime::update` with `render` and `swapBuffers` skipped. That is sound
+because the headless `--frames` path already runs `update` with no renderer at
+all; nothing in a step reads back from a draw. On this machine a step costs
+about 0.34 ms against a presented frame's ~16.6 ms, so the ceiling is roughly
+40x.
+
+Three things differ from the original, all of them harness concerns:
+
+- **Steps run against a wall-clock budget**, 20 ms, rather than truly uncapped.
+  One press cannot then starve event polling, so the key can still be let go of.
+- **A frame is still presented about every 33 ms**, at whatever point the
+  simulation has reached. A window that goes black until release is worse to
+  work with than one that updates at ~20 Hz while the scene sprints, and it is
+  the only way to see where to stop.
+- **Audio is muted while held.** The mixer runs at 1x on its own thread, so
+  every cue the sprinting simulation fires would key on over the top of the last
+  one. The device stays open and `mix` still runs -- that is what drains the
+  pending key-on queue -- and the harness zeroes the buffer after it.
+
+Releasing prints what the burst achieved:
+
+```
+[ff] 2612 steps in 1.04 s (2511.5 steps/s, 41.9x)
+```
+
+`--screenshot` ignores the key outright. That path promises one simulation step
+per rendered frame so two builds photograph the same instant, and a held key
+must not be able to move it.
 
 ## POSITION_DISP, the original's own overlay
 

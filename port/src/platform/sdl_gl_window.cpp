@@ -36,6 +36,9 @@ namespace orphen::port
     constexpr std::uint16_t kRawPadCircle = 0x0020;
     constexpr std::uint16_t kRawPadCross = 0x0040;
     constexpr std::uint16_t kRawPadSquare = 0x0080;
+    // Shoulder bits live in the same low byte: FUN_002000c0's fast-forward test
+    // is DAT_003555f4 & 2.
+    constexpr std::uint16_t kRawPadR2 = 0x0002;
 
     float axisToUnit(int rawAxis)
     {
@@ -205,7 +208,7 @@ namespace orphen::port
         {
           input.toggleDebugOverlayRequested = true;
         }
-        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_p)
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_o)
         {
           input.toggleSubprocDisplayRequested = true;
         }
@@ -255,6 +258,10 @@ namespace orphen::port
     bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
+    // Fast forward. Held, never edge-triggered, so it can be leaned on through
+    // a long cutscene the same way R2 is on hardware.
+    input.fastForwardHeld = keys[SDL_SCANCODE_P] != 0;
+
     // A gamepad, when present, overrides the keyboard for movement and camera.
     bool usingAnalogStick = false;
     auto *controller = static_cast<SDL_GameController *>(controller_);
@@ -302,6 +309,16 @@ namespace orphen::port
       {
         input.rawHeldPad |= orphen::ported::camera::kRawPadR3;
       }
+
+      // R2 is analog on a DualShock 2 and the original only ever tests the
+      // digital bit, so treat anything past half travel as held. Half of
+      // SDL's 0..32767 trigger range, well clear of a resting trigger.
+      constexpr int kTriggerHeldThreshold = 16384;
+      if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >
+          kTriggerHeldThreshold)
+      {
+        input.fastForwardHeld = true;
+      }
     }
 
     if (cameraLeftHeld)
@@ -327,6 +344,13 @@ namespace orphen::port
     if (squareHeld)
     {
       input.rawHeldPad |= kRawPadSquare;
+    }
+    // The bit the original's own fast forward reads, DAT_003555f4 & 2. Nothing
+    // ported reads it yet; setting it keeps the pad mapping honest for whatever
+    // does first.
+    if (input.fastForwardHeld)
+    {
+      input.rawHeldPad |= kRawPadR2;
     }
 
     // DAT_003555f6: newly pressed = held & ~previously held.

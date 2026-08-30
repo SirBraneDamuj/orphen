@@ -45,15 +45,22 @@ namespace orphen::harness
   {
     void SDLCALL audioCallback(void *userData, Uint8 *stream, int lengthBytes)
     {
-      auto *engine = static_cast<orphen::ported::sound::SoundEngine *>(userData);
+      auto *device = static_cast<AudioDevice *>(userData);
       auto *samples = reinterpret_cast<float *>(stream);
       const std::size_t frames = static_cast<std::size_t>(lengthBytes) / (2 * sizeof(float));
+      auto *engine = device != nullptr ? device->engine() : nullptr;
       if (engine == nullptr)
       {
         std::memset(stream, 0, static_cast<std::size_t>(lengthBytes));
         return;
       }
+      // Mix either way: mix() is what drains the pending key-on queue, so
+      // muting by skipping it would let the queue grow while fast forwarding.
       engine->mix(samples, frames);
+      if (device->muted())
+      {
+        std::memset(stream, 0, static_cast<std::size_t>(lengthBytes));
+      }
     }
   } // namespace
 
@@ -82,7 +89,7 @@ namespace orphen::harness
     // that asked for it, long enough not to underrun behind a slow frame.
     want.samples = 1024;
     want.callback = audioCallback;
-    want.userdata = engine;
+    want.userdata = this;
 
     SDL_AudioSpec have{};
     const SDL_AudioDeviceID device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);

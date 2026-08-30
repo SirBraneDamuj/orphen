@@ -13,6 +13,7 @@
 
 #include "ported/sound/original_sound_engine.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -38,9 +39,22 @@ namespace orphen::harness
     void close();
     bool isOpen() const { return deviceId_ != 0; }
 
+    // Silences the output without stopping the device. Used by fast forward,
+    // where the simulation runs tens of steps per real frame and every cue it
+    // fires would key on at that rate against a mixer still running at 1x.
+    // Pausing the device instead would stop the callback, and with it the
+    // drainPendingKeyOns that keeps the queue from growing without bound.
+    void setMuted(bool muted) { muted_.store(muted, std::memory_order_relaxed); }
+
+    // For the callback, which is handed the device rather than the engine.
+    orphen::ported::sound::SoundEngine *engine() const { return engine_; }
+    bool muted() const { return muted_.load(std::memory_order_relaxed); }
+
   private:
     std::uint32_t deviceId_ = 0;
     orphen::ported::sound::SoundEngine *engine_ = nullptr;
+    // Read on SDL's audio thread.
+    std::atomic<bool> muted_{false};
   };
 
 } // namespace orphen::harness

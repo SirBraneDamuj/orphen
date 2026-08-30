@@ -17,8 +17,14 @@ namespace orphen::port
     bool toggleHudRequested = false;
     // In-world debug drawing: collision boxes, entity labels, origin axes.
     bool toggleDebugOverlayRequested = false;
-    // 'P': DAT_003555dd bit 7, the debug menu's SCR SUBPROC DISP entry.
+    // 'O': DAT_003555dd bit 7, the debug menu's SCR SUBPROC DISP entry.
     bool toggleSubprocDisplayRequested = false;
+    // Held 'P', or the pad's right trigger. The original's debug fast forward:
+    // FUN_002000c0 skips its whole vsync-wait block while R2 is held and the
+    // cheat flag DAT_003555db is set, so the simulation runs uncapped with
+    // nothing presented in between. Harness control, not game input -- the
+    // simulation must not be able to see it.
+    bool fastForwardHeld = false;
     bool previousMapRequested = false;
     bool nextMapRequested = false;
     // 'G': dump a pose/draw-list snapshot of the current frame to stdout and to
