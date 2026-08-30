@@ -419,6 +419,12 @@ namespace orphen::ported::script
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
 
+    // FUN_002610a8, opcode 0x8E: leave for another scene. Publishing the request
+    // is all the opcode does -- DAT_003551ec, DAT_003551f8 and the departure
+    // position all live outside the script, and FUN_002239c8 spends them at the
+    // top of the next frame.
+    std::function<void(std::int32_t destination)> FUN_002610a8_request_scene_change;
+
     // FUN_00217e18: drop an installed script camera, restoring the saved pose
     // when the argument is non-zero. Opcode 0x45's whole effect.
     std::function<void(bool restore)> FUN_00217e18_release_camera;

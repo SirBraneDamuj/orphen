@@ -233,6 +233,38 @@ namespace orphen::port
     // Kept so a map cycle can rebind the model store against the new scene's
     // bundle the same way initialize does.
     std::filesystem::path discRoot_;
+
+    // == The scene-change request, FUN_0022a418's four inputs ==
+    //
+    // DAT_003551ec is the request word and the rest are its operands. Zero means
+    // "stay"; anything else is spent by FUN_002239c8:22 at the top of a frame.
+    // Opcode 0x8E writes 0x20001 and nothing else in the port writes it yet.
+    std::uint32_t DAT_003551ec_sceneRequest_ = 0;
+    // DAT_003551f4 / DAT_003551f0: the section and entry of the scene the game
+    // considers itself to be in. FUN_0022a418:50 copies the section into
+    // DAT_00355208, the map-prop bank -- and note that 0x8E leaves *both* of
+    // these alone, so a group-0xE scene keeps drawing its props out of the bank
+    // belonging to the stage that sent it there.
+    int DAT_003551f4_sceneSection_ = -1;
+    int DAT_003551f0_sceneEntry_ = -1;
+    // DAT_003551f8: the entry within the group-0xE list, which is what 0x8E's
+    // operand actually is.
+    int DAT_003551f8_groupEntry_ = 0;
+    // DAT_003555d3, set from bit 0x20000 of the request. Sticky for the whole
+    // time a group-0xE scene is loaded: FUN_0022a238 and FUN_0022a288 both read
+    // it to decide which descriptor list they are walking.
+    bool DAT_003555d3_groupEScene_ = false;
+    // MCB0 section 14. FUN_0022a418:102 passes it as a literal.
+    static constexpr std::uint16_t kGroupEScene = 14;
+    // DAT_00354d78 / DAT_00354d7c, written at FUN_0022a418:409. The scene that
+    // was current when the load started, which the *next* load compares against.
+    int DAT_00354d78_previousSection_ = -1;
+    int DAT_00354d7c_previousEntry_ = -1;
+    // DAT_0031e668. FUN_002610a8 copies the lead's +0x20..+0x28 here on the way
+    // out; FUN_00261068 and FUN_0026bc10 are the two that copy it back into the
+    // spawn point DAT_00325340. Neither is reached yet, so this is written and
+    // held rather than read.
+    orphen::ported::psm2::Vec3 DAT_0031e668_departurePosition_{};
     orphen::ported::entity::MapPropDescriptorTable mapPropTable_;
     // Opcode 0xBD's path-follow slots. Ticked just before the actor loop.
     //
@@ -362,6 +394,9 @@ namespace orphen::port
     mutable bool reportedTickHalt_ = false;
 
     void loadExecutable(const PortRuntimeConfig &config);
+    // FUN_002239c8:22-33: spend a pending scene-change request, if this frame is
+    // allowed to. Runs at the top of the frame, before the pad is published.
+    void FUN_002239c8_service_scene_change();
     // The whole per-scene load: model bindings, player reset, scene script.
     // Shared by initialize and the map-cycle path so they cannot drift.
     void loadSceneForCurrentMap();

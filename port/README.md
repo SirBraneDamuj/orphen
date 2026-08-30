@@ -866,15 +866,12 @@ last:
   DAT_003551ec = 0x20001;
   ```
 
-  `FUN_0022b300`, the map loader, reads `DAT_003551ec` as a selector (`0x2001` an
-  ordinary scene, `0x20000` the 0xE group) and `DAT_003551f8` as the index into
-  the table at `DAT_00315b04`. **This is the one that read as a hang.** The body
-  ahead of it waits on the fade-out, releases the player, drops the camera and
-  sets flag `0x523` — then asks to leave. Halting there left the slot re-entering
-  and halting every frame, 4071 times in one run, with the screen already faded
-  to nothing: the scene had finished and simply could not leave. Consumed and
-  reported now, so the body reaches its `0x9E` and retires; `--scr-report` prints
-  `0x8E scene change requested ... last destination=1`.
+  **This is the one that read as a hang.** The body ahead of it waits on the
+  fade-out, releases the player, drops the camera and sets flag `0x523` — then
+  asks to leave. Halting there left the slot re-entering and halting every frame,
+  4071 times in one run, with the screen already faded to nothing: the scene had
+  finished and simply could not leave. See *Leaving for another scene* below for
+  what it does now.
 
 - **`0x13F`** (`FUN_002604a8`) publishes a type-`0x28` rig's two children into two
   work slots. Operands only, and deliberately: the fields it reads (`+0x198` /
@@ -892,6 +889,88 @@ last:
 With all four, `0xd780` runs its 43 records with **zero unimplemented opcodes**,
 ending on the last at frame 15874 with the player released in the doorway and no
 object-script slot left spinning.
+
+### Leaving for another scene
+
+`0x8E` now performs the change rather than only reporting it, and the shape of
+that is worth writing down because almost none of it is in the opcode.
+
+**Nothing loads where the request is made.** `FUN_002610a8` writes three globals
+and returns; `FUN_002239c8:22`, at the top of the *next* frame, is what spends
+them:
+
+```c
+if ((uGpffffb27c != 0) && (1 < iGpffffadbc - 9U) &&
+    ((uGpffffb27c & 2) == 0 || FUN_0025d238(0) != 0)) { ... FUN_0022a418(); }
+```
+
+`uGpffffb27c` is `DAT_003551ec` and `iGpffffadbc` is `DAT_00354d2c`, the game
+mode — the unsigned compare excludes modes 9 and 10 and nothing else. Bit 1 of
+the request would defer the load until the fade-out has bottomed out; `0x8E`
+writes `0x20001`, so it does not, because the script has already done that
+waiting itself with `0x86`. `PortRuntime::FUN_002239c8_service_scene_change` is
+that gate, called from the same place in the frame — ahead of the pad publish, so
+no frame ever runs half on one scene and half on the next.
+
+**Bit `0x20000` is the whole of what makes this a cutscene handoff.**
+`FUN_0022a418:49` turns it into `DAT_003555d3`, and that changes which of two
+selectors names the destination:
+
+| | ordinary scene | group 0xE |
+|---|---|---|
+| bundle | `(DAT_003551f4, DAT_003551f0)` | `(0xE, DAT_003551f8)` |
+| descriptor list | searched by index | `FUN_0022a238`'s entry 14, indexed directly |
+
+and `0x8E` **writes only `DAT_003551f8`**. `DAT_003551f4` and `DAT_003551f0` are
+left naming the scene being *departed*, which matters more than it looks:
+`FUN_0022a418:50` copies `DAT_003551f4` into `DAT_00355208`, the map-prop bank.
+So a group-0xE scene pulls its bundle out of MCB0 section 14 while its props
+still come from the bank of the stage that sent it there. `loadSceneForCurrentMap`
+used to read the bank off the loaded scene's own section, which is the same thing
+for every load the port could previously do and asks for the non-existent bank 14
+for this one. It now adopts the loaded section only when `DAT_003555d3` is clear.
+The map-cycle path clears the flag for the same reason `FUN_0022b300` writes
+`0x2001` on every scene it walks to.
+
+`s01_e012`'s doorway asks for destination 1, so the scene it leaves for is
+**`s14_e001`**:
+
+```
+port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e012 \
+    --arm-stream d780:2 --frames 3000
+[scene] s01_e012 -> s14_e001 (request 0x20001, frame 2533)
+```
+
+Reached the honest way it is the same thing 13 000 frames later: the opening
+cutscene has to finish before the doorway is live at all. The per-frame entry
+`0x24be` gates the whole floor-panel chain on `work[0x0d] == 0`, and the opening
+holds that non-zero for its entire run — which is why `--scr-report` shows the
+panel sites at `0x3d43`..`0x402c` with far fewer tests than the ones in `0xb439`.
+
+Two things this does **not** yet do, both of them in the arriving scene rather
+than in the transition:
+
+- `s14_e001`'s own script halts immediately — `0x3C` at `0x803` (init), `0x117`
+  at `0x15b5` (start) and `0x46` at `0x208f` (per-frame). So the scene loads,
+  places its lead and draws, but does not run.
+- The screen comes back on its own. In the original the fade-out block is left
+  at `0x1FE0` across the load and the arriving scene's script is what reveals;
+  the port clears it in `resetLeadPlayerForLoadedMap`, which is a documented
+  divergence that predates this and is what stops the arrival being black while
+  the script above cannot run.
+
+#### The floor panels are a 4-bit code
+
+`--scr-report` used to print a centroid per panel bit. It is grouped by the whole
+low byte now, because that is how the script reads them: the exit chain at
+`0x3d25` is eight branches that each spell out all four of `0x10`..`0x80`, and
+the one that arms `0xd780` is `!0x10 && 0x20 && 0x40 && !0x80`. A per-bit
+centroid averages tiles belonging to different doorways and lands on a spot that
+satisfies none of them — bit `0x40` alone reported `(1.50, 0.00)`, which is the
+midpoint of two doorways at opposite ends of the room and carries no panel tile
+at all. `s01_e012`'s six doorways come out as codes `0x28`, `0x3a`, `0x46`, `0x50`,
+`0x62`, `0x84` and `0x9c`, and the one the transition wants is `0x62`, at
+`(5.50, -2.75)`.
 
 ### The close-up rig, and the draw walk's deferral queue
 

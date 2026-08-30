@@ -1587,19 +1587,25 @@ namespace orphen::ported::script
   //   DAT_003551f8 = param;
   //   DAT_003551ec = 0x20001;
   //
-  // `0x58bed0` is pool slot 0's position, so the copy is the arrival spawn, and
-  // the two globals are the destination: FUN_0022b300 -- the map loader -- reads
-  // `DAT_003551ec` as a selector (`0x2001` an ordinary scene, `0x20000` the 0xE
-  // group) and `DAT_003551f8` as the index within it, then indexes the table at
-  // `DAT_00315b04`. The port has no script-driven scene transition, so this is
-  // consumed and *reported* rather than performed.
+  // `0x58bed0` is pool slot 0's position, so the copy records where the lead
+  // stood when it left, and the two globals name the destination. **Nothing
+  // loads here.** `DAT_003551ec` is a request the frame loop spends:
+  // FUN_002239c8:22 tests it at the top of the next frame and runs FUN_0022a418
+  // if it is set, which is what makes the load happen after the current frame's
+  // scripts have finished rather than underneath them.
   //
-  // It is the last statement of `s01_e012`'s doorway cutscene, at `0xab41`. The
-  // body ahead of it releases the player (`0x6D 1`), drops the camera and sets
-  // flag `0x523`, then asks to leave. Halting instead left that slot re-entering
-  // and halting every frame -- 4071 times over one run -- with the screen
-  // already faded out behind it, which is what a hang at the end of the scene
-  // looks like. Consuming it lets the body reach its `0x9E` and retire.
+  // FUN_0022a418:49 reads bit `0x20000` as "this is a group-0xE scene", which
+  // sets `DAT_003555d3` and makes `DAT_003551f8` -- not `DAT_003551f0` -- the
+  // index. Bit 0 asks for the lead to be placed at `DAT_00325340`, the spawn
+  // FUN_0025b600 takes out of the arriving scene's own script header. So
+  // `0x20001` means "group 0xE, entry `param`, spawn where that scene says".
+  //
+  // It is the last statement of `s01_e012`'s doorway cutscene, at `0xab41`, in
+  // subproc `0x1187` (body `0xaafc`). That body opens by spinning on `0x86`
+  // until the fullscreen fade has bottomed out, then releases the player
+  // (`0x6D 1`), drops the camera, sets flag `0x523` -- the one-shot that stops
+  // the doorway arming a second time -- and asks to leave for group 0xE entry
+  // 1, which is `s14_e001`.
   std::uint32_t SceneCommandInterpreter::FUN_002610a8_request_scene_change()
   {
     const std::int32_t destination = static_cast<std::int32_t>(FUN_0025c258_evaluate());
@@ -1608,6 +1614,10 @@ namespace orphen::ported::script
       return 0;
     }
     trace_.recordSceneChange(destination);
+    if (environment_.FUN_002610a8_request_scene_change)
+    {
+      environment_.FUN_002610a8_request_scene_change(destination);
+    }
     return 0;
   }
 

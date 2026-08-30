@@ -799,6 +799,17 @@ namespace orphen::port
       modelStore_.bindingForTypeId(typeId);
     };
 
+    // FUN_002610a8's three statements. Nothing here loads anything: the request
+    // is published and FUN_002239c8_service_scene_change spends it at the top of
+    // the next frame.
+    environment.FUN_002610a8_request_scene_change = [this](std::int32_t destination)
+    {
+      const auto &lead = entityPool_.leadPlayer();
+      DAT_0031e668_departurePosition_ = {lead.positionX20, lead.positionZ24, lead.positionY28};
+      DAT_003551f8_groupEntry_ = destination;
+      DAT_003551ec_sceneRequest_ = 0x20001;
+    };
+
     environment.FUN_00217e18_release_camera = [this](bool restore)
     {
       fieldCamera_.FUN_00217e18_release_manual_camera(restore);
@@ -1401,6 +1412,96 @@ namespace orphen::port
     }
   }
 
+  // FUN_002239c8:18-33, the top of the field frame:
+  //
+  //   if ((uGpffffb27c != 0) && (1 < iGpffffadbc - 9U) &&
+  //      (((uGpffffb27c & 2) == 0 || (FUN_0025d238(0) != 0)))) {
+  //     FUN_002f9308(0,0); FUN_00305110(); FUN_0022a418(); ...
+  //   }
+  //
+  // `uGpffffb27c` is DAT_003551ec and `iGpffffadbc` is DAT_00354d2c, the game
+  // mode -- gp 0xffffadbc against the 0x00359F70 base. The unsigned `1 < mode -
+  // 9` excludes modes 9 and 10 and nothing else, and bit 1 of the request defers
+  // the load until the fade-out block has bottomed out.
+  //
+  // Opcode 0x8E writes 0x20001, so neither gate defers it. The waiting is done
+  // by the script instead: s01_e012's subproc 0x1187 spins on `0x86` -- the same
+  // FUN_0025d238 -- before it ever reaches the 0x8E. Modelling the bit anyway
+  // costs one branch and keeps the two readings of "the fade is done" from
+  // drifting apart when a scene does set it.
+  void PortRuntime::FUN_002239c8_service_scene_change()
+  {
+    if (DAT_003551ec_sceneRequest_ == 0)
+    {
+      return;
+    }
+    if (DAT_00354d2c_gameMode_ - 9u <= 1u)
+    {
+      return;
+    }
+    if ((DAT_003551ec_sceneRequest_ & 2u) != 0 &&
+        !DAT_00571dc0_screenFade_.FUN_0025d238_step_fade_out(0))
+    {
+      return;
+    }
+
+    // FUN_0022a418:49. Sticky for as long as the scene stays loaded, because
+    // FUN_0022a238 keeps reading it to pick a descriptor list.
+    DAT_003555d3_groupEScene_ = (DAT_003551ec_sceneRequest_ & 0x20000u) != 0;
+
+    // FUN_0022a418:98-103. Two calls, one selector each: the ordinary scene
+    // takes (DAT_003551f4, DAT_003551f0) and the group-0xE scene takes
+    // (0xE, DAT_003551f8).
+    const orphen::harness::McbSceneSelection destination{
+        static_cast<std::uint16_t>(DAT_003555d3_groupEScene_ ? kGroupEScene : DAT_003551f4_sceneSection_),
+        static_cast<std::uint16_t>(DAT_003555d3_groupEScene_ ? DAT_003551f8_groupEntry_ : DAT_003551f0_sceneEntry_)};
+
+    if (discRoot_.empty())
+    {
+      std::cout << "[scene] change to " << orphen::harness::sceneName(destination)
+                << " ignored: no disc root to load it from\n";
+      DAT_003551ec_sceneRequest_ = 0;
+      DAT_003555d3_groupEScene_ = false;
+      return;
+    }
+
+    std::cout << "[scene] " << (mapViewer_.loadedDiscScene().has_value()
+                                    ? orphen::harness::sceneName(*mapViewer_.loadedDiscScene())
+                                    : std::string("<none>"))
+              << " -> " << orphen::harness::sceneName(destination) << " (request 0x" << std::hex
+              << DAT_003551ec_sceneRequest_ << std::dec << ", frame " << frameCount_ << ")\n";
+
+    try
+    {
+      mapViewer_.loadDiscSceneMap(discRoot_, destination);
+    }
+    catch (const std::exception &error)
+    {
+      // The original walks off the end of the table into FUN_0026c088 and stops
+      // the machine. Staying on the scene that is already loaded is the more
+      // useful failure here, and clearing the request stops it retrying every
+      // frame.
+      std::cerr << "[scene] " << orphen::harness::sceneName(destination)
+                << " could not be loaded: " << error.what() << '\n';
+      DAT_003551ec_sceneRequest_ = 0;
+      DAT_003555d3_groupEScene_ = false;
+      return;
+    }
+
+    // FUN_0022a418's body. The port's share of it is loadSceneForCurrentMap,
+    // which reads DAT_003555d3 and DAT_003551f4 as they stand now.
+    loadSceneForCurrentMap();
+
+    // FUN_0022a418:409-411. The scene that was current becomes the previous
+    // one, and the request is spent. Note the ordering: 0x8E left
+    // DAT_003551f4/f0 naming the *departing* scene, and that is deliberately
+    // what gets recorded -- a group-0xE scene has no coordinates of its own in
+    // that pair.
+    DAT_00354d7c_previousEntry_ = DAT_003551f0_sceneEntry_;
+    DAT_00354d78_previousSection_ = DAT_003551f4_sceneSection_;
+    DAT_003551ec_sceneRequest_ = 0;
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // Models bind before the script runs, so the spawn path can report a
@@ -1410,8 +1511,21 @@ namespace orphen::port
     // FUN_0022a418:50 sets DAT_00355208 from DAT_003551f4, the stage number of
     // the scene being entered -- s01_e024 is stage 1. That is the bank
     // FUN_00229980 uses for the 0x272 type range.
-    const auto scene = mapViewer_.loadedDiscScene();
-    const int stageBank = scene.has_value() ? static_cast<int>(scene->section) : -1;
+    //
+    // DAT_003551f4 is not simply "the section the bundle came from". For every
+    // load the port used to do they are the same, so this used to read the
+    // section off the loaded scene -- but a group-0xE load does not touch
+    // DAT_003551f4 at all (FUN_002610a8 writes only DAT_003551f8), so an
+    // s01_e012 handoff pulls its bundle out of section 14 while its props still
+    // come from stage 1's bank. Adopting the loaded section here instead would
+    // ask for bank 14, which does not exist.
+    if (!DAT_003555d3_groupEScene_)
+    {
+      const auto loadedScene = mapViewer_.loadedDiscScene();
+      DAT_003551f4_sceneSection_ = loadedScene.has_value() ? static_cast<int>(loadedScene->section) : -1;
+      DAT_003551f0_sceneEntry_ = loadedScene.has_value() ? static_cast<int>(loadedScene->entry) : -1;
+    }
+    const int stageBank = DAT_003551f4_sceneSection_;
     modelStore_.setMapPropTable(&mapPropTable_, stageBank);
     // The same banks reach the descriptor path, which is what lets a streamed
     // type id spawn from a real descriptor instead of struct defaults. Must be
@@ -2525,36 +2639,45 @@ namespace orphen::port
         std::cout << "  map terrain words: " << wordCounts.size() << " distinct, union=0x"
                   << std::hex << unionWord << std::dec << '\n';
 
-        // Where each panel bit lives, so a trigger can be walked onto on
-        // purpose. The centroid is enough: a panel is a handful of triangles.
-        for (std::uint32_t bit = 0x01; bit <= 0x80; bit <<= 1)
+        // Where each panel lives, so a trigger can be walked onto on purpose.
+        // The centroid is enough: a panel is a handful of triangles.
+        //
+        // Grouped by the whole low byte rather than a bit at a time, because
+        // that is how the script reads them. s01_e012's exit script is eight
+        // branches that each spell out all four of bits 0x10..0x80 -- the
+        // doorway it wants is `!0x10 && 0x20 && 0x40 && !0x80`, so the panels
+        // are a code and not four independent switches. Averaging per bit
+        // mixes tiles from different codes and lands the centroid on a spot
+        // that satisfies none of them.
+        std::map<std::uint32_t, std::pair<std::size_t, std::pair<float, float>>> panelCentroids;
+        for (const auto &triangle : map->derivedTriangles)
         {
-          std::size_t count = 0;
-          float sumX = 0.0f;
-          float sumY = 0.0f;
-          for (const auto &triangle : map->derivedTriangles)
-          {
-            if (triangle.primitiveIndex >= map->DAT_003556b0_dRecords78.size() ||
-                (map->DAT_003556b0_dRecords78[triangle.primitiveIndex].terrainFlags & bit) == 0)
-            {
-              continue;
-            }
-            for (const auto vertexIndex : triangle.vertexIndices)
-            {
-              const auto &position = map->DAT_0035569c_sectionCRecords.at(vertexIndex).position;
-              sumX += position.x;
-              sumY += position.y;
-            }
-            count += triangle.vertexIndices.size();
-          }
-          if (count == 0)
+          if (triangle.primitiveIndex >= map->DAT_003556b0_dRecords78.size())
           {
             continue;
           }
-          std::cout << "    panel bit 0x" << std::hex << bit << std::dec
+          const std::uint32_t code =
+              map->DAT_003556b0_dRecords78[triangle.primitiveIndex].terrainFlags & 0xFFu;
+          if (code == 0)
+          {
+            continue;
+          }
+          auto &accumulator = panelCentroids[code];
+          for (const auto vertexIndex : triangle.vertexIndices)
+          {
+            const auto &position = map->DAT_0035569c_sectionCRecords.at(vertexIndex).position;
+            accumulator.second.first += position.x;
+            accumulator.second.second += position.y;
+          }
+          accumulator.first += triangle.vertexIndices.size();
+        }
+        for (const auto &entry : panelCentroids)
+        {
+          const float count = static_cast<float>(entry.second.first);
+          std::cout << "    panel code 0x" << std::hex << entry.first << std::dec
                     << " centred near (" << std::fixed << std::setprecision(2)
-                    << sumX / static_cast<float>(count) << ", "
-                    << sumY / static_cast<float>(count) << ")"
+                    << entry.second.second.first / count << ", "
+                    << entry.second.second.second / count << ")"
                     << std::defaultfloat << '\n';
         }
       }
@@ -4200,6 +4323,10 @@ namespace orphen::port
     ++DAT_003555b4_frameCounter_;
     DAT_003555b8_tickCounter_ += frameTicks;
     soundEngine_.setFrame(frameCount_);
+    // FUN_002239c8:22, ahead of the pad publish and of everything the frame
+    // does. A scene change asked for last frame lands here, so no part of a
+    // frame ever runs half on one scene and half on the next.
+    FUN_002239c8_service_scene_change();
     // FUN_0023b5d8's slot: the pad's analog magnitude is published before
     // anything downstream of it runs.
     DAT_003555e8_stickMagnitude_ = input.stickMagnitude;
@@ -4233,6 +4360,13 @@ namespace orphen::port
       // fog, the draw distance and the entity set, and its bundle owns the
       // models. resetLeadPlayerForLoadedMap alone left all of that on the
       // previous scene's values.
+      //
+      // The cycle is the port's stand-in for FUN_0022b300, which writes
+      // DAT_003551ec = 0x2001 for every scene it walks to -- bit 0x20000 clear,
+      // so DAT_003555d3 goes back to zero. Without that, a cycle taken after a
+      // group-0xE handoff would keep the sticky flag up and go on reporting the
+      // sending stage's prop bank for every scene after it.
+      DAT_003555d3_groupEScene_ = false;
       loadSceneForCurrentMap();
     }
     auto *loadedMap = mapViewer_.loadedMap();
