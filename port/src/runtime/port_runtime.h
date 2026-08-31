@@ -27,6 +27,8 @@
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_hit_sparks.h"
+#include "ported/render/original_entity_draw.h"
+#include "ported/render/original_weapon_trail.h"
 #include "ported/entity/original_particles.h"
 #include "ported/entity/player_bandana.h"
 #include "runtime/entity_model_store.h"
@@ -410,6 +412,21 @@ namespace orphen::port
     // and FUN_00220910 steps and draws it in the *draw* phase, which is why the
     // step lives in publishSpriteQuads rather than beside the particle one.
     orphen::ported::entity::HitSparkPool DAT_00355b74_hitSparks_;
+
+    // DAT_004FBC7C, FUN_0020e840's 32 motion-trail slots, and the world-space
+    // ribbons this frame's walk produced. The step runs per entity inside the
+    // pose walk -- FUN_0020c810 calls FUN_0020e840 last, after the bone palette
+    // is composed -- and publishSpriteQuads turns the ribbons into quads once
+    // the camera is known.
+    orphen::ported::render::WeaponTrailPool DAT_004fbc7c_weaponTrails_;
+    struct PendingTrailRibbon
+    {
+      orphen::ported::render::TrailQuad quad;
+      // FUN_0020e840 submits into `ctx+0x1D8 + 1`: one bucket in front of the
+      // entity the trail belongs to, so the ribbon draws over its own model.
+      int displayListBucket = 2;
+    };
+    std::vector<PendingTrailRibbon> pendingTrailRibbons_;
 
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;

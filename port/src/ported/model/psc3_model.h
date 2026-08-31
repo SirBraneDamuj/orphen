@@ -27,11 +27,14 @@
 //   +0x2C  u32 keyframe pool        s16 quaternion / translation keys
 //   +0x30  u32 hit-volume column map bytes, one per pose column
 //   +0x34  u32 hit-volume records     stride 0x10
+//   +0x38  u32 motion-trail table     stride 0x0C, at most eight entries
 //
-// The last two are only on weapon-effect models -- grp_0179, the sword blade,
-// has them and grp_0001, the player, does not. FUN_002148a8 reads +0x30 first
-// and returns immediately when it is zero, which is why the swept hit test does
-// nothing when it is handed anything but a weapon.
+// The first two of those three are only on weapon-effect models -- grp_0179,
+// the sword blade, has them and grp_0001, the player, does not. FUN_002148a8
+// reads +0x30 first and returns immediately when it is zero, which is why the
+// swept hit test does nothing when it is handed anything but a weapon.
+//
+// +0x38 is FUN_0020e840's, and only seven models in s00_e000 carry one at all.
 //
 // Note that +0x1C..+0x28 are rewritten to absolute addresses when the game
 // relocates a model (FUN_00221f60), so a PSC3 read out of an EE dump has four
@@ -176,6 +179,36 @@ namespace orphen::ported::model
   //   2: steps 2  radius 12  A (0,1,304)  B (-2,0,-12)
   //   3: steps 4  radius  4  A (-5,0,-40) B (-5,0,88)
   //   4: steps 4  radius  4  A (0,0,-36)  B (0,0,204)
+  // Header +0x38, one entry per motion trail. FUN_0020e840 reads it as three
+  // words, and which entries are live is decided every frame by the low eight
+  // bits of entity +0xAA -- the keyframe event halfword -- so a model can carry
+  // more descriptors than any one animation turns on.
+  //
+  // grp_0179, the sword blade, has two: a bright pale-green one over three
+  // samples and a darker one over four, both spanning the same pair of blade
+  // vertices. Its animation 0 -- the long phase after the spawn flourish, the
+  // one that runs the swept hit test -- carries 0x0003, and animations 1 and 2
+  // carry nothing. That is the whole of the sword trail's authoring.
+  struct Psc3Trail
+  {
+    // +0x00. The low three bytes are the GS colour in r/g/b order and the top
+    // byte is its alpha. FUN_00207de8 halves the alpha of an untextured packet
+    // on the way to the GS and leaves the rgb alone, so 0xC8 is 100/128 and the
+    // rgb is free to run over 0x80 -- grp_0179's first trail is (0xAA, 0xF9,
+    // 0xD1), which is 1.33x on the red channel.
+    std::uint32_t colour = 0;
+    // +0x04 and +0x06, indices into the vertex stream. The trail spans the
+    // segment between the two, one edge of the ribbon each, and they are
+    // skinned by their own bones like any other vertex. Some models store -1
+    // for the second on an entry no animation enables.
+    std::int16_t vertexA = 0;
+    std::int16_t vertexB = 0;
+    // +0x08, how many of the recorded samples the spline runs through.
+    // FUN_0020e840 clamps it to [3, 16] and then to what has been recorded, so
+    // the stored 2 on grp_0179's first trail means three.
+    std::int32_t sampleCount = 0;
+  };
+
   struct Psc3HitVolume
   {
     // +0x00: how many boxes to lay down along the segment. The sweep starts at
@@ -241,6 +274,10 @@ namespace orphen::ported::model
     // malformed rather than that the game would have done something else.
     std::vector<std::uint8_t> hitVolumeColumnMap;
     std::vector<Psc3HitVolume> hitVolumes;
+
+    // Header +0x38. At most eight, because entity +0xAA only has eight bits to
+    // enable them with.
+    std::vector<Psc3Trail> trails;
 
     // A **sprite strip**, not a skeletal model: no magic, no geometry, and a
     // four-byte animation timeline instead of a six-byte one. `grp_017e`, the

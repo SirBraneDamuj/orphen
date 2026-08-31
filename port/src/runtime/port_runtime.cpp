@@ -2875,6 +2875,48 @@ namespace orphen::port
       }
     }
 
+    // FUN_0020e840's ribbons, built during the pose walk. They reach the GS
+    // through the same display list as everything else here, so they are
+    // converted once the camera is in hand and then sorted with the rest.
+    for (const auto &ribbon : pendingTrailRibbons_)
+    {
+      orphen::ported::render::SpriteQuad quad;
+      quad.oriented = true;
+      quad.untextured = true;
+      bool visible = true;
+      for (int corner = 0; corner < 4; ++corner)
+      {
+        const auto view = viewProjection.toViewSpace(ribbon.quad.corner[corner]);
+        // FUN_0020d820's per-point test, `z < 0xFFFE`. The projection puts the
+        // near plane at exactly 65534, so this is "in front of the near plane"
+        // written in screen units, and one corner failing drops the quad.
+        if (!(view.z > 0.0f) ||
+            !(viewProjection.screenDepth(view.z) <
+              static_cast<float>(orphen::ported::render::weaponTrail::kScreenZAtNearPlane)))
+        {
+          visible = false;
+          break;
+        }
+        quad.cornerX[corner] = view.x;
+        quad.cornerY[corner] = view.y;
+        quad.cornerZ[corner] = view.z;
+        for (int channel = 0; channel < 4; ++channel)
+        {
+          quad.cornerColour[corner][channel] = ribbon.quad.colour[corner][channel];
+        }
+      }
+      if (!visible)
+      {
+        continue;
+      }
+      quad.blendMode = orphen::ported::render::weaponTrail::kBlendMode;
+      quad.textureSlot = -1;
+      quad.displayListBucket = ribbon.displayListBucket;
+      quad.depthTest = true;
+      quads.push_back(quad);
+    }
+    pendingTrailRibbons_.clear();
+
     // FUN_0020f510:0x00210170 pushes each finished packet into one of 4096
     // depth buckets, or into 0x1005 when the entity asked to be drawn over
     // everything, and the list is walked in ascending bucket order -- back to
@@ -2929,6 +2971,32 @@ namespace orphen::port
           view.rotationX154 = entity.rotationX154;
           view.rotationY158 = entity.rotationY158;
           attachModel(view, entity, frameTicks);
+
+          // FUN_0020c810's last call, after the bone palette is composed. The
+          // ribbon is built here rather than in the draw so the history
+          // advances once per simulation step, which is what the original does
+          // -- FUN_0020c5a8 runs inside the frame function -- and what keeps
+          // --frames reproducible.
+          if (view.model != nullptr && !view.model->trails.empty())
+          {
+            std::vector<orphen::ported::render::TrailQuad> ribbons;
+            DAT_004fbc7c_weaponTrails_.FUN_0020e840_step(*view.model,
+                                                         view.bonePalette,
+                                                         entity.flagsAa,
+                                                         entity.previousTrailMaskB0,
+                                                         entity.trailSlotsB1,
+                                                         ribbons);
+            if (!ribbons.empty())
+            {
+              const int bucket = orphen::ported::render::FUN_0020eec0_depthBucket(
+                  view.worldOrigin, renderCamera_);
+              for (auto &ribbon : ribbons)
+              {
+                pendingTrailRibbons_.push_back({ribbon, bucket + 1});
+              }
+            }
+          }
+
           views.push_back(view);
   }
 
@@ -4732,6 +4800,9 @@ namespace orphen::port
     std::cout << "hit sparks: alive=" << DAT_00355b74_hitSparks_.aliveCount()
               << " groups=" << static_cast<int>(DAT_00355b74_hitSparks_.DAT_00355b7c_activeGroups())
               << "\n";
+    std::cout << "motion trails: slots=" << DAT_004fbc7c_weaponTrails_.liveSlotCount()
+              << " mask=0x" << std::hex << DAT_004fbc7c_weaponTrails_.DAT_00355a3c_mask()
+              << std::dec << "\n";
 
     std::cout << "=== end actor report ===\n\n";
   }
@@ -5303,6 +5374,8 @@ namespace orphen::port
     // leaves behind is dead and every group empty, so re-running it here is the
     // same state and it stops a burst surviving a map change.
     DAT_00355b74_hitSparks_.FUN_002205d0_reset();
+    DAT_004fbc7c_weaponTrails_.reset();
+    pendingTrailRibbons_.clear();
     for (auto &filter : DAT_003ffe00_poseFilters_)
     {
       filter.reset();

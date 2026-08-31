@@ -92,6 +92,8 @@ target_sources(orphen_port
         src/ported/render/original_light_table.h
         src/ported/render/original_sprite_pass.cpp
         src/ported/render/original_sprite_pass.h
+        src/ported/render/original_weapon_trail.cpp
+        src/ported/render/original_weapon_trail.h
         src/platform/gl_extensions.cpp
         src/platform/gl_extensions.h
         src/platform/sdl_gl_window.cpp

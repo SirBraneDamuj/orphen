@@ -1690,6 +1690,7 @@ namespace orphen::harness
         setMapBlendMode(0);
         state.blendMode = 0;
       }
+      glDisable(GL_ALPHA_TEST);
       state.valid = false;
     }
 
@@ -1750,6 +1751,22 @@ namespace orphen::harness
           setMapBlendMode(blendMode);
           state.blendMode = blendMode;
         }
+
+        // The same cutout discard drawObjectModel does, for the same reason:
+        // the GS alpha test is one piece of context state, so it covers the map
+        // passes as well as the model passes. Only exactly-zero alpha is
+        // dropped, which is what a cutout texture stores in its surround.
+        //
+        // The map path needs it *because* its blend state is now explicit. It
+        // used to inherit whatever the last entity subdraw left enabled, and an
+        // inherited alpha blend hid a cutout's transparent texels by accident --
+        // which is why s01_e024's hanging chains looked right while they were
+        // also translucent enough to see the floor through. With mapBlendMode
+        // correctly reporting these primitives as opaque (slot 0 is f=0x00),
+        // nothing removed the surround any more and every chain link came back
+        // as a black stair-stepped slab.
+        glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GREATER, 0.0f);
 
         if (texture != 0)
         {
@@ -2905,23 +2922,41 @@ namespace orphen::harness
     unsigned int boundTexture = 0;
     int currentMode = -1;
     bool depthTestOn = true;
+    bool texturingOn = true;
     for (const auto &quad : spriteQuads_)
     {
-      const auto slot = static_cast<std::size_t>(quad.textureSlot);
-      if (quad.textureSlot < 0 || slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
+      // An untextured quad -- FUN_0020e840's motion trails, the only source --
+      // carries no slot at all, and its PRIM word has TME clear.
+      const orphen::ported::resource::BmpaTexture *image = nullptr;
+      if (!quad.untextured)
       {
-        continue;
+        const auto slot = static_cast<std::size_t>(quad.textureSlot);
+        if (quad.textureSlot < 0 || slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
+        {
+          continue;
+        }
+        image = &textureSlots_->slot(slot).texture;
+        if (image->width == 0 || image->height == 0)
+        {
+          continue;
+        }
+        if (slotTextureIds_[slot] != boundTexture)
+        {
+          boundTexture = slotTextureIds_[slot];
+          glBindTexture(GL_TEXTURE_2D, boundTexture);
+        }
       }
-      const auto &texture = textureSlots_->slot(slot).texture;
-      if (texture.width == 0 || texture.height == 0)
+      if (quad.untextured == texturingOn)
       {
-        continue;
-      }
-
-      if (slotTextureIds_[slot] != boundTexture)
-      {
-        boundTexture = slotTextureIds_[slot];
-        glBindTexture(GL_TEXTURE_2D, boundTexture);
+        texturingOn = !quad.untextured;
+        if (texturingOn)
+        {
+          glEnable(GL_TEXTURE_2D);
+        }
+        else
+        {
+          glDisable(GL_TEXTURE_2D);
+        }
       }
       if (quad.blendMode != currentMode)
       {
@@ -2956,6 +2991,25 @@ namespace orphen::harness
       }
 
       glColor4f(quad.colour[0], quad.colour[1], quad.colour[2], quad.colour[3]);
+
+      if (quad.untextured)
+      {
+        // PRIM 0x0D: IIP set, so the four corner colours are interpolated
+        // across the quad. That gradient is the whole of the trail's fade.
+        glBegin(GL_QUADS);
+        for (int corner = 0; corner < 4; ++corner)
+        {
+          glColor4f(quad.cornerColour[corner][0],
+                    quad.cornerColour[corner][1],
+                    quad.cornerColour[corner][2],
+                    quad.cornerColour[corner][3]);
+          glVertex3f(quad.cornerX[corner], quad.cornerY[corner], quad.cornerZ[corner]);
+        }
+        glEnd();
+        continue;
+      }
+
+      const auto &texture = *image;
 
       // The UVs are the ones the GS packet carries. FUN_0020f510 writes
       // `u + (width1 - 1)` for the far corner and the GS samples [u0, u1), so

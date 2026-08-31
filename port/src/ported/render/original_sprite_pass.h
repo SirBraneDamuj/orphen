@@ -138,6 +138,18 @@ namespace orphen::ported::render
     // 0..1, with 1.0 standing for the GS's 0x80. Alpha included.
     float colour[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
+    // Set for a quad with no texture at all: FUN_0020e840's motion trails write
+    // 0xFFFF into the packet's texture halfword, FUN_00207de8 increments it to
+    // zero on the way past and emits PRIM 0x0D -- a gouraud triangle fan with
+    // TME clear. It is the only untextured primitive in the executable, and it
+    // is the only one that needs a colour per corner, because the ribbon's
+    // alpha ramps along its length. `colour` is ignored when this is set.
+    bool untextured = false;
+    float cornerColour[4][4] = {{1.0f, 1.0f, 1.0f, 1.0f},
+                                {1.0f, 1.0f, 1.0f, 1.0f},
+                                {1.0f, 1.0f, 1.0f, 1.0f},
+                                {1.0f, 1.0f, 1.0f, 1.0f}};
+
     int blendMode = 0;
     int textureSlot = -1;
     // FUN_0020f510's own submission order: the packet is pushed into one of

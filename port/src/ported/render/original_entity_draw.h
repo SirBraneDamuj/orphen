@@ -53,6 +53,11 @@ namespace orphen::ported::render
     int depthBucket = 0;
   };
 
+  // FUN_0020eec0 lines 181-205 for one entity. Split out because
+  // FUN_0020e840's motion trails need the same number: they submit into
+  // `bucket + 1`, one step in front of the model they belong to.
+  int FUN_0020eec0_depthBucket(const Vec3 &worldOrigin, const ViewProjection &viewProjection);
+
   // FUN_0020c5a8's walk reduced to what the port has: the view list is already
   // the set of live, drawable entities, so this is FUN_0020eec0's sorting half.
   // The result is ordered by bucket, far to near, matching the map draw list.

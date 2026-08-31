@@ -2612,6 +2612,63 @@ built in world space and only meet the projection at the end.
 `--actor-report` grew a `hit sparks:` line — how many are alive and how many
 groups are busy, which is also how many hits are currently showing.
 
+### The sword trail
+
+`FUN_0020e840`, the green ribbon the blade leaves as it swings. Ported into
+`ported/render/original_weapon_trail.{h,cpp}`, with the model side in
+`ported/model/psc3_model.{h,cpp}`. Written up in
+`analyzed/weapon_motion_trail.c`.
+
+Finding it is most of the work, because it is **not** one of the standalone
+effect systems `FUN_002192c0` runs. Every one of those has a gate global, and
+in the `sword_trail` save state every one of them reads zero while the trail is
+plainly on screen. `FUN_0020c810` calls this last, per entity, after the bone
+palette is composed and after `FUN_0020eec0` has worked out the entity's depth
+bucket — a motion trail is part of a model's own draw, and its state lives in
+the entity and in a static pool at `0x004FBC7C`.
+
+The low eight bits of entity `+0xAA` — the halfword the animation stepper
+stages out of the current keyframe — are an **enable mask**, one bit per
+descriptor in the model's header `+0x38` table. `+0xB0` holds last frame's copy
+so an edge either way is seen, and `+0xB1..+0xB8` hold one-based handles into a
+pool of 32 slots. A descriptor is a colour, two vertex indices and a sample
+count. `grp_0179`, the sword blade, carries two of them — a bright pale-green
+ribbon over three samples and a darker one over four, both on the same pair of
+blade vertices — and its **animation 0** turns both on. Animation 0 is the long
+phase after the six-frame spawn flourish, the one that also runs the swept hit
+test, so the trail is alive for exactly as long as the blade can hit something.
+
+Both named vertices are skinned by their own bones, through the same vertex
+stream and the same matrix buffer the mesh draw uses, and the pair goes into a
+16-deep history with the newest at index 0. Each frame the newest `sampleCount`
+pairs — clamped to `[3, 16]` and then to what has been recorded — become the
+control points of a **natural cubic spline**, one per edge, resampled at twelve
+points and stitched into eleven quads whose alpha ramps from the descriptor's
+own down to a twelfth of it.
+
+Two things are worth knowing about the solve, `FUN_00266460`. Its scratch array
+at `[17]` means two different things at two different times — the forward sweep
+overwrites each divided difference with the eliminated diagonal, and the back
+substitution divides by *that* — and it reduces the last row twice, which is
+harmless only because the term it subtracts is the coefficient the natural
+boundary condition already set to zero. `FUN_00266668`'s coefficient is a third
+of the textbook one and its powers are arranged to match, so the two are only
+right together; both are ported as written rather than normalised.
+
+**This is the only untextured primitive in the executable.** `FUN_0020e840`
+writes `0xFFFF` into the packet's texture halfword; `FUN_00207de8` increments
+that field before use, so it arrives as zero and takes the branch that emits
+PRIM `0x0D` — a gouraud triangle fan with TME clear — instead of `0x1D`. That
+same untextured branch halves only the packet's *alpha* on the way to the GS
+and leaves the rgb alone, which is why the descriptor's rgb is free to run over
+`0x80`: `grp_0179`'s first trail is 1.95x on green. `SpriteQuad` grew an
+`untextured` form with a colour per corner to carry it, since the ramp is the
+whole of the fade.
+
+`--actor-report` grew a `motion trails:` line — how many pool slots are held
+and the allocation mask itself, which is `0x3` mid-swing in both the save state
+and the port.
+
 ### What is not ported
 
 Called out at their sites: `FUN_00215670` (a third hit-test
@@ -4087,6 +4144,51 @@ opaque here; all of them have an untextured slot 0.
 differ in 25.2% of pixels, at f6000 12.0%; `s01_e024` is **byte-identical**, so
 the room the port was developed against is untouched. Cost is 23 extra batches
 and 0.80 -> 0.92 ms of map time, entities unchanged.
+
+### The cutout discard the map path was missing
+
+Making the map's blend state explicit above had a second-order cost that only
+showed up later, in `s01_e024`'s hanging chains. Each chain is four crossed
+quads -- primitives 1618-1621 and 1626-1629, at `(-+0.45, -4.30, 1..3)` --
+sampling a 16x64 strip at `u 0..15, v 144..207` of map page 0. That strip's
+alpha is strictly binary: the link ring is 255, the surround is 0. Its single
+material slot reads `type=0x00 a=0x00 f=0x00`, so `mapBlendMode` correctly
+returns **0, opaque**, and an opaque draw of a cutout texture paints the
+surround. Every chain link came back as a black stair-stepped slab.
+
+`drawObjectModel` has discarded fully transparent texels since the grp_0003
+hair-through-jeans fix -- `GL_ALPHA_TEST` at `GL_GREATER 0`, the fixed-function
+stand-in for the GS alpha test. **The map path never had one.** Both paths feed
+the same VU1 program and select GS state out of the same register blocks at
+`608 + mode*3`, so whatever removes an alpha-0 texel for a model removes it for
+a map primitive too; the port simply applied it on one side only.
+
+It went unnoticed because the map draw used to *inherit* its blend state.
+`drawObjectModel` called `setBlendMode` per subdraw and never reset it on exit,
+and until `setMapBlendMode` existed nothing in `drawPrimitiveSlot` touched
+`GL_BLEND` at all -- so map primitives drew under whatever the last entity
+subdraw happened to leave enabled. An inherited alpha blend hides a cutout's
+surround by accident. Building `cd24333^` and walking to the chains shows it
+exactly: no black slab, but the whole chain is translucent enough to read the
+floor and the player through it. Correct blend state removed the accident and
+exposed the real gap.
+
+So `drawPrimitiveSlot` now enables the alpha test with the rest of its batch
+state and `flushMapBatch` clears it, which also re-arms it after each
+interleaved entity (`drawObjectModel` disables it on the way out). Fragment
+alpha here is the slot alpha times the occlusion fade, and `alphaForFade`
+returns 1.0 for "no fade", so nothing opaque can reach exactly zero and vanish;
+the cases that can are already invisible under their own blend.
+
+The 20000-frame `--actor-report`/`--scr-report` is byte-identical. `s01_e012`
+f6000 is unchanged, f3000 differs in 11 pixels (max delta 6, in a near-black
+corner), and `s01_e024` at f600 differs in 0.35% -- a second cutout slab, in the
+floor grating at the bottom right, going away for the same reason.
+
+The earlier claim in the section above that the lanterns' stair-stepped
+silhouette was "the alpha test doing its job" was wrong about the mechanism: the
+map path had no alpha test to do it. The stair-stepping came from the same
+inherited blend.
 
 ### The shop's additive props: a bundle-lookup order bug
 

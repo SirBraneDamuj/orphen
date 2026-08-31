@@ -12,6 +12,10 @@ namespace orphen::ported::model
     constexpr std::size_t kSubmeshStride = 0x14;
     constexpr std::size_t kPrimitiveStride = 0x18;
     constexpr std::size_t kHitVolumeStride = 0x10;
+    // FUN_0020e840 indexes header +0x38 as `trailIndex * 0xC`, and by bit
+    // position in the low byte of entity +0xAA, which caps the table at eight.
+    constexpr std::size_t kTrailStride = 0x0C;
+    constexpr std::size_t kMaxTrails = 8;
     constexpr std::size_t kSubdrawStride = 10;
     constexpr std::size_t kVertexStride = 10;
     constexpr std::size_t kNormalStride = 16;
@@ -169,6 +173,28 @@ namespace orphen::ported::model
           volume.pointB[axis] = s16At(bytes, at + 0x0A + axis * 2);
         }
         model.hitVolumes.push_back(volume);
+      }
+    }
+
+    // Header +0x38, FUN_0020e840's motion trails. The table has no stored
+    // length: the function indexes it by bit position in entity +0xAA, which is
+    // eight bits, so eight is the ceiling and the blob decides the rest.
+    const std::uint32_t trailOffset = u32At(bytes, 0x38);
+    if (trailOffset != 0 && trailOffset < bytes.size())
+    {
+      for (std::size_t index = 0; index < kMaxTrails; ++index)
+      {
+        const std::size_t at = trailOffset + index * kTrailStride;
+        if (!fits(bytes, at, kTrailStride))
+        {
+          break;
+        }
+        Psc3Trail trail;
+        trail.colour = u32At(bytes, at + 0x00);
+        trail.vertexA = s16At(bytes, at + 0x04);
+        trail.vertexB = s16At(bytes, at + 0x06);
+        trail.sampleCount = static_cast<std::int32_t>(u32At(bytes, at + 0x08));
+        model.trails.push_back(trail);
       }
     }
 

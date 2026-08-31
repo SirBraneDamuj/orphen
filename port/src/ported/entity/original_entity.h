@@ -144,6 +144,14 @@ namespace orphen::ported::entity
     std::uint16_t previousPoseColumnAe = 0;
     float animationBlend13c = 1.0f;
     std::uint16_t flagsAa = 0;               // +0xAA: bit 0x100 gates type 0x3A's effect.
+    // +0xB0 and +0xB1..+0xB8: FUN_0020e840's motion trails. The low eight bits
+    // of +0xAA are an enable mask over the model's header +0x38 table; +0xB0 is
+    // last frame's copy of that byte, so an edge either way is visible, and the
+    // eight bytes after it are the one-based handles into the 32-slot pool at
+    // DAT_004FBC7C. Zero means "no slot held". The blade, grp_0179, runs two of
+    // them through its animation 0 -- that is the sword trail.
+    std::uint8_t previousTrailMaskB0 = 0;
+    std::array<std::uint8_t, 8> trailSlotsB1{};
     // +0xBD: freeze / hit-stop countdown in frames, read by FUN_0023a068.
     std::int8_t freezeTimerBd = 0;
 
