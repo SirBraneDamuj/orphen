@@ -72,7 +72,14 @@ namespace orphen::ported::resource
     // `piVar3 = blob + *(int *)(groupTable + group * 8)`: the group index is a
     // table of {offset, count} pairs whose offset points at that group's own
     // {records, names, descriptions} triple. Records are the first of the three.
-    if (blob_.empty() || groupTableOffset_ == 0 || index < 0)
+    //
+    // **A negative index is legal here.** FUN_00229688 does no bounds check at
+    // all, and FUN_0025bae8's group-0 path hands it `type - 0x7C`, which is
+    // negative for every attackable thing whose type id sits below the enemy
+    // range -- the type 0x62 flyer among them, at -26. The read lands earlier in
+    // the same blob and is perfectly deterministic, so it is reproduced rather
+    // than rejected. See FUN_0025bae8_record.
+    if (blob_.empty() || groupTableOffset_ == 0)
     {
       return std::nullopt;
     }
@@ -82,11 +89,14 @@ namespace orphen::ported::resource
       return std::nullopt;
     }
     const std::uint32_t records = u32At(blob_, triple);
-    const std::size_t at = records + static_cast<std::size_t>(index) * 0x28;
-    if (records == 0 || at + 0x28 > blob_.size())
+    const std::int64_t signedAt =
+        static_cast<std::int64_t>(records) + static_cast<std::int64_t>(index) * 0x28;
+    if (records == 0 || signedAt < 0 ||
+        static_cast<std::uint64_t>(signedAt) + 0x28 > blob_.size())
     {
       return std::nullopt;
     }
+    const std::size_t at = static_cast<std::size_t>(signedAt);
 
     StatRecord record;
     record.halfword00 = i16At(blob_, at + 0x00);
@@ -112,6 +122,17 @@ namespace orphen::ported::resource
     if (blob_.empty() || groupTableOffset_ == 0)
     {
       return std::nullopt;
+    }
+
+    // Group 0 is the enemy table and does not take the id directly: the record
+    // index is `(short)(id - 0x7C)`, and there is no count check on this path.
+    // For a type below 0x7C that index is negative and the read runs backwards
+    // out of the group -- see FUN_00229688_record. For the type 0x62 flyer it
+    // lands in the string pool, and the byte FUN_00216140 uses as its element
+    // resistance comes out as 46.
+    if (group == 0)
+    {
+      return FUN_00229688_record(0, static_cast<std::int16_t>(id - 0x7C));
     }
 
     // `if (*(short *)(groupTable + 0xc) < id)` -- the count beside group 1's

@@ -459,6 +459,37 @@ namespace
         config.spawnOverride = spawn;
         continue;
       }
+      if (argument == "--place-slot")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--place-slot requires slot,x,y,z");
+        }
+        const std::string value = argv[++argumentIndex];
+        std::vector<std::string> fields;
+        std::size_t start = 0;
+        while (true)
+        {
+          const std::size_t comma = value.find(',', start);
+          fields.push_back(value.substr(start, comma - start));
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        if (fields.size() != 4)
+        {
+          throw std::runtime_error("--place-slot expects slot,x,y,z");
+        }
+        orphen::port::PortRuntimeConfig::PlacedSlot placed;
+        placed.slot = std::stoi(fields[0]);
+        placed.position.x = std::stof(fields[1]);
+        placed.position.y = std::stof(fields[2]);
+        placed.position.z = std::stof(fields[3]);
+        config.placedSlots.push_back(placed);
+        continue;
+      }
       if (argument == "--load-only")
       {
         config.loadOnly = true;

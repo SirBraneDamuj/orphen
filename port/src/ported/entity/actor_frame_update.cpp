@@ -43,6 +43,18 @@ namespace orphen::ported::entity
     // The radius FUN_00256130 gives the blade's light slot, 0x40000000.
     constexpr float kBladeLightRadius = 2.0f;
 
+    // DAT_0035468c, read out of eeMemory.bin: the magic projectile's hit box
+    // half-extent in the horizontal plane.
+    constexpr float kDAT_0035468c_hitExtent = 0.150000005960464478f;
+
+    // The type 0x62 death tumble, read out of eeMemory.bin: uGpffffa5dc is the
+    // pitch it falls toward (pi/2, flat on its back), fGpffffa5d8 the pitch step
+    // per tick and fGpffffa5e0 the spin -- exactly twice the pitch rate, so it
+    // rolls through half a turn while it tips over.
+    constexpr float kuGpffffa5dc_deathPitchTarget = 1.57079601287841797f;
+    constexpr float kfGpffffa5d8_deathPitchRate = 0.00545415282249450684f;
+    constexpr float kfGpffffa5e0_deathSpinRate = 0.0109083056449890137f;
+
     // ---- type 0x44, the homing magic projectile ---------------------------
     // The constant block at 0x0035467C, plus the two gp-relative values
     // FUN_002d2e00 seeds the entity from. Every one read out of s01_e24.bin.
@@ -117,6 +129,11 @@ namespace orphen::ported::entity
     // velocity lands on exactly zero, so the sign survives the next subtract.
     constexpr float kDAT_00352428_velocityFloor = -1.0e-05f;
   } // namespace
+
+  // Defined further down; the enemy's clone loop calls it before its definition.
+  void FUN_00229ef0_set_scale(OriginalEntity &entity, float scale,
+                              const EntityDescriptorTable *descriptors);
+
 
   bool FUN_0023a068_freeze_gate(OriginalEntity &entity, std::uint32_t frameTicks)
   {
@@ -390,11 +407,10 @@ namespace orphen::ported::entity
       clone.positionY28 = spawnY;
       clone.groundHeight4c = spawnY;
 
-      // FUN_00229ef0(scale, clone): the descriptor's radius and height times the
-      // scale. This is what makes the clones visibly smaller than the leader.
-      clone.scale14c = cloneScale;
-      clone.radius54 *= cloneScale;
-      clone.height58 *= cloneScale;
+      // FUN_00229ef0(leaderScale * DAT_00354510, clone): the *descriptor's*
+      // radius and height times the scale, not the clone's own scaled again.
+      // This is what makes the clones visibly smaller than the leader.
+      FUN_00229ef0_set_scale(clone, cloneScale, environment.descriptors);
 
       FUN_00225bf0_set_state_and_animation(clone, 3, 2);
       clone.verticalAcceleration48 = kDAT_0035450c_enemyGravity;
@@ -592,6 +608,57 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002cda60: type 0x62's state 6, where a killed flyer goes.
+  //
+  // Two halves, and which one runs is decided by +0x0C bit 0 -- the grounded
+  // flag the physics pass sets. FUN_002cd0a0 *clears* that bit on the frame it
+  // kills the flyer, so the death always starts in the air:
+  //
+  //   airborne  pitch the body over toward pi/2 and spin it about its own
+  //             facing, both capped per tick. Nothing here drives it downward;
+  //             the gravity in +0x48 is what brings it down, which is why a
+  //             flyer killed over a pit keeps tumbling.
+  //
+  //   grounded  swap to animation 5, the landing, and stop drawing the pitch.
+  //             When *that* animation completes, +0x06 is assigned 0x10 -- an
+  //             assignment, not an or, so every other animation latch is
+  //             dropped with it -- and +0x04 gets bit 0x800, which is what
+  //             hands the slot to FUN_0023a568 to fade out and free itself.
+  //
+  // The animation the flyer is *in* while airborne is 4, set by FUN_002cd0a0's
+  // kill branch, not by anything here. eeMemory.bin catches two flyers in
+  // exactly that state: slots 24 and 25, state 6, animation 4, +0x0C bit 0
+  // clear, +0x134 at 0x7C and +0x138 at 0xC0.
+  void FUN_002cda60_enemy62_death(OriginalEntity &entity, const ActorEnvironment &environment)
+  {
+    if ((entity.collisionFlags0c & 1u) != 0)
+    {
+      if (entity.animationA0 == 5)
+      {
+        if ((entity.flags06 & kAnimationComplete06) != 0)
+        {
+          entity.flags06 = 0x0010;
+          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | kFading04);
+        }
+      }
+      else
+      {
+        FUN_00225bc8_set_animation(entity, 5);
+        entity.rotationX154 = 0.0f;
+        // +0x08 bit 0x10: "not drawn last frame", which makes the pose filter
+        // snap to the landing rather than easing into it from the tumble.
+        entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x0010u);
+      }
+      return;
+    }
+
+    const float ticks = static_cast<float>(environment.frameTicks);
+    entity.rotationX154 += FUN_0023a320_approach_angle(
+        entity.rotationX154, kuGpffffa5dc_deathPitchTarget, ticks * kfGpffffa5d8_deathPitchRate);
+    entity.facingRadians5c = orphen::ported::model::FUN_00216690_wrap_angle(
+        entity.facingRadians5c + ticks * kfGpffffa5e0_deathSpinRate);
+  }
+
   // FUN_002cd0a0 (type 0x62): freeze gate, the +0xBE hit reaction, the +0x1C2
   // countdown, then PTR_FUN_00326660[+0x60].
   void FUN_002cd0a0_enemy62(OriginalEntity &entity,
@@ -644,7 +711,8 @@ namespace orphen::ported::entity
     const std::uint32_t handler = environment.dispatchTable->stateHandler(
         kPTR_FUN_00326660_enemy62States, kEnemy62StateCount, entity.state60);
 
-    const bool implemented = entity.state60 == 0 || entity.state60 == 3;
+    const bool implemented =
+        entity.state60 == 0 || entity.state60 == 3 || entity.state60 == 6;
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
@@ -653,6 +721,10 @@ namespace orphen::ported::entity
     else if (entity.state60 == 3)
     {
       FUN_002cd3a0_enemy62_chase(entity, environment);
+    }
+    else if (entity.state60 == 6)
+    {
+      FUN_002cda60_enemy62_death(entity, environment);
     }
 
     // FUN_002cd0a0 lines 39-52: the flap runs after the state handler, gated on
@@ -1334,9 +1406,21 @@ namespace orphen::ported::entity
       }
     }
 
-    // FUN_00216078(ownerType, 0, effect + 0x198) fills the effect's +0x198 from
-    // a per-type parameter table, and the only reader is FUN_002148a8 -- the
-    // swept hit test, which is not ported. See FUN_002d21b8 below.
+    // FUN_00216078(ownerType, 0, effect + 0x198): record 0 of the *swinger's*
+    // type, not the blade's. For the lead player that is `01 00 1e 00` --
+    // element 0, +30% power, reaction 0. FUN_002148a8 is its only reader.
+    //
+    // The original leaves +0x198 as it was when the type has no record; so does
+    // this, and a blade with a zero record deals the floor of one point.
+    if (environment.DAT_00354d6c_hitParameters != nullptr)
+    {
+      const auto record =
+          environment.DAT_00354d6c_hitParameters->FUN_00216078_record(owner.typeId00, 0);
+      if (record.has_value())
+      {
+        effect.hitParameters198 = record->packed();
+      }
+    }
 
     return static_cast<std::int32_t>(slot);
   }
@@ -1362,10 +1446,12 @@ namespace orphen::ported::entity
   // test's idle). Animation 2 is the dissipate FUN_00256130 selects when the
   // swing's keyframe event fires, and completing *that* deletes the blade.
   //
-  // Not ported: FUN_002148a8, the swept hit test the blade runs on animations 0
-  // and 1, and FUN_002d59c0, the reaction it triggers. It is several hundred
-  // lines of capsule sweeps against the entity pool, and nothing in the port
-  // yet takes damage.
+  // The fourth job is the one that makes the swing mean anything: on animations
+  // 0 and 1 the blade runs FUN_002148a8, the swept hit test, against the whole
+  // pool. FUN_002d59c0 -- `FUN_0023bbd8(0, 3)` -- is the reaction it would
+  // trigger, but FUN_002148a8's return value is unreachable-dead in this build
+  // and always zero, so the call site is written the original's way and never
+  // fires. See ported/entity/original_hit_test.cpp.
   void FUN_002d21b8_sword_effect(OriginalEntity &effect,
                                  std::size_t slot,
                                  const ActorEnvironment &environment)
@@ -1378,6 +1464,36 @@ namespace orphen::ported::entity
 
     const std::int16_t animation = static_cast<std::int16_t>(effect.animationA0);
     const bool animationComplete = (effect.flags06 & kAnimationComplete06) != 0;
+
+    // FUN_002d21b8's control flow: the hit test runs on animation 0 and on
+    // animation 1, but *not* on the frame animation 1 completes -- that frame
+    // falls through to the animation-0 switch and jumps straight to the light
+    // block. Animation 2, the dissipate, never tests at all.
+    bool runHitTest = false;
+    if (animation == 1)
+    {
+      runHitTest = !animationComplete;
+    }
+    else if (animation == 0)
+    {
+      runHitTest = true;
+    }
+    if (runHitTest && environment.hitTest != nullptr)
+    {
+      const auto parameters =
+          orphen::ported::resource::HitParameters::unpack(effect.hitParameters198);
+      const std::int8_t contacts =
+          FUN_002148a8_swept_hit_test(effect, slot, parameters, *environment.hitTest);
+      if (contacts != 0)
+      {
+        // FUN_002d59c0, one call: FUN_0023bbd8(0, 3), the hit cue. That is the
+        // sound engine's priority-channel entry point rather than
+        // FUN_00267d38's, and the port reaches the engine only through the
+        // latter -- the same reason the magic launch skips its own
+        // FUN_0023bbd8. The branch is here so the cue is one line away once
+        // that path exists.
+      }
+    }
 
     if (animation == 1)
     {
@@ -1467,6 +1583,9 @@ namespace orphen::ported::entity
     {
       entity.radius54 = scale * descriptor->radius0x08;
       entity.height58 = scale * descriptor->height0x0c;
+      // The hit-test volume at +0x11C/+0x120 comes off the same two lines.
+      entity.hitVolumeRadius11c = entity.radius54;
+      entity.hitVolumeHeight120 = entity.height58;
     }
   }
 
@@ -1591,6 +1710,8 @@ namespace orphen::ported::entity
     // every time the scale changes, so this is only the starting size.
     projectile.radius54 = kuGpffffa73c_projectileExtent;
     projectile.height58 = kuGpffffa73c_projectileExtent;
+    projectile.hitVolumeRadius11c = kuGpffffa73c_projectileExtent;
+    projectile.hitVolumeHeight120 = kuGpffffa73c_projectileExtent;
     projectile.projectileSpeed19c = kuGpffffa740_projectileSpeed;
 
     // FUN_00266050 again -- the projectile carries its own light the whole way,
@@ -1624,9 +1745,18 @@ namespace orphen::ported::entity
     projectile.hitCooldown1aa = kProjectileHitCooldown;
     projectile.homingTimer1a8 = kProjectileHomingTicks;
 
-    // FUN_00216078(1, 1, projectile + 0x1AC) fills the hit test's parameters
-    // from the caster type's table. FUN_00215ac8 is its only reader and is not
-    // ported; see FUN_002d2470 below.
+    // FUN_00216078(casterType, 1, projectile + 0x1AC): record *1* of the
+    // caster's type, where the sword blade takes record 0. FUN_00215ac8 is its
+    // only reader.
+    if (environment.DAT_00354d6c_hitParameters != nullptr)
+    {
+      const auto record =
+          environment.DAT_00354d6c_hitParameters->FUN_00216078_record(owner.typeId00, 1);
+      if (record.has_value())
+      {
+        projectile.hitParameters1ac = record->packed();
+      }
+    }
 
     return static_cast<std::int32_t>(slot);
   }
@@ -1650,11 +1780,11 @@ namespace orphen::ported::entity
   // leaves the hand travelling dead straight and only tightens later, which is
   // most of why it reads as a guided missile rather than a tracking beam.
   //
-  // NOT PORTED, and both are called out at their sites below: FUN_00215ac8, the
-  // swept hit test, and the hundred-particle impact burst FUN_002d2470 builds
-  // into DAT_00355620 before it enters state 4. The burst has its own renderer
-  // installed at DAT_00355e0c (FUN_002d2348) and is a separate slice; state 4
-  // itself is here, so the lifetime is complete and the light still flares out.
+  // The hit test is FUN_00215ac8, the plain box form: a 0.15 cube in the
+  // horizontal plane running from the projectile's feet to its full height, run
+  // once the cooldown at +0x1AA expires. Its contact count is the third of the
+  // three things that detonate the bolt, and the only one that ever fires on
+  // something alive.
   void FUN_002d2470_magic_projectile(OriginalEntity &projectile,
                                      std::size_t slot,
                                      const ActorEnvironment &environment)
@@ -1750,11 +1880,31 @@ namespace orphen::ported::entity
 
     // ---- state 1: flying ---------------------------------------------------
 
-    // +0x1AA, the hit-test cooldown. FUN_00215ac8 -- the swept box test against
-    // the entity pool, using the parameters at +0x1AC -- would run here once it
-    // reaches zero, and its hit is one of the three things that detonate the
-    // projectile. It is not ported, so only the other two can.
-    if (projectile.hitCooldown1aa != 0)
+    // +0x1AA, the hit-test cooldown. The test and the countdown are the two
+    // halves of one `if`: while the cooldown is running nothing is tested, and
+    // the frame it reaches zero is the first the box is measured.
+    std::int8_t contacts = 0;
+    if (projectile.hitCooldown1aa == 0)
+    {
+      // DAT_0035468c, 0.15: a cube in the horizontal plane, and vertically the
+      // projectile's own +0x28 to +0x28 + +0x58. Not centred on it -- the box
+      // sits on its feet.
+      const std::array<float, 6> box{
+          projectile.positionX20 - kDAT_0035468c_hitExtent,
+          projectile.positionX20 + kDAT_0035468c_hitExtent,
+          projectile.positionZ24 - kDAT_0035468c_hitExtent,
+          projectile.positionZ24 + kDAT_0035468c_hitExtent,
+          projectile.positionY28,
+          projectile.positionY28 + projectile.height58};
+      if (environment.hitTest != nullptr)
+      {
+        const auto parameters =
+            orphen::ported::resource::HitParameters::unpack(projectile.hitParameters1ac);
+        contacts = FUN_00215ac8_box_hit_test(projectile, slot, box, parameters,
+                                             *environment.hitTest);
+      }
+    }
+    else
     {
       const std::int16_t remaining = static_cast<std::int16_t>(
           projectile.hitCooldown1aa - static_cast<std::uint16_t>(environment.frameTicks));
@@ -1772,13 +1922,14 @@ namespace orphen::ported::entity
       projectile.halfword04 = static_cast<std::uint16_t>(projectile.halfword04 & 0xfffeu);
     }
 
-    // Detonate: hit something solid, or outlived 0x2580 ticks (five seconds).
+    // Detonate: hit something solid, outlived 0x2580 ticks (five seconds), or
+    // the box test above touched something.
     //
-    // The wall case does not currently fire. `integrateNonPlayerMovement` is not
+    // The wall case still does not fire. `integrateNonPlayerMovement` is not
     // FUN_002262c0 -- see the note on it -- so a non-player actor passes through
-    // geometry and +0x0C never picks up the blocked bits. Until that is the real
-    // thing, the projectile always ends on the timeout.
-    if ((projectile.collisionFlags0c & 0x0266u) != 0 || lifetime > kProjectileMaxLifetime)
+    // geometry and +0x0C never picks up the blocked bits.
+    if ((projectile.collisionFlags0c & 0x0266u) != 0 || lifetime > kProjectileMaxLifetime ||
+        contacts != 0)
     {
       // 0x002d2818: up to a hundred particles into DAT_00355620, fanning out
       // from the projectile's own facing, and FUN_002d2348 installed as their

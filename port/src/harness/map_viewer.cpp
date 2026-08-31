@@ -2966,14 +2966,29 @@ namespace orphen::harness
       const float v1 = quad.v1 / static_cast<float>(texture.height);
 
       glBegin(GL_QUADS);
-      glTexCoord2f(u0, v0);
-      glVertex3f(quad.x0, quad.y0, quad.viewZ);
-      glTexCoord2f(u1, v0);
-      glVertex3f(quad.x1, quad.y0, quad.viewZ);
-      glTexCoord2f(u1, v1);
-      glVertex3f(quad.x1, quad.y1, quad.viewZ);
-      glTexCoord2f(u0, v1);
-      glVertex3f(quad.x0, quad.y1, quad.viewZ);
+      if (quad.oriented)
+      {
+        // A world-space quad: four corners, four depths, four texels. The hit
+        // sparks are the only source, and their packet lists the corners in the
+        // order FUN_00220c00 built them, so they need no rewinding here.
+        for (int corner = 0; corner < 4; ++corner)
+        {
+          glTexCoord2f(quad.cornerU[corner] / static_cast<float>(texture.width),
+                       quad.cornerV[corner] / static_cast<float>(texture.height));
+          glVertex3f(quad.cornerX[corner], quad.cornerY[corner], quad.cornerZ[corner]);
+        }
+      }
+      else
+      {
+        glTexCoord2f(u0, v0);
+        glVertex3f(quad.x0, quad.y0, quad.viewZ);
+        glTexCoord2f(u1, v0);
+        glVertex3f(quad.x1, quad.y0, quad.viewZ);
+        glTexCoord2f(u1, v1);
+        glVertex3f(quad.x1, quad.y1, quad.viewZ);
+        glTexCoord2f(u0, v1);
+        glVertex3f(quad.x0, quad.y1, quad.viewZ);
+      }
       glEnd();
     }
 

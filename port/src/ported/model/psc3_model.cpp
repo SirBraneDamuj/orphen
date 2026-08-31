@@ -11,6 +11,7 @@ namespace orphen::ported::model
 
     constexpr std::size_t kSubmeshStride = 0x14;
     constexpr std::size_t kPrimitiveStride = 0x18;
+    constexpr std::size_t kHitVolumeStride = 0x10;
     constexpr std::size_t kSubdrawStride = 10;
     constexpr std::size_t kVertexStride = 10;
     constexpr std::size_t kNormalStride = 16;
@@ -133,6 +134,43 @@ namespace orphen::ported::model
     model.animationTableOffset = u32At(bytes, 0x0C);
     model.animationCount = u16At(bytes, 0x06);
     model.keyframePoolOffset = u32At(bytes, 0x2C);
+
+    // Header +0x30/+0x34, the swept hit test's volumes. Absent on most models.
+    // Their extents are not stored: the column map runs to the record table and
+    // the record table runs to whatever section follows it, or to the end of
+    // the blob when nothing does.
+    const std::uint32_t hitColumnOffset = u32At(bytes, 0x30);
+    const std::uint32_t hitVolumeOffset = u32At(bytes, 0x34);
+    if (hitColumnOffset != 0 && hitVolumeOffset > hitColumnOffset &&
+        fits(bytes, hitColumnOffset, hitVolumeOffset - hitColumnOffset))
+    {
+      model.hitVolumeColumnMap.assign(bytes.begin() + hitColumnOffset,
+                                      bytes.begin() + hitVolumeOffset);
+    }
+    if (hitVolumeOffset != 0 && hitVolumeOffset < bytes.size())
+    {
+      std::size_t end = bytes.size();
+      const std::uint32_t following = u32At(bytes, 0x38);
+      if (following > hitVolumeOffset && following <= bytes.size())
+      {
+        end = following;
+      }
+      const std::size_t count = (end - hitVolumeOffset) / kHitVolumeStride;
+      model.hitVolumes.reserve(count);
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        const std::size_t at = hitVolumeOffset + index * kHitVolumeStride;
+        Psc3HitVolume volume;
+        volume.steps = s16At(bytes, at + 0x00);
+        volume.radius = s16At(bytes, at + 0x02);
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+          volume.pointA[axis] = s16At(bytes, at + 0x04 + axis * 2);
+          volume.pointB[axis] = s16At(bytes, at + 0x0A + axis * 2);
+        }
+        model.hitVolumes.push_back(volume);
+      }
+    }
 
     if (submeshCount == 0 || submeshOffset == 0 || vertexOffset == 0 || primitiveOffset == 0)
     {

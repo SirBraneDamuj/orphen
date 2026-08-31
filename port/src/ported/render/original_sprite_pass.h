@@ -104,11 +104,29 @@ namespace orphen::ported::render
   {
     // The four corners, already flipped if the record asked for it. x0/y0 is
     // the first corner and x1/y1 the opposite one; either may be the larger.
+    // Ignored when `oriented` is set.
     float x0 = 0.0f;
     float y0 = 0.0f;
     float x1 = 0.0f;
     float y1 = 0.0f;
     float viewZ = 0.0f;
+
+    // Set for a quad whose corners are four independent points rather than an
+    // axis-aligned rectangle at one depth. Nothing in the sprite pass itself
+    // produces one -- FUN_0020f510 and FUN_002d3058 both build their corners in
+    // GS screen units around a projected origin -- but the hit sparks
+    // (FUN_00220c00) build a streak in **world** space and only project at the
+    // end, so their four corners each carry their own depth and their own
+    // texel. They still reach the GS through the same display list, which is
+    // why they are carried here rather than in a list of their own.
+    bool oriented = false;
+    // View space, in the corner order the packet uses. u/v are texels, matched
+    // to the same corner index.
+    float cornerX[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float cornerY[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float cornerZ[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float cornerU[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float cornerV[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Texels, not normalised -- the caller divides by the bound texture's size
     // the way the dialogue sprites do.
@@ -201,11 +219,17 @@ namespace orphen::ported::render
   // packet puts the origin at two vertices and origin+half at the other two. At
   // the depth these are used, that is a one to three pixel dot either way.
   //
-  // The texture is the boot sheet in slot 0x2A -- FUN_002d3058 writes 0x2B into
-  // the packet and that field is slot + 1, the same encoding FUN_0020f510 uses
-  // for entity +0x136. The UV rectangle is fixed, and DAT_10008080's bit 0x8000
-  // selects blend mode 2, additive.
-  inline constexpr int kParticleTextureSlot = 0x2A;
+  // The texture is the boot sheet in slot 0x2B: FUN_002d3058 writes 0x2B into
+  // the packet's texture field and that field is the slot itself. Slot 0x2B
+  // holds texture 0x177, whose (65,177)-(79,191) is a round white-blue spark
+  // exactly filling the rectangle; slot 0x2A's texture 0x178 has a flat grey
+  // noise field there. See original_hit_sparks.h, which reaches the same
+  // reading from the other effect path -- and note that FUN_0020f510 writes
+  // `slot + 1` into the same field, so the two producers disagree by one.
+  //
+  // The UV rectangle is fixed, and DAT_10008080's bit 0x8000 selects blend
+  // mode 2, additive.
+  inline constexpr int kParticleTextureSlot = 0x2B;
   inline constexpr float kParticleU0 = 65.0f;  // 0.2539 * 256, the packet stores
   inline constexpr float kParticleV0 = 177.0f; // normalised and scales by 4096
   inline constexpr float kParticleU1 = 79.0f;  // to reach GS 1/16-texel units

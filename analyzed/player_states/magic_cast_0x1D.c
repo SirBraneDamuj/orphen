@@ -38,11 +38,16 @@
  * FUN_002d2ca8 and FUN_002d2470 into
  * port/src/ported/entity/actor_frame_update.cpp. See port/README.md.
  *
- * NOT PORTED: FUN_00215ac8, the swept hit test, and with it
- * FUN_00216078(1, 1, ...) which fills the parameters at +0x1AC that the test is
- * the only reader of; and the hundred-particle impact burst FUN_002d2470 builds
- * into DAT_00355620, which installs its own stepper at DAT_00355E0C
- * (FUN_002d2348). State 4 itself is ported, so the lifetime is complete.
+ * FUN_00215ac8 and its parameters are analysed and ported -- see
+ * analyzed/sword_hit_test_and_damage.c. It returns the CONTACT COUNT, which the
+ * decompiler hides behind an apparently unassigned local, and that count is the
+ * third of the three things that detonate the bolt.
+ *
+ * FUN_00216078(casterType, 1, ...) fills the parameters at +0x1AC that the test
+ * is the only reader of, and it too is ported. The hundred-particle impact
+ * burst into DAT_00355620 was ported earlier. So the whole lifetime is now
+ * covered, and a bolt that reaches an enemy detonates on it instead of flying
+ * on to its timeout.
  *
  * DRAWN BY THE OTHER PASS. Type 0x44's +0x02 carries bit 0x200, and
  * FUN_0020c5a8 refuses to put such an entity in the skeletal draw list at all --

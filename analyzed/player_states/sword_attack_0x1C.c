@@ -41,9 +41,11 @@
  * (FUN_00256130_spawn_sword_effect, FUN_002d21b8_sword_effect,
  * FUN_00265ec0_destroy_entity). See port/README.md.
  *
- * NOT ANALYSED: FUN_002148a8, the swept hit test, and FUN_002d59c0, its
- * reaction. FUN_00216078 fills the blade's +0x198 from a per-type parameter
- * table and the hit test is its only reader.
+ * FUN_002148a8, the swept hit test, and the damage it charges are analysed and
+ * ported -- see analyzed/sword_hit_test_and_damage.c. FUN_002d59c0 is one call,
+ * FUN_0023bbd8(0, 3), the hit cue on the sound engine's priority channel; the
+ * port reaches the engine only through FUN_00267d38, so the branch is there and
+ * the cue is not.
  */
 
 #include "orphen_globals.h"
@@ -51,9 +53,18 @@
 /* --------------------------------------------------------------------------
  * FUN_002560e8 -- the only way out of state 0x1C.
  *
- * DAT_00355634 and FUN_00215e48 clear the swing's already-hit set: eight words
- * at entity +0xCC plus +0x06 bit 0x40, so the next swing can hit the same
- * target again.
+ * FUN_00215e48 clears the already-hit set -- eight words from +0xD0 down, plus
+ * +0x06 bit 0x40 -- so the next swing can hit the same target again.
+ *
+ * Two things about that call. It is passed the PLAYER, not the blade: a0 is
+ * untouched across it, which the disassembly at 0x00256108 confirms. The set
+ * FUN_002148a8 reads is the blade's own, and the blade is destroyed at the end
+ * of every swing, so this is vestigial for the sword. And the eight words it
+ * clears are one word out from the eight the tests read -- see
+ * analyzed/sword_hit_test_and_damage.c.
+ *
+ * DAT_00355634 is dead: this is the only function in the executable that
+ * touches that byte.
  */
 bool player_sword_attack_finished(entity *e)
 {
@@ -171,10 +182,14 @@ void update_sword_blade_entity(entity *blade)
     goto light;
   }
 
-  /* Animations 0 and 1 run the swept hit test. NOT ANALYSED. */
+  /* Animations 0 and 1 run the swept hit test -- but not the frame animation 1
+   * completes, which falls through to the animation-0 switch above and jumps
+   * straight to the light block. The return is the CONTACT COUNT, not the
+   * constant the decompiler makes it look like; see
+   * analyzed/sword_hit_test_and_damage.c. */
   if (FUN_002148a8(blade, &blade->hitParams_198) != 0)
   {
-    FUN_002d59c0();
+    FUN_002d59c0(); /* FUN_0023bbd8(0, 3), the hit cue */
   }
 
 light:

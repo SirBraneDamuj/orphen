@@ -1,5 +1,6 @@
 #include "ported/player/original_player_controller.h"
 
+#include "ported/entity/original_hit_test.h"
 #include "ported/original_frame_timing.h"
 
 #include <algorithm>
@@ -471,17 +472,25 @@ namespace orphen::ported::player
   }
 
   // FUN_002560e8. The one gate on the whole of state 0x1C: when the swing
-  // animation reports complete, drop back to idle. The original also does
-  // `DAT_00355634 = 0` and calls FUN_00215e48, which clear the swing's
-  // already-hit set (eight words at entity +0xCC, plus +0x06 bit 0x40) so the
-  // next swing can hit the same target again. There is no hit test here to
-  // feed, so neither is reproduced.
+  // animation reports complete, drop back to idle.
+  //
+  // It also clears the **player's** already-hit set, not the blade's -- the
+  // register holding the entity is untouched across the call, which the
+  // disassembly at 0x00256108 confirms. That is vestigial for the sword: the
+  // set FUN_002148a8 actually reads and writes is the blade's own, and the
+  // blade is destroyed at the end of every swing, so it starts each one clear
+  // regardless. Reproduced because the write is real and clearing +0x06 bit
+  // 0x40 on the player is visible to anything else that latches it.
+  //
+  // `DAT_00355634 = 0` is the other half, and it is dead: this is the only
+  // function in the executable that touches that byte.
   bool OriginalPlayerController::FUN_002560e8_end_on_animation_complete()
   {
     if ((entity().flags06 & kAnimationComplete06) == 0)
     {
       return false;
     }
+    orphen::ported::entity::FUN_00215e48_clear_hit_set(entity());
     FUN_00252d88_return_to_idle_state();
     return true;
   }

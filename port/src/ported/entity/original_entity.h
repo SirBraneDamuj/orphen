@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace orphen::ported::entity
@@ -152,6 +153,75 @@ namespace orphen::ported::entity
     // follower to face it (plus pi) before playing the stagger, so the
     // character reels away from the blow rather than in a fixed direction.
     float hitDirectionC4 = 0.0f;
+    // +0xC8: a bias added to the attacker's +0x5C to get the direction it
+    // stamps on a victim. Both hit tests read it; nothing in the executable
+    // writes it, and it is zero on every entity in both EE dumps -- so the
+    // stamped direction is the attacker's plain facing. Modelled because the
+    // read is real, not because the value ever differs.
+    float hitDirectionBiasC8 = 0.0f;
+
+    // +0xBB: which kind of thing landed the last hit -- 1 when the attacker's
+    // +0x02 carries 0x1001 (a player-side effect), 0 otherwise. Written by both
+    // hit tests, FUN_002148a8 and FUN_00215670.
+    std::uint8_t hitSourceKindBb = 0;
+    // +0xBC: the hit record's byte 3, the reaction the victim should play.
+    // FUN_00216140 stores it before it has decided on any damage.
+    std::uint8_t hitReactionBc = 0;
+    // +0xC0: the attack id FUN_00215670 copies out of its parameter block.
+    // FUN_002148a8 only reads it, as a gate: a victim with a non-zero +0xC0 is
+    // already committed to another attack this frame and is skipped.
+    std::uint16_t hitSourceC0 = 0;
+    // +0xC2: the hit record's halfword 0, the element/behaviour bit set. Kept
+    // because FUN_00216140 tests bit 0x4000 on it and FUN_00273610 clears it.
+    std::uint16_t hitFlagsC2 = 0;
+    // +0xCC: the pool slot of whatever landed the last hit. The original stores
+    // a pointer; the port stores the slot, and -1 for "nothing".
+    std::int16_t lastAttackerSlotCc = -1;
+
+    // +0xD0..+0xF3: the swept hit test's already-hit set, one bit per pool
+    // slot, so a single swing cannot hit the same target twice.
+    //
+    // **The window really is nine words and the two halves disagree.**
+    // FUN_002148a8 and FUN_00215670 both start a `uint *` at +0xD0 and step it
+    // *before* the first slot, so slot n's bit lives in word `(n >> 5) + 1` --
+    // +0xD4 for slots 0..31, up to +0xF0 for slots 224..255. FUN_00215e48
+    // clears eight words from +0xD0 down, so it clears +0xD0 (which no slot
+    // uses) and misses +0xF0 (which slots 224..255 do). Both halves are
+    // reproduced here rather than tidied, because the seam is the behaviour: a
+    // slot 224 or above stays flagged for the rest of the scene once hit.
+    //
+    // A second seam sits on top of it. +0xF0 and +0x100 are also where
+    // FUN_002148a8 caches last frame's blade endpoints, so on the real machine
+    // the word slots 224..255 test is the float bits of that cached X. The port
+    // keeps the two as separate members; s01_e024 never fills the pool past
+    // slot 29, so nothing can observe the difference.
+    std::array<std::uint32_t, 9> alreadyHitD0{};
+
+    // +0xF0 and +0x100: last frame's interpolated blade endpoints, in the
+    // blade's own local space. FUN_002148a8 writes them every frame it runs and
+    // reads them back on the next one -- they are what makes the test a sweep
+    // rather than an instant. +0x06 bit 0x40 marks them as valid.
+    std::array<float, 3> sweptPreviousAf0{};
+    std::array<float, 3> sweptPreviousB100{};
+
+    // +0x110..+0x120: the volume the hit tests measure against, which is *not*
+    // +0x54/+0x58 even though FUN_00229ef0 fills both from the same numbers.
+    // +0x110..+0x118 is a centre offset (zero on everything in s01_e024),
+    // +0x11C the horizontal radius and +0x120 the height above +0x28.
+    std::array<float, 3> hitVolumeOffset110{};
+    float hitVolumeRadius11c = 0.15f;
+    float hitVolumeHeight120 = 0.8f;
+
+    // +0x124: the half-angle of the victim's guard arc, in radians. Zero means
+    // "no guard", which is every enemy in s01_e024; a non-zero value makes
+    // FUN_00216140 compare the hit direction against +0x5C and negate the
+    // damage when the blow lands inside the arc.
+    float guardArc124 = 0.0f;
+    // +0x128: maximum hit points, the denominator of the HP bar.
+    std::uint16_t maxHitPoints128 = 0;
+    // +0x12E: defence, subtracted from the attacker's scaled +0x12C. The
+    // difference is floored at 1, so a hit always costs at least one point.
+    std::uint16_t defence12e = 0;
     // +0x130: the placement record's id byte for a spawned prop. Script opcode
     // 0xB7 also writes it outright, which is how s01_e012's init tags its cast.
     std::int16_t recordId130 = -1;
@@ -194,6 +264,14 @@ namespace orphen::ported::entity
     // it as the number of companion clones to spawn. Object register 0x38 writes
     // it, which is how s01_e024's script tells its enemy to bring five friends.
     std::uint32_t eventFlagId198 = 0;
+    // +0x198 on an *effect* entity is the four attack bytes FUN_00216078
+    // copied out of SCR.BIN resource 0xBE, packed little-endian the way the
+    // original stores them. FUN_00256130 fills it when it spawns the sword
+    // blade and FUN_002148a8 is the only reader; resource::HitParameters
+    // unpacks it. Same halfword as eventFlagId198 in the original -- a blade is
+    // never a chest and never an interaction candidate, so the three uses
+    // cannot overlap.
+    std::uint32_t hitParameters198 = 0;
     // +0x198 doubles as the player's interaction target: FUN_00252828 writes
     // the candidate there. Kept apart from eventFlagId198 because the port
     // stores a slot index, not a pointer, and the two uses never overlap -- the
@@ -269,6 +347,14 @@ namespace orphen::ported::entity
     std::int32_t secondaryTarget1a4 = -1;    // +0x1A4: alternate target used when +0x1C4 == 2.
     float desiredFacing1a8 = 0.0f;           // +0x1A8: the angle state 3 turns toward.
     float desiredHeight1ac = 0.0f;           // +0x1AC: the height state 3 holds; also the party's move speed.
+    // +0x1AC on a type 0x44 magic projectile: the four attack bytes
+    // FUN_00216078 copied out of SCR.BIN resource 0xBE, packed the way the
+    // original stores them. Record *1* of the caster's type, where the sword
+    // blade takes record 0 -- `10 00 0a 00` for the lead player, element 4 at
+    // +10%. FUN_00215ac8 is the only reader. Kept apart from desiredHeight1ac
+    // because a projectile never holds a hover height and a flyer never carries
+    // an attack record.
+    std::uint32_t hitParameters1ac = 0;
     // +0x1B0: FUN_002cdb28's wing phase, in degrees. Ramps 25 per frame and
     // wraps from 60 back to -40, so one flap is four frames.
     float wingPhase1b0 = 0.0f;

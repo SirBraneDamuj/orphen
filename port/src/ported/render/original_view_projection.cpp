@@ -33,6 +33,16 @@ namespace orphen::ported::render
     matrix.at(1, 1) = cosine;
   }
 
+  void FUN_0020ba88_setRotationY(Matrix4 &matrix, float angleRadians)
+  {
+    const float cosine = std::cos(angleRadians);
+    const float sine = std::sin(angleRadians);
+    matrix.at(0, 0) = cosine;
+    matrix.at(0, 2) = sine;
+    matrix.at(2, 0) = -sine;
+    matrix.at(2, 2) = cosine;
+  }
+
   void FUN_0020ba30_setRotationX(Matrix4 &matrix, float angleRadians)
   {
     const float cosine = std::cos(angleRadians);

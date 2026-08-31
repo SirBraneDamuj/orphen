@@ -62,6 +62,8 @@ target_sources(orphen_port
         src/ported/player/original_item_window.cpp
         src/ported/player/original_item_window.h
         src/ported/resource/character_stats.cpp
+        src/ported/resource/hit_parameter_table.cpp
+        src/ported/resource/hit_parameter_table.h
         src/ported/resource/item_database.cpp
         src/ported/resource/item_database.h
         src/ported/sound/original_sequence_player.cpp
@@ -113,6 +115,10 @@ target_sources(orphen_port
     src/ported/entity/entity_pool.cpp
     src/ported/entity/original_particles.cpp
     src/ported/entity/original_particles.h
+    src/ported/entity/original_hit_test.cpp
+    src/ported/entity/original_hit_test.h
+    src/ported/entity/original_hit_sparks.cpp
+    src/ported/entity/original_hit_sparks.h
     src/ported/entity/entity_pool.h
     src/ported/entity/original_entity.h
     src/ported/entity/actor_dispatch_table.cpp

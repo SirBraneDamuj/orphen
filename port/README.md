@@ -2150,11 +2150,11 @@ grows, `FUN_002660d0` carries it along the flight, and state 4 fades it out. Tha
 light is what the homing was originally verified against, before there was
 anything to see.
 
-Not ported: `FUN_00215ac8`, the swept hit test, and with it
-`FUN_00216078(1, 1, ...)`, which fills the `+0x1AC` parameters it is the only
-reader of. The hundred-particle impact burst `FUN_002d2470` builds into
-`DAT_00355620` before entering state 4 *is* ported now -- see The spark shower,
-below -- and so is state 4 itself, so the lifetime is complete.
+`FUN_00215ac8` -- the box hit test -- and `FUN_00216078(casterType, 1, ...)`,
+which fills the `+0x1AC` parameters it is the only reader of, are both ported
+now; see Contact, damage and death, below. So is the hundred-particle impact
+burst, and so is state 4. The lifetime is complete, and a bolt that reaches an
+enemy detonates on it rather than flying on to its timeout.
 
 One caveat that is not the projectile's fault. `integrateNonPlayerMovement` is
 not `FUN_002262c0` -- see the note on it -- so where a flying actor is stopped is
@@ -2428,6 +2428,200 @@ projectile detonates around frame 165, the pool reads `alive=100` from there
 through frame 250, and it is empty again by 340. Screenshots are a poor check
 here: the bolt homes on the enemy cluster and leaves frame before it ends.
 
+## Contact, damage and death
+
+A hit is three things on three different frames, and keeping them apart is most
+of what makes this readable:
+
+1. an **effect** entity — the sword blade, the magic bolt — sweeps a volume
+   against the pool and calls `FUN_00216140` for whatever it touches;
+2. `FUN_00216140` works out what that contact costs and **adds it to the
+   victim's `+0xBE`**. It never reads hit points and never kills anything;
+3. the victim's own behaviour, next time it is ticked, drains `+0xBE` against
+   its `+0x12A` and decides whether that was fatal.
+
+`+0xBE` is a mailbox, not a subtraction. That is why a hit landed after a victim
+has already run this frame still counts, and why two attackers in one frame both
+land.
+
+The attacker in step 1 is the *effect*, not the swinger — `+0x12C`, `+0x02` and
+`+0x96` are all read off the blade. `FUN_00256130` copying the player's `+0x12C`
+onto it at spawn is the only place the two are connected.
+
+### The volume comes out of the model
+
+PSC3 header `+0x30` and `+0x34` are two sections nothing else reads, and only
+weapon-effect models carry them: `grp_0179` (the blade) has both, `grp_0001`
+(the player) has neither. That is the early return which makes `FUN_002148a8` a
+no-op for everything that is not a weapon, and it is why the parser had never
+needed them.
+
+`+0x30` is one byte per pose column — a record index, or `0xFF` for "no volume
+here". The blade's is sixteen bytes and only columns 1, 3, 4, 11 and 12 are
+armed, so the swing is dangerous for part of its arc and inert for the rest.
+`+0x34` holds `{steps, radius, A[3], B[3]}` records: a segment in model space,
+how many boxes to lay along it, and their half-extent in fortieths of a unit.
+
+**The sweep looks forward, not back.** The interpolation factor is `+0xA4 /
++0xA6` — the countdown *still to run* over the entry's duration — so it is 1 at
+the start of a timeline entry and 0 at its end, and the volume runs from the
+column being entered back toward the one being left. The pair actually measured
+is `[now, next frame]`: the near end is evaluated at `remaining - frameTicks`
+and cached into `+0xF0`/`+0x100`, and the far end is last frame's cache.
+`+0x06` bit `0x40` says the cache is valid, which is why forgetting the
+already-hit set and forgetting the sweep history are the same call.
+
+Between the two the test fills the gap: any box that moved more than four
+half-extents in a frame gets extra boxes appended, interpolated corner-wise. The
+cap is 31 and it **abandons the whole fill mid-segment** rather than clamping,
+so a very fast swing gets fewer boxes at its far end rather than coarser ones
+along its length.
+
+### The return value is not what the decompiler says
+
+`cStack_161` reads as a local nothing ever assigns, which is why the port used
+to call `FUN_002148a8` dead and treat the bolt's hit as unreachable. It is
+`sp+0x83F`, and the scratch buffer the test hands `FUN_00216140` starts at
+`sp+0` — `0x002164D0` is `sb v0, 2111(s2)`, `FUN_00216140` storing to exactly
+that byte. Ghidra never connects the two.
+
+**Both hit tests return the number of contacts.** That is what plays the sword's
+hit cue and what makes the magic bolt detonate on something alive instead of
+flying on to its five-second timeout.
+
+### Two seams worth knowing about
+
+**The already-hit set does not line up with its own clear.** Both tests start a
+`uint *` at `+0xD0` and step it *before* the first slot, so slot n's bit is in
+word `(n >> 5) + 1` — `+0xD4` for slots 0..31, up to `+0xF0` for 224..255.
+`FUN_00215e48` clears eight words from `+0xD0` down: it clears `+0xD0`, which no
+slot uses, and misses `+0xF0`, which slots 224..255 do. A slot that high stays
+flagged for the rest of the scene once hit. And `+0xF0` is also where the test
+caches last frame's blade endpoints, so on the real machine those slots test the
+float bits of a coordinate. Reproduced rather than tidied; `s01_e024` never
+fills the pool past slot 29, so nothing can observe it here.
+
+**The enemy resistance table is indexed by `type - 0x7C`, unchecked.** The type
+`0x62` flyer sits below the enemy range, so its index is **-26** and the read
+runs backwards out of the group into the blob's string pool. It is perfectly
+deterministic — same file, same offset — and it comes out as 46 for element 0.
+So the sword's `1.3x` lands on `trunc(0.46 * 1.3 * 1) = 0`, and the hit costs
+anything at all only because `FUN_00216140` floors the net at one point.
+
+That floor is confirmed from outside: `FUN_002206a8` spawns `damage * 10` hit
+sparks, and the save state holds two struck flyers with ten sparks each.
+
+### The flyers have no hit points
+
+`+0x128` and `+0x12A` are both zero on every type `0x62` in the dump, so
+`0 - damage < 1` on the first hit and **any** contact kills. `FUN_002cd0a0`'s
+kill branch then puts them in state 6 on animation 4, clears `+0x0C` bit 0 so
+the death starts airborne, and sets `+0x134` to `0x7C` and `+0x138` to `0xC0`.
+`eeMemory.bin` catches two of them mid-fall in exactly that state, one frame
+apart, both with `+0xCC` pointing at the blade.
+
+`FUN_002cda60`, state 6, splits on the grounded flag: airborne it pitches toward
+π/2 and spins about its own facing at exactly twice the pitch rate, so it rolls
+through half a turn while it tips over; grounded it swaps to animation 5 and,
+when that completes, assigns `+0x06 = 0x10` — an assignment, not an or — and
+raises `+0x04` bit `0x800` to hand the slot to `FUN_0023a568` to fade out and
+free itself.
+
+### The lead's own numbers
+
+`FUN_00251dc0`, which `FUN_0022a418` calls at scene init with `DAT_0058beb0`
+outright, copies four fields off the party record: max hit points, hit points,
+attack power and defence. Orphen's record gives 50 / 50 / 1 / 0, which is what
+the dump holds. Attack power is the number `FUN_00216140` scales, so without it
+every hit fell through the damage floor by accident.
+
+### Checking it
+
+`--actor-report` grew a `hit tests:` line — sweeps built, boxes laid down after
+subdivision, contacts, and the points those contacts charged — plus the world
+bounds of the last sweep, which is how you tell "the swing is too short" from
+"the swing is at the wrong height".
+
+The flyers in `s01_e024` hover about eight units above the floor the player can
+actually stand on, so they cannot be walked up to in the harness. `--place-slot
+<slot>,<x>,<y>,<z>` parks one pool entity at a fixed point every frame, which is
+scaffolding rather than anything the original does:
+
+```bat
+orphen_port.exe --disc-root . --scene s01_e024 --frames 400 ^
+  --spawn -2.5,-8,0 --place-slot 23,-2.15,-8.0,0.3 --press-attack 60 --actor-report
+```
+
+reports `sweeps=14 boxes=38 contacts=4 damage=4`, `live actors` down from 20 to
+16, and `type=0x62 state=6 -> 0x2cda60` running for 311 ticks. Swapping
+`--press-attack` for `--press-magic` and parking the flyer in the bolt's path
+gives one contact, one point, one death and the impact burst.
+
+### The hit sparks
+
+`FUN_002206a8` is a **third** particle system, sharing nothing with the other
+two: a thousand entries of `0x38` bytes at `DAT_00355b74` in ten fixed groups of
+a hundred, no behaviour pointer, and a quad oriented in world space. Ten hits
+can be showing at once and an eleventh silently shows nothing, because a burst
+takes the first group whose count is not positive and gives up if there is none.
+
+A burst is `min(100, damage * 10)` sparks at three quarters of the victim's
+height, each with a random yaw over the full circle and a place in a fan that
+starts at thirty degrees and steps `(360 / count)` degrees — an **integer**
+division, so a burst of seven leaves a gap rather than closing the circle.
+
+A spark is a **streak**, not a billboard: four corners at `(±1, ±0.01)` in the
+local x/z plane with **only the long axis scaled**, so it stays 0.6 units long
+and 0.02 wide however far away it is. Two matrices place it, and they have to be
+separate because the streak points along its own travel while the burst as a
+whole is oriented off the camera: `Z(-fanAngle)` for the streak, and
+`Y(yaw) → Z(-cameraYaw - pi/2) → T(spawn)` for the burst. That second Z is the
+exact inverse of the view matrix's own yaw, so the fan opens across the screen.
+
+Two things had to be read out of the disassembly rather than the decompiler.
+
+**The matrix sequence.** `FUN_00220910` loads `vf20..23` with the identity once
+and never writes them again, so every `sqc2 vf20` in the middle of the run is
+*restoring the identity* to the scratchpad before the next rotation builder
+writes its four entries over it, and `vcallms 0xC` accumulates into `vf28..31`
+oldest first. Read as C it looks like four builders each overwriting part of a
+product matrix, which would be meaningless.
+
+**The texture slot.** `FUN_002190f8`'s last argument carries `0x22` in its low
+byte, and that is the slot **itself** — texture `0x19A`, which at exactly the two
+rectangles in the descriptors at `0x003159B8` holds two lens-shaped streaks,
+blue for a party-side victim and gold for everything else, each the exact size
+of its rectangle. Slot `0x21` has a smoke puff across both and nothing
+streak-shaped anywhere on it, and the save state's own screenshot shows gold.
+
+`FUN_0020f510` writes `slot + 1` into the same packet field for the sprite pass,
+so the two producers disagree by one and only the sheets say which the consumer
+honours. The same reading fixed `DAT_00355620`'s particles, which were drawing
+slot `0x2A`'s flat grey noise instead of slot `0x2B`'s round spark. The port
+never reads that field for sprites — they carry the slot the cache handed them
+— so the disagreement only decides these two effect paths.
+
+The port steps the pool in the draw phase, where `FUN_002192c0` runs it, rather
+than beside the actor loop where `DAT_00355620` steps; the original really does
+run the two in different halves of the frame. It hands the four world-space
+corners to the scene's own projection instead of projecting each to integer GS
+coordinates, which is the faithful analogue here: unlike the sprite pass, whose
+corners are *built* in GS integer units around a truncated origin, these are
+built in world space and only meet the projection at the end.
+
+`--actor-report` grew a `hit sparks:` line — how many are alive and how many
+groups are busy, which is also how many hits are currently showing.
+
+### What is not ported
+
+Called out at their sites: `FUN_00215670` (a third hit-test
+form, used by enemy attacks), `FUN_002d5630` (the HP bar, gated on
+`DAT_003555D3`, which is zero in both dumps), `FUN_002d59c0` (the hit cue, on
+the sound engine's priority channel that the port does not reach), and the
+`FUN_0025ba98` branch of the resistance lookup, which no attacker in this scene
+can reach because a streamed prop's `+0x02` is not in the `0x2048` candidate
+mask.
+
 ## The screen smear
 
 `FUN_00201a38` draws the *previous* frame back over the current one,
@@ -2671,6 +2865,13 @@ a screenshot names pixels; this is what connects them. Bisecting the slot range
 against `--screenshot` at a fixed frame, and comparing the `.ppm` bytes rather
 than eyeballing, identifies the entity behind any piece of on-screen geometry in
 about seven runs. That is how the map-prop descriptor bug above was cornered.
+
+`--place-slot <slot>,<x>,<y>,<z>` parks one pool entity at a fixed world point
+every frame, just before the actor loop, so a behaviour that needs two entities
+next to each other can be exercised without waiting for a scene to arrange it.
+It is the only way to land a sword swing on the `s01_e024` flyers, which hover
+about eight units above any floor the player can reach. Scaffolding, not a
+ported feature: nothing reads it unless the flag is given.
 
 `--press-confirm <frame>[,<frame>...]` fires Cross on each listed frame from
 `--frames` or `--screenshot`, so the interaction path is checkable without a

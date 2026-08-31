@@ -177,11 +177,15 @@ void step_spark(float *p, uint frameTicks)
  *
  * The projected point is the quad's TOP-LEFT corner, not its centre.
  *
- * The texture is the boot sheet in slot 0x2A: the packet carries 0x2B and that
- * field is slot + 1, the same encoding FUN_0020f510 uses for entity +0x136. The
- * UV rectangle is fixed at texels (65,177)-(79,191), stored normalised over 256
- * and scaled by 4096 on the way into the GS's 1/16-texel units. DAT_10008080's
- * bit 0x8000 selects blend mode 2, additive.
+ * The texture is the boot sheet in slot 0x2B: the packet carries 0x2B and that
+ * field is the slot itself. Texture 0x177 sits there, and its
+ * (65,177)-(79,191) is a round white-blue spark exactly filling the rectangle,
+ * while slot 0x2A's 0x178 has flat grey noise. FUN_0020f510 writes `slot + 1`
+ * into the same field, so the two producers of it disagree by one; see
+ * analyzed/sword_hit_test_and_damage.c, which settles it the same way from the
+ * hit sparks. The UV rectangle is stored normalised over 256 and scaled by 4096
+ * on the way into the GS's 1/16-texel units. DAT_10008080's bit 0x8000 selects
+ * blend mode 2, additive.
  *
  * FUN_00207de8(0x1000) puts every particle in one display-list bucket, above
  * all of FUN_0020f510's depth-sorted 1..0xFFF and below its 0x1005.

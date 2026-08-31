@@ -14,6 +14,7 @@
 #include "ported/text/original_dialogue_text.h"
 #include "ported/text/original_dialogue_stream.h"
 #include "ported/resource/character_stats.h"
+#include "ported/resource/hit_parameter_table.h"
 #include "ported/resource/item_database.h"
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
@@ -25,6 +26,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/entity/original_hit_sparks.h"
 #include "ported/entity/original_particles.h"
 #include "ported/entity/player_bandana.h"
 #include "runtime/entity_model_store.h"
@@ -199,6 +201,16 @@ namespace orphen::port
     // scene reload can be exercised without a window.
     std::uint32_t cycleMapEveryFrames = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
+    // --place-slot: park one pool entity at a fixed world point every frame, so
+    // a behaviour that depends on two entities being next to each other can be
+    // exercised without waiting for the scene to arrange it. Debug scaffolding,
+    // not a ported feature; nothing reads it unless the flag is given.
+    struct PlacedSlot
+    {
+      int slot = -1;
+      orphen::ported::psm2::Vec3 position;
+    };
+    std::vector<PlacedSlot> placedSlots;
     // Retail executable, read for static tables such as the entity descriptors.
     // Optional: when empty, SLUS_200.11 is looked for in the disc root, and when
     // that is missing too the port runs without descriptor data.
@@ -234,6 +246,10 @@ namespace orphen::port
     OriginalLeadPlayer leadPlayer_;
     orphen::ported::camera::OriginalFieldCamera fieldCamera_;
     orphen::ported::render::ViewProjection renderCamera_;
+    // fGpffffb6d4, kept beside the matrices it went into. The hit sparks turn
+    // their fan by its negation, so it has to be the same yaw FUN_0020bec8 was
+    // given or the two no longer cancel.
+    float renderCameraYaw_ = 0.0f;
     // fGpffffb6f4 / uGpffffb6f8. Opcode 0x94 arms it, FUN_0020bec8_build
     // spends it, and FUN_0022a418:287 clears it on scene load.
     orphen::ported::render::CameraShake DAT_00355664_cameraShake_;
@@ -242,6 +258,7 @@ namespace orphen::port
     std::uint64_t trackedMapGeneration_ = 0;
     std::optional<std::size_t> reportedGroundPrimitive_;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride_;
+    std::vector<PortRuntimeConfig::PlacedSlot> placedSlots_;
     // Kept so a map cycle can rebind the model store against the new scene's
     // bundle the same way initialize does.
     std::filesystem::path discRoot_;
@@ -388,6 +405,12 @@ namespace orphen::port
     // alive into the same display list the billboards use.
     orphen::ported::entity::ParticlePool DAT_00355620_particles_;
 
+    // DAT_00355B74, the hit sparks -- a thousand entries in ten fixed groups.
+    // FUN_002205d0 carves it out at boot, FUN_00216140 fires bursts into it,
+    // and FUN_00220910 steps and draws it in the *draw* phase, which is why the
+    // step lives in publishSpriteQuads rather than beside the particle one.
+    orphen::ported::entity::HitSparkPool DAT_00355b74_hitSparks_;
+
     // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
     std::uint32_t actorRandomState_ = 0x12345678u;
     // FUN_00216868, the one draw the three call sites share. A plain LCG rather
@@ -454,7 +477,7 @@ namespace orphen::port
     void reportSceneEnvironment() const;
     void publishSceneObjectViews(std::uint32_t frameTicks);
     // FUN_0020f3e0: the billboard pass's collect half.
-    void publishSpriteQuads();
+    void publishSpriteQuads(std::uint32_t frameTicks);
     // One slot of that walk. Split out so FUN_0020c5a8's deferral queue can
     // call it in dependency order rather than slot order.
     void publishOneSceneObjectView(orphen::port::SceneObjectViewList &views,
@@ -480,6 +503,10 @@ namespace orphen::port
     orphen::ported::script::ScriptEnvironment scriptEnvironment(
         std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);
+    // Built alongside actorEnvironment and pointed at by it. Separate because
+    // FUN_002148a8 is also the projectile's test, and both call sites want the
+    // same one.
+    orphen::ported::entity::HitTestEnvironment hitTestEnvironment(std::uint32_t frameTicks);
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();
@@ -525,6 +552,13 @@ namespace orphen::port
     // uGpffffadf8, the character stat table. DAT_00343688's seven party
     // records come out of it; see FUN_002294d0_load_party_records.
     orphen::ported::resource::CharacterStats characterStats_;
+    // uGpffffadfc, SCR.BIN resource 0xBE: the attack parameter table.
+    orphen::ported::resource::HitParameterTable DAT_00354d6c_hitParameters_;
+    // DAT_003151c8, the slot list the last hit test filled.
+    orphen::ported::entity::HitList DAT_003151c8_hitList_;
+    // Rebuilt every time actorEnvironment is, and pointed at by it. A member
+    // rather than a temporary because ActorEnvironment holds a pointer to it.
+    orphen::ported::entity::HitTestEnvironment hitTestEnvironment_;
     // The proportional width table FUN_00238c90 measures out of slots 0x2E and
     // 0x2F at boot, and this frame's glyph list built against it.
     orphen::ported::text::DialogueFont dialogueFont_;

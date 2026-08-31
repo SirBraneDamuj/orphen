@@ -25,6 +25,13 @@
 //   +0x24  u32 subdraw table        stride 10, UVs + texture flags
 //   +0x28  u32 normal table         float4
 //   +0x2C  u32 keyframe pool        s16 quaternion / translation keys
+//   +0x30  u32 hit-volume column map bytes, one per pose column
+//   +0x34  u32 hit-volume records     stride 0x10
+//
+// The last two are only on weapon-effect models -- grp_0179, the sword blade,
+// has them and grp_0001, the player, does not. FUN_002148a8 reads +0x30 first
+// and returns immediately when it is zero, which is why the swept hit test does
+// nothing when it is handed anything but a weapon.
 //
 // Note that +0x1C..+0x28 are rewritten to absolute addresses when the game
 // relocates a model (FUN_00221f60), so a PSC3 read out of an EE dump has four
@@ -158,6 +165,32 @@ namespace orphen::ported::model
     int parentIndex = -1;
   };
 
+  // One record of the section at header +0x34, 0x10 bytes. FUN_002148a8 builds
+  // the swing's swept volume out of a pair of these, one for the pose column
+  // the animation is leaving and one for the column it is entering.
+  //
+  // grp_0179's five records, as the file stores them:
+  //
+  //   0: steps 1  radius 14  A (0,0,217)  B (0,0,-16)
+  //   1: steps 4  radius  2  A (1,-2,8)   B (1,-2,118)
+  //   2: steps 2  radius 12  A (0,1,304)  B (-2,0,-12)
+  //   3: steps 4  radius  4  A (-5,0,-40) B (-5,0,88)
+  //   4: steps 4  radius  4  A (0,0,-36)  B (0,0,204)
+  struct Psc3HitVolume
+  {
+    // +0x00: how many boxes to lay down along the segment. The sweep starts at
+    // this many and grows, capped at 31.
+    std::int16_t steps = 0;
+    // +0x02: the box half-extent, in fortieths of a unit before the entity's
+    // +0x14C scale. FUN_002148a8's expression is `(v * 256 / 40) / 256`, an
+    // integer divide by 40 with a redundant round trip through 8.8 fixed point.
+    std::int16_t radius = 0;
+    // +0x04 and +0x0A: the segment's two endpoints in the model's own space,
+    // s16 over 256.
+    std::array<std::int16_t, 3> pointA{};
+    std::array<std::int16_t, 3> pointB{};
+  };
+
   struct Psc3Model
   {
     bool valid = false;
@@ -194,6 +227,20 @@ namespace orphen::ported::model
     // docs called it.
     std::uint16_t animationCount = 0;
     std::uint32_t keyframePoolOffset = 0;   // header +0x2C
+
+    // Header +0x30 and +0x34, empty on a model that carries neither.
+    //
+    // The map is indexed by pose column -- entity +0xAC and +0xAE -- and holds
+    // a record index, or 0xFF for "this column has no hit volume". grp_0179's
+    // is 16 bytes: ff 00 ff 01 02 ff ff ff ff ff ff 03 04 00 00 00, so the
+    // blade is only dangerous on columns 1, 3, 4, 11 and 12.
+    //
+    // Neither section is counted anywhere in the header, so the extents come
+    // from the following section offset. The original never bounds-checks
+    // either read; the port clamps, and a clamped read means the model is
+    // malformed rather than that the game would have done something else.
+    std::vector<std::uint8_t> hitVolumeColumnMap;
+    std::vector<Psc3HitVolume> hitVolumes;
 
     // A **sprite strip**, not a skeletal model: no magic, no geometry, and a
     // four-byte animation timeline instead of a six-byte one. `grp_017e`, the

@@ -7,7 +7,9 @@
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/follower_navmesh.h"
 #include "ported/entity/original_entity.h"
+#include "ported/entity/original_hit_test.h"
 #include "ported/entity/player_bandana.h"
+#include "ported/resource/hit_parameter_table.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/render/original_light_table.h"
 
@@ -153,6 +155,17 @@ namespace orphen::ported::entity
     // way the light table would if it were not already a pointer.
     std::function<void(const OriginalEntity &source, std::size_t slot)>
         FUN_002d2470_spawn_impact_burst;
+
+    // uGpffffadfc: the attack parameter table. FUN_00256130 reads record 0 of
+    // the swinger's own type out of it and stamps it on the blade; FUN_002d2e00
+    // reads record 1 onto the magic projectile.
+    const orphen::ported::resource::HitParameterTable *DAT_00354d6c_hitParameters = nullptr;
+
+    // Everything FUN_002148a8 needs that this struct does not already carry.
+    // Owned by the runtime because two of its callbacks read the matrix palette
+    // bank and the loaded models. Null in harnesses with no renderer, which
+    // simply means nothing takes damage.
+    const HitTestEnvironment *hitTest = nullptr;
 
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;

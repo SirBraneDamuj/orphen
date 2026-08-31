@@ -7,6 +7,7 @@
 //   src/FUN_0020bc38.c               identity
 //   src/FUN_0020bb48.c               translation
 //   src/FUN_0020bae0.c               rotation about Z
+//   src/FUN_0020ba88.c               rotation about Y
 //   src/FUN_0020ba30.c               rotation about X
 //   src/FUN_0020bb38.c               diagonal scale
 //   src/FUN_0020bb58.c               multiply (VU0 microprogram 0x60)
@@ -48,6 +49,7 @@ namespace orphen::ported::render
   Matrix4 FUN_0020bc38_identity();
   void FUN_0020bb48_setTranslation(Matrix4 &matrix, float x, float y, float z);
   void FUN_0020bae0_setRotationZ(Matrix4 &matrix, float angleRadians);
+  void FUN_0020ba88_setRotationY(Matrix4 &matrix, float angleRadians);
   void FUN_0020ba30_setRotationX(Matrix4 &matrix, float angleRadians);
   void FUN_0020bb38_setScale(Matrix4 &matrix, float x, float y, float z);
   Matrix4 FUN_0020bb58_multiply(const Matrix4 &first, const Matrix4 &second);

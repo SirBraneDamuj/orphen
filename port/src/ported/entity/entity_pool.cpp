@@ -108,6 +108,11 @@ namespace orphen::ported::entity
     entity.depthBias133 = static_cast<std::int8_t>(descriptor->byte0x02);
     entity.radius54 = descriptor->radius0x08;
     entity.height58 = descriptor->height0x0c;
+    // FUN_00229c40:67,70 writes the hit-test volume from the same two numbers.
+    // It is a separate pair of fields, not an alias, and the hit tests read
+    // only this one.
+    entity.hitVolumeRadius11c = descriptor->radius0x08;
+    entity.hitVolumeHeight120 = descriptor->height0x0c;
     entity.modelIndex = descriptor->modelIndex0x00;
 
     // Descriptor +0x10 is copied to entity +0x80 as raw bits, so it is a float,

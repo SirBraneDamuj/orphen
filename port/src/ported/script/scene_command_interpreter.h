@@ -2,6 +2,7 @@
 
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/entity/original_entity_sound.h"
 #include "ported/original_frame_timing.h"
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/render/original_fade_track.h"
@@ -250,6 +251,41 @@ namespace orphen::ported::script
         anyLoaded = true;
       }
       partyRecordsLoaded = anyLoaded;
+    }
+
+    // FUN_00251dc0: stamp one party record onto the lead player's four combat
+    // halfwords. FUN_0022a418:206 calls it at scene init with DAT_0058beb0
+    // outright, so it is always slot 0 that gets them.
+    //
+    //   +0x128 max hit points   record +0x02 (which FUN_002294d0 has already
+    //                           copied from +0x06, so the party starts full)
+    //   +0x12A hit points       record +0x06
+    //   +0x12C attack power     record +0x07
+    //   +0x12E defence          record +0x08
+    //
+    // Orphen's record gives 50/50/1/0, which is exactly what eeMemory.bin holds
+    // at slot 0. Attack power is the number FUN_00216140 scales by the attack's
+    // element resistance and its +30% sword bonus, so without this every hit
+    // fell through to the "at least one point" floor by accident.
+    void FUN_00251dc0_load_player_stats(orphen::ported::entity::OriginalEntity &player) const
+    {
+      if (!partyRecordsLoaded)
+      {
+        return;
+      }
+      const int characterClass =
+          orphen::ported::entity::FUN_002298d0_character_class(player.effectiveTypeId());
+      if (characterClass >= static_cast<int>(kPartySlotCount))
+      {
+        return;
+      }
+      const auto &record = DAT_00343688_partyRecords[static_cast<std::size_t>(characterClass)];
+      player.maxHitPoints128 = static_cast<std::uint16_t>(record.halfword02);
+      player.staggerTimer12a =
+          static_cast<std::uint16_t>(static_cast<std::int8_t>(record.byte06));
+      player.attackPower12c =
+          static_cast<std::uint16_t>(static_cast<std::int8_t>(record.byte07));
+      player.defence12e = static_cast<std::uint16_t>(static_cast<std::int8_t>(record.byte08));
     }
 
     // DAT_00571de0: parameter ramps, three floats each -- current, target,
