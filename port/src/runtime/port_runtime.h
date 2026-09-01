@@ -102,14 +102,13 @@ namespace orphen::port
     // no report can, because a report names entities and a screenshot names
     // pixels. Nothing else reads it, so it cannot affect simulation.
     std::vector<int> hideSlots;
-    // Lighting behaviours read out of VU1. The light floor is ON -- a hardware
-    // capture of s01_e012's shop confirmed it, see SceneLighting -- and
-    // --lighting-no-floor A/Bs it. The unlit flag is still derived-only and
-    // stays off behind --lighting-unlit, so a regression is attributable to
-    // exactly one of them. --gleam-report measures the specular pass without
-    // drawing it.
-    bool applyLightFloor = true;
-    bool applyUnlitFlag = false;
+    // Lighting behaviours read out of VU1. The unlit flag is ON -- a GS dump of
+    // s01_e012's shop proved it, see SceneLighting -- and --lighting-no-unlit
+    // A/Bs it. The light floor is still derived-only and stays off behind
+    // --lighting-floor, so a regression is attributable to exactly one of them.
+    // --gleam-report measures the specular pass without drawing it.
+    bool applyLightFloor = false;
+    bool applyUnlitFlag = true;
     // The dynamic point lights default ON, unlike the two above: the VU0 list
     // they are built from was read back out of a save state and matched the
     // script's table exactly, so this is a confirmed path rather than a derived

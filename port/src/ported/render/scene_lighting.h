@@ -128,33 +128,39 @@ namespace orphen::ported::render
     // available rather than silently rendering everything black.
     bool active = false;
 
-    // ---- The per-material light floor ------------------------------------
+    // ---- The unlit flag ---------------------------------------------------
     //
-    // vf15.z, the MAXz at VU1 0x01d1 that puts a lower bound under every
-    // intensity. **On by default since 2026-08-31**, when a hardware capture of
-    // s01_e012's shop finally pinned it: the wood wall behind Volcan reads
-    // (47, 29, 18) and (68, 41, 22) there; the port renders (33, 24, 16) and
-    // (15, 16, 13) without the floor, and (45, 28, 19) and (50, 35, 24) with
-    // it.
+    // Draw header byte 15 -- primitive flag bit 8 on a model, bit 13 (0x2000)
+    // on a map primitive -- makes VU1 0x01ba branch past the whole lighting
+    // block, so the authored vertex colour reaches the GS untouched.
     //
-    // It stayed off this long because s01_e024 -- the room the renderer was
-    // built against -- cannot show it. Its primitives carry +0x2D = 0xBF, a
-    // floor of 0.2, which their half-Lambert intensities already clear; turning
-    // the floor on there moves 0.5% of the pixels and the frame mean by 0.02.
-    // s01_e012's carry 0x7F, a floor of 0.4, and 52% of that frame changes.
-    // --lighting-no-floor restores the old look for an A/B.
-    bool applyLightFloor = true;
+    // **On by default since 2026-09-01**, proven from a GS dump of s01_e012's
+    // shop rather than derived. The light pool the lantern casts on the wall is
+    // a pair of gouraud quads whose bright corner carries the vertex colour
+    // (254, 155, 122). The lighting model cannot produce that: with this
+    // frame's ambient (10, 30, 50) and light 0 (42, 23, 12), the largest colour
+    // it can emit is 255/256 * (52, 53, 62). Anything above 128 in a channel is
+    // therefore an unlit draw, and the dump has 26 such draws out of 3556 --
+    // the authored glow decals, and nothing else.
+    //
+    // --lighting-no-unlit restores the old look for an A/B.
+    bool applyUnlitFlag = true;
 
     // ---- Derived but not yet visually confirmed --------------------------
     //
-    // Read straight out of the microprogram and believed correct, but not yet
-    // matched against a reference frame. Defaults OFF; --lighting-unlit turns
-    // it on. It is the natural explanation for the residual noted with the
-    // light floor in port/README.md -- the shop lantern's glass still comes out
-    // bluer than hardware, which is exactly the "dimmer and bluer" a lit draw
-    // of an authored-bright colour gives -- but no primitive in grp_00c6 sets
-    // the bit, so it is not the answer there.
-    bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
+    // vf15.z, the MAXz at VU1 0x01d1 that puts a lower bound under every
+    // half-Lambert intensity, from the complement of the primitive's +0x2D
+    // scaled by vf01.z = 1/320. Read out of the microprogram and believed
+    // correct, but **off**, behind --lighting-floor.
+    //
+    // It was briefly turned on and then reverted. The evidence was a hardware
+    // wall patch that the floor appeared to match -- but that patch sat inside
+    // the lantern's light pool, so a local effect was being fitted with a
+    // global lift. With the unlit decals drawing the pool properly, the floor
+    // only overshoots: at the matched frame the wall away from the lantern is
+    // (30, 22, 16) on hardware and (28, 22, 17) without the floor against
+    // (32, 24, 18) with it.
+    bool applyLightFloor = false;
     // Subdraw pass blending is NOT a toggle -- it is always on. The draw loop
     // walks every pass and takes its blend mode from the subdraw's texFlags:
     // FUN_00212058:139 puts the mode nibble in plVar5[6], :217 writes draw

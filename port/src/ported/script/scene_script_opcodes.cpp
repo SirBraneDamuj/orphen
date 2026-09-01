@@ -339,17 +339,21 @@ namespace orphen::ported::script
     if (environment_.terrainHeight)
     {
       // The record's own z is where this thing was authored to stand, so it is
-      // the band to look in. FUN_0025e7c0 does not sample terrain at all -- it
-      // just writes the record's z into +0x28 and +0x4C -- so this only exists
-      // to tell the report whether the placement landed on anything.
+      // the band to look in. **FUN_0025e7c0 does not sample terrain at all** --
+      // it writes the record's z into +0x28 and +0x4C and stops -- so this only
+      // exists to tell the report whether the placement landed on anything.
+      //
+      // It used to write the sample into +0x4C as well, contradicting the line
+      // above. s01_e012's hanging lanterns are what showed it: 25 of them at
+      // z = 0, and the one at (4, -1.4) sits over a shelf top -- primitive
+      // #2223, an upward face at z = 0.25 that the scan legitimately accepts --
+      // so that one alone was lifted a quarter unit and hung visibly too high.
+      // The save state settles it: every lantern has +0x4C = 0.000 on hardware,
+      // and +0x4C equals the spawn z for every other placed prop as well.
       const auto height = environment_.terrainHeight(record.position.x, record.position.y,
                                                      record.position.z,
                                                      record.position.z + entity.height58);
-      if (height.has_value())
-      {
-        entity.groundHeight4c = *height;
-        spawnRecord.grounded = true;
-      }
+      spawnRecord.grounded = height.has_value();
     }
 
     spawnRecord.slot = slot;

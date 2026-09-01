@@ -221,10 +221,50 @@ namespace orphen::harness
     // texture-coordinate array enabled for the next one.
     bool g_batchTextured = false;
 
+    // The GS's texture function is `(Ct * Cv) >> 7`: a vertex colour of 0x80 is
+    // x1.0 and 0xFF is x1.99, so the GS can *brighten* a texel. GL_MODULATE
+    // clamps both operands to 1.0 and can only darken, which quietly halved
+    // every authored over-bright colour. GL_COMBINE with GL_RGB_SCALE 2 gets
+    // that octave back: the emit sides divide by 256 rather than 128, so the
+    // vertex colour always lands inside [0, 1) and the texture unit puts the
+    // factor of two back afterwards.
+    //
+    // s01_e012's lantern is the case that found it. The light-pool decals on
+    // the wall are drawn unlit with an authored corner colour of
+    // (254, 155, 122) -- x1.98 -- and clamping to x1.0 halved the pool. The GS
+    // dump has 26 draws out of 3556 carrying a channel above 128, so this is a
+    // narrow correction and not a global brightness change.
+    //
+    // Alpha is deliberately left alone: GL_MODULATE's alpha was Ct.a * Cv.a and
+    // the combiner reproduces exactly that at GL_ALPHA_SCALE 1. The port's
+    // alpha is already a plain 0..1 rather than the GS's 0..128, and rescaling
+    // it is a separate change.
+    void applyGsTextureEnv(bool textured)
+    {
+      namespace gl = orphen::port::gl;
+      if (!textured)
+      {
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        return;
+      }
+      glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, static_cast<GLint>(gl::kCombine));
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kCombineRgb), GL_MODULATE);
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kSource0Rgb), GL_TEXTURE);
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kSource1Rgb),
+                static_cast<GLint>(gl::kPrimaryColor));
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kCombineAlpha), GL_MODULATE);
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kSource0Alpha), GL_TEXTURE);
+      glTexEnvi(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kSource1Alpha),
+                static_cast<GLint>(gl::kPrimaryColor));
+      glTexEnvf(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kRgbScale), 2.0f);
+      glTexEnvf(GL_TEXTURE_ENV, static_cast<GLenum>(gl::kAlphaScale), 1.0f);
+    }
+
     void batchReset(bool textured)
     {
       g_batchVertices.clear();
       g_batchTextured = textured;
+      applyGsTextureEnv(textured);
     }
 
     void batchPush(const orphen::ported::psm2::Vec3 &position,
@@ -872,6 +912,7 @@ namespace orphen::harness
           glDisable(GL_TEXTURE_2D);
         }
         g_batchTextured = id != 0;
+        applyGsTextureEnv(g_batchTextured);
       };
 
       int activeBlendMode = -1;
@@ -1069,16 +1110,26 @@ namespace orphen::harness
             // grp_001E is the case that shows it. Its one colour entry is
             // (191, 0, 0): meaningless as a modulator (x1.49, clamped to a
             // blown-out pure red) and exactly right as a colour, 0xBF.
-            const float scale = untexturedPass ? 1.0f / 255.0f : 1.0f / 128.0f;
-            colour[0] = std::min(1.0f, model.colours[colourEntry * 3 + 0] * scale * light[0]);
-            colour[1] = std::min(1.0f, model.colours[colourEntry * 3 + 1] * scale * light[1]);
-            colour[2] = std::min(1.0f, model.colours[colourEntry * 3 + 2] * scale * light[2]);
+            //
+            // The textured divisor is 256, not 128, because applyGsTextureEnv
+            // multiplies by two afterwards -- see there. The untextured one
+            // stays 255 and stays clamped: that pass has no texture unit in
+            // front of it, so its colour really is capped at full scale.
+            const float scale = untexturedPass ? 1.0f / 255.0f : 1.0f / 256.0f;
+            const float ceiling = untexturedPass ? 1.0f : 255.0f / 256.0f;
+            colour[0] = std::min(ceiling, model.colours[colourEntry * 3 + 0] * scale * light[0]);
+            colour[1] = std::min(ceiling, model.colours[colourEntry * 3 + 1] * scale * light[1]);
+            colour[2] = std::min(ceiling, model.colours[colourEntry * 3 + 2] * scale * light[2]);
           }
           else
           {
-            colour[0] = std::min(1.0f, light[0]);
-            colour[1] = std::min(1.0f, light[1]);
-            colour[2] = std::min(1.0f, light[2]);
+            // No colour entry is an implicit 0x80, i.e. x1.0 -- which the
+            // combiner needs as 0.5 so the doubling lands back on x1.0.
+            const float implicit = untexturedPass ? 1.0f : 0.5f;
+            const float ceiling = untexturedPass ? 1.0f : 255.0f / 256.0f;
+            colour[0] = std::min(ceiling, light[0] * implicit);
+            colour[1] = std::min(ceiling, light[1] * implicit);
+            colour[2] = std::min(ceiling, light[2] * implicit);
           }
           batchPush(points[corner], currentU, currentV, colour,
                     fogAmountAt(points[corner].x, points[corner].y, points[corner].z));
@@ -1531,10 +1582,14 @@ namespace orphen::harness
       // FUN_00211230:266-289. Textured primitives take the vertex colour
       // straight; untextured ones modulate it against the slot's flat colour
       // with a >> 6, which is why the flat colours look like 0x40 mid greys.
+      // 256, not 128: applyGsTextureEnv doubles this back for a textured slot,
+      // which is what lets an authored over-bright colour survive. An
+      // untextured slot has no texture unit in front of it and is corrected on
+      // the way out below.
       std::uint32_t colour = record80.vertexColours[corner];
-      float red = static_cast<float>(colour & 0xff) / 128.0f;
-      float green = static_cast<float>((colour >> 8) & 0xff) / 128.0f;
-      float blue = static_cast<float>((colour >> 16) & 0xff) / 128.0f;
+      float red = static_cast<float>(colour & 0xff) / 256.0f;
+      float green = static_cast<float>((colour >> 8) & 0xff) / 256.0f;
+      float blue = static_cast<float>((colour >> 16) & 0xff) / 256.0f;
 
       // VU1 0x01b2..0x01e0. The map path is unskinned -- the microprogram's
       // per-vertex bone rotation is gated on header byte 10, which
@@ -1586,8 +1641,16 @@ namespace orphen::harness
         blue *= static_cast<float>((flat >> 16) & 0xff) / 64.0f;
       }
 
-      const float vertexColour[4] = {std::min(red, 1.0f), std::min(green, 1.0f),
-                                     std::min(blue, 1.0f), alpha};
+      // The GS clamps its vertex colour at 255, which is x1.99 through the
+      // texture function -- so the ceiling here is 255/256 and the combiner's
+      // doubling turns it into that. An untextured slot never reaches the
+      // combiner, so it takes the factor of two here instead and keeps the old
+      // full-scale ceiling.
+      const float slotScale = modulateByFlatColour ? 2.0f : 1.0f;
+      const float ceiling = modulateByFlatColour ? 1.0f : 255.0f / 256.0f;
+      const float vertexColour[4] = {std::min(red * slotScale, ceiling),
+                                     std::min(green * slotScale, ceiling),
+                                     std::min(blue * slotScale, ceiling), alpha};
 
       const auto [u, v] = textureCoordinateForCorner(map, triangle, triangleCornerIndex, slotIndex);
       const auto position = viewerVertex(map, triangle.vertexIndices[triangleCornerIndex]);
