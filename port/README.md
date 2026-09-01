@@ -2878,10 +2878,58 @@ scene identically block for block:
 So ~0.17 ms/frame while a light is live, out of ~5 ms, and nothing measurable
 otherwise — the per-vertex path early-outs on the light count. `s01_e024` and
 `s01_e012` before frame 1409 render **byte-identically** with and without it.
-`--lighting-no-points` turns it off for A/B. Unlike `--lighting-floor` and
-`--lighting-unlit` this defaults **on**, because the VU0 list was read back out
-of a save state and matched the script's table exactly rather than being derived
-from the microprogram alone.
+`--lighting-no-points` turns it off for A/B. It defaults **on**, because the VU0
+list was read back out of a save state and matched the script's table exactly
+rather than being derived from the microprogram alone. So does the light floor
+below; `--lighting-unlit` is the one lighting behaviour still off by default.
+
+### The per-material light floor, and the room that could not show it
+
+VU1 `0x01d1` is `MAXz.xyzw vf16, vf16, vf15z` — a lower bound under every one of
+the four half-Lambert intensities, taken from draw header byte 14, which both
+geometry builders write as the *complement* of the primitive's `+0x2D`
+(`FUN_00211230:203`, `*(byte *)(puVar21 + 0xe) = ~*(byte *)((int)pfVar27 +
+0x2d)`) and the VU scales by `vf01.z` = 1/320. So a source byte of 0xFF means no
+floor and 0x00 means 0.797.
+
+This was read out of the microprogram in August and then left **off** for two
+weeks, behind `--lighting-floor`, as "derived but not visually confirmed". A
+hardware capture of s01_e012's shop settles it. The wood wall behind Volcan:
+
+| | wall behind Volcan | wall further left |
+|---|---|---|
+| hardware | (47, 29, 18) | (68, 41, 22) |
+| port, no floor | (33, 24, 16) | (15, 16, 13) |
+| port, floor | **(45, 28, 19)** | **(50, 35, 24)** |
+
+**s01_e024 cannot show this and that is why it went unnoticed.** Its primitives
+carry `+0x2D = 0xBF`, a floor of 0.2, which their half-Lambert intensities
+already clear: turning the floor on moves 0.5% of the f600 pixels and the frame
+mean from 55.51 to 55.53, and the chain shot 2.5% and 50.86 to 50.89. s01_e012's
+carry `0x7F`, a floor of 0.4 — 52% of f3000 changes and the mean goes 20.32 →
+23.64, f6000 41% and 26.51 → 29.47. The renderer was built and validated in the
+one room whose authored floors are all below what its geometry already produces.
+
+Everything feeding the model was checked against `eeMemory.bin` first, so this is
+a change to the shading and not a patch over bad state: the ambient at
+`uGpffffb6fc` is `0x000a1e32` = (10, 30, 50) and the port has exactly that, and
+`uGpffffb700` is `0x001e0f05` = (30, 15, 5), the dark end of the colour ramp the
+port runs between (31, 16, 5) and (118, 78, 59) on a ~120-frame ping-pong.
+
+`--lighting-no-floor` restores the old look; `--lighting-floor` is kept as a
+no-op alias so older command lines still mean the same picture. The 20000-frame
+`--actor-report`/`--scr-report` is byte-identical.
+
+**One residual, not explained by this.** The shop lantern's glass panels still
+come out too blue: hardware's brightest panel texels are (163, 123, 10), the
+port's are (144, 124, 50) with the floor on — red and green land, blue is 5x
+over. It is not a resolution artefact; downsampling the hardware lamp to the
+port's on-screen size leaves its blue at 13. Blue is exactly where the scene
+ambient dominates (10, **30**, **50**), so this is the "dimmer and bluer"
+signature of drawing an authored-bright colour *lit* — which is what the unlit
+flag exists to prevent. But `--lighting-unlit` changes the lamp by one or two
+levels, so no primitive in `grp_00c6` carries bit 8, and the real mechanism is
+still open.
 
 `0xC1` stays operands-only. It is the one member of the family that is not a
 plain table write — it claims the entity's own light index at `+0x195` and runs

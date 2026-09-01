@@ -128,14 +128,32 @@ namespace orphen::ported::render
     // available rather than silently rendering everything black.
     bool active = false;
 
+    // ---- The per-material light floor ------------------------------------
+    //
+    // vf15.z, the MAXz at VU1 0x01d1 that puts a lower bound under every
+    // intensity. **On by default since 2026-08-31**, when a hardware capture of
+    // s01_e012's shop finally pinned it: the wood wall behind Volcan reads
+    // (47, 29, 18) and (68, 41, 22) there; the port renders (33, 24, 16) and
+    // (15, 16, 13) without the floor, and (45, 28, 19) and (50, 35, 24) with
+    // it.
+    //
+    // It stayed off this long because s01_e024 -- the room the renderer was
+    // built against -- cannot show it. Its primitives carry +0x2D = 0xBF, a
+    // floor of 0.2, which their half-Lambert intensities already clear; turning
+    // the floor on there moves 0.5% of the pixels and the frame mean by 0.02.
+    // s01_e012's carry 0x7F, a floor of 0.4, and 52% of that frame changes.
+    // --lighting-no-floor restores the old look for an A/B.
+    bool applyLightFloor = true;
+
     // ---- Derived but not yet visually confirmed --------------------------
     //
-    // Each of these is read straight out of the microprogram and each is
-    // believed correct, but none has been matched against a reference frame
-    // yet. They default OFF so the port renders the behaviour that has been
-    // confirmed by eye; --lighting-floor / --lighting-unlit turn them on
-    // individually so a regression is attributable to exactly one.
-    bool applyLightFloor = false; // vf15.z, the MAXz floor on every intensity
+    // Read straight out of the microprogram and believed correct, but not yet
+    // matched against a reference frame. Defaults OFF; --lighting-unlit turns
+    // it on. It is the natural explanation for the residual noted with the
+    // light floor in port/README.md -- the shop lantern's glass still comes out
+    // bluer than hardware, which is exactly the "dimmer and bluer" a lit draw
+    // of an authored-bright colour gives -- but no primitive in grp_00c6 sets
+    // the bit, so it is not the answer there.
     bool applyUnlitFlag = false;  // draw header byte 15 / primitive flag bit 8
     // Subdraw pass blending is NOT a toggle -- it is always on. The draw loop
     // walks every pass and takes its blend mode from the subdraw's texFlags:

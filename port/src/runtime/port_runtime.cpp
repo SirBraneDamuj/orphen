@@ -3697,6 +3697,38 @@ namespace orphen::port
       out << "\n";
     }
 
+    // The whole VU1 lighting block as the draw paths read it this frame, in the
+    // microprogram's own 0..255 byte units. FUN_00200e38 rewrites the scene
+    // light and the ambient every frame out of whatever 0x97 last wrote, and
+    // s01_e012 ping-pongs a colour ramp into it, so a still frame is the only
+    // way to see which end of the ramp a screenshot caught. `points` is the
+    // compacted DAT_00343888 list the map path runs per vertex.
+    {
+      const auto &lighting = mapViewer_.sceneLighting();
+      out << "lighting active=" << (lighting.active ? 1 : 0)
+          << " ambient=(" << lighting.ambient[0] << "," << lighting.ambient[1] << ","
+          << lighting.ambient[2] << ")";
+      for (int index = 0; index < orphen::ported::render::SceneLighting::kLightCount; ++index)
+      {
+        out << " L" << index << "=(" << lighting.lightColour[index][0] << ","
+            << lighting.lightColour[index][1] << "," << lighting.lightColour[index][2] << ")"
+            << "d=(" << lighting.lightDirection[index].x << ","
+            << lighting.lightDirection[index].y << "," << lighting.lightDirection[index].z << ")";
+      }
+      out << "\n";
+      out << "lighting points=" << lighting.pointLightCount
+          << " directional=" << lighting.directionalPointLights << "\n";
+      for (int index = 0; index < lighting.pointLightCount; ++index)
+      {
+        const auto &light = lighting.pointLights[index];
+        out << "  point slot=" << light.tableSlot
+            << " pos=(" << light.position.x << "," << light.position.y << "," << light.position.z
+            << ") r=" << light.radius
+            << " colour=(" << light.colour[0] << "," << light.colour[1] << "," << light.colour[2]
+            << ")\n";
+      }
+    }
+
     EntityModelStore &store = const_cast<EntityModelStore &>(modelStore_);
 
     // `span` is the posed mesh's bounding box and `bind` the same model's

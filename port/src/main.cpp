@@ -218,9 +218,9 @@ namespace
         config.probeRadius = parsed[3];
         continue;
       }
-      if (argument == "--lighting-floor")
+      if (argument == "--lighting-no-floor")
       {
-        config.applyLightFloor = true;
+        config.applyLightFloor = false;
         continue;
       }
       if (argument == "--lighting-no-points")
@@ -285,6 +285,13 @@ namespace
       {
         config.applyLightFloor = true;
         config.applyUnlitFlag = true;
+        continue;
+      }
+      if (argument == "--lighting-floor")
+      {
+        // Kept as a no-op alias: the floor is on by default now, and old
+        // command lines that asked for it should still mean the same picture.
+        config.applyLightFloor = true;
         continue;
       }
       if (argument == "--gleam-report")

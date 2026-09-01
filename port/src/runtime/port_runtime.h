@@ -102,11 +102,13 @@ namespace orphen::port
     // no report can, because a report names entities and a screenshot names
     // pixels. Nothing else reads it, so it cannot affect simulation.
     std::vector<int> hideSlots;
-    // Lighting behaviours derived from VU1 this session. Off by default so the
-    // port renders the last visually confirmed state; each can be enabled alone
-    // so a regression is attributable. --gleam-report measures the specular
-    // pass without drawing it.
-    bool applyLightFloor = false;
+    // Lighting behaviours read out of VU1. The light floor is ON -- a hardware
+    // capture of s01_e012's shop confirmed it, see SceneLighting -- and
+    // --lighting-no-floor A/Bs it. The unlit flag is still derived-only and
+    // stays off behind --lighting-unlit, so a regression is attributable to
+    // exactly one of them. --gleam-report measures the specular pass without
+    // drawing it.
+    bool applyLightFloor = true;
     bool applyUnlitFlag = false;
     // The dynamic point lights default ON, unlike the two above: the VU0 list
     // they are built from was read back out of a save state and matched the
