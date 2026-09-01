@@ -4244,6 +4244,112 @@ the material byte that decides it -- `slot0 f=0x00` gives mode 0, and one bit
 free. **A GS dump taken at the chains would settle it in one look**: the draws'
 `PRIM.ABE` bit and `ALPHA_1` are all it takes.
 
+The Sephy dump narrowed this further without touching `s01_e024`. It confirmed
+that the GS's alpha test discards nothing (`AREF` 0, GEQUAL), so the discard is
+certainly not what the original does -- and it turned up the same conflation of
+`ABE` with the register-block index on the *map* path, `FUN_00211230:152-161`.
+Whether the chains reach it depends on a bit in their flags byte, which only the
+dump can say. See "`ABE` is not the register-block index" below.
+
+### `ABE` is not the register-block index
+
+`s01_e012`, Sephy's close-up: her bangs drew as a set of solid pink strips laid
+over her face where hardware feathers them into it.
+
+The port had one `mode` variable standing for two independent things.
+`FUN_00212058:137-141`:
+
+```c
+if ((texFlags & 0xc000) != 0) {
+    plVar5[0x2c] = texFlags & 0x7f;          // pass alpha
+    plVar5[6]    = texFlags >> 0xe;          // GS register-block index
+    plVar5[1]   |= 0x40;                     // PRIM.ABE -- set here, and kept
+    if ((texFlags & 0x7f) == 0x7f && (plVar5[0x2c] = 0x80, texFlags >> 0xe == 1))
+        plVar5[6] = 0;                       // only the *index* folds
+}
+```
+
+`plVar5[6]` picks the GS state at `608 + mode*3`; `plVar5[1] |= 0x40` is PRIM
+bit 6. The full-alpha fold rewrites the index and leaves ABE standing, so block
+0 is **not "the opaque block"** -- it is `ALPHA_1 0x44` with `ZBUF.ZMSK` clear,
+differing from block 1 only in that it writes depth. The port read the fold as
+"switch blending off".
+
+Read out of the save state, the four blocks and how each is actually reached:
+
+| block | `ALPHA_1` | `ZMSK` | reached by | draws in the dump |
+|---|---|---|---|---|
+| 0 | `0x44` | 0 | mode 0 (ABE off), or mode 1 folded at full alpha (ABE on) | 540 off, 84 on |
+| 1 | `0x44` | 1 | mode 1 below full alpha | 28 |
+| 2 | `0x48` | 1 | mode 2, additive | 9 |
+| 3 | `0xa1` | 1 | mode 3, reverse subtract | 0 |
+
+The 84 are her hair: `PRIM.ABE 1`, `ALPHA_1 0x44`, `ZMSK 0`, vertex alpha `0x80`
+on all 332 vertices. With `TEX0.TCC = 1` and `TFX = 0` (MODULATE) the GS's `As`
+is `(Av * At) >> 7`, so at `Av = 0x80` the blend factor **is the texel's alpha**
+-- and her sheet's CLUT at `CBP 0x24b4` carries a full `0..128` ramp. That is
+the whole effect, and the fold was throwing it away.
+
+It hid for so long because it is a no-op on an opaque sheet: `As = 128` gives
+`(Cs-Cd)*128>>7 + Cd = Cs` exactly. grp_0172's 60 chest passes are the same
+fold case and look identical either way, which is why folding to opaque seemed
+to work when it was introduced -- the chests that went translucent back then did
+so because the port sent them to block *1*, losing the depth write, not because
+they blended.
+
+`setBlendMode(mode)` is now `setBlendState(mode, blend)`, carrying the two
+separately, and block 0 sets `GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA` with
+`glDepthMask(GL_TRUE)`.
+
+**The map path has the identical shape.** `FUN_00211230:152-161` folds
+`plVar8[6]` to 0 when byte `+0x0A` is `0x80` and then sets `plVar8[1] |= 0x40`
+*outside* the branch, exactly as the PSC3 path does; `mapBlendMode` collapses it
+the same way `drawObjectModel` used to. Left alone deliberately -- it wants its
+own change with pixel diffs on `s01_e024`, and it is the strongest candidate yet
+for the chains (see the open note above: a primitive whose slot flags carry
+`0x70` blends on hardware however its alpha reads).
+
+### Texture filtering is bilinear, and the port was sampling nearest
+
+`TEX1_1 = 0x0000000000000060` -- `MMAG 1`, `MMIN 1`, both LINEAR, with `MXL 0`
+and `LCM 0` so there are no mipmaps and minification is plain bilinear. It is
+written 160 times across the capture and never takes another value. `CLAMP_1` is
+`0`, `WMS`/`WMT` both REPEAT, which the port already had.
+
+Every texture the port uploads was `GL_NEAREST`. `SCISSOR_1` is `640x224` -- one
+interlaced field -- so every 256x256 sheet is magnified several times over on
+its way to the screen, and nearest sampling turns a graded alpha ramp into hard
+strand edges. The GS filters the RGBA the CLUT lookup produced, so filtering an
+already-expanded RGBA8 page is the same operation; `GL_LINEAR` with no mipmap
+levels is the exact equivalent.
+
+`s01_e024` f600 moves 90% of its pixels and its mean goes 58.75 -> 57.63. The
+20000-frame `--actor-report`/`--scr-report` is byte-identical, as it must be:
+neither this nor the ABE change is visible to the simulation.
+
+### What is left on the bangs, and what it is not
+
+They are still slightly heavier than hardware. Two things it is **not**:
+
+- **The `GL_RGB_SCALE 2.0` combiner.** GS MODULATE is `C = (Ct * Cv) >> 7`; the
+  port computes `tex * (Cv/256) * 2`, which is the same expression. Nothing to
+  change.
+- **Fog.** All 332 hair vertices carry `F = 255` in `XYZF2`, and `FOGCOL` is 0.
+  The hair is unfogged on hardware.
+
+What remains is the lit vertex colour feeding the card: hardware's hair vertices
+are median RGB `(70, 51, 25)`, alpha 128 throughout. So the residual is a
+scene-lighting brightness question -- the same thread as the lantern work's
+"the port is overall too bright" -- and not a property of the hair at all.
+
+**Worth carrying forward: the GS discards nothing here.** `TEST_1` is `0x5000d`
+on every draw in the capture -- `ATE` on, but GEQUAL against `AREF` 0, which
+always passes. What stops a transparent hair texel from occluding on hardware is
+draw order: the 84 blended cards go out after the 454 opaque body draws, so
+nothing is left to be rejected by the depth they write. The port's
+`glAlphaFunc(GL_GREATER, 0)` on both the entity and the map path has no
+counterpart in the original.
+
 ### The shop's additive props: a bundle-lookup order bug
 
 s01_e012 drew white/pink sheets and a rope swirl above the shop counter that the

@@ -916,8 +916,14 @@ namespace orphen::harness
       };
 
       int activeBlendMode = -1;
-      const auto setBlendMode = [&activeBlendMode](int mode) {
-        if (mode == activeBlendMode)
+      int activeBlendEnabled = -1;
+      // Two independent things. `mode` picks a GS register block -- ALPHA_1 and
+      // ZBUF.ZMSK -- while `blend` is PRIM's ABE bit, which FUN_00212058:140
+      // raises for any pass whose texFlags name a mode and never lowers again.
+      // So block 0 is not "the opaque one": a pass folded back to it at full
+      // alpha still blends, against 0x44, with depth writes left on.
+      const auto setBlendState = [&activeBlendMode, &activeBlendEnabled](int mode, bool blend) {
+        if (mode == activeBlendMode && static_cast<int>(blend) == activeBlendEnabled)
         {
           return;
         }
@@ -930,13 +936,21 @@ namespace orphen::harness
         // have seen is preserved.
         batchFlush();
         activeBlendMode = mode;
+        activeBlendEnabled = static_cast<int>(blend);
+        if (blend)
+        {
+          glEnable(GL_BLEND);
+        }
+        else
+        {
+          glDisable(GL_BLEND);
+        }
         switch (mode)
         {
         case 2:
           // ALPHA 0x48, (Cs - 0) * As + Cd. ZMSK is set on this block, so it
           // tests depth without writing, and LEQUAL because an overlay pass sits
           // at exactly the depth the base pass just wrote.
-          glEnable(GL_BLEND);
           glBlendFunc(GL_SRC_ALPHA, GL_ONE);
           glDepthMask(GL_FALSE);
           glDepthFunc(GL_LEQUAL);
@@ -948,14 +962,14 @@ namespace orphen::harness
           // glBlendEquation -- not in the fixed-function entry points this
           // harness links, and unused by every model in s01_e024. It falls back
           // to straight alpha so it shows up as wrong rather than as missing.
-          glEnable(GL_BLEND);
           glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
           glDepthMask(GL_FALSE);
           glDepthFunc(GL_LEQUAL);
           break;
         case 0:
         default:
-          glDisable(GL_BLEND);
+          // Block 0 is ALPHA 0x44 as well, and the only block with ZMSK clear.
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
           glDepthMask(GL_TRUE);
           glDepthFunc(GL_LESS);
           break;
@@ -1155,24 +1169,34 @@ namespace orphen::harness
                   ? &model.subdraws[static_cast<std::size_t>(index)]
                   : nullptr;
 
-          // FUN_00212058:137-141. Mode 0 never enables ABE, so its alpha field
-          // is not read at all; otherwise 0x7F is the sentinel for 0x80, fully
-          // opaque, and anything else is the value straight out of the low
-          // seven bits.
+          // FUN_00212058:137-141. A pass whose texFlags carry a mode raises
+          // ABE (`plVar5[1] |= 0x40`) and keeps it; 0x7F is the sentinel for
+          // 0x80, fully opaque, and anything else is the value straight out of
+          // the low seven bits.
           int mode = 0;
+          bool blend = false;
           float passAlpha = g_entityFadeAlpha;
           if (subdraw != nullptr)
           {
             mode = static_cast<int>(subdraw->blendMode());
             if (mode != 0)
             {
+              blend = true;
               const std::uint16_t raw = subdraw->alpha();
               passAlpha = raw == 0x7F ? 1.0f : static_cast<float>(raw) / 128.0f;
-              // A fully opaque alpha blend is pointless, so the original folds
-              // it straight back to the opaque mode -- and only for mode 1, not
-              // for the additive one, where full alpha still means something.
-              // grp_0172 is 60 passes of exactly this, and blending them is what
-              // made every ordinary chest translucent.
+              // Full alpha sends mode 1 back to register block 0 -- and only
+              // mode 1, not the additive one, where full alpha still means
+              // something. That fold does *not* switch the pass off: the
+              // original rewrites the block index at plVar5[6] and leaves ABE
+              // standing, so the pass keeps blending, now with depth writes on.
+              // It still comes out solid wherever the sheet is opaque, because
+              // under MODULATE the GS's As is texel alpha times vertex alpha and
+              // the vertex alpha here is 0x80 -- which is why grp_0172's 60
+              // passes look right either way. Where the sheet has a graded
+              // alpha channel it feathers, and treating the fold as opaque is
+              // what made Sephy's bangs a set of solid strips over her face:
+              // 84 draws in the s01_e012 dump, every one of them ABE 1,
+              // ALPHA 0x44, ZMSK 0.
               if (raw == 0x7F && mode == 1)
               {
                 mode = 0;
@@ -1183,12 +1207,13 @@ namespace orphen::harness
             // original gets this for free: +0x134 rides in the draw header and
             // VU1 folds it into the vertex alpha before the GS's own ALPHA
             // register ever sees it.
-            if (mode == 0 && g_entityFadeAlpha < 1.0f)
+            if (!blend && g_entityFadeAlpha < 1.0f)
             {
+              blend = true;
               mode = 1;
             }
           }
-          setBlendMode(mode);
+          setBlendState(mode, blend);
 
           // **A pass picks its own sheet.** FUN_00212058:180-208 reads the
           // subdraw's texFlags bits 10..7 and writes packet byte 6 from it:
@@ -1705,7 +1730,7 @@ namespace orphen::harness
 
     // The same GS reading the PSC3 path uses, because both feed VU1 programs
     // that select GS state by this mode number. See drawObjectModel's
-    // setBlendMode for the derivation of each case.
+    // setBlendState for the derivation of each case.
     void setMapBlendMode(int mode)
     {
       switch (mode)
@@ -2636,12 +2661,21 @@ namespace orphen::harness
       GLuint textureId = 0;
       glGenTextures(1, &textureId);
       glBindTexture(GL_TEXTURE_2D, textureId);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      // TEX1_1 is `0x60` in the s01_e012 GS dump -- MMAG 1, MMIN 1, both
+      // LINEAR -- and it is written 160 times across the capture without ever
+      // taking another value. MXL and LCM are 0, so there are no mipmaps and
+      // the minification filter is plain bilinear too, which is what GL_LINEAR
+      // with no mipmap levels gives. The GS filters the RGBA the CLUT lookup
+      // produced, so filtering an already-expanded RGBA8 page is the same
+      // operation. SCISSOR_1 is 640x224, one interlaced field, so every sheet
+      // is magnified several times over and this is not a subtle difference:
+      // GL_NEAREST turned the graded alpha ramp on Sephy's hair sheet into hard
+      // strand edges.
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       // REPEAT, not clamp: a UV animation track scrolls its offset across a
-      // whole 256-texel page and relies on wrapping round. Filtering is
-      // GL_NEAREST and every static primitive's coordinates sit inside 0..1,
-      // where the two modes sample identically, so this changes nothing else.
+      // whole 256-texel page and relies on wrapping round. CLAMP_1 is 0 in the
+      // same dump, WMS and WMT both REPEAT, so this is what the GS does.
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, state.texture.width, state.texture.height, 0,
@@ -2672,12 +2706,21 @@ namespace orphen::harness
       GLuint textureId = 0;
       glGenTextures(1, &textureId);
       glBindTexture(GL_TEXTURE_2D, textureId);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      // TEX1_1 is `0x60` in the s01_e012 GS dump -- MMAG 1, MMIN 1, both
+      // LINEAR -- and it is written 160 times across the capture without ever
+      // taking another value. MXL and LCM are 0, so there are no mipmaps and
+      // the minification filter is plain bilinear too, which is what GL_LINEAR
+      // with no mipmap levels gives. The GS filters the RGBA the CLUT lookup
+      // produced, so filtering an already-expanded RGBA8 page is the same
+      // operation. SCISSOR_1 is 640x224, one interlaced field, so every sheet
+      // is magnified several times over and this is not a subtle difference:
+      // GL_NEAREST turned the graded alpha ramp on Sephy's hair sheet into hard
+      // strand edges.
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       // REPEAT, not clamp: a UV animation track scrolls its offset across a
-      // whole 256-texel page and relies on wrapping round. Filtering is
-      // GL_NEAREST and every static primitive's coordinates sit inside 0..1,
-      // where the two modes sample identically, so this changes nothing else.
+      // whole 256-texel page and relies on wrapping round. CLAMP_1 is 0 in the
+      // same dump, WMS and WMT both REPEAT, so this is what the GS does.
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 

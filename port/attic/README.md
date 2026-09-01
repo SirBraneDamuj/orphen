@@ -9,6 +9,22 @@ exactly what builds. It was kept rather than deleted because the parsing and
 opcode work is real and re-usable; it is the *wiring* that was wrong, not the
 research.
 
+## `gsparse.py`
+
+Not parked work -- a tool. Walks a PCSX2 `.gs` capture and rebuilds every draw
+with the GS state that was in force when it started. `find_stream` brute-forces
+the packet offset (the header arithmetic does not land exactly); `feed` walks
+GIF tags and handles PACKED, REGLIST and IMAGE.
+
+The one thing to keep in mind is why `flush` reads `at_start` rather than the
+live registers: VU1 emits the *next* draw's A+D block ahead of its GIF tag, so
+sampling at flush time attributes every blend mode to the draw before it. It is
+worth a paragraph because the shifted reading is plausible rather than obviously
+broken -- it made the lantern's additive decals look like ordinary alpha blends.
+
+Usage is `python -c` against the module; `port/README.md`'s "Notes on GS dumps"
+has the recipes.
+
 ## `runtime/scene_script_interpreter.{h,cpp}` + `runtime/scene_script_state.{h,cpp}`
 
 ~3,400 lines of SCR bytecode VM: opcode dispatch and tracing, terrain mutation,
