@@ -170,6 +170,14 @@ namespace orphen::ported::entity
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
 
+    // DAT_00355588, the shared hit effect's one-frame request word. FUN_002f1380
+    // -- the setter every damage path calls to place the effect -- raises bit 0
+    // in it; FUN_002f13d0, the type 0x1E3 behaviour, is what acts on it and
+    // clears it again. Owned by the runtime because the writer lives outside
+    // this layer. Null in harnesses with no runtime, which reads as "no request"
+    // and leaves the effect hidden, which is its resting state anyway.
+    std::uint16_t *DAT_00355588_hitEffectRequest = nullptr;
+
     // DAT_003555d0. FUN_00208450 clears it at the top of every frame and raises
     // it for any collision group whose dirty byte is live -- i.e. "movable
     // collision moved this frame". FUN_002262c0:112 reads it, and it is the

@@ -39,6 +39,16 @@ namespace
                  "                  and its object-script slots. On by default.\n"
                  "  --actor-report  print which actor behavior each spawned entity\n"
                  "                  dispatches to, and which of them are ported.\n"
+                 "  --battle-report print the battle module's loadout-to-button\n"
+                 "                  binding, the party the scene built, and every\n"
+                 "                  frame the player's action byte or state moved.\n"
+                 "  --hold-triangle <first>-<last>   hold one face button across an\n"
+                 "  --hold-circle   <first>-<last>   inclusive 1-based frame range,\n"
+                 "  --hold-cross    <first>-<last>   pressed on the first frame only.\n"
+                 "  --hold-square   <first>-<last>   The battle module's five action\n"
+                 "                  pairs are press-and-release, so a one-frame\n"
+                 "                  --press-* pulse enters a charge and leaves it on\n"
+                 "                  the same frame and never fires anything.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
                  "                  print its geometry counts.\n"
                  "  --no-screen-smear  skip FUN_00201a38's feedback quad, so the same\n"
@@ -135,6 +145,11 @@ namespace
       if (argument == "--actor-report")
       {
         config.printActorReport = true;
+        continue;
+      }
+      if (argument == "--battle-report")
+      {
+        config.printBattleReport = true;
         continue;
       }
       if (argument == "--sound-report")
@@ -564,6 +579,44 @@ namespace
         }
         continue;
       }
+      // --hold-triangle / --hold-circle / --hold-cross / --hold-square, each
+      // taking `<first>-<last>` in 1-based frames. See PortRuntimeConfig for
+      // why a press list is not enough for the battle module.
+      {
+        static const struct { const char *flag; int index; } kHoldFlags[] = {
+            {"--hold-triangle", 0}, {"--hold-circle", 1},
+            {"--hold-cross", 2},    {"--hold-square", 3}};
+        bool matched = false;
+        for (const auto &entry : kHoldFlags)
+        {
+          if (argument != entry.flag)
+          {
+            continue;
+          }
+          matched = true;
+          if (argumentIndex + 1 >= argc)
+          {
+            throw std::runtime_error(std::string(entry.flag) + " expects <first>-<last>");
+          }
+          const std::string range = argv[++argumentIndex];
+          const std::size_t dash = range.find('-');
+          if (dash == std::string::npos)
+          {
+            throw std::runtime_error(std::string(entry.flag) + " expects <first>-<last>");
+          }
+          const std::uint32_t first =
+              static_cast<std::uint32_t>(std::stoul(range.substr(0, dash)));
+          const std::uint32_t last =
+              static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1)));
+          config.holdFaceButtons[entry.index].emplace_back(first, last);
+          break;
+        }
+        if (matched)
+        {
+          continue;
+        }
+      }
+
       if (argument == "--press-magic")
       {
         if (argumentIndex + 1 >= argc)
@@ -770,6 +823,30 @@ int main(int argc, char **argv)
                                                          (attackThisFrame ? kRawPadCircle : 0) |
                                                          (magicThisFrame ? kRawPadTriangle : 0));
         input.rawHeldPad = input.rawPressedPad;
+
+        // --hold-triangle / --hold-circle / --hold-cross / --hold-square. Held
+        // for the whole inclusive range, pressed only on its first frame, which
+        // is exactly what FUN_002462c8's press-then-release pair reads.
+        {
+          constexpr std::uint16_t kHoldBits[4] = {0x0010, 0x0020, 0x0040, 0x0080};
+          for (int index = 0; index < 4; ++index)
+          {
+            for (const auto &range : config.holdFaceButtons[index])
+            {
+              const std::uint32_t frame = frameIndex + 1;
+              if (frame < range.first || frame > range.second)
+              {
+                continue;
+              }
+              input.rawHeldPad = static_cast<std::uint16_t>(input.rawHeldPad | kHoldBits[index]);
+              if (frame == range.first)
+              {
+                input.rawPressedPad =
+                    static_cast<std::uint16_t>(input.rawPressedPad | kHoldBits[index]);
+              }
+            }
+          }
+        }
 
         if (config.holdStick.has_value())
         {

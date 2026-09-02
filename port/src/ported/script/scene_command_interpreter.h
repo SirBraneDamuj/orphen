@@ -273,8 +273,22 @@ namespace orphen::ported::script
       {
         return;
       }
+      // FUN_0022a418:190-197 reads the party leader out of DAT_0058beb0 and
+      // *forces it to 1 when it is zero*; :206 then calls FUN_00251dc0 with
+      // that same slot. The port clears the pool between those two lines
+      // (resetLeadPlayerForLoadedMap), so by the time this runs the lead's type
+      // is back at zero, FUN_002298d0 answers 7, and the guard below threw the
+      // stats away -- every scene the port has ever loaded gave the lead 0 HP,
+      // 0 attack and 0 defence.
+      //
+      // Nothing noticed until the battle module: FUN_00249610:84 stops the
+      // whole character update when +0x12A minus +0xBE drops below 1, so a lead
+      // with no hit points reads as a dead one and never dispatches a state.
+      constexpr std::int16_t kDAT_0058beb0_defaultLeader = 1;
+      const std::int16_t leaderType =
+          player.effectiveTypeId() != 0 ? player.effectiveTypeId() : kDAT_0058beb0_defaultLeader;
       const int characterClass =
-          orphen::ported::entity::FUN_002298d0_character_class(player.effectiveTypeId());
+          orphen::ported::entity::FUN_002298d0_character_class(leaderType);
       if (characterClass >= static_cast<int>(kPartySlotCount))
       {
         return;
@@ -396,6 +410,22 @@ namespace orphen::ported::script
                       std::uint32_t duration)>
         FUN_002443f8_start_path;
     std::function<int(std::size_t entitySlot)> FUN_002445c8_path_progress;
+
+    // Opcode 0xBD's *battle* methods, the low numbers of the same table. This
+    // is how a scene enters battle mode -- see ported/battle/battle_party.h for
+    // why docs/battle_mode_activation.md says otherwise and is wrong.
+    //
+    //   1    FUN_00242de0  stop the battle
+    //   2    FUN_00243f80  start it, building the party first if method 3 has
+    //                      not already run
+    //   3    FUN_002432d8  build the party from the roster
+    //   0x78 FUN_00244cc0  equip `spellId` into loadout slot `packed & 0xF` of
+    //                      row `(packed >> 8) & 0xF`
+    //
+    // s14_e012 calls all four. The battle module lives outside ported/script/,
+    // so like every other cross-module effect it arrives as a callback.
+    std::function<std::uint32_t(std::int32_t method, std::int32_t arg3, std::int32_t arg4)>
+        FUN_00242a18_battle_method;
 
     orphen::ported::entity::EntityPool *entityPool = nullptr;
     const orphen::ported::entity::EntityDescriptorTable *descriptors = nullptr;
@@ -811,6 +841,7 @@ namespace orphen::ported::script
     static void FUN_0023a518_apply_party_record(orphen::ported::entity::OriginalEntity &entity,
                                                 const orphen::ported::resource::StatRecord &record);
     std::uint32_t FUN_00263498_release_party_slot();  // 0xAD, 0xAE
+    std::uint32_t FUN_002635c0_select_party_member();  // 0xAF
     std::uint32_t FUN_00260578_spawn_attached_prop(); // 0x140, 0x141
     void FUN_00263c58_set_entity_short_and_word();    // 0xB7
     std::uint32_t FUN_00265790_set_global_byte();     // 0x149

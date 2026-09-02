@@ -40,6 +40,7 @@ namespace orphen::ported::resource
   bool ItemDatabase::load(const std::filesystem::path &discRoot)
   {
     blob_.clear();
+    recordTableOffset_ = 0;
     nameTableOffset_ = 0;
     descriptionTableOffset_ = 0;
     messageTableOffset_ = 0;
@@ -67,6 +68,7 @@ namespace orphen::ported::resource
       return false;
     }
 
+    recordTableOffset_ = u32At(blob_, group0);
     nameTableOffset_ = u32At(blob_, group0 + 4);
     descriptionTableOffset_ = u32At(blob_, group0 + 8);
     if (nameTableOffset_ == 0 || nameTableOffset_ >= blob_.size())
@@ -94,6 +96,43 @@ namespace orphen::ported::resource
       return {};
     }
     return std::span<const std::uint8_t>(blob_.data() + offset, blob_.size() - offset);
+  }
+
+  std::optional<ItemRecord> ItemDatabase::FUN_00229688_record(std::int32_t itemId) const
+  {
+    // `puVar1 = *piVar3 + param_1 + param_3 * 0x28`, then a field-by-field copy.
+    if (blob_.empty() || recordTableOffset_ == 0 || itemId < 0)
+    {
+      return std::nullopt;
+    }
+    const std::size_t at = static_cast<std::size_t>(recordTableOffset_) +
+                           static_cast<std::size_t>(itemId) * 0x28u;
+    if (at + 0x28 > blob_.size())
+    {
+      return std::nullopt;
+    }
+    const std::uint8_t *src = blob_.data() + at;
+
+    const auto s32 = [src](std::size_t offset) {
+      std::int32_t value = 0;
+      std::memcpy(&value, src + offset, sizeof(value));
+      return value;
+    };
+
+    ItemRecord record;
+    for (std::size_t i = 0; i < record.ids.size(); ++i)
+    {
+      std::memcpy(&record.ids[i], src + i * 2, sizeof(std::uint16_t));
+    }
+    record.byte06 = src[0x06];
+    record.byte07 = src[0x07];
+    record.byte08 = src[0x08];
+    record.byte09 = src[0x09];
+    record.value0c = static_cast<float>(s32(0x0C)) / 1000.0f;
+    record.value10 = static_cast<float>(s32(0x10)) / 1000.0f;
+    record.value14 = static_cast<float>(s32(0x14)) / 1000.0f;
+    std::memcpy(record.elementTable.data(), src + 0x18, record.elementTable.size());
+    return record;
   }
 
   std::string ItemDatabase::stringAt(std::uint32_t tableOffset, std::int32_t itemId) const

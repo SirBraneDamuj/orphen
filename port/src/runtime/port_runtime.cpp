@@ -236,6 +236,7 @@ namespace orphen::port
     }
     runScriptTick_ = config.runScriptTick;
     printActorReport_ = config.printActorReport;
+    printBattleReport_ = config.printBattleReport;
     printSoundReport_ = config.printSoundReport;
     printRenderReport_ = config.printRenderReport;
     printGleamReport_ = config.printGleamReport;
@@ -433,6 +434,9 @@ namespace orphen::port
 
     descriptorTable_ = orphen::ported::entity::EntityDescriptorTable(&executable_.value());
     actorDispatchTable_ = orphen::ported::entity::ActorDispatchTable(&executable_.value());
+    // FUN_002294b8's default loadout at DAT_00318b50 and the item -> effect
+    // type table at DAT_00324fc8, both static data in the executable.
+    battleParty_.loadStaticTables(executable_.value());
     std::cout << "[elf] loaded " << path.string() << " for static tables\n";
   }
 
@@ -523,6 +527,7 @@ namespace orphen::port
     environment.dispatchTable = &actorDispatchTable_;
     environment.frameTicks = frameTicks;
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
+    environment.DAT_00355588_hitEffectRequest = &DAT_00355588_hitEffectRequest_;
     environment.pushOutCounter = &pushOutCount_;
     environment.frameNumber = frameCount_;
     environment.boneOverrides = DAT_004a7e00_boneOverrides_;
@@ -937,6 +942,26 @@ namespace orphen::port
     { return pathFollowers_->FUN_002443f8_start(entitySlot, waypoints, duration); };
     environment.FUN_002445c8_path_progress = [this](std::size_t entitySlot)
     { return pathFollowers_->FUN_002445c8_progress(entitySlot); };
+
+    // Opcode 0xBD methods 1 / 2 / 3 / 0x78, FUN_00242a18's battle half.
+    environment.FUN_00242a18_battle_method =
+        [this](std::int32_t method, std::int32_t arg3, std::int32_t arg4) -> std::uint32_t
+    {
+      const auto battle = battleEnvironment();
+      switch (method)
+      {
+      case 1: return battleParty_.FUN_00242de0_end_battle();
+      case 2:
+        battleTrace_.recordBattleStarted(frameCount_ + 1);
+        return battleParty_.FUN_00243f80_start_battle(battle);
+      case 3:
+        battleTrace_.recordBattleBuilt(frameCount_ + 1);
+        return battleParty_.FUN_002432d8_build_battle_party(battle, arg3, arg4);
+      case 0x78:
+        return battleParty_.FUN_00244cc0_equip_spell(static_cast<std::uint32_t>(arg3), arg4);
+      default: return 0;
+      }
+    };
 
     // FUN_00227070 / FUN_00227798 stand in as the existing PSM2 ground query,
     // the same one the camera uses. `requireOriginalTerrainSample` stays off:
@@ -1666,6 +1691,76 @@ namespace orphen::port
   // FUN_0025d238 -- before it ever reaches the 0x8E. Modelling the bit anyway
   // costs one branch and keeps the two readings of "the fade is done" from
   // drifting apart when a scene does set it.
+  orphen::ported::battle::BattleUpdateEnvironment PortRuntime::battleUpdateEnvironment(
+      std::uint16_t frameTicks)
+  {
+    orphen::ported::battle::BattleUpdateEnvironment environment;
+    environment.party = &battleParty_;
+    environment.pool = &entityPool_;
+    environment.descriptors = &descriptorTable_;
+    environment.trace = &battleTrace_;
+    environment.frameTicks = frameTicks;
+    environment.FUN_00267d38_play_at_entity = [this](std::uint16_t cue, std::size_t slot)
+    {
+      const auto &at = entityPool_.slot(slot);
+      soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28);
+    };
+    environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+    return environment;
+  }
+
+  // One --battle-report line per frame the player's action byte, state, charge
+  // or cooldowns moved. Read-only: the trace cannot move a --frames run off its
+  // deterministic path.
+  void PortRuntime::sampleBattleTrace(std::uint32_t heldPad)
+  {
+    using namespace orphen::ported::battle;
+    const std::int32_t member = battleParty_.DAT_00354ebe_playerSlot() - 1;
+    if (member < 0 || member >= static_cast<std::int32_t>(kControlBlockCount))
+    {
+      return;
+    }
+    const std::uint32_t memberU = static_cast<std::uint32_t>(member);
+    const std::uint32_t control = BattleTables::controlBlock(memberU);
+    const auto &tables = battleParty_.tables();
+
+    BattleTrace::Sample sample;
+    sample.frame = frameCount_;
+    sample.heldPad = heldPad;
+    sample.pendingAction = tables.read<std::uint8_t>(control + control::kPendingAction0e);
+    sample.currentAction = tables.read<std::uint8_t>(control + control::kCurrentAction0f);
+    sample.target = tables.read<std::int16_t>(control + control::kTarget2c);
+    sample.selectedSlot = battleParty_.selectedSlot(battleParty_.DAT_00354ebe_playerSlot());
+    const std::int32_t entitySlot = battleParty_.entitySlotAt(control + control::kEntity08);
+    if (entitySlot != kNoEntity)
+    {
+      sample.state = entityPool_.slot(static_cast<std::size_t>(entitySlot)).state60;
+    }
+    // The charge is party record +0x3C, the accumulator FUN_00249128 fills and
+    // FUN_00249270 divides by 0x780 to get the 0..4 level.
+    sample.charge = tables.read<std::uint16_t>(BattleTables::partyRecord(memberU) + record::kChargeTimer3c);
+    for (std::uint32_t index = 0; index < sample.cooldowns.size(); ++index)
+    {
+      sample.cooldowns[index] = tables.read<std::uint16_t>(BattleTables::cooldown(memberU, index));
+    }
+    battleTrace_.sample(sample);
+  }
+
+  orphen::ported::battle::BattleParty::Environment PortRuntime::battleEnvironment()
+  {
+    orphen::ported::battle::BattleParty::Environment environment;
+    environment.pool = &entityPool_;
+    environment.descriptors = &descriptorTable_;
+    environment.items = &itemDatabase_;
+    // The roster's +0x0A halfwords. FUN_002432d8 reads nothing else out of
+    // DAT_00343688, so the rest of the record stays where the script layer
+    // already keeps it.
+    environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;
+    environment.DAT_00343688_partyRecords = sceneScript_.state().DAT_00343688_partyRecords;
+    environment.partySlotCount = orphen::ported::script::SceneScriptState::kPartySlotCount;
+    return environment;
+  }
+
   void PortRuntime::FUN_002239c8_service_scene_change()
   {
     if (DAT_003551ec_sceneRequest_ == 0)
@@ -1753,6 +1848,26 @@ namespace orphen::port
 
   void PortRuntime::loadSceneForCurrentMap()
   {
+    // FUN_0022a418:49 sets DAT_003555d3 from bit 0x20000 of the scene request,
+    // which FUN_002610a8 raises for every group-0xE destination -- MCB0
+    // section 14, the battle section. A scene reached through the doorway gets
+    // the flag from FUN_002239c8_service_scene_change; a scene loaded straight
+    // from `--scene sNN_eMMM` never went through a request at all, so the flag
+    // stayed clear and `--scene s14_e012` ran with battle mode off. That is a
+    // divergence, not a harness convenience: the same scene arrived at in game
+    // has the flag set, and FUN_0025b6d0 already branches on it.
+    if (const auto loadedScene = mapViewer_.loadedDiscScene();
+        loadedScene.has_value() && loadedScene->section == kGroupEScene)
+    {
+      DAT_003555d3_groupEScene_ = true;
+    }
+
+    // FUN_0023f288, which FUN_0022a418 runs on every scene load: wipe the
+    // battle module, then re-seed the loadout the way the same function does.
+    battleParty_.FUN_0023f288_reset();
+    battleParty_.FUN_0022a418_propagate_loadout();
+    battleParty_.FUN_002239c8_fill_empty_loadout_slots(DAT_003551f4_sceneSection_);
+
     // Models bind before the script runs, so the spawn path can report a
     // missing model at the moment it spawns the entity that wanted it.
     modelStore_.initialize(mapViewer_.loadedSceneResources(), discRoot_, &descriptorTable_);
@@ -1910,11 +2025,22 @@ namespace orphen::port
                  static_cast<std::streamsize>(decoded.size()));
       std::cout << "[scr] dumped " << decoded.size() << " bytes to " << scrDumpPath_ << "\n";
     }
+    // SceneScript::load rebuilds SceneScriptState, and the party stat table is
+    // one of its members -- so the FUN_002294d0 pass that ran once at
+    // initialize is gone the moment a scene script loads. In the original
+    // DAT_00343688 is a global that outlives every scene, which is why nothing
+    // reloads it there. Re-seeded here so the port's scene-scoped state means
+    // the same thing.
+    //
+    // Without this, FUN_00251dc0 has an empty record to copy and the lead ends
+    // up with zero hit points -- see the note beside the second FUN_00251dc0
+    // call below for why that was invisible until the battle module.
     if (!sceneScript_.load(decoded))
     {
       std::cout << "[scr] script blob too small to hold a header (" << decoded.size() << " bytes)\n";
       return;
     }
+    sceneScript_.state().FUN_002294d0_load_party_records(characterStats_);
 
     // FUN_0022a418:185 applies the scene block's draw distance before it seeds
     // the environment and before either script entry runs, so the whole chain
@@ -1948,6 +2074,22 @@ namespace orphen::port
     reportSceneEnvironment();
 
     applySceneMarkerSpawn();
+
+    // FUN_0022a418 calls FUN_00251dc0 at :206 and places the lead at :372-375,
+    // and nothing between those two lines touches the entity -- the placement
+    // only moves it. The port's placement goes through
+    // OriginalPlayerController::resetAt, which is a port-side construct and
+    // begins `entity() = OriginalEntity{}`, so it threw the stats away every
+    // time. Re-applying them here restores the original's net effect.
+    //
+    // This had been true of every scene the port ever loaded: the lead has been
+    // running with 0 hit points, 0 attack power and 0 defence. Nothing noticed
+    // because nothing read them -- FUN_00216140 floors a hit at one point, so
+    // the damage the player deals looked plausible. The battle module is what
+    // surfaced it: FUN_00249610:84 abandons the whole character update when
+    // +0x12A minus +0xBE falls below 1, so a lead with no hit points reads as a
+    // corpse and never dispatches a state.
+    sceneScript_.state().FUN_00251dc0_load_player_stats(entityPool_.leadPlayer());
 
     // FUN_0022a418:372-375, right after the start entry has run and the lead is
     // wherever the scene put it.
@@ -3526,6 +3668,138 @@ namespace orphen::port
     std::cout << "=== end sound report ===\n";
   }
 
+
+  // --battle-report. See ported/battle/battle_trace.h for why this exists in
+  // place of the game's own HUD.
+  void PortRuntime::printBattleReport() const
+  {
+    using namespace orphen::ported::battle;
+    const auto &tables = battleParty_.tables();
+    const auto hex = [](std::uint32_t value, int width) {
+      std::ostringstream out;
+      out << "0x" << std::hex << std::setw(width) << std::setfill('0') << value;
+      return out.str();
+    };
+
+    std::cout << "\n=== battle report ===\n";
+    std::cout << "mode: DAT_003555d3=" << (DAT_003555d3_groupEScene_ ? 1 : 0)
+              << " sGpffffb052=" << hex(battleParty_.sGpffffb052(), 4)
+              << " (bit 0 = running)"
+              << "  DAT_00354ebc=" << battleParty_.DAT_00354ebc_memberCount()
+              << " DAT_00354ebe=" << battleParty_.DAT_00354ebe_playerSlot() << "\n";
+    if (battleTrace_.partyBuiltFrame() != 0)
+    {
+      std::cout << "  party built on frame " << battleTrace_.partyBuiltFrame()
+                << ", battle started on frame " << battleTrace_.battleStartedFrame() << "\n";
+    }
+    else
+    {
+      std::cout << "  the scene never called 0xBD method 3; no battle was built\n";
+    }
+
+    // The loadout, resolved end to end. This is the line the whole slice is
+    // about: which button ends up firing which spell, and through which of
+    // FUN_002462c8's five action pairs.
+    static constexpr const char *kButtonNames[3] = {"Triangle", "Circle  ", "Cross   "};
+    struct MaskField
+    {
+      std::uint32_t trigger;
+      std::uint32_t held;
+      const char *actions;
+    };
+    std::cout << "loadout (DAT_003437a0 row 0, the player):\n";
+    for (std::uint32_t slot = 0; slot < 3; ++slot)
+    {
+      const std::uint8_t itemId = battleParty_.DAT_003437a0_loadout()[slot];
+      std::cout << "  slot " << slot << " " << kButtonNames[slot] << " "
+                << hex(kDAT_0031d168_slotButtons[slot], 2) << "  item " << hex(itemId, 2);
+      if (itemId == 0)
+      {
+        std::cout << " (empty)\n";
+        continue;
+      }
+      std::cout << " \"" << itemDatabase_.FUN_00229688_name(itemId) << "\"";
+      const std::int8_t kind = tables.read<std::int8_t>(kDAT_0031da2e_kinds + slot);
+      const char *pair = "?";
+      std::uint32_t field = 0;
+      if (kind == 0) { pair = "0x86 -> 0x84/0x85 (states 107 -> 105/106)"; field = mask::kTriggerAttack04; }
+      else if (kind >= 1) { pair = "0x8A -> 0x8B (states 111 -> 112)"; field = mask::kTriggerSpellA0c; }
+      else if (kind == -1) { pair = "0x8E -> 0x8F (states 115 -> 116)"; field = mask::kTriggerSpellC1c; }
+      else { pair = "0x8C -> 0x8D (states 113 -> 114)"; field = mask::kTriggerSpellB14; }
+      const std::uint32_t maskWord =
+          tables.read<std::uint32_t>(BattleTables::buttonMask(0) + field);
+      std::cout << " kind=" << static_cast<int>(kind) << " mask+" << hex(field, 2) << "="
+                << hex(maskWord, 2) << " " << pair << " effect type "
+                << hex(tables.read<std::uint16_t>(kDAT_0031da3a_effectTypes + slot * 2), 4)
+                << "\n";
+    }
+    std::cout << "  Square   " << hex(kDAT_0031d174_guardButton, 2)
+              << "  the shield, mask+24="
+              << hex(tables.read<std::uint32_t>(BattleTables::buttonMask(0) + mask::kTriggerGuard24), 2)
+              << " 0x90 -> 0x91 (states 117 -> 118)\n";
+
+    std::cout << "party records built:\n";
+    for (std::int32_t member = 0; member < battleParty_.DAT_00354ebc_memberCount(); ++member)
+    {
+      const std::uint32_t recordBase = BattleTables::partyRecord(static_cast<std::uint32_t>(member));
+      const std::uint32_t controlBase = BattleTables::controlBlock(static_cast<std::uint32_t>(member));
+      std::cout << "  member " << member
+                << " class=" << tables.read<std::int16_t>(recordBase + record::kClass00)
+                << " entity slot=" << battleParty_.entitySlotAt(controlBase + control::kEntity08)
+                << " action=" << hex(tables.read<std::uint8_t>(controlBase + control::kCurrentAction0f), 2)
+                << " target=" << tables.read<std::int16_t>(controlBase + control::kTarget2c);
+      const std::int32_t reportSlot = battleParty_.entitySlotAt(controlBase + control::kEntity08);
+      if (reportSlot >= 0)
+      {
+        const auto &reportEntity = entityPool_.slot(static_cast<std::size_t>(reportSlot));
+        // FUN_00249610:84 stops the whole update when +0x12A minus +0xBE falls
+        // below 1, so a member whose stats never loaded looks exactly like a
+        // dead one. Printed because that is the failure it is easiest to
+        // mistake for the state machine not working.
+        std::cout << " hp=" << reportEntity.staggerTimer12a << "/" << reportEntity.maxHitPoints128
+                  << " +0x95=" << static_cast<int>(reportEntity.byte95)
+                  << " state=" << hex(reportEntity.state60, 4);
+      }
+      std::cout << "\n";
+    }
+
+    std::cout << "player action timeline (frames where something changed):\n";
+    for (const auto &sample : battleTrace_.samples())
+    {
+      std::cout << "  f=" << sample.frame << " pad=" << hex(sample.heldPad, 4)
+                << " pending=" << hex(sample.pendingAction, 2)
+                << " action=" << hex(sample.currentAction, 2)
+                << " state=" << hex(sample.state, 4) << " charge=" << sample.charge
+                << " target=" << sample.target << " slot=" << static_cast<int>(sample.selectedSlot)
+                << " cd=[";
+      for (std::size_t i = 0; i < sample.cooldowns.size(); ++i)
+      {
+        std::cout << (i ? "," : "") << sample.cooldowns[i];
+      }
+      std::cout << "]\n";
+    }
+    if (battleTrace_.samples().empty())
+    {
+      std::cout << "  (nothing ran: battle mode never engaged)\n";
+    }
+
+    if (!battleTrace_.unportedStates().empty())
+    {
+      std::cout << "states reached whose handler is not ported in this slice:\n";
+      for (const auto &[state, hits] : battleTrace_.unportedStates())
+      {
+        std::cout << "  state " << (state & 0xBFFF) << " (raw " << hex(state, 4) << ") hits=" << hits
+                  << "\n";
+      }
+    }
+
+    // The two deliberate omissions, named rather than left as silent gaps.
+    std::cout << "not in this slice: the FUN_0023fd30 battle VM (19 opcodes at "
+                 "PTR_LAB_0031d118, the opener and enemy/ally AI) and the enemy table "
+                 "(DAT_00354eb4/DAT_00354eba stay empty, which is what keeps every target -1)\n";
+    std::cout << "=== end battle report ===\n";
+  }
+
   void PortRuntime::printExitReports() const
   {
     // The load-time script report is a load inventory. When frames have run it
@@ -3559,6 +3833,10 @@ namespace orphen::port
     if (printActorReport_)
     {
       printActorReport();
+    }
+    if (printBattleReport_)
+    {
+      printBattleReport();
     }
     if (printRenderReport_)
     {
@@ -5117,14 +5395,27 @@ namespace orphen::port
       // measured in render frames rather than in simulation ones.
       DAT_00342a70_mappedActions_.FUN_0023b5d8_push(input.rawHeldPad, input.rawPressedPad);
 
-      leadPlayer_.update(frameTicks,
-                         movementRequest,
-                         input.stickMagnitude,
-                         DAT_00342a70_mappedActions_.FUN_0023b890_recent(8),
-                         (input.rawHeldPad & kRawPadCircle) != 0,
-                         (input.rawPressedPad & kRawPadCross) != 0,
-                         loadedMap,
-                         [this] { return runInteractionProbe(); });
+      // FUN_002239c8:117. The battle module replaces the field controller
+      // outright -- FUN_00249610 instead of FUN_00251ed8 -- once the scene has
+      // raised DAT_003555d3 (a section-14 scene) and opcode 0xBD method 2 has
+      // set bit 0 of sGpffffb052. Nothing about the field path runs while it
+      // does, which is why the player stands still in battle: the movement
+      // request above is simply never spent.
+      if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
+      {
+        orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
+      }
+      else
+      {
+        leadPlayer_.update(frameTicks,
+                           movementRequest,
+                           input.stickMagnitude,
+                           DAT_00342a70_mappedActions_.FUN_0023b890_recent(8),
+                           (input.rawHeldPad & kRawPadCircle) != 0,
+                           (input.rawPressedPad & kRawPadCross) != 0,
+                           loadedMap,
+                           [this] { return runInteractionProbe(); });
+      }
 
       // FUN_002446e8 must land before the actor loop: it writes the movement
       // request at +0x30/+0x34 and the physics inside that loop is what spends
@@ -5155,6 +5446,28 @@ namespace orphen::port
       // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
       // its first step on the next one rather than on the frame it was seeded.
       DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+
+      // FUN_002239c8:129 -> FUN_0023fd30 -> FUN_002462c8. The command input
+      // runs *after* the actor loop, not before it, so a press is read against
+      // the state the character is in at the end of the frame.
+      //
+      // FUN_0023fd30's own body -- the 19-opcode battle VM at PTR_LAB_0031d118
+      // that steps the master battle script and every member's AI -- is not in
+      // this slice. FUN_00243f80 installs those scripts on members *other* than
+      // 0, so the player's control block has none and the player path does not
+      // need the VM. --battle-report says so rather than leaving it silent.
+      if (battleParty_.battleRunning())
+      {
+        orphen::ported::battle::CommandInputEnvironment commandInput;
+        commandInput.party = &battleParty_;
+        commandInput.pool = &entityPool_;
+        commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
+        commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
+        commandInput.frameTicks = frameTicks;
+        commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+        orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
+        sampleBattleTrace(input.rawHeldPad);
+      }
 
       // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and
       // before FUN_0025b918's late slots. It spends whatever the tick wrote

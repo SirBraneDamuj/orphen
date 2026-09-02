@@ -59,13 +59,19 @@ class GS:
                 frame=self.frame, prim=self.prim,
                 tex0=self.at_start['tex0'], alpha=self.at_start['alpha'],
                 test=self.at_start['test'], zbuf=self.at_start['zbuf'],
+                tex1=self.at_start['tex1'],
                 verts=[(x / 16.0 - ofx, y / 16.0 - ofy, z, c, uv) for x, y, z, c, uv in self.pending]))
             self.pending = []
 
     def snapshot(self):
         return dict(xyoffset=self.xyoffset(), tex0=self.reg.get(0x06, 0),
                     alpha=self.reg.get(0x42, 0), test=self.reg.get(0x47, 0),
-                    zbuf=self.reg.get(0x4E, 0))
+                    zbuf=self.reg.get(0x4E, 0), tex1=self.reg.get(0x14, 0),
+                    prim=self.prim)
+
+    def texsize(self):
+        v = self.reg.get(0x06, 0)
+        return 1 << ((v >> 26) & 0xF), 1 << ((v >> 30) & 0xF)
 
     def vertex(self, x, y, z):
         if not self.pending:
@@ -123,8 +129,15 @@ def feed(gs, b):
                     gs.flush(); gs.prim = w[0] & 0x7FF
                 elif reg == 0x01:
                     gs.rgbaq = (w[0] & 0xFF, w[1] & 0xFF, w[2] & 0xFF, w[3] & 0xFF)
-                elif reg == 0x03:
-                    gs.uv = (w[0] & 0x3FFF, w[1] & 0x3FFF)
+                elif reg == 0x02:       # ST -- what this game actually emits
+                    # PACKED ST is S, T, then Q. Q reads as a denormal in these
+                    # dumps and the texel coordinates only make sense at Q = 1,
+                    # so the divide is skipped. `uv` is texels either way.
+                    s, t = struct.unpack('<2f', struct.pack('<2I', w[0], w[1]))
+                    tw, th = gs.texsize()
+                    gs.uv = (s * tw, t * th)
+                elif reg == 0x03:       # UV -- unused by this game's VU1
+                    gs.uv = ((w[0] & 0x3FFF) / 16.0, (w[1] & 0x3FFF) / 16.0)
                 elif reg == 0x04:       # XYZF2
                     gs.vertex(w[0] & 0xFFFF, w[1] & 0xFFFF, (w[2] >> 4) | ((w[3] & 0xF) << 28))
                 elif reg == 0x05:       # XYZ2

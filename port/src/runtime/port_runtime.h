@@ -20,6 +20,10 @@
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/input/mapped_action_history.h"
+#include "ported/battle/battle_party.h"
+#include "ported/battle/battle_character_update.h"
+#include "ported/battle/battle_command_input.h"
+#include "ported/battle/battle_trace.h"
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/actor_trace.h"
@@ -66,6 +70,9 @@ namespace orphen::port
     bool printSceneTree = false;
     bool printScriptReport = false;
     bool printActorReport = false;
+    // --battle-report: the loadout -> button -> mask binding, the party the
+    // scene built, and every frame the player's action byte or state changed.
+    bool printBattleReport = false;
     bool printRenderReport = false;
     // --sound-report: every cue the frame loop asked for, and what happened.
     bool printSoundReport = false;
@@ -195,6 +202,17 @@ namespace orphen::port
     std::vector<std::uint32_t> pressAttackFrames;
     // And for Triangle: --press-magic, the cast.
     std::vector<std::uint32_t> pressMagicFrames;
+    // --hold-triangle / --hold-circle / --hold-cross / --hold-square
+    // <first>-<last>: hold one face button across an inclusive 1-based frame
+    // range, with the pressed edge on the first frame only.
+    //
+    // The battle module cannot be exercised any other way. Its five action
+    // pairs are all press-and-release -- FUN_002462c8 emits the press action
+    // when the trigger mask catches a newly pressed bit and the release action
+    // when the *held* word it latched goes clear -- so a one-frame pulse enters
+    // a charge and leaves it the same frame. The charge level a spell fires at
+    // is how many ticks separated the two.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[4];
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -447,12 +465,19 @@ namespace orphen::port
     std::uint32_t reportedBattleBoots_ = 0;
     void reportPanelActivity();
     bool printActorReport_ = false;
+    bool printBattleReport_ = false;
     orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;
     bool printModelReport_ = false;
     std::uint32_t snapshotFrame_ = 0;
     // DAT_003555d0, republished into ActorEnvironment each frame.
     bool DAT_003555d0_collisionGroupMoved_ = false;
+
+    // DAT_00355588. The shared hit effect's one-frame request word: FUN_002f1380
+    // raises bit 0, FUN_002f13d0 (type 0x1E3) consumes it. Nothing raises it yet
+    // -- the damage paths that call FUN_002f1380 are not ported -- so it stays 0
+    // and the effect stays hidden, which is what the original does between hits.
+    std::uint16_t DAT_00355588_hitEffectRequest_ = 0;
     // Frames DAT_003555d0 has been up, and times the embedded-corner push-out
     // has produced a request. Both go in the 'G' snapshot: they separate "the
     // gate never opened" from "it opened and found nothing embedded".
@@ -567,6 +592,17 @@ namespace orphen::port
     bool buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId);
     orphen::ported::player::ItemWindow itemWindow_;
     orphen::ported::resource::ItemDatabase itemDatabase_;
+
+    // The battle module. FUN_002239c8:117 picks FUN_00249610 over FUN_00251ed8
+    // when DAT_003555d3 and sGpffffb052 are both set, and script opcode 0xBD's
+    // low methods are what set the second of those. See
+    // ported/battle/battle_party.h.
+    orphen::ported::battle::BattleParty battleParty_;
+    orphen::ported::battle::BattleParty::Environment battleEnvironment();
+    orphen::ported::battle::BattleUpdateEnvironment battleUpdateEnvironment(std::uint16_t frameTicks);
+    void sampleBattleTrace(std::uint32_t heldPad);
+    orphen::ported::battle::BattleTrace battleTrace_;
+    void printBattleReport() const;
     // uGpffffadf8, the character stat table. DAT_00343688's seven party
     // records come out of it; see FUN_002294d0_load_party_records.
     orphen::ported::resource::CharacterStats characterStats_;

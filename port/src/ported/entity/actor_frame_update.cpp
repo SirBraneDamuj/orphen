@@ -2029,6 +2029,64 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002f13d0 (0x002f13d0), the behaviour of type 0x1E3 -- the one shared
+  // hit effect FUN_002432d8:331 spawns for the whole battle and parks in
+  // DAT_0031dad0. Not in src/; recovered from SLUS_200.11 at 0x002F13D0..
+  // 0x002F141C, which is the whole function.
+  //
+  //     addiu v0, zero, -0x18      entity+0x133 = -24
+  //     lh    v1, DAT_00355588
+  //     bnel  v1, zero, +          branch-likely: skip the hide when a request
+  //     lhu   v0, 8(a0)            is pending
+  //     ori   v0, v0, 1            entity+0x08 |= 1
+  //     ...
+  //
+  // `DAT_00355588` is a one-frame request word. FUN_002f1380 -- the "show the
+  // hit effect here" setter every damage path calls with a position, a scale
+  // and a height -- raises bit 0 in it; this handler is what acts on it, and
+  // clears it again. So the effect is *hidden by default* and only becomes
+  // visible on the frames a hit asked for it.
+  //
+  // That default is the whole point of porting this. FUN_002432d8 spawns the
+  // entity with no post-spawn writes at all, so it arrives from FUN_00229c40
+  // with +0x08 bit 0 clear (drawable), scale 1, and position (0,0,0). Without
+  // its behaviour it sits at the world origin as a full-size sprite for the
+  // entire battle -- which is exactly what the port drew.
+  void FUN_002f13d0_shared_hit_effect(OriginalEntity &entity,
+                                      const ActorEnvironment &environment)
+  {
+    entity.depthBias133 = -0x18;
+
+    std::uint16_t request = environment.DAT_00355588_hitEffectRequest != nullptr
+                                ? *environment.DAT_00355588_hitEffectRequest
+                                : static_cast<std::uint16_t>(0);
+    if (request == 0)
+    {
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+    }
+
+    const std::uint16_t flags08 = entity.halfword08;
+    if ((flags08 & 1u) == 0)
+    {
+      // Already showing. The request is consumed either way, so a caller that
+      // stops asking lets the next frame's hide branch take it back down.
+      if (environment.DAT_00355588_hitEffectRequest != nullptr)
+      {
+        *environment.DAT_00355588_hitEffectRequest = 0;
+      }
+      return;
+    }
+
+    // Hidden. The animation is rewound every frame it stays hidden, so a
+    // request always starts the effect from frame 0.
+    entity.animationA0 = 0;
+    if (request == 0)
+    {
+      return;
+    }
+    entity.halfword08 = static_cast<std::uint16_t>(flags08 & 0xFFFEu);
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -2043,6 +2101,7 @@ namespace orphen::ported::entity
     case 0x002D2F40u: // FUN_002d2f40, type 0x28, the close-up rig
     case 0x002D21B8u: // FUN_002d21b8, type 0x42, the sword blade
     case 0x002D2470u: // FUN_002d2470, type 0x44, the homing magic projectile
+    case 0x002F13D0u: // FUN_002f13d0, type 0x1E3, the shared hit effect
       return true;
     default:
       return false;
@@ -2073,6 +2132,8 @@ namespace orphen::ported::entity
       return "FUN_002d21b8 (sword blade)";
     case 0x002D2470u:
       return "FUN_002d2470 (magic projectile)";
+    case 0x002F13D0u:
+      return "FUN_002f13d0 (shared hit effect)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -2189,6 +2250,9 @@ namespace orphen::ported::entity
         break;
       case 0x002D2470u:
         FUN_002d2470_magic_projectile(entity, slot, slotEnvironment);
+        break;
+      case 0x002F13D0u:
+        FUN_002f13d0_shared_hit_effect(entity, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

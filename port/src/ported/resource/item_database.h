@@ -31,14 +31,45 @@
 
 #include "harness/flat_bin_archive.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace orphen::ported::resource
 {
+
+  // FUN_00229688 param_4: the 0x28-byte stat record, unpacked exactly as that
+  // function unpacks it -- the three ints at +0x0C/+0x10/+0x14 divided by 1000
+  // into floats, everything else copied straight across at the same offsets.
+  //
+  // The battle module reads four things out of this. `kindByte` (+0x27) picks
+  // which of FUN_002432d8 four button-mask fields the spell binds to, and the
+  // first non-zero entry of `elementTable` (+0x18..+0x27) gives the element
+  // index and its power: index 0 physical, 1 lightning, 2 wind, 4 fire, 5 dark,
+  // 10 ice, matching the pentagon vertex order in FUN_0022ec30.
+  //
+  // Note that +0x27 is *both* the kind byte and the sixteenth element entry.
+  // That overlap is what the original does -- FUN_002432d8 declares
+  // `char acStack_e8[15]` immediately followed by `char cStack_d9` -- so the
+  // two are not separated here either.
+  struct ItemRecord
+  {
+    std::array<std::uint16_t, 3> ids{};      // +0x00, +0x02, +0x04
+    std::uint8_t byte06 = 0;                 // +0x06
+    std::uint8_t byte07 = 0;                 // +0x07, party record +0x14 + slot
+    std::uint8_t byte08 = 0;                 // +0x08, party record +0x18 + slot*4 + 3
+    std::uint8_t byte09 = 0;                 // +0x09
+    float value0c = 0.0f;                    // +0x0C, raw / 1000
+    float value10 = 0.0f;                    // +0x10, raw / 1000
+    float value14 = 0.0f;                    // +0x14, raw / 1000
+    std::array<std::uint8_t, 16> elementTable{}; // +0x18..+0x27
+
+    std::int8_t kindByte() const { return static_cast<std::int8_t>(elementTable[15]); }
+  };
 
   class ItemDatabase
   {
@@ -58,8 +89,13 @@ namespace orphen::ported::resource
     // itself with control code 0x01, which is the reader's job to spot.
     std::span<const std::uint8_t> FUN_0025b9e8_message(std::size_t index) const;
 
+    // FUN_00229688 with param_4 set, which is how FUN_002432d8 reaches it
+    // through the FUN_00229820 wrapper. Empty when the id is out of range.
+    std::optional<ItemRecord> FUN_00229688_record(std::int32_t itemId) const;
+
   private:
     std::vector<std::uint8_t> blob_;
+    std::uint32_t recordTableOffset_ = 0;
     std::uint32_t nameTableOffset_ = 0;
     std::uint32_t descriptionTableOffset_ = 0;
     std::uint32_t messageTableOffset_ = 0;

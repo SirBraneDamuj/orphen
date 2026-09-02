@@ -1693,6 +1693,7 @@ namespace orphen::harness
       unsigned int texture = 0;
       bool cullDisabled = false;
       int blendMode = 0;
+      bool blendEnabled = false;
       bool valid = false;
     };
 
@@ -1728,15 +1729,32 @@ namespace orphen::harness
       return (slot.flags & 0x10) != 0 ? 3 : 2;
     }
 
+    // PRIM's ABE bit, which is *not* the mode number. FUN_00211230:162 raises it
+    // for any slot whose flags name a mode and never lowers it again, so the
+    // full-alpha fold two lines up rewrites only the register-block index: a
+    // folded pass still blends, against ALPHA 0x44, with depth writes left on.
+    // Same shape as FUN_00212058:137-141 on the PSC3 path -- see setBlendState.
+    bool mapBlendEnabled(const orphen::ported::psm2::MaterialSlot &slot)
+    {
+      return !g_mapBlendDisabled && slot.textured() && (slot.flags & 0x70) != 0;
+    }
+
     // The same GS reading the PSC3 path uses, because both feed VU1 programs
     // that select GS state by this mode number. See drawObjectModel's
     // setBlendState for the derivation of each case.
-    void setMapBlendMode(int mode)
+    void setMapBlendState(int mode, bool blend)
     {
+      if (blend)
+      {
+        glEnable(GL_BLEND);
+      }
+      else
+      {
+        glDisable(GL_BLEND);
+      }
       switch (mode)
       {
       case 2:
-        glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         glDepthMask(GL_FALSE);
         glDepthFunc(GL_LEQUAL);
@@ -1746,14 +1764,14 @@ namespace orphen::harness
         // Mode 3's reverse subtract needs glBlendEquation, which is not in the
         // fixed-function entry points this harness links. It falls back to
         // straight alpha so it reads as wrong rather than as missing.
-        glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_FALSE);
         glDepthFunc(GL_LEQUAL);
         break;
       case 0:
       default:
-        glDisable(GL_BLEND);
+        // Block 0 is ALPHA 0x44 as well, and the only block with ZMSK clear.
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);
         glDepthFunc(GL_LESS);
         break;
@@ -1773,10 +1791,11 @@ namespace orphen::harness
         glEnable(GL_CULL_FACE);
         state.cullDisabled = false;
       }
-      if (state.blendMode != 0)
+      if (state.blendMode != 0 || state.blendEnabled)
       {
-        setMapBlendMode(0);
+        setMapBlendState(0, false);
         state.blendMode = 0;
+        state.blendEnabled = false;
       }
       glDisable(GL_ALPHA_TEST);
       state.valid = false;
@@ -1810,9 +1829,13 @@ namespace orphen::harness
       const orphen::ported::psm2::MaterialSlot *slot =
           materialSlotForPrimitive(map, primitiveIndex, slotIndex);
       int blendMode = slot != nullptr ? mapBlendMode(*slot) : 0;
-      if (blendMode != 0 && slot != nullptr)
+      bool blend = slot != nullptr && mapBlendEnabled(*slot);
+      if (blend)
       {
         // 0x80 is the GS's fully-opaque, so the divisor is 128 and not 255.
+        // Read whenever the slot names a mode, not only when the mode survives
+        // the fold: `plVar8[4]` is written before the fold, and the folded case
+        // is 0x80 anyway, so the two agree.
         alpha *= static_cast<float>(slot->alpha) / 128.0f;
       }
       // A map primitive held down by DAT_00355700 has to blend whatever its
@@ -1822,22 +1845,25 @@ namespace orphen::harness
       // cutscene's fade cap of 3 was computed, emitted, folded into the vertex
       // colour and then thrown away, so the room the cutscene means to black
       // out stayed fully lit behind the item.
-      if (blendMode == 0 && forceBlend)
+      if (!blend && forceBlend)
       {
+        blend = true;
         blendMode = 1;
       }
 
       // The fade alpha rides in the vertex colour, so it is not part of the
-      // key -- only the three things that are actual GL state are.
+      // key -- only the things that are actual GL state are.
       if (!state.valid || state.texture != texture ||
-          state.cullDisabled != wantCullDisabled || state.blendMode != blendMode)
+          state.cullDisabled != wantCullDisabled || state.blendMode != blendMode ||
+          state.blendEnabled != blend)
       {
         batchFlush();
 
-        if (state.blendMode != blendMode || !state.valid)
+        if (state.blendMode != blendMode || state.blendEnabled != blend || !state.valid)
         {
-          setMapBlendMode(blendMode);
+          setMapBlendState(blendMode, blend);
           state.blendMode = blendMode;
+          state.blendEnabled = blend;
         }
 
         // The same cutout discard drawObjectModel does, for the same reason:
@@ -3075,9 +3101,9 @@ namespace orphen::harness
         }
         else
         {
-          setMapBlendMode(currentMode);
+          setMapBlendState(currentMode, true);
         }
-        // setMapBlendMode also touches the depth mask; this pass never writes.
+        // setMapBlendState also touches the depth mask; this pass never writes.
         glDepthMask(GL_FALSE);
       }
 

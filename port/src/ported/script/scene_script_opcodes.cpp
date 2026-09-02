@@ -2172,6 +2172,43 @@ namespace orphen::ported::script
   // Otherwise the entity's real type is parked at +0x1A0 and it becomes a type
   // 0x37 follower, which is why effectiveTypeId() has to alias 0x37 the same way
   // it aliases 0x38.
+  // 0xAF (FUN_002635c0): select a party member as the current entity.
+  //
+  //   FUN_0025c258(&idx);
+  //   if (6 < idx) FUN_0026bfc0("...");
+  //   DAT_00355044 = &DAT_0058beb0 + ((short *)&DAT_00343692)[idx * 0x14] * 0xec;
+  //
+  // DAT_00343692 is the roster's +0x0A halfword at a stride of 0x28, i.e. the
+  // pool slot the party member is bound to -- the same array opcode 0xAC fills.
+  // DAT_00355044 is uGpffffb0d4 (0x00359F70 - 0x4F2C), the selection every
+  // object-method opcode reads, so this is `selectEntity` and nothing more.
+  //
+  // s14_e012 runs it six times, for indices 0..5, at blob 0x04f7..0x06aa -- the
+  // statement the port used to halt on. The assert above 6 is a developer
+  // check; an out-of-range index in the original still indexes the array.
+  std::uint32_t SceneCommandInterpreter::FUN_002635c0_select_party_member()
+  {
+    const std::int32_t index = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_ || environment_.state == nullptr)
+    {
+      return 0;
+    }
+    if (index < 0 || static_cast<std::size_t>(index) >= SceneScriptState::kPartySlotCount)
+    {
+      return 0;
+    }
+    const std::uint16_t poolSlot = environment_.state->DAT_00343692_partySlots[index];
+    // 0x100 and 0xFFFF are the two "not in the party" sentinels opcode 0xAC
+    // leaves behind; both would index outside the pool.
+    if (poolSlot >= orphen::ported::entity::kEntitySlotCount)
+    {
+      selectEntity(kNoEntity);
+      return 0;
+    }
+    selectEntity(poolSlot);
+    return 0;
+  }
+
   std::uint32_t SceneCommandInterpreter::FUN_002631f0_bind_party_slot()
   {
     const std::uint32_t slot = FUN_0025c258_evaluate();
@@ -4026,6 +4063,10 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00263498_release_party_slot();
 
+    case 0xAF:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_002635c0_select_party_member();
+
     case 0xA8:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00262f38_install_lead_slot();
@@ -4346,6 +4387,29 @@ namespace orphen::ported::script
       //
       switch (method)
       {
+      // The battle methods. FUN_00242a18 cases 1, 2, 3 and 0x78 are the whole
+      // of how a scene enters battle mode, and s14_e012 uses all four:
+      //
+      //   0x032f..0x0495  method 0x78 nine times -- all three slots of loadout
+      //                   rows 3, 4 and 5, packed as 0x300..0x502
+      //   0x0816, 0x0a2a  method 3, build the party
+      //   0x09a5, 0x0bb0  method 2, start the battle
+      //
+      // The selector is evaluated above and lands in currentEntity_, which is
+      // DAT_00355044 -- the entity FUN_00242a18 takes as param_1. The battle
+      // methods below do not use it; they act on the party as a whole.
+      case 1:
+      case 2:
+      case 3:
+      case 0x78:
+        if (environment_.FUN_00242a18_battle_method)
+        {
+          return environment_.FUN_00242a18_battle_method(static_cast<std::int32_t>(method),
+                                                         static_cast<std::int32_t>(arg3),
+                                                         static_cast<std::int32_t>(arg4));
+        }
+        return 0;
+
       case 0x70:
       {
         // FUN_002443f8. The path lives at `arg3 + DAT_00355058`: a u32 count,

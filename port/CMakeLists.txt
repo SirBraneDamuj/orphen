@@ -51,6 +51,9 @@ target_sources(orphen_port
     src/harness/scene_resource_tree.h
         src/harness/flat_bin_archive.cpp
         src/harness/flat_bin_archive.h
+        src/ported/battle/battle_party.cpp
+        src/ported/battle/battle_command_input.cpp
+        src/ported/battle/battle_character_update.cpp
         src/ported/entity/map_prop_descriptor_table.cpp
         src/ported/entity/map_prop_descriptor_table.h
         src/ported/debug/original_debug_text.cpp

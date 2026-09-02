@@ -1047,6 +1047,222 @@ at all. `s01_e012`'s six doorways come out as codes `0x28`, `0x3a`, `0x46`, `0x5
 `0x62`, `0x84` and `0x9c`, and the one the transition wants is `0x62`, at
 `(5.50, -2.75)`.
 
+## Battle mode
+
+`s14_e045` stopped because it was already being driven by the battle module.
+This is the first slice of that module: the player half, against **`s14_e012`**
+— a small section-14 scene with one ally and several enemies, and no opener to
+speak of.
+
+```
+port\build\msvc-Release\orphen_port.exe --disc-root . --scene s14_e012 \
+    --frames 460 --hold-cross 300-360 --battle-report
+```
+
+### Battle entry is script-driven, and `docs/battle_mode_activation.md` is wrong about it
+
+That document concludes that no SCR opcode enters battle mode and that the MCB
+debug menu `FUN_00268e20` is the only code that writes `cGpffffb663`. Both
+halves are wrong, and both are checkable:
+
+- **`cGpffffb663` is `DAT_003555d3`**, which `FUN_0022a418:49` sets from bit
+  `0x20000` of the scene request — the bit `FUN_002610a8` raises for every
+  group-0xE destination. Group 0xE is MCB0 **section 14**, which holds 63
+  scenes and is the battle section. The port already tracked that flag as
+  `DAT_003555d3_groupEScene_`; it just never set it for a scene loaded straight
+  from `--scene`, so a cold `--scene s14_e012` ran with battle mode off.
+  `loadSceneForCurrentMap` now raises it when the loaded section is 14, and
+  `--scr-report`'s work dump shows `[26]=50` on a cold load as a result —
+  `FUN_0025b6d0`'s group-0xE branch, the same one the `s01_e012` handoff proved.
+- **Opcode `0xBD` starts the battle.** `FUN_00263e80` evaluates four operands
+  and hands them to `FUN_00242a18`, a method table on the selected entity. The
+  port already implemented methods `0x70`/`0x72` as waypoint path-follow; the
+  battle lives in the low numbers of the same table:
+
+  | method | handler | |
+  |---|---|---|
+  | 1 | `FUN_00242de0` | stop the battle (`uGpffffb052 = 0`) |
+  | 2 | `FUN_00243f80` | start it, building the party first if 3 has not run |
+  | 3 | `FUN_002432d8` | build the party from the roster |
+  | 0x78 | `FUN_00244cc0` | equip a spell into a loadout slot |
+
+  `s14_e012` calls all four — method `0x78` nine times at blob `0x032f`..`0x0495`
+  (all three slots of rows 3, 4 and 5, packed `0x300`..`0x502`), method 3 at
+  `0x0816` and `0x0a2a`, method 2 at `0x09a5` and `0x0bb0`.
+
+The pair `FUN_002239c8:117` tests is `DAT_003555d3` and `sGpffffb052`, and bit 0
+of the second is exactly what method 2 sets.
+
+Getting there needed one more opcode: **`0xAF`** (`FUN_002635c0`), three lines
+that set `DAT_00355044` — the interpreter's `currentEntity_` — from roster entry
+`idx`'s `+0x0A` pool slot. `s14_e012` runs it six times at `0x04f7`..`0x06aa`,
+and it is where the port used to halt. With it the scene reaches **zero
+unimplemented opcodes** and its per-frame entry runs.
+
+### The loadout is a table, and it is the one the game ships with
+
+`FUN_002432d8` clears five tables whose sizes pin their extents, then binds each
+of the three assignable slots to a button:
+
+```c
+FUN_00267e78(0x31d3c8, 1000);   // party records, stride 100  -> 10
+FUN_00267e78(0x31d7b0,  600);   // control blocks, stride 0x3C -> 10
+FUN_00267e78(0x31da08, 0xFC);   // per-member spell aux
+FUN_00267e78(0x31dc18, 0xF0);   // button masks, stride 0x28   -> 6
+FUN_00267e78(0x31dd08, 0x3C);   // cooldowns, stride 10        -> 6 x 5
+```
+
+`DAT_0031d168` is `{0x10, 0x20, 0x40}` and `DAT_0031d174` is `0x80` — Triangle,
+Circle, Cross, then Square. Post-`CONCAT11` layout, the same one
+`sdl_gl_window.cpp` already builds `rawHeldPad` in, so these are pad bits
+directly.
+
+Which of five mask fields a slot ORs its button into is chosen by the **item's
+kind byte**, record `+0x27` of the 0x28-byte item record `FUN_00229688` returns.
+Square is not chosen by anything: `DAT_0031dc3c = DAT_0031d174` is written
+outright, which is why the shield is on Square whatever is equipped.
+
+The loadout itself is `DAT_003437a0`, seven rows of three, seeded by
+`FUN_002294b8` from **`0x00318b50`**. Row 0 reads `05 07 01`, and the item
+database names those:
+
+| slot | button | item | kind | element | pair | class-1 states | effect type |
+|---|---|---|---|---|---|---|---|
+| 0 | Triangle `0x10` | `0x05` Hand of Pyro | 12 | fire | `0x8A` → `0x8B` | 111 → 112 | `0x013D` |
+| 1 | Circle `0x20` | `0x07` Bite of Lightning | -2 | lightning | `0x8C` → `0x8D` | 113 → 114 | `0x0174` |
+| 2 | Cross `0x40` | `0x01` Sword of the Fallen Devil | 0 | physical | `0x86` → `0x84`/`0x85` | 107 → 105/106 | `0x0139` |
+| — | Square `0x80` | the shield | — | — | `0x90` → `0x91` | 117 → 118 | `0x01C7` |
+
+`battle_logo_loaded.p2s`, a save state taken inside a real battle, holds exactly
+`05 07 01` at `0x003437A0`. The effect type comes from a second table at
+**`0x00324FC8`**, stride `0x12`, item id to entity type, terminated by a zero id.
+
+### Hold to charge is one test, and the charge is a party-record field
+
+`FUN_002462c8` writes control block `+0x0E`, the pending action byte, and
+`FUN_0024a360` spends it: for a byte in `0x84..0x92` it computes
+`state = byte + 0x3FE5` — states 105..119 — with bit `0x4000` riding along as a
+restart marker the handler clears itself.
+
+Every pair works the same way. A press ORs the button that fired into the *held*
+word beside its trigger word; the release test is `held-word AND
+currently-held == 0`. Between those two the action byte does not move, and the
+state behind it accumulates `DAT_003555bc` per frame into **party record
+`+0x3C`**, capped at `0x2D00` (`FUN_00249128`). `FUN_00249270(entity, 0x780)`
+divides that, capped at `0x2580`, into the **charge level 0..4** — the number
+`FUN_0024bae0` stamps into the effect entity's `+0x94`. That is the projectile
+count.
+
+The whole cycle, from `--battle-report`:
+
+```
+f=300 pad=0x0040 pending=0x86 action=0x06 state=0x0078 charge=0    slot=2
+f=301 pad=0x0040 pending=0x00 action=0x86 state=0x006b charge=0    slot=2
+f=321 pad=0x0040 pending=0x00 action=0x86 state=0x006b charge=32   slot=2
+...
+f=360 pad=0x0040 pending=0x00 action=0x86 state=0x006b charge=1280 slot=2
+f=361 pad=0x0000 pending=0x85 action=0x86 state=0x006b charge=1312 slot=2
+f=362 pad=0x0000 pending=0x00 action=0x85 state=0x406a charge=1312 slot=2
+```
+
+`--hold-triangle`, `--hold-circle`, `--hold-cross` and `--hold-square` each take
+`<first>-<last>` in 1-based frames and hold the button across the range with the
+pressed edge on the first frame only. The battle module cannot be exercised any
+other way: `--press-magic` and friends are one-frame pulses, which enter a charge
+and leave it on the same frame.
+
+### No target is a branch, not a special case
+
+`FUN_00249610:170` is `else if (lVar11 < 3)`, where `lVar11` is control block
+`+0x2C`. With no enemy table every member keeps a target below 3, the whole
+face-the-target block is skipped, and control falls straight to the state
+dispatch. The enemy side is not in this slice, so this is the mode it runs in,
+and it costs no special case at all.
+
+`FUN_0024cf20` forces that halfword positive and, when it is zero, to 1 — so the
+report prints `target=1` rather than `-1`, and the `< 3` test still takes the
+no-target branch. `FUN_0024b410` (state 106, the approach run between releasing a
+kind-0 charge and the swing landing) reads the same field: it negates it, tests
+`< 2`, and asks for `0x84` on its first frame. With no enemy that makes the
+approach a pass-through into state 105, the swing — which is what the port does,
+because it is the original's own arithmetic and not a shortcut.
+
+### The lead player has had no hit points since the port began
+
+`FUN_00249610:84` abandons the character update when `+0x12A` minus `+0xBE`
+falls below 1, so a lead with no hit points reads as a corpse and never
+dispatches a state. Chasing that turned up two bugs that predate the battle work
+and were invisible without it:
+
+- `SceneScript::load` rebuilds `SceneScriptState`, and the party stat table is
+  one of its members — so the `FUN_002294d0` pass that ran once at
+  `initialize` was gone the moment a scene script loaded. In the original
+  `DAT_00343688` is a global that outlives every scene. Re-seeded after the
+  load.
+- `FUN_0022a418` calls `FUN_00251dc0` at :206 and places the lead at :372-375,
+  and nothing between those two lines touches the entity. The port's placement
+  goes through `OriginalPlayerController::resetAt`, a port-side construct that
+  begins `entity() = OriginalEntity{}` — so it threw the stats away every time.
+
+Both together left the lead at 0/0 hit points, 0 attack and 0 defence in every
+scene the port has ever loaded. Nothing noticed because `FUN_00216140` floors a
+hit at one point, so the damage the player dealt still looked plausible. Both
+standing scenes stay byte-identical at 3000 frames with the fix in, which is the
+same thing said from the other side.
+
+### What is deliberately not here
+
+Two omissions, both named by `--battle-report` rather than left silent:
+
+- **`FUN_0023fd30`'s VM.** The battle master tick runs a *second* bytecode
+  interpreter — 19 opcodes at `PTR_LAB_0031d118` (`src/PTR_LAB_0031d118.txt`) —
+  stepping a master battle script plus a per-member AI script off control block
+  `+0x30`. It drives the opener, the "battle start" beat and enemy and ally AI.
+  `FUN_00243f80` installs those scripts only on members *other* than 0, so the
+  player's control block has none and the player path does not need it.
+- **The enemy table.** `DAT_00354eb4`/`DAT_00354eba` stay empty, which is what
+  keeps every target below 3 and the no-target branch live.
+
+One visible consequence, honestly reported by `--actor-report` as
+`UNIMPLEMENTED`: the effect entities `FUN_00242df0` and the state handlers
+spawn — types `0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7` — have no behaviours
+yet, so they hold whatever pose the spawn gave them. All five are spawned with
+`+0x08` bit 0 set, which is `FUN_0020c5a8`'s hide, so none of them is on screen.
+
+#### The shared hit effect hides itself, and nothing else hides it
+
+Type `0x1E3` is the exception, and it drew as a room-height cyan slab across the
+middle of the arena. `FUN_002432d8`'s last line spawns it with **no post-spawn
+writes at all** — so it arrives from `FUN_00229c40` drawable (`+0x02` has no
+`0x200`), at scale 1, at the world origin. Nothing in the spawn path hides it.
+Its behaviour does, and that behaviour is not in `src/`; recovered from
+`SLUS_200.11` at `0x002F13D0`, the whole function is:
+
+```c
+entity->depthBias133 = -0x18;
+if (DAT_00355588 == 0) entity->halfword08 |= 1;      // hide
+if ((entity->halfword08 & 1) == 0) { DAT_00355588 = 0; return; }
+entity->animationA0 = 0;                              // rewind while hidden
+if (DAT_00355588 == 0) return;
+entity->halfword08 &= ~1;                             // a request: show it
+```
+
+`DAT_00355588` is a one-frame request word raised by `FUN_002f1380`, the
+"put the hit effect here" setter every damage path calls with a position, a
+scale and a height. So the effect is hidden by default and visible only on the
+frames a hit asked for it — one shared entity teleported around the field rather
+than one spawned per hit. Ported, with `DAT_00355588` owned by the runtime so
+the damage paths have somewhere to write when they land. Nothing raises it yet,
+which is why the effect now stays down.
+
+The general lesson is worth keeping: an effect entity that a spawner leaves
+untouched is not "parked", it is **live and full-size**, and its behaviour is
+the only thing standing between it and the screen.
+
+Of the 24 class-1 state handlers at `0x0031DD60`, this slice ports 101..107 and
+109..122 except 102, 108 and 115. `--battle-report` names any state a run
+actually reached whose handler is missing.
+
 ### The close-up rig, and the draw walk's deferral queue
 
 The doorway scene swaps Orphen for a close-up model with an animating head, and
@@ -2937,10 +3153,12 @@ right of hardware's and ~15% high, which is not chased further here.
 
 **Two things the dump settled in passing.**
 
-`TEST_1` is `0x5000d` on 3554 of this frame's 3556 draws: `ATE` is on, but `ATST`
-is GEQUAL against `AREF` 0, so **the GS alpha test never rejects anything**. That
-contradicts the stated mechanism for the map cutout discard added for s01_e024's
-chains -- see the note in that section.
+`TEST_1` is `0x5000d` on 3554 of this frame's 3556 draws. **Corrected later:**
+this file first read that as `ATST` GEQUAL against `AREF` 0 -- a test that never
+rejects -- and built two open questions on top of it. `ATST` is bits 1..3, so
+`0xd` is `110` = **GREATER**, not `101` = GEQUAL. `ATE` on, GREATER, `AREF` 0,
+`AFAIL` KEEP is exactly `glAlphaFunc(GL_GREATER, 0)`: the GS discards alpha-zero
+texels and nothing else. See the chains section.
 
 The four VU1 register blocks at `608 + mode*3`, read straight out of
 `vu1Memory.bin`, are exactly what this file already claimed: mode 0 `ALPHA 0x44`
@@ -4232,24 +4450,42 @@ silhouette was "the alpha test doing its job" was wrong about the mechanism: the
 map path had no alpha test to do it. The stair-stepping came from the same
 inherited blend.
 
-**Open -- the justification above is now in doubt.** The s01_e012 GS dump has
-`TEST_1 = 0x5000d` on effectively every draw: `ATE` on, but GEQUAL against
-`AREF` 0, which always passes. If s01_e024 sets the same value then the GS alpha
-test discards nothing there either, and whatever removes the chain's surround on
-hardware is not this. The picture the discard produces still matches the
-reference shot, so it stays for now, but the mechanism is unproven. The likeliest
-alternative is that the chain primitives really do blend and the port misreads
-the material byte that decides it -- `slot0 f=0x00` gives mode 0, and one bit
-(`0x40`) would give mode 1, whose alpha blend removes an alpha-0 surround for
-free. **A GS dump taken at the chains would settle it in one look**: the draws'
-`PRIM.ABE` bit and `ALPHA_1` are all it takes.
+**Settled by a GS dump taken at the chains** (`s01_e024`, player standing in the
+doorway, four captured frames, 1212 draws each). Both chains are `tbp 5760`
+trifans, two crossed quads deep at any pixel through a link:
 
-The Sephy dump narrowed this further without touching `s01_e024`. It confirmed
-that the GS's alpha test discards nothing (`AREF` 0, GEQUAL), so the discard is
-certainly not what the original does -- and it turned up the same conflation of
-`ABE` with the register-block index on the *map* path, `FUN_00211230:152-161`.
-Whether the chains reach it depends on a bit in their flags byte, which only the
-dump can say. See "`ABE` is not the register-block index" below.
+| | |
+|---|---|
+| `PRIM` | `0x03d` -- trifan, IIP, TME, FGE, **`ABE` 0** |
+| `ALPHA_1` | `0x44` (register block 0) |
+| `ZBUF.ZMSK` | 0 -- depth written |
+| `TEST_1` | `0x5000d` |
+| `TEX1_1` | `0x60` -- bilinear, as everywhere else |
+
+So the chains do **not** blend. `mapBlendMode` returning 0 for `slot0 f=0x00` was
+right, and the alternative floated below -- that the port misreads the material
+byte and the primitives really blend -- is dead.
+
+What removes the surround is the alpha test, and the earlier doubt about it was a
+decode slip on my part. `ATST` occupies bits 1..3 of `TEST`, so `0x5000d`'s `0xd`
+is `110` = **GREATER**, not GEQUAL; with `AREF` 0 and `AFAIL` KEEP that discards
+exactly the alpha-zero texels and passes everything else. It is `0x5000d` on
+4836 of the dump's 4848 draws and `0x3000d` on the other 12 (`ZTST` ALWAYS, an
+overlay), and every one of the 4848 has `ATE` 1 / GREATER / `AREF` 0. The page's
+CLUT at `CBP 6016` carries **exactly one** alpha-zero index among 256 -- the
+chain surround -- and 234 at alpha 128.
+
+`glAlphaFunc(GL_GREATER, 0.0f)` on both paths is therefore not a stand-in for
+something else; it is what the GS is configured to do, and the port already had
+it right on both sides. Nothing to change.
+
+Two smaller things the dump confirmed in passing. `ZTST` is GEQUAL against a
+reversed Z on every draw, which is why the specular pass -- coplanar with the
+base pass it follows -- needs `GL_LEQUAL` and gets it. And the entity's per-face
+additive second pass is there in the capture exactly as `drawObjectModel` builds
+it: 365 untextured `ALPHA 0x48` `ZMSK 1` quads interleaved one-for-one with the
+player's textured faces, in a constant `(32, 80, 160)` with the intensity in the
+vertex alpha.
 
 ### `ABE` is not the register-block index
 
@@ -4301,13 +4537,25 @@ they blended.
 separately, and block 0 sets `GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA` with
 `glDepthMask(GL_TRUE)`.
 
-**The map path has the identical shape.** `FUN_00211230:152-161` folds
-`plVar8[6]` to 0 when byte `+0x0A` is `0x80` and then sets `plVar8[1] |= 0x40`
-*outside* the branch, exactly as the PSC3 path does; `mapBlendMode` collapses it
-the same way `drawObjectModel` used to. Left alone deliberately -- it wants its
-own change with pixel diffs on `s01_e024`, and it is the strongest candidate yet
-for the chains (see the open note above: a primitive whose slot flags carry
-`0x70` blends on hardware however its alpha reads).
+**The map path had the identical shape, and now carries the two separately
+too.** `FUN_00211230:152-161` folds `plVar8[6]` to 0 when byte `+0x0A` is `0x80`
+and then sets `plVar8[1] |= 0x40` *outside* the branch, exactly as the PSC3 path
+does. `mapBlendMode` still returns the block index; `mapBlendEnabled` is the new
+`ABE`, `(flags & 0x70) != 0` on a textured slot, and `setMapBlendState(mode,
+blend)` mirrors `setBlendState`. The slot alpha is now folded into the vertex
+colour whenever the slot names a mode rather than only when the mode survives --
+`plVar8[4]` is written before the fold, and the folded case is `0x80`, so the two
+agree.
+
+**It changes nothing in either scene, and that is a measured claim, not an
+assumption.** Counting the fold case (`flags & 0x70` set *and* alpha `0x80`) over
+the first 20,000 map slot draws: `s01_e024` `fold=0 blend=0 plain=20000` -- no
+map primitive blends there at all -- and `s01_e012` `fold=0 blend=4367
+plain=15633`. Zero either way, so the path exists but no shipped material reaches
+it. `s01_e024` and `s01_e012` at f600 and f3000 are byte-identical before and
+after, and the 20000-frame `--actor-report`/`--scr-report` diff is empty. Worth
+having anyway: it was a real divergence, and it is the same one line of reasoning
+as the entity path rather than a second, different rule.
 
 ### Texture filtering is bilinear, and the port was sampling nearest
 
@@ -4342,13 +4590,11 @@ are median RGB `(70, 51, 25)`, alpha 128 throughout. So the residual is a
 scene-lighting brightness question -- the same thread as the lantern work's
 "the port is overall too bright" -- and not a property of the hair at all.
 
-**Worth carrying forward: the GS discards nothing here.** `TEST_1` is `0x5000d`
-on every draw in the capture -- `ATE` on, but GEQUAL against `AREF` 0, which
-always passes. What stops a transparent hair texel from occluding on hardware is
-draw order: the 84 blended cards go out after the 454 opaque body draws, so
-nothing is left to be rejected by the depth they write. The port's
-`glAlphaFunc(GL_GREATER, 0)` on both the entity and the map path has no
-counterpart in the original.
+~~**Worth carrying forward: the GS discards nothing here.**~~ **Withdrawn.**
+`TEST_1` is `0x5000d` on every draw in the capture, and `ATST` is bits 1..3, so
+that is GREATER against `AREF` 0 -- a cutout discard -- not GEQUAL. The port's
+`glAlphaFunc(GL_GREATER, 0)` on both paths is the exact equivalent. Draw order
+matters too, but it is not doing this job alone.
 
 ### The shop's additive props: a bundle-lookup order bug
 

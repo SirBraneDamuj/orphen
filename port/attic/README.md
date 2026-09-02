@@ -22,6 +22,13 @@ sampling at flush time attributes every blend mode to the draw before it. It is
 worth a paragraph because the shifted reading is plausible rather than obviously
 broken -- it made the lantern's additive decals look like ordinary alpha blends.
 
+Two smaller things it gets wrong if you don't know: texcoords arrive as `ST`
+(reg `0x02`), not `UV`, and the `Q` in that packet is not a usable float here --
+`uv` is therefore `S * 2^TW` at an assumed `Q = 1`, which gives sane texels. And
+`TEST` is a bitfield worth decoding off the layout every time: `ATST` is bits
+1..3, so `0x5000d` is GREATER, not GEQUAL, and that one bit is the difference
+between "the GS discards nothing" and "the GS is doing a cutout discard".
+
 Usage is `python -c` against the module; `port/README.md`'s "Notes on GS dumps"
 has the recipes.
 
