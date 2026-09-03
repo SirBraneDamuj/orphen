@@ -42,6 +42,14 @@ namespace orphen::ported::battle
       // The attack effect's +0x150 in thousandths -- the blade's length, which
       // is what a kind-0 charge grows.
       std::uint16_t bladeLength = 0;
+      // The ground ring's +0x14C in thousandths (type 0x18F, DAT_0031DA8C): the
+      // charge gauge under the caster's feet, which FUN_002d9b78 resizes.
+      std::uint16_t ringScale = 0;
+      // The shared hit effect's +0x14C in thousandths (type 0x1E3,
+      // DAT_0031DAD0): **the blue targeting circle** an elemental spell grows
+      // at its landing spot, placed every frame by FUN_002f1380. Without this
+      // column the growth is invisible in a headless run.
+      std::uint16_t hitEffectScale = 0;
       std::uint32_t heldPad = 0;
       std::array<std::uint16_t, 5> cooldowns{};
     };

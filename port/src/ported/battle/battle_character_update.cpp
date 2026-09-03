@@ -227,7 +227,8 @@ namespace orphen::ported::battle
                                    std::uint32_t member,
                                    std::uint32_t tableBase,
                                    std::size_t casterSlot,
-                                   bool onlyWhenTypeChanged)
+                                   bool onlyWhenTypeChanged,
+                                   bool assignHitParameters)
     {
       BattleParty &party = *environment.party;
       const auto &caster = environment.pool->slot(casterSlot);
@@ -273,6 +274,16 @@ namespace orphen::ported::battle
 
       // +0x12C is the effect's attack power: the caster's, plus the per-slot
       // byte the party record took from the item's +0x07.
+      //
+      // **Only the kind-0 states do this on entry.** FUN_0024b7d0 (107) and
+      // FUN_0024ac88 (105) stamp the power and the element block on the blade
+      // as they spawn it; FUN_0024c058 (111) and FUN_0024c538 (113) do not --
+      // their release states, FUN_0024bae0 and FUN_0024c910, write both at the
+      // throw marker instead, off the slot that is selected by then.
+      if (!assignHitParameters)
+      {
+        return spawned;
+      }
       effect.attackPower12c = static_cast<std::uint16_t>(
           caster.attackPower12c +
           party.tables().read<std::int8_t>(BattleTables::partyRecord(member) + record::kSpellByte14 +
@@ -575,7 +586,7 @@ namespace orphen::ported::battle
         // Unconditional here, unlike state 105's, which only respawns when the
         // slot's type has changed under it.
         respawnSlotEffect(*context.environment, context.member, kDAT_0031da9c_attackEntity,
-                          context.entitySlot, false);
+                          context.entitySlot, false, true);
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         FUN_00248e98_set_animation_if_changed(entity, 0x33);
         party.FUN_00249108_clear_turn_flags(context.member);
@@ -768,7 +779,8 @@ namespace orphen::ported::battle
           }
           entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
 
-          respawnSlotEffect(*context.environment, context.member, attackAt, context.entitySlot, true);
+          respawnSlotEffect(*context.environment, context.member, attackAt, context.entitySlot, true,
+                            true);
           orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
           effect = attackEntity();
           if (effect != nullptr)
@@ -1177,7 +1189,7 @@ namespace orphen::ported::battle
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                          context.entitySlot, false);
+                          context.entitySlot, false, false);
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
         // :37-40. Only a voiced character arms the spell voice.
         if (FUN_00249348_is_voiced_player(party, entity))
@@ -1226,7 +1238,9 @@ namespace orphen::ported::battle
           }
         }
       }
-      return charge;
+      // FUN_0024c058 ends `jr ra; move v0, zero` -- the charge halfword is not
+      // what it hands back.
+      return 0;
     }
 
     // FUN_0024c3e0 (state 112): the kind > 0 release. Its own body is the
@@ -1271,30 +1285,49 @@ namespace orphen::ported::battle
     }
 
     // FUN_0024c538 (state 113): the kind < 0 hold -- Circle with Bite of
-    // Lightning. Unlike 111 this one steers: while party record +0x28+0x1D is
-    // not -1 the character is aiming, and the charge accumulates.
-    std::uint16_t stateChargeSpellB113(const StateContext &context, std::uint16_t charge)
+    // Lightning. It looks like state 111 and it is not: **111 captures the
+    // target position once, on entry; 113 tracks it every frame until the cast
+    // pose lands**, and it gates on +0xAA bits 0x200/0x400 rather than 111's
+    // 0x800.
+    //
+    // The thing that makes the difference legible is party record +0x45, which
+    // is a **frame number, not a flag**. It starts at -1. When the cast
+    // animation raises +0xAA bit 0x200 the state copies the animation cursor
+    // +0xA8 into it, halved; from then on the last line writes it back into
+    // +0xA8 every frame, which is what freezes the character in the cast pose
+    // for as long as Circle is held. Nothing charges before that: while +0x45
+    // is -1 the state is still steering the landing spot onto the target.
+    std::uint16_t stateChargeSpellB113(const StateContext &context, std::uint16_t)
     {
       auto &entity = *context.entity;
       BattleParty &party = *context.party;
+      auto &tables = party.tables();
       if (party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4) == kNoEntity)
       {
         entity.state60 = 0x4078;
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
         setAction(context, kActionIdle06);
-        return charge;
+        return 0;
       }
 
-      const std::uint32_t aimAt = BattleTables::partyRecord(context.member) + record::kAimMarker45;
+      const std::uint32_t voiceSlot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+      const std::uint32_t recordBase = BattleTables::partyRecord(context.member);
+      const std::uint32_t aimAt = recordBase + record::kAimMarker45;
+
       if ((entity.state60 & 0x4000) != 0)
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         const std::int32_t shield =
             respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                              context.entitySlot, false);
+                              context.entitySlot, false, false);
         FUN_00248e98_set_animation_if_changed(entity, 0x3A);
+        // :37-40. Ask for the spell voice bank, exactly as 111 does.
+        if (FUN_00249348_is_voiced_player(party, entity))
+        {
+          tables.write<std::int16_t>(kDAT_0031da60_voiceState + voiceSlot * 2, 1);
+        }
         party.FUN_00249108_clear_turn_flags(context.member);
-        party.tables().write<std::int8_t>(aimAt, -1);
+        tables.write<std::int8_t>(aimAt, -1);
         if (shield != kNoEntity)
         {
           auto &effect = context.environment->pool->slot(static_cast<std::size_t>(shield));
@@ -1303,24 +1336,168 @@ namespace orphen::ported::battle
         }
       }
 
-      // +0xAA bit 0x200 takes the aim marker off -1 and starts the charge.
+      // +0xAA bit 0x200: the cast pose has arrived. Half the cursor, because
+      // the pin below doubles it again.
       if ((entity.flagsAa & 0x200) != 0)
       {
-        party.tables().write<std::int8_t>(
+        tables.write<std::int8_t>(
             aimAt, static_cast<std::int8_t>(static_cast<std::int16_t>(entity.timelineCursorA8) / 2));
       }
-      if (party.tables().read<std::int8_t>(aimAt) != -1)
+
+      if (tables.read<std::int8_t>(aimAt) == -1)
+      {
+        // Still aiming. The landing spot follows the target; FUN_002493f0 reads
+        // it back out of the same three floats.
+        const std::int16_t target = tables.read<std::int16_t>(context.control + control::kTarget2c);
+        if (target >= 0 &&
+            static_cast<std::size_t>(target) < orphen::ported::entity::kEntitySlotCount)
+        {
+          const auto &body = context.environment->pool->slot(static_cast<std::size_t>(target));
+          tables.write<float>(recordBase + record::kTargetPos28 + 0, body.positionX20);
+          tables.write<float>(recordBase + record::kTargetPos28 + 4, body.positionZ24);
+          tables.write<float>(recordBase + record::kTargetPos28 + 8, body.positionY28);
+        }
+        // With no enemy table the target is -1 and the original indexes the
+        // pool one stride *below* slot 0. What it copies there is never read --
+        // FUN_002493f0 takes its no-target branch on the same -1 -- so the port
+        // simply leaves the three floats alone rather than reproducing a read
+        // off the front of the pool.
+      }
+      else
       {
         FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
       }
-      return charge;
+
+      // :78-90. The bank load walks whether or not the charge is building.
+      if (FUN_00249348_is_voiced_player(party, entity))
+      {
+        FUN_0024c058_step_spell_voice(*context.environment, voiceSlot);
+      }
+
+      if (tables.read<std::int8_t>(aimAt) != -1)
+      {
+        // The ring gate, the same one 107 and 111 use: no incantation while the
+        // ground ring is anything but open.
+        if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0 &&
+            FUN_00249348_is_voiced_player(party, entity))
+        {
+          const std::uint32_t at = kDAT_0031da60_voiceState + voiceSlot * 2;
+          if (tables.read<std::int16_t>(at) == 3 && context.environment->FUN_00206a90_voice_busy &&
+              !context.environment->FUN_00206a90_voice_busy() &&
+              context.environment->FUN_00206f08_play_voice &&
+              context.environment->FUN_00206f08_play_voice(voiceSlot, 0))
+          {
+            tables.write<std::int16_t>(at, 100);
+          }
+        }
+      }
+
+      // The pose pin. +0x45 is read back as an *unsigned* byte here, which is
+      // the original's own spelling.
+      if ((entity.flagsAa & 0x400) != 0 && (entity.flags06 & 4) != 0)
+      {
+        entity.timelineCursorA8 =
+            static_cast<std::uint16_t>(tables.read<std::uint8_t>(aimAt) << 1);
+      }
+      return 0;
     }
 
-    // FUN_0024c910 (state 114): the kind < 0 release. Like 112 it ends in
-    // FUN_0024bae0.
-    std::uint16_t stateReleaseSpellB114(const StateContext &context, std::uint16_t charge)
+    // FUN_0024c910 (state 114): the kind < 0 release. **It does not tail-call
+    // FUN_0024bae0** -- 112 does, 114 does not, and it is the only release
+    // state that carries its own body. The differences are real: it holds
+    // animation 0x3A rather than 0x14, it clears the *character's* hit set on
+    // entry rather than the effect's, and its charge level runs 0..5 rather
+    // than 0..4, because five is the summon.
+    std::uint16_t stateReleaseSpellB114(const StateContext &context, std::uint16_t)
     {
-      return stateReleaseSpell109(context, charge);
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      auto &tables = party.tables();
+      const std::int32_t shield =
+          party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4);
+      if (shield == kNoEntity)
+      {
+        entity.state60 = 0x4078;
+        setAction(context, kActionIdle06);
+        return 0;
+      }
+      auto &effect = context.environment->pool->slot(static_cast<std::size_t>(shield));
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        FUN_00248e98_set_animation_if_changed(entity, 0x3A);
+        // FUN_00215e48: forget whatever the previous cast already hit.
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+      }
+
+      // The release shout, clip 1 of the same bank. 101 means it was spoken,
+      // 102 that something else had the voice and it was dropped.
+      if (FUN_00249348_is_voiced_player(party, entity))
+      {
+        const std::uint32_t voiceSlot =
+            party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+        const std::uint32_t at = kDAT_0031da60_voiceState + voiceSlot * 2;
+        if (tables.read<std::int16_t>(at) == 100)
+        {
+          const bool busy = context.environment->FUN_00206a90_voice_busy &&
+                            context.environment->FUN_00206a90_voice_busy();
+          if (!busy)
+          {
+            if (context.environment->FUN_00206f08_play_voice)
+            {
+              context.environment->FUN_00206f08_play_voice(voiceSlot, 1);
+            }
+            tables.write<std::int16_t>(at, 0x65);
+          }
+          else
+          {
+            tables.write<std::int16_t>(at, 0x66);
+          }
+        }
+      }
+
+      // +0xAA bit 0x100 is the release marker.
+      if ((entity.flagsAa & 0x100) != 0 && (entity.flags06 & 4) != 0)
+      {
+        // FUN_00249270(entity, 0x780) over a charge capped at 0x2580: **0..5**.
+        // Five with a live target is the summon, which FUN_002de650 branches to
+        // and which is not ported.
+        const std::int32_t level = FUN_00249270_charge(party, context.member, 0x780);
+        if (level >= 5)
+        {
+          party.FUN_0023f620_count(2, static_cast<std::int8_t>(entity.byte95));
+        }
+        const std::uint8_t chosen = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+        const std::uint32_t recordBase = BattleTables::partyRecord(context.member);
+        effect.attackPower12c = static_cast<std::uint16_t>(
+            entity.attackPower12c +
+            tables.read<std::int8_t>(recordBase + record::kSpellByte14 + chosen));
+        effect.hitParameters198 =
+            recordBase + record::kSpellBlock18 + static_cast<std::uint32_t>(chosen) * 4;
+        effect.state60 = 1; // <<< the trigger FUN_002deae8 waits on
+        effect.spawnParam94 = static_cast<std::uint8_t>(level);
+        // Read-only: stop the ring pulsing without resizing it.
+        FUN_002d9b78_drive_cast_ring(*context.environment, context.member, false);
+      }
+
+      if ((entity.flags06 & 1) == 0)
+      {
+        // The animation is still running. A non-zero return raises control
+        // block +0x38 bit 0, which is what locks the pad out mid-cast.
+        return 1;
+      }
+      if (effect.animationA0 != 2)
+      {
+        FUN_00248ee0_set_animation(effect, 2);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 0x10);
+      }
+      setAction(context, kActionIdle06);
+      const std::uint32_t roll =
+          context.environment->FUN_00216868_random ? context.environment->FUN_00216868_random() : 0;
+      entity.animationA0 = (roll & 1) ? 0x13 : 0x2F;
+      entity.state60 = 0x78;
+      return 0;
     }
 
     // FUN_0024cba0 (state 117): the shield. Holds animation 0x3C, raises the
@@ -1402,6 +1579,39 @@ namespace orphen::ported::battle
         nullptr,               // 123 -- the original's own null entry
     };
   } // namespace
+
+  // FUN_002493f0 (0x002493f0). Twenty lines, and the whole of "where does an
+  // elemental spell go". See the header for the two branches.
+  std::int32_t FUN_002493f0_spell_landing(const BattleParty &party,
+                                          const orphen::ported::entity::OriginalEntity &caster,
+                                          orphen::ported::psm2::Vec3 &out)
+  {
+    const std::int32_t member = static_cast<std::int32_t>(caster.byte95) - 1;
+    if (member < 0 || static_cast<std::uint32_t>(member) >= kControlBlockCount)
+    {
+      out = orphen::ported::psm2::Vec3{caster.positionX20, caster.positionZ24, caster.positionY28};
+      return -1;
+    }
+    const auto &tables = party.tables();
+    const std::int32_t target = tables.read<std::int16_t>(
+        BattleTables::controlBlock(static_cast<std::uint32_t>(member)) + control::kTarget2c);
+    if (target < 2)
+    {
+      // FUN_00305130 is cosf and FUN_00305218 is sinf, not the other way round.
+      out.x = 2.0f * std::cos(caster.facingRadians5c) + caster.positionX20;
+      out.y = 2.0f * std::sin(caster.facingRadians5c) + caster.positionZ24;
+      out.z = caster.positionY28;
+    }
+    else
+    {
+      const std::uint32_t at =
+          BattleTables::partyRecord(static_cast<std::uint32_t>(member)) + record::kTargetPos28;
+      out.x = tables.read<float>(at + 0);
+      out.y = tables.read<float>(at + 4);
+      out.z = tables.read<float>(at + 8);
+    }
+    return target;
+  }
 
   bool class1StateIsPorted(std::uint16_t state)
   {

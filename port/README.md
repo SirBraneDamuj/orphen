@@ -1393,9 +1393,28 @@ Two omissions, both named by `--battle-report` rather than left silent:
   keeps every target below 3 and the no-target branch live.
 
 Of the effect entities `FUN_00242df0` and the state handlers spawn — types
-`0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7` — only `0x118` and `0x174` are still
-reported `UNIMPLEMENTED` by `--actor-report`. They sit where `FUN_00242df0` left
-them, hidden by the `+0x08` bit 0 it spawns them with.
+`0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7` — only `0x118` is still reported
+`UNIMPLEMENTED` by `--actor-report`. It sits where `FUN_00242df0` left it,
+hidden by the `+0x08` bit 0 it spawns it with.
+
+#### `uGpffffb052` and `DAT_00354fc2` are one halfword
+
+Worth stating because keeping them apart cost a visible bug. `gp` is
+`0x00359F70` and the offset spells `-0x4FAE`, so `uGpffffb052` resolves to
+`0x00354FC2`; the decompilation uses both spellings for it, sometimes in
+adjacent functions (`FUN_0023fd30` tests `uGpffffb052 & 8`, `FUN_0023c340` tests
+`DAT_00354fc2 & 8`). The port modelled them as two variables, so
+`FUN_00243f80`'s
+
+```c
+if ((uGpffffb052 & 2) == 0) { FUN_002432d8(0, 0); }
+```
+
+never saw the bit `FUN_002432d8:46` had raised. Starting a battle therefore
+rebuilt the whole party a second time — and leaked a second type `0x1E3`, which
+then ate the `FUN_002f1380` request every frame and left the real targeting
+circle hidden. `--battle-report` now prints `sGpffffb052=0x0003` where it used
+to print `0x0001`.
 
 #### The shared hit effect hides itself, and nothing else hides it
 
@@ -1596,6 +1615,137 @@ as a translucent textured swirl with the UV animation running on it. `--frames
 3000 --actor-report --scr-report` on `s01_e024` and `s01_e012` is unchanged
 except for the texture cache's generation counter, which counts one more load.
 
+#### Bite of Lightning, end to end
+
+Circle's spell, the kind `< 0` arm, and the second command whose whole chain is
+ported. It is not shaped like Hand of Pyro: the fire spell throws a projectile,
+this one marks a spot on the ground while it charges and then hits everything
+standing on it.
+
+```
+FUN_002462c8   Circle press -> pending 0x8C (hold) / 0x8D (release)
+FUN_0024a360   pending + 0x3FE5 -> state 113 / 114
+FUN_0024c538   113, the hold      -> the aim marker, then the charge
+FUN_0024c910   114, the release   -> effect +0x60 = 1, +0x94 = level
+FUN_002deae8   type 0x174, the hand effect -> FUN_002de650 on +0x60 == 1
+FUN_002de650   the launch -> one 0x15C damage disc, one 0x178 flash,
+                              and one 0x15C spark per victim
+```
+
+**Three entities are easy to confuse.** The ring at the caster's *feet* is type
+`0x18F` (`FUN_002d9c88`), the charge gauge. The effect in the caster's *hand* is
+`0x174`. The blue circle that grows on the ground at the *landing spot* is
+neither — it is the single type `0x1E3` in `DAT_0031DAD0`, moved and resized
+every frame by `FUN_002f1380`, whose only callers anywhere in `src/` are the six
+elemental hand effects. It is the targeting marker, not a general hit flash.
+
+##### Where the circle goes when there is no target
+
+`FUN_002493f0` is the whole rule and there is nothing random in it:
+
+```c
+long FUN_002493f0(entity, Vec3 *out)
+{
+  long target = controlBlock(entity->byte95 - 1)->target2c;
+  if (target < 2) {                        // no target
+    out->x = 2 * cosf(entity->facing5c) + entity->posX;
+    out->y = 2 * sinf(entity->facing5c) + entity->posZ;
+    out->z = entity->posY;
+  } else {
+    *out = partyRecord(byte95 - 1) + 0x28; // what 113 tracked onto the target
+  }
+  return target;
+}
+```
+
+**Two world units straight ahead of the caster.** It looks like it varies by
+battlefield only because it varies with which way the caster happens to be
+facing. Note the threshold is `< 2`, where `FUN_00249610`'s face-the-target block
+uses `< 3` — genuinely different numbers. (`FUN_00305130` is `cosf` and
+`FUN_00305218` is `sinf`, not the other way round.)
+
+##### Party record `+0x45` is a frame number, not a flag
+
+It starts at `-1`. When the cast animation raises `+0xAA` bit `0x200`, state 113
+copies the animation cursor `+0xA8` into it, halved; from then on the state's
+last line writes it *back* into `+0xA8` every frame that `+0xAA` bit `0x400` is
+up. That is what pins the character in the cast pose for as long as Circle is
+held — and, because the cursor still advances between pins, what makes the hold
+a two-column flicker between entries 5 and 6 of animation `0x3A` rather than a
+freeze. **Nothing charges before the pose is reached**: while `+0x45` is `-1` the
+state is still steering the landing spot onto the target instead.
+
+State 111 is not this shape. It captures the target position once on entry and
+gates on `+0xAA` bit `0x800`; copying its body onto 113 loses the tracking, the
+pin and the charge gate all at once.
+
+##### The release is not `FUN_0024bae0`
+
+112 tail-calls it, 114 does not — 114 is the only release state with its own
+body. It holds animation `0x3A` rather than `0x14`, clears the *character's* hit
+set on entry rather than the effect's, and its level runs **0..5** rather than
+0..4, because `FUN_00249270(entity, 0x780)` caps the charge at `0x2580` and five
+is the summon. Its `return 1` while `+0x06` bit 0 is down is the input lock:
+`FUN_00249610` writes the return into `+0x62` and raises control block `+0x38`
+bit 0 for any non-zero value, which is what stops a second press mid-cast.
+
+##### `FUN_002de650` allocates both spawns as `0x174` and retypes them
+
+Both the damage disc and the flash are `FUN_002d6c68(0x174)` with `+0x00`
+overwritten afterwards — `0x15C` and `0x178`. They get `0x174`'s descriptor and
+model but the other two types' behaviour. The port resolves the *handler* from
+`typeId00` every frame, so that half works for free; the *model* it did not, and
+a retyped entity looked up a model for a type the scene never loaded. Hence
+`OriginalEntity::modelTypeId15c`, the original's own `+0x15C` model pointer: set
+at spawn, unmoved by a later write to `+0x00`, and `-1` on everything else.
+
+`FUN_002e4c00`, type `0x178`, is not in `src/` and not defined in Ghidra.
+Recovered from `SLUS_200.11`, the whole function is four instructions:
+
+```c
+void FUN_002e4c00(entity) { if (entity->flags06 & 1) FUN_00265ec0(entity); }
+```
+
+A pure one-shot: play the animation the launch set, destroy on the
+animation-finished flag. Its 32-frame `+0x1B0` timer is never read.
+
+##### What `--battle-report` shows
+
+`ring=` is the `0x18F` marker's `+0x14C` and `hitfx=` is `DAT_0031DAD0`'s, both
+in thousandths. Without them the growth is invisible in a headless run.
+
+```
+orphen_port.exe --disc-root . --scene s14_e012 --frames 700 --no-audio \
+    --hold-circle 300-460 --battle-report
+```
+
+```
+f=301 action=0x8c state=0x0071 charge=0    ring=1000 hitfx=1500
+f=365 action=0x8c state=0x0071 charge=1152 ring=1166 hitfx=2652
+f=449 action=0x8c state=0x0071 charge=3840 ring=1560 hitfx=5340
+f=463 action=0x8d state=0x0072 charge=4224 ring=1612 hitfx=5724
+```
+
+`hitfx` is exactly `charge/1000 + 1.5`, and at a full `0x2D00` charge it reaches
+`11.1` — the read caps at `0x2580`. Hold to full and the level is 5; with no
+enemy table the target stays `-1`, so `level == 5 && target > 1` is false and the
+summon branch is not taken. The box the launch lays down is `1.5 * level` in the
+horizontal plane and `0.5 * level` vertically, centred on the landing spot: at
+level 5, `x [-5.5, 9.5] y [-7.5, 7.5]` around `(2, 0, 0)`, 5 contacts and one
+`0x15C` spark each.
+
+The hold *must* start after the battle does. `--hold-circle` presses on its first
+frame only, and `s14_e012` raises `sGpffffb052` bit 0 on frame 247; a press
+before that is simply not seen.
+
+##### Deliberately not ported: the summon
+
+`FUN_002deef0` is the only entry, taken from `FUN_002de650` on `level == 5 &&
+target > 1`. It spawns type `0x13E` at animation 5 (behaviour `FUN_002df018`, in
+`src/`), arms a 32-frame timer at `+0x1AC`, and raises `uGpffffaf5c` — the
+battle-interrupt flag that stops the rest of the battle while the spirit plays.
+The port returns 0 from that branch with a comment rather than approximating it.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips
@@ -1639,8 +1789,8 @@ when the stream ends; reading the mixer instead would make `--frames` output
 depend on whether audio was enabled. Verified: an audible run and `--no-audio`
 produce byte-identical reports.
 
-Of the 24 class-1 state handlers at `0x0031DD60`, this slice ports 101..107 and
-109..122 except 102, 108 and 115. `--battle-report` names any state a run
+Of the 24 class-1 state handlers at `0x0031DD60`, this slice ports 101..122
+except 102 and 115. `--battle-report` names any state a run
 actually reached whose handler is missing.
 
 `--hold-square 300-380` works under `--screenshot` as well as `--frames`; it did

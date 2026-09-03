@@ -116,7 +116,6 @@ namespace orphen::ported::battle
     sGpffffb052_ = 0;
     DAT_00354ebc_ = 0;
     DAT_00354eba_enemyCount_ = 0;
-    DAT_00354fc2_ = 0;
     DAT_00354ecc_ = 0;
     DAT_0031dad0_ = kNoEntity;
     // See the header: not one of FUN_0023f288's clears, and nothing in src/
@@ -576,7 +575,9 @@ namespace orphen::ported::battle
       return 0;
     }
 
-    DAT_00354fc2_ |= 2;
+    // FUN_002432d8:46. Bit 1 is "the party has been built"; FUN_00243f80
+    // tests it to decide whether it has to build one first.
+    sGpffffb052_ = static_cast<std::uint16_t>(sGpffffb052_ | 2);
 
     // :47-51, the five clears. Their sizes are what pin the table extents.
     tables_.FUN_00267e78_clear(kDAT_0031d3c8_partyRecords, 1000);

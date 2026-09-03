@@ -212,6 +212,25 @@ namespace orphen::ported::entity
     // and leaves the effect hidden, which is its resting state anyway.
     std::uint16_t *DAT_00355588_hitEffectRequest = nullptr;
 
+    // FUN_002f1380 (0x002f1380), the setter on the other side of that word:
+    // move DAT_0031dad0 to `position`, give it `scale` and `height`, and raise
+    // bit 0 of DAT_00355588 so FUN_002f13d0 un-hides it this frame. The entity
+    // it writes is owned by the battle module, so this arrives as a callback
+    // the same way the two table reads above do. Null outside a battle, which
+    // simply leaves the effect where it is -- hidden.
+    std::function<void(float scale, float height, const orphen::ported::psm2::Vec3 &position)>
+        FUN_002f1380_show_hit_effect;
+
+    // FUN_002493f0 (0x002493f0): where an elemental spell cast by this entity
+    // lands, and the caster's current target. With a target (control +0x2C >= 2)
+    // it is the party record's +0x28 -- the position state 113 tracked onto the
+    // target while the cast pose was coming round. **With no target it is two
+    // world units straight ahead of the caster**, `2*sin(+0x5C) + x`,
+    // `2*cos(+0x5C) + z`, `y`. Returns the target index, which FUN_002de650
+    // needs as well as the position. Null outside a battle.
+    std::function<std::int32_t(std::size_t casterSlot, orphen::ported::psm2::Vec3 &out)>
+        FUN_002493f0_spell_landing;
+
     // DAT_003555d0. FUN_00208450 clears it at the top of every frame and raises
     // it for any collision group whose dirty byte is live -- i.e. "movable
     // collision moved this frame". FUN_002262c0:112 reads it, and it is the

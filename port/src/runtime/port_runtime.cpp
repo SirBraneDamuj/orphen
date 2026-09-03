@@ -559,6 +559,40 @@ namespace orphen::port
     environment.DAT_0031d3c8_battleTableWord = [this](std::uint32_t address) {
       return battleParty_.tables().read<std::uint32_t>(address);
     };
+    // FUN_002f1380: place, size and un-hide the one shared hit effect. The
+    // entity it moves is the battle module's DAT_0031DAD0; the word it raises
+    // is the runtime's DAT_00355588. FUN_002deae8 calls it every frame Bite of
+    // Lightning is charging, which is what makes the blue circle on the ground
+    // grow with the charge.
+    environment.FUN_002f1380_show_hit_effect =
+        [this](float scale, float height, const orphen::ported::psm2::Vec3 &position) {
+          const std::int32_t slot = battleParty_.DAT_0031dad0_sharedHitEffect();
+          if (slot < 0 || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+          {
+            return;
+          }
+          auto &effect = entityPool_.slot(static_cast<std::size_t>(slot));
+          effect.positionX20 = position.x;
+          effect.positionZ24 = position.y;
+          effect.positionY28 = position.z;
+          effect.groundHeight4c = position.z;
+          effect.previousGroundHeight50 = position.z;
+          effect.scale14c = scale;
+          effect.scaleZ150 = height;
+          DAT_00355588_hitEffectRequest_ =
+              static_cast<std::uint16_t>(DAT_00355588_hitEffectRequest_ | 1u);
+        };
+    // FUN_002493f0: where this caster's elemental spell lands, and its target.
+    environment.FUN_002493f0_spell_landing =
+        [this](std::size_t casterSlot, orphen::ported::psm2::Vec3 &out) -> std::int32_t {
+      if (!battleParty_.battleRunning() ||
+          casterSlot >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return -1;
+      }
+      return orphen::ported::battle::FUN_002493f0_spell_landing(
+          battleParty_, entityPool_.slot(casterSlot), out);
+    };
     environment.pushOutCounter = &pushOutCount_;
     environment.frameNumber = frameCount_;
     environment.boneOverrides = DAT_004a7e00_boneOverrides_;
@@ -1826,6 +1860,19 @@ namespace orphen::port
     {
       sample.bladeLength = static_cast<std::uint16_t>(
           entityPool_.slot(static_cast<std::size_t>(bladeSlot)).scaleZ150 * 1000.0f);
+    }
+    const std::int32_t ringSlot = battleParty_.entitySlotAt(kDAT_0031da8c_slotEntity + memberU * 4);
+    if (ringSlot != kNoEntity)
+    {
+      sample.ringScale = static_cast<std::uint16_t>(
+          entityPool_.slot(static_cast<std::size_t>(ringSlot)).scale14c * 1000.0f);
+    }
+    const std::int32_t hitEffectSlot = battleParty_.DAT_0031dad0_sharedHitEffect();
+    if (hitEffectSlot != kNoEntity &&
+        static_cast<std::size_t>(hitEffectSlot) < orphen::ported::entity::kEntitySlotCount)
+    {
+      sample.hitEffectScale = static_cast<std::uint16_t>(
+          entityPool_.slot(static_cast<std::size_t>(hitEffectSlot)).scale14c * 1000.0f);
     }
     // The charge is party record +0x3C, the accumulator FUN_00249128 fills and
     // FUN_00249270 divides by 0x780 to get the 0..4 level.
@@ -3884,6 +3931,7 @@ namespace orphen::port
                 << " state=" << hex(sample.state, 4) << " charge=" << sample.charge
                 << " target=" << sample.target << " slot=" << static_cast<int>(sample.selectedSlot)
                 << " anim=" << hex(sample.animation, 2) << " blade=" << sample.bladeLength
+                << " ring=" << sample.ringScale << " hitfx=" << sample.hitEffectScale
                 << " cd=[";
       for (std::size_t i = 0; i < sample.cooldowns.size(); ++i)
       {

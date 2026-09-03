@@ -2938,6 +2938,457 @@ namespace orphen::ported::entity
                                 origin.z, static_cast<std::int16_t>(casterSlot), environment);
   }
 
+  // ------------------------------------------------------- Bite of Lightning
+  //
+  // Circle's spell, the kind < 0 arm. Its chain is longer than Hand of Pyro's
+  // and its shape is different: the fire spell throws a projectile, this one
+  // marks a spot on the ground while it charges and then hits everything
+  // standing on it.
+  //
+  //   FUN_0024c538  state 113, the hold     -> the aim marker, then the charge
+  //   FUN_0024c910  state 114, the release  -> effect +0x60 = 1, +0x94 = level
+  //   FUN_002deae8  type 0x174, the hand    -> FUN_002de650 on +0x60 == 1
+  //   FUN_002de650  the launch              -> one 0x15C damage disc, one 0x178
+  //                                            flash, one 0x15C spark per victim
+  //
+  // **Three separate entities are easy to confuse here.** The ring at the
+  // caster's *feet* is type 0x18F (FUN_002d9c88, the charge gauge). The effect
+  // in the caster's *hand* is this 0x174. The blue circle that grows on the
+  // ground at the *landing spot* is neither -- it is the one shared hit effect,
+  // type 0x1E3, moved and resized every frame by FUN_002f1380.
+
+  // FUN_002de9e8 (0x002de9e8): one spark on a victim. A plain type 0x15C at a
+  // fixed 2.0 scale, planted on the victim's own position -- the launch spawns
+  // one of these for every entity its box caught.
+  std::int32_t FUN_002de9e8_spawn_victim_spark(std::int8_t level,
+                                               std::int16_t victimSlot,
+                                               std::uint32_t hitParameters,
+                                               std::int16_t casterSlot,
+                                               float positionX,
+                                               float positionZ,
+                                               float positionY,
+                                               const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    const std::size_t spawned = environment.entityPool->FUN_00265e28_allocate_and_initialize(
+        0x15C, *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &spark = environment.entityPool->slot(spawned);
+    spark.positionX20 = positionX;
+    spark.positionZ24 = positionZ;
+    spark.positionY28 = positionY;
+    spark.groundHeight4c = positionY;
+    spark.previousGroundHeight50 = positionY;
+    spark.attackPower12c = 0;
+    spark.descriptorFlags02 = static_cast<std::uint16_t>(spark.descriptorFlags02 | 0x1000u);
+    spark.halfword04 = 0x19;
+    spark.hitParameters198 = hitParameters;
+    spark.lightningTarget1ac = victimSlot;
+    spark.lightningCaster1ae = casterSlot;
+    spark.lightningLevel1b3 = (level == 0) ? static_cast<std::int8_t>(1) : level;
+    spark.lightningByte1b2 = 0;
+    spark.fadeRamp62 = 0;
+    spark.animationA0 = 0;
+    spark.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+    spark.scale14c = 2.0f;
+    spark.scaleZ150 = 2.0f;
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002de650 (0x002de650): the launch. Everything the spell does on the
+  // frame the release animation reaches its marker.
+  //
+  // **The summon is the first branch and it is not ported.** At level 5 with a
+  // live target the whole thing hands over to FUN_002deef0, which interrupts
+  // the battle to play a spirit summon and damage every enemy. Its entry point
+  // is written up in docs/bite_of_lightning_spell_path.md; nothing else here
+  // depends on it, and with no enemy table the target stays -1, so the branch
+  // is unreachable in this slice.
+  //
+  // Both spawns are allocated as type **0x174** and then have their +0x00
+  // overwritten -- 0x15C for the damage disc, 0x178 for the flash. They get
+  // 0x174's descriptor and model but 0x15C's and 0x178's behaviour. The port
+  // resolves the handler from typeId00 every frame, so that works; caching a
+  // handler at spawn time would break it silently.
+  std::int32_t FUN_002de650_launch_lightning(std::uint8_t level,
+                                             std::uint16_t attackPower,
+                                             std::int16_t target,
+                                             std::uint32_t hitParameters,
+                                             std::int16_t casterSlot,
+                                             const orphen::ported::psm2::Vec3 &castPosition,
+                                             const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return 0;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    if (level == 5 && target > 1)
+    {
+      // FUN_002deef0. Out of scope: it spawns type 0x13E, raises uGpffffaf5c --
+      // the battle-interrupt flag -- and runs the summon. Deliberately a gap
+      // rather than an approximation.
+      return 0;
+    }
+
+    // FUN_0023bbd8(0, 7, level, power) when the player cast it: the pad rumble,
+    // DAT_00571B50's four slots. The port has no rumble path.
+
+    std::int32_t scaled = (level == 0) ? 1 : static_cast<std::int32_t>(level);
+    if (scaled > 5)
+    {
+      scaled = 5;
+    }
+    const float levelF = static_cast<float>(scaled);
+    const std::int8_t levelB = static_cast<std::int8_t>(scaled);
+
+    // ---- (a) the damage disc, type 0x15C -----------------------------------
+    const std::size_t discSlot =
+        pool.FUN_00265e28_allocate_and_initialize(0x174, *environment.descriptors);
+    if (discSlot >= kEntitySlotCount)
+    {
+      return 0;
+    }
+    auto &disc = pool.slot(discSlot);
+    disc.typeId00 = 0x15C;
+    disc.modelTypeId15c = 0x174; // allocated as 0x174; the model stays 0x174's
+    disc.depthBias133 = static_cast<std::int8_t>(levelB * -0x0C);
+    disc.facingRadians5c = (static_cast<std::size_t>(casterSlot) < kEntitySlotCount)
+                               ? pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c
+                               : 0.0f;
+    disc.descriptorFlags02 = static_cast<std::uint16_t>(disc.descriptorFlags02 | 0x1000u);
+    disc.halfword04 = 0x19;
+    disc.positionX20 = castPosition.x;
+    disc.positionZ24 = castPosition.y;
+    disc.positionY28 = castPosition.z;
+    disc.groundHeight4c = castPosition.z;
+    disc.previousGroundHeight50 = castPosition.z;
+    disc.attackPower12c = static_cast<std::uint16_t>(attackPower + scaled * 4);
+    disc.hitParameters198 = hitParameters;
+    disc.lightningTarget1ac = target;
+    disc.lightningCaster1ae = casterSlot;
+    disc.lightningLevel1b3 = levelB;
+    disc.lightningByte1b2 = 0;
+    disc.fadeRamp62 = 0;
+    disc.animationA0 = 0;
+    disc.scale14c = levelF * 2.0f;
+    disc.scaleZ150 = 0.3f; // DAT_00354914
+    disc.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+    FUN_00215e48_clear_hit_set(disc);
+    if (casterSlot == 0 && target > 2 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+        (pool.slot(static_cast<std::size_t>(target)).effectFlags96 & 0x40u) != 0)
+    {
+      // +0x96 bit 0x40: the player's own instant-kill path through the hit
+      // test, carried over from the target only when the player cast it.
+      disc.effectFlags96 = static_cast<std::uint8_t>(disc.effectFlags96 | 0x40u);
+    }
+
+    // The box is level-sized: 1.5 per level horizontally, 0.5 vertically,
+    // centred on the landing spot. At level 5 that is a 15-unit square.
+    std::int8_t contacts = 0;
+    if (environment.hitTest != nullptr)
+    {
+      const float half = levelF * 1.5f;
+      const float halfY = levelF * 0.5f;
+      const std::array<float, 6> box{castPosition.x - half,  castPosition.x + half,
+                                     castPosition.y - half,  castPosition.y + half,
+                                     castPosition.z - halfY, castPosition.z + halfY};
+      contacts = FUN_00215ac8_box_hit_test(
+          disc, discSlot, box, orphen::ported::resource::HitParameters::unpack(hitParameters),
+          *environment.hitTest);
+    }
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xE1, disc); // the thunder crack
+    }
+
+    // ---- (b) the flash, type 0x178 -----------------------------------------
+    std::int32_t flashSlot = 0;
+    const std::size_t flash =
+        pool.FUN_00265e28_allocate_and_initialize(0x174, *environment.descriptors);
+    if (flash < kEntitySlotCount)
+    {
+      auto &burst = pool.slot(flash);
+      burst.typeId00 = 0x178;
+      burst.modelTypeId15c = 0x174;
+      burst.attackPower12c = 0;
+      burst.depthBias133 = static_cast<std::int8_t>(levelB * -0x0C);
+      burst.descriptorFlags02 = static_cast<std::uint16_t>(burst.descriptorFlags02 | 0x1000u);
+      burst.halfword04 = 0x19;
+      burst.positionX20 = castPosition.x;
+      burst.positionZ24 = castPosition.y;
+      burst.positionY28 = castPosition.z;
+      burst.groundHeight4c = castPosition.z;
+      burst.previousGroundHeight50 = castPosition.z;
+      burst.hitParameters198 = hitParameters;
+      burst.lightningLevel1b3 = levelB;
+      burst.lightningByte1b2 = 0;
+      burst.lightningTarget1ac = target;
+      burst.lightningCaster1ae = casterSlot;
+      // Animation 3, or 4 while DAT_00354ecc -- the battle opener's hold. That
+      // word is 0 in the ELF and the port keeps it that way.
+      burst.animationA0 = 3;
+      burst.fadeRamp62 = 0;
+      burst.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+      flashSlot = static_cast<std::int32_t>(flash);
+    }
+
+    // ---- (c) one spark per victim ------------------------------------------
+    if (contacts == 0 || environment.hitTest == nullptr ||
+        environment.hitTest->DAT_003151c8_hitList == nullptr)
+    {
+      return flashSlot;
+    }
+    const auto &hitList = *environment.hitTest->DAT_003151c8_hitList;
+    // The original walks DAT_003151C8 until a non-positive entry and gives up
+    // after index 0x14, so at most 21 sparks.
+    const std::size_t limit = std::min<std::size_t>(hitList.size(), 21u);
+    for (std::size_t index = 0; index < limit; ++index)
+    {
+      const std::uint16_t victim = hitList[index];
+      if (victim == 0 || static_cast<std::size_t>(victim) >= kEntitySlotCount)
+      {
+        break;
+      }
+      const auto &body = pool.slot(static_cast<std::size_t>(victim));
+      FUN_002de9e8_spawn_victim_spark(levelB, static_cast<std::int16_t>(victim), hitParameters,
+                                      casterSlot, body.positionX20, body.positionZ24,
+                                      body.positionY28, environment);
+    }
+    return flashSlot;
+  }
+
+  // FUN_002deae8 (0x002deae8), the behaviour of type 0x174 -- the charge that
+  // gathers in Orphen's hand while Circle is held.
+  //
+  // Structurally the twin of FUN_002da8a0 above, with one line the fire spell
+  // has no equivalent of: **every frame it is drawing, it calls FUN_002f1380**,
+  // which moves the shared 0x1E3 hit effect to wherever the spell would land
+  // and scales it by the charge. That is the blue circle that grows on the
+  // ground under the target. It runs only for the player -- `caster == 0` --
+  // and it reads pool slot 0's charge directly rather than its own caster's,
+  // which is the original's own hardcoding of 0x58BEB0.
+  void FUN_002deae8_lightning_hand(OriginalEntity &effect,
+                                   std::size_t /*slot*/,
+                                   const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    const std::size_t casterSlot = static_cast<std::size_t>(casterIndex);
+    OriginalEntity &caster = pool.slot(casterSlot);
+
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C; // 0xF4
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+    effect.facingRadians5c = 0.0f;
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+
+    std::int16_t step = static_cast<std::int16_t>(effect.animationA0);
+    if (step != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4001u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      // `1 < (byte)(current + 0x74)` -- true for anything outside the two
+      // action bytes 0x8C and 0x8D, i.e. the caster has stopped casting.
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x74u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      step = static_cast<std::int16_t>(effect.animationA0);
+    }
+
+    if (step == 0 || step == 1)
+    {
+      // **The targeting circle.** FUN_00249270(pool[0], 1) is the raw charge
+      // capped at 0x2580, so the scale runs 1.5 at a tap to 11.1 at a full
+      // charge. The height stays 1.0; only the radius grows.
+      if (casterSlot == 0 && environment.FUN_002f1380_show_hit_effect &&
+          environment.FUN_002493f0_spell_landing)
+      {
+        ActorEnvironment::BattleMemberView lead;
+        const OriginalEntity &player = pool.slot(0);
+        std::int32_t charge = 0;
+        if (player.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+            environment.DAT_0031d7b0_battleMember(static_cast<std::uint32_t>(player.byte95) - 1u,
+                                                  lead))
+        {
+          charge = lead.chargeTimer3c > 0x2580 ? 0x2580 : lead.chargeTimer3c;
+        }
+        orphen::ported::psm2::Vec3 landing{};
+        environment.FUN_002493f0_spell_landing(0, landing);
+        environment.FUN_002f1380_show_hit_effect(static_cast<float>(charge) / 1000.0f + 1.5f, 1.0f,
+                                                 landing);
+      }
+      // The hand light. Blue where Hand of Pyro's is orange, and twice its base
+      // radius.
+      FUN_002da220_spell_light(effect, casterSlot, haveBlock ? view.chargeTimer3c : 0, 0x54, 0x8D,
+                               0xFE, 1000, environment);
+    }
+
+    if (step == 1)
+    {
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+    }
+    else if (step == 0)
+    {
+      effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    }
+    else if (step == 2)
+    {
+      if ((effect.flags06 & 1u) != 0)
+      {
+        effect.parentSlot192 = casterIndex;
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+        // FUN_00266098: give the light slot back.
+        if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195))
+              .radius = 0.0f;
+          effect.lightSlot195 = -1;
+        }
+      }
+    }
+
+    // **The launch.** +0x60 is 1 for exactly one frame, written by FUN_0024c910
+    // when the release animation reaches its +0xAA bit 0x100 marker.
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+    effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    FUN_00225bc8_set_animation(effect, 2);
+    effect.state60 = 0;
+
+    // FUN_0020dc88(caster, +0x194, matrixOut, positionOut). Both outputs feed
+    // FUN_002de650's param_6, which only the summon branch reads -- so this is
+    // kept for shape, not for a value anything on this path consumes.
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      (void)environment.FUN_0020dc88_bone_point(casterSlot,
+                                                static_cast<std::size_t>(effect.attachBone194),
+                                                orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+
+    orphen::ported::psm2::Vec3 castPosition{caster.positionX20, caster.positionZ24,
+                                            caster.positionY28};
+    std::int32_t target = -1;
+    if (environment.FUN_002493f0_spell_landing)
+    {
+      target = environment.FUN_002493f0_spell_landing(casterSlot, castPosition);
+    }
+    // On the hand effect +0x198 is a pointer into the caster's party record;
+    // FUN_00267da0 copies the four bytes it names onto each spawn as a value.
+    const std::uint32_t hitParameters =
+        environment.DAT_0031d3c8_battleTableWord
+            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+            : 0;
+    FUN_002de650_launch_lightning(effect.spawnParam94, effect.attackPower12c,
+                                  static_cast<std::int16_t>(target), hitParameters,
+                                  static_cast<std::int16_t>(casterSlot), castPosition, environment);
+  }
+
+  // FUN_002dee08 (0x002dee08), the behaviour of type 0x15C -- the ground disc
+  // the launch lays down, and the spark it plants on each victim. Both are the
+  // same entity; only the scale differs.
+  //
+  // It lives 32 frames and spins: +0x5C advances 0.349 radians (20 degrees) per
+  // tick, and every frame it coin-flips between clearing its bone-0 override
+  // and setting one at 0.5236 radians (30 degrees). The four bytes it zeroes at
+  // the end are the hit bookkeeping -- it is not supposed to react to anything
+  // it touches.
+  void FUN_002dee08_lightning_disc(OriginalEntity &disc,
+                                   std::size_t slot,
+                                   const ActorEnvironment &environment)
+  {
+    disc.halfword08 = static_cast<std::uint16_t>(disc.halfword08 | 0x4000u);
+    disc.lightningTimer1b0 = FUN_00248e58_step_timer(
+        disc.lightningTimer1b0, static_cast<std::uint16_t>(environment.frameTicks));
+    if (disc.lightningTimer1b0 == 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    disc.facingRadians5c += 0.34906578f; // fGpffffa9a8
+    const std::uint32_t roll = environment.random ? environment.random() : 0;
+    if (slot < environment.boneOverrides.size())
+    {
+      auto &overrides = environment.boneOverrides[slot];
+      if ((roll & 1u) == 0)
+      {
+        orphen::ported::model::FUN_0020d9c8_clear_bone_override(overrides, 0);
+      }
+      else
+      {
+        // FUN_0030bfac(pose, 0, 0x1c) then pose[0] = uGpffffa9ac: rotation x
+        // only, everything else zero, over two frames.
+        std::array<float, orphen::ported::model::kPoseFieldCount> pose{};
+        pose[0] = 0.5235987f;
+        orphen::ported::model::FUN_0020d8c0_set_bone_override(overrides, 0, pose, 2);
+      }
+    }
+    disc.freezeTimerBd = 0;
+    disc.hitSourceC0 = 0;
+    disc.hitFlagsC2 = 0;
+    disc.pendingDamageBe = 0;
+  }
+
+  // FUN_002e4c00 (0x002e4c00), the behaviour of type 0x178 -- the flash. Not in
+  // src/ and not defined in Ghidra; recovered from SLUS_200.11, where it is
+  // four instructions:
+  //
+  //     lhu   v0, 6(a0)
+  //     andi  v0, v0, 1
+  //     beql  v0, zero, +
+  //     j     FUN_00265ec0
+  //
+  // A pure one-shot: play the animation the launch set, destroy on the
+  // animation-finished flag. Its 32-frame +0x1B0 timer is never read.
+  void FUN_002e4c00_lightning_flash(OriginalEntity &flash,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment)
+  {
+    if ((flash.flags06 & 1u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
   // FUN_002da350 (0x002da350), the behaviour of type 0x139 -- the sword the
   // battle module puts in Orphen's hand for the kind-0 arm, and of type 0x13E,
   // the same effect in red.
@@ -3177,6 +3628,9 @@ namespace orphen::ported::entity
     case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
     case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
     case 0x002D9C88u: // FUN_002d9c88, type 0x18F, the ground ring
+    case 0x002DEAE8u: // FUN_002deae8, type 0x174, Bite of Lightning's hand effect
+    case 0x002DEE08u: // FUN_002dee08, type 0x15C, its ground disc and victim sparks
+    case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
       return true;
     default:
       return false;
@@ -3219,6 +3673,12 @@ namespace orphen::ported::entity
       return "FUN_002dae60 (fireball)";
     case 0x002D9C88u:
       return "FUN_002d9c88 (cast marker)";
+    case 0x002DEAE8u:
+      return "FUN_002deae8 (bite of lightning)";
+    case 0x002DEE08u:
+      return "FUN_002dee08 (lightning disc)";
+    case 0x002E4C00u:
+      return "FUN_002e4c00 (lightning flash)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -3353,6 +3813,15 @@ namespace orphen::ported::entity
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);
+        break;
+      case 0x002DEAE8u:
+        FUN_002deae8_lightning_hand(entity, slot, slotEnvironment);
+        break;
+      case 0x002DEE08u:
+        FUN_002dee08_lightning_disc(entity, slot, slotEnvironment);
+        break;
+      case 0x002E4C00u:
+        FUN_002e4c00_lightning_flash(entity, slot, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

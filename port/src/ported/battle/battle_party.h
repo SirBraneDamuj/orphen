@@ -204,6 +204,11 @@ namespace orphen::ported::battle
     void FUN_0023f620_count(std::int16_t which, std::int8_t member);
 
     std::uint32_t DAT_00354ecc() const { return DAT_00354ecc_; }
+
+    // DAT_0031DAD0, the one shared hit effect (type 0x1E3) FUN_002432d8
+    // spawns for the whole battle. FUN_002f1380 is the setter that moves it;
+    // it lives in the runtime because the word it raises, DAT_00355588, does.
+    std::int32_t DAT_0031dad0_sharedHitEffect() const { return DAT_0031dad0_; }
     void setDAT_00354ecc(std::uint32_t value) { DAT_00354ecc_ = value; }
 
     // FUN_002239c8:117. Both halves have to be true for FUN_00249610 to run in
@@ -221,7 +226,16 @@ namespace orphen::ported::battle
     std::int16_t DAT_00354ebc_memberCount() const { return DAT_00354ebc_; }
     std::int16_t DAT_00354ebe_playerSlot() const { return DAT_00354ebe_; }
     std::uint16_t sGpffffb052() const { return sGpffffb052_; }
-    std::uint32_t DAT_00354fc2() const { return DAT_00354fc2_; }
+    // **DAT_00354FC2 and uGpffffb052 are the same halfword.** gp is 0x00359F70
+    // and the offset spells -0x4FAE, so `uGpffffb052` resolves to 0x00354FC2;
+    // the decompilation uses both names for it, sometimes in adjacent
+    // functions (FUN_0023fd30 tests `uGpffffb052 & 8`, FUN_0023c340 tests
+    // `DAT_00354fc2 & 8`). Keeping them apart made FUN_00243f80's
+    // `if ((uGpffffb052 & 2) == 0) FUN_002432d8(...)` guard never see the bit
+    // FUN_002432d8 had raised, so starting a battle rebuilt the whole party a
+    // second time and leaked a second shared hit effect -- which then ate the
+    // FUN_002f1380 request every frame and left the real one hidden.
+    std::uint32_t DAT_00354fc2() const { return sGpffffb052_; }
 
     std::span<const std::uint8_t> DAT_003437a0_loadout() const { return DAT_003437a0_; }
     const std::vector<SpellTableRow> &spellTable() const { return spellTable_; }
@@ -250,10 +264,11 @@ namespace orphen::ported::battle
 
     BattleTables tables_;
 
-    // uGpffffb052 == sGpffffb052 == 0x00355022. A bitfield, not a boolean: bit
+    // uGpffffb052 == sGpffffb052 == DAT_00354fc2 == 0x00354FC2 (gp 0x00359F70
+    // minus 0x4FAE). A bitfield, not a boolean: bit
     // 0 is "battle running" (FUN_00243f80 / FUN_00242de0), bit 1 is "the party
-    // has been built" (FUN_002432d8 sets DAT_00354fc2 bit 1 and FUN_00243f80
-    // tests b052 bit 1 to decide whether to build first), bit 2 is the pause
+    // has been built" (FUN_002432d8:46 raises it, FUN_00243f80:11 tests it to
+    // decide whether to build first), bit 2 is the pause
     // gate FUN_00244bf0 toggles and bit 3 the surrender path FUN_0023fd30
     // takes. battle_logo_loaded.p2s reads 0x12F.
     std::uint16_t sGpffffb052_ = 0;
@@ -269,7 +284,6 @@ namespace orphen::ported::battle
     // branch, which is the mode this slice runs in.
     std::int16_t DAT_00354eba_enemyCount_ = 0;
 
-    std::uint32_t DAT_00354fc2_ = 0;
     // DAT_00354f80 / DAT_00354e96: the target-cycle repeat timer and the
     // pentagon's on-screen timer. Both stepped by FUN_00248e58.
     std::uint16_t DAT_00354f80_ = 0;

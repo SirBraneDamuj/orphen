@@ -445,6 +445,19 @@ namespace orphen::ported::entity
     // +0x96 bit 0x40: set on the first fireball of a chain only.
     std::uint8_t effectFlags96 = 0;
 
+    // The Bite of Lightning burst block, shared by types 0x15C (the ground
+    // disc FUN_002de650 lays down and the one FUN_002de9e8 plants on each
+    // victim) and 0x178 (the one-shot flash). It **overlaps** the enemy and
+    // fireball blocks above the same way those overlap each other -- +0x1AC is
+    // the enemy's hover height and the fireball's horizontal velocity, +0x1B0
+    // the wing phase and the rise rate -- and an entity is never two of these
+    // at once.
+    std::int16_t lightningTarget1ac = 0; // +0x1AC: the pool slot the cast was aimed at.
+    std::int16_t lightningCaster1ae = 0; // +0x1AE: the pool slot that cast it.
+    std::uint16_t lightningTimer1b0 = 0; // +0x1B0: FUN_00248e48(0x20), 32 frames of life.
+    std::uint8_t lightningByte1b2 = 0;   // +0x1B2: cleared on spawn; nothing in src/ reads it.
+    std::int8_t lightningLevel1b3 = 0;   // +0x1B3: the charge level, 1..5.
+
     // The type 0x37 party follower's block, PTR_FUN_0031e1a0's states. It
     // **overlaps** the two blocks above the same way they overlap each other --
     // +0x1B0..+0x1BC are the enemy's wing phase and home position, +0x1C0 its
@@ -488,8 +501,21 @@ namespace orphen::ported::entity
     // FUN_002658c0 for the walk animation. Looking a model up by the raw type
     // after 0x66 finds nothing, which is what stopped s01_e012's cast animating
     // and left the cutscene waiting on a frame counter that never advanced.
+    // +0x15C in the original: the model FUN_00229c40 bound at spawn. **A later
+    // rewrite of +0x00 does not move it**, which is what makes FUN_002de650's
+    // retype trick work -- both of its spawns are allocated as type 0x174 and
+    // then stamped 0x15C and 0x178, so they get 0x174's model and the other
+    // two types' behaviour. -1 is "resolve the model from the type id", which
+    // is what every normally spawned entity does; only a deliberate retype
+    // fills it in.
+    std::int16_t modelTypeId15c = -1;
+
     std::int16_t effectiveTypeId() const
     {
+      if (modelTypeId15c >= 0)
+      {
+        return modelTypeId15c;
+      }
       if (typeId00 == 0x38)
       {
         return originalType1ce;

@@ -99,6 +99,26 @@ namespace orphen::ported::battle
   void FUN_00249610_battle_character_update(const BattleUpdateEnvironment &environment,
                                             std::size_t entitySlot);
 
+  // FUN_002493f0 (0x002493f0): **where an elemental spell lands**, and the
+  // caster's target, in one call. Both of its callers are on the entity side --
+  // FUN_002deae8 asks every frame to place the growing circle, and again on the
+  // launch frame to place the damage box -- so the runtime hands it to the
+  // actor layer as a callback.
+  //
+  //   control +0x2C >= 2   the party record's +0x28, which state 113 has been
+  //                        tracking onto the target every frame
+  //   control +0x2C <  2   **two world units straight ahead of the caster**:
+  //                        2*cos(+0x5C) + x, 2*sin(+0x5C) + z, y
+  //
+  // The no-target case is not a fallback, it is the rule the game plays by when
+  // nothing is locked on -- it only looks like it varies by battlefield because
+  // it varies with which way the caster is facing. Note the threshold is `< 2`;
+  // FUN_00249610's face-the-target block uses `< 3`, and they are deliberately
+  // different numbers.
+  std::int32_t FUN_002493f0_spell_landing(const BattleParty &party,
+                                          const orphen::ported::entity::OriginalEntity &caster,
+                                          orphen::ported::psm2::Vec3 &out);
+
   // The class-1 table at 0x0031DD60, exposed so --battle-report can say whether
   // a state it saw has a handler.
   bool class1StateIsPorted(std::uint16_t state);
