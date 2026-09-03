@@ -1051,6 +1051,21 @@ namespace orphen::harness
             // by looking at textured exports rather than by reading code.
             currentU = static_cast<float>(packed & 0xFF) / 256.0f;
             currentV = static_cast<float>((packed >> 8) & 0xFF) / 256.0f;
+            // FUN_00212058:183 puts the pass's texture bank -- texFlags bits
+            // 13..11 -- into the draw header, and VU1 adds the (u, v) at that
+            // index of the 0x2B0 block FUN_0020EEC0 uploaded. Bank 0 is "does
+            // not animate"; banks 1..7 are the script's tracks 0..6.
+            //
+            // This is the ring under a battle character. grp_00a8 puts its
+            // ground layer on bank 3 and its wall on bank 1, and those two
+            // tracks scroll U at 1 and 4 texels a frame -- the shimmer, and the
+            // only thing about the ring that moves.
+            const std::uint16_t bank = subdraw->textureBank();
+            if (bank != 0 && bank <= object.uvAnimationOffsets.size())
+            {
+              currentU += object.uvAnimationOffsets[bank - 1].u;
+              currentV += object.uvAnimationOffsets[bank - 1].v;
+            }
           }
           // Flat-shaded primitives hold one colour at colourIndex; only the
           // per-vertex ones have a colour per corner. Same for the normal:

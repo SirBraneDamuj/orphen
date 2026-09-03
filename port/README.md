@@ -1339,48 +1339,55 @@ variants selected by its `+0x19A`, and raises the matching bit in
 `+0x5C += frameTicks * 0.00226893` — so it is an animated ring, just a
 conditional one.
 
-#### The ring's shimmer is a per-frame U scroll on its subdraw UVs
+#### The ring's shimmer is the model's own UV animation script
 
-Two `.gs` captures of a *resting* battle ring, four frames each, settle what the
-shimmer is. It is not the pose and it is not the geometry: within a capture the
-ring's screen positions are identical frame to frame to the last sub-pixel, and
-its vertex colours never change. What changes is **U**, on every corner of every
-pass, by a whole texel, with **V** fixed:
+Two `.gs` captures of a *resting* battle ring, four frames each, plus the pyro
+one, settle what the shimmer is. It is not the pose and it is not the geometry:
+what changes is **U**, on every corner of every pass, by whole texels, with
+**V** fixed. Measured against `grp_00a8`'s authored subdraw table, per game
+frame:
 
-| pass | subdraw `texFlags` | U per game frame |
-|---|---|---|
-| ground layer | `0x9C7F` (bank 3) | `+1`, wrapping in the byte |
-| wall layer | `0x8C7F` (bank 1) | `+4`, wrapping at 32 |
-| the alpha-12 pass | `0x850C` (bank 0) | none |
+| pass | subdraw `texFlags` | bank | U per game frame |
+|---|---|---|---|
+| the alpha-12 pass | `0x850C` | 0 | none |
+| wall layer | `0x8C7F`, `0x8C3F` | 1 | `+4` |
+| — | `0x943F` | 2 | `+8` |
+| ground layer | `0x9C7F` | 3 | `+1` |
+| — | `0xA4BF` | 4 | `+11` |
 
-The offset is a rigid translation of the whole quad — the authored span survives
-— so it is an addend on the packed UV, not a different subdraw record and not a
-rotation of the model. Against `grp_00a8`'s authored table the two capture sets
-read:
+The mechanism is the one the map already uses for the rain outside the windows,
+which is why none of the searching for a bespoke ring animator found anything:
 
-```
-capture A   frame 0..3   ground +34 +35 +35 +36   wall  +8 +12 +12 +16
-capture B   frame 0..3   ground  +1  +1  +2  +2   wall  +4  +4  +8  +8
-```
+- **PSC3 header `+0x40` is a UV animation script**, byte for byte the map's
+  section G. The header map in `psc3_model.h` stopped at `+0x38`.
+  `grp_00a8`'s is four one-frame scroll tracks, `u` = 256, 512, 64 and 700
+  sixty-fourths of a texel with duration −3, −3, −3 and −1 — which is exactly
+  the table above, since the stepper's `hold` of 1 comes out as one step every
+  two frames.
+- **`FUN_00221E70`** reads it at load, raises bit 2 of the model record's
+  `+0x04`, and seeds **four** running copies through `FUN_002256D0` /
+  `FUN_002256F0` into record `+0x18`/`+0x1C`/`+0x20`/`+0x24`.
+- **`FUN_00229C40`** sets entity `+0x08` bit 3 for those models, and
+  **`FUN_00229F88`** hands the entity the copy its pool slot's low two bits
+  name. That is why the pyro capture has two rings on screen at `+34` and `+62`
+  of the same track: four copies, not one global counter.
+- **`FUN_0020C810:209-211`** steps the entity's copy once per drawn entity, then
+  points the draw context at it; **`FUN_0020EEC0:97-110`** uploads seven
+  `(u, v)` pairs, scaled by 1/64, as `0x640702B0` into VU1 `0x2B0`.
+- **`FUN_00212058:183`** puts the subdraw's texture bank — `texFlags` bits
+  13..11 — into the draw header, and VU1 adds the pair at that index. Bank 0 is
+  "does not animate"; banks 1..7 are tracks 0..6. `grp_00a8` uses banks 0..4 and
+  ships exactly four tracks.
 
-Every one of those eight samples satisfies `wall == (ground * 4) & 0x1F`, across
-two captures minutes apart, so the two layers are phase-locked to **one**
-counter advancing once per game frame — not two free-running ones. The port
-emits the authored UVs unmodified, which is exactly why its ring is inert.
+The port implements all of it: `Psc3Model::uvAnimationScript`,
+`EntityModelBinding::uvAnimation` (the four copies),
+`PortRuntime::attachModel` (the step and the seven-pair publish) and
+`SceneObjectView::uvAnimationOffsets`, applied in `drawObjectModel`'s per-corner
+emit. Verified by building the draw with the bank forced to 0 and diffing a
+`--screenshot` of `s14_e012` at frame 400 against the real one, and by the
+accumulators advancing 256/512/64/700 per step.
 
-Where the engine applies it is still open, and the usual oracle cannot answer
-it. `FUN_00212058` reads the subdraw record at model `+0x24` and
-`FUN_002129b8:151-159` copies its halfwords into the packet verbatim, so the
-scrolled values should be sitting in the model's own table — but they are not in
-`eeMemory.bin`. The pyro save state contains the *built packets* (the
-`0x6D048006` vertex tag and the `count << 16 | 0x6600C039` UV tag are
-`FUN_00212058`'s, so the mesh path built them) and nothing else: searching all
-32 MB for the eight authored UV bytes of subdraw 4 returns two hits, both
-packets, and the byte pair `7F 9C` — the ground layer's `texFlags` — appears 57
-times in the whole image against the 224 the model alone holds. `grp_00a8`'s
-subdraw table is not resident, so whatever holds the scrolled copy is transient.
-
-Two other things the same dump settles:
+Two other things the same dumps settle:
 
 - **The alpha-12 pass is degenerate in the original.** Its 48 draws all collapse
   to a single screen point, so the box the port draws is those passes failing to
@@ -1390,6 +1397,36 @@ Two other things the same dump settles:
 - **The port's alpha-12 vertices are legitimate.** An earlier note here said the
   original emits no alpha-12 vertices at all; that was read off a max-charge
   capture. A resting ring emits 192 of them.
+
+#### The ring drew untextured because one of the three model tables was missing
+
+The ring was a white drum until its sheet was actually loaded, and none of that
+was the draw path's doing.
+
+`--model-report` reports its passes as `{bound+10:48 bound+8:224 bound+9:64}`,
+which reads like three global slots but is not. Every one of grp_00a8's 200
+primitives carries flag `0x800`, and `FUN_00212058:183-208` sends that form down
+the *other* branch: the selector is moved into packet byte 5 and byte 6 goes to
+`0x3F`, the entity's own bound slot. So all 336 passes draw from slot 37 — which
+is what the capture shows, all six `texFlags` groups on one page, `tbp 13716`.
+`FUN_002103d0` is where that number comes from: a slot's GS base is
+`0x1680 + slot * 0x104` below 24 and `12000 + (slot - 24) * 0x84` above, and
+slot 37 is `12000 + 13 * 132 = 13716`. The bound slot and the page agree.
+
+Slot 37 was simply empty. `FUN_00221fd8` walks **three** model-record tables
+looking for records whose `+0x06` is 100 and loading `+0x02` into `+0x07`;
+`FUN_00221fd8_staticTextureBinds` walked two, on a note that
+`PTR_DAT_003228c0`'s table "lives in BSS". It does not — the original takes the
+*address* of that symbol as the table base, and the records are in the
+executable's LOAD segment like the other two, 226 of them with 17 static binds.
+`[146] mesh=00a8 tex=0197 slot=37` is one of them, and slot 37 is reachable from
+nowhere else.
+
+With the third table walked, the port's slot table on `s01_e012` matches
+`eeMemory.bin` entry for entry across 32..37, 40 and 42..44, and the ring draws
+as a translucent textured swirl with the UV animation running on it. `--frames
+3000 --actor-report --scr-report` on `s01_e024` and `s01_e012` is unchanged
+except for the texture cache's generation counter, which counts one more load.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 

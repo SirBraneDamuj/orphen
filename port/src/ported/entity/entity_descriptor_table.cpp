@@ -149,13 +149,23 @@ namespace orphen::ported::entity
       return binds;
     }
 
-    // The original bounds the primary walk with iGpffffb270 and the secondary
-    // walk with "next record's mesh id is zero". Both tables terminate on a
-    // zero mesh id at exactly the record counts the offline extractor found
-    // (95 and 114), so the terminator alone is enough and the port does not
-    // have to resolve a gp-relative count.
+    // FUN_00221fd8 walks all three model tables here, not two. The original
+    // bounds the primary walk with iGpffffb270 and the other two with "the
+    // next record's mesh id is zero"; all three terminate on a zero mesh id at
+    // exactly the record counts the offline extractor found (95, 114 and 226),
+    // so the terminator alone is enough and the port does not have to resolve a
+    // gp-relative count.
+    //
+    // PTR_DAT_003228c0 is a table, not a pointer -- the original takes its
+    // *address* as the base and strides 0x2C from there -- and it is in the
+    // executable's LOAD segment like the other two, so its records read
+    // straight out of the ELF. Its 17 static binds are the effect models'
+    // sheets, and slot 37 (tex_0197) is reachable from nowhere else: it is what
+    // grp_00a8, the battle ground ring, draws with, and leaving the table out
+    // is why the ring came out as a white drum.
     constexpr std::size_t kRecordCap = 256;
-    for (const std::uint32_t base : {kDAT_0031ee48_primaryModels, kDAT_003214f8_secondaryModels})
+    for (const std::uint32_t base : {kDAT_0031ee48_primaryModels, kDAT_003214f8_secondaryModels,
+                                     kPTR_DAT_003228c0_tertiaryModels})
     {
       for (std::size_t index = 0; index < kRecordCap; ++index)
       {
@@ -172,8 +182,6 @@ namespace orphen::ported::entity
       }
     }
 
-    // PTR_DAT_003228c0's table lives in BSS, so its static binds are not
-    // reachable from the executable. None of s01_e024's entities use it.
     return binds;
   }
 

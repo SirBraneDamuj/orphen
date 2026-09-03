@@ -3,7 +3,9 @@
 #include "ported/model/psc3_model.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/psm2/psm2_uv_animation.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -85,6 +87,16 @@ namespace orphen::port
     float scaleZ150 = 1.0f;  // +0x150
     float rotationX154 = 0.0f;
     float rotationY158 = 0.0f;
+
+    // FUN_0020EEC0's 0x640702B0 upload: the seven (u, v) pairs VU1 adds to the
+    // baked texture coordinates, already normalised to the 0..1 the port's UVs
+    // use. Index n is what a subdraw's texture bank n + 1 selects; bank 0 does
+    // not animate. Stepped once per drawn entity in attachModel, because
+    // FUN_0020C810 steps the entity's own copy of the script on the way to
+    // building this, and the state has to advance once per simulation frame
+    // rather than once per rendered one.
+    std::array<orphen::ported::psm2::UvOffset,
+               orphen::ported::psm2::kUvAnimationUploadSlots> uvAnimationOffsets{};
 
     // False for the lead player, which draws its own magenta box and ground
     // triangle through drawLeadPlayer. It is in this list only so its model

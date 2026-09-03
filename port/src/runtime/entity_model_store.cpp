@@ -209,7 +209,7 @@ namespace orphen::port
     }
   }
 
-  const EntityModelBinding *EntityModelStore::ensureLoaded(std::uint32_t modelRecordAddress)
+  EntityModelBinding *EntityModelStore::ensureLoaded(std::uint32_t modelRecordAddress)
   {
     const auto existing = bindings_.find(modelRecordAddress);
     if (existing != bindings_.end())
@@ -233,13 +233,22 @@ namespace orphen::port
 
   // Split out from ensureLoaded so a record from somewhere other than the ELF
   // can reuse it once that source is identified.
-  const EntityModelBinding *EntityModelStore::bindRecord(
+  EntityModelBinding *EntityModelStore::bindRecord(
       std::uint32_t bindingKey, const orphen::ported::entity::EntityModelRecord &record)
   {
     EntityModelBinding binding;
     binding.meshId = record.meshId0x00;
     binding.textureId = record.texId0x02;
     binding.model = loadModel(record.meshId0x00);
+    if (binding.model != nullptr && !binding.model->uvAnimationScript.empty())
+    {
+      // FUN_00221E70's loop: four copies of the same script, each seeded by
+      // FUN_002256F0 with the frame cursor at 0xFF and the running bit set.
+      for (auto &state : binding.uvAnimation)
+      {
+        state = binding.model->uvAnimationScript;
+      }
+    }
     if (binding.model == nullptr)
     {
       const auto stored = models_.find(record.meshId0x00);
@@ -281,7 +290,7 @@ namespace orphen::port
 
   // FUN_00229980's map-streamed branch. The record is real data out of SCR.BIN,
   // so this is the same binding path as the ELF one -- only the lookup differs.
-  const EntityModelBinding *EntityModelStore::bindMapProp(std::uint32_t typeId)
+  EntityModelBinding *EntityModelStore::bindMapProp(std::uint32_t typeId)
   {
     if (mapProps_ == nullptr || !mapProps_->valid())
     {
@@ -301,7 +310,7 @@ namespace orphen::port
     return bindRecord(kMapPropKeyBase | typeId, *record);
   }
 
-  const EntityModelBinding *EntityModelStore::bindingForTypeId(std::uint32_t typeId)
+  EntityModelBinding *EntityModelStore::bindingForTypeId(std::uint32_t typeId)
   {
     if (descriptors_ == nullptr)
     {

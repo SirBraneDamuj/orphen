@@ -31,6 +31,7 @@
 #include "ported/model/psc3_model.h"
 #include "ported/resource/texture_slot_cache.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -52,6 +53,15 @@ namespace orphen::port
     int textureSlot = orphen::ported::resource::kNoTextureSlot;
     // Why there is no model, when there is none.
     std::string diagnostic;
+
+    // Model record +0x18/+0x1C/+0x20/+0x24. FUN_00221E70 seeds four running
+    // copies of the model's UV animation script at load -- one script, four
+    // independent states -- and FUN_00229F88 gives an entity the one its pool
+    // slot's low two bits name. Empty when the model's header +0x40 is zero,
+    // which is what leaves the record's +0x04 bit 2 clear and, through
+    // FUN_00229C40, entity +0x08 bit 3 with it.
+    std::array<std::vector<orphen::ported::psm2::UvAnimationTrack>, 4> uvAnimation;
+    bool hasUvAnimation() const { return !uvAnimation[0].empty(); }
   };
 
   class EntityModelStore
@@ -69,14 +79,16 @@ namespace orphen::port
     void FUN_00221fd8_bind_boot_textures();
 
     // FUN_00266118. Idempotent; the binding is cached per model record address.
-    const EntityModelBinding *ensureLoaded(std::uint32_t modelRecordAddress);
+    EntityModelBinding *ensureLoaded(std::uint32_t modelRecordAddress);
     // Builds a binding from an already-read record.
-    const EntityModelBinding *bindRecord(std::uint32_t bindingKey,
+    EntityModelBinding *bindRecord(std::uint32_t bindingKey,
                                          const orphen::ported::entity::EntityModelRecord &record);
-    const EntityModelBinding *bindMapProp(std::uint32_t typeId);
+    EntityModelBinding *bindMapProp(std::uint32_t typeId);
 
     // Convenience: resolve a type id all the way through the descriptor table.
-    const EntityModelBinding *bindingForTypeId(std::uint32_t typeId);
+    // Non-const because the binding owns the four UV animation states, and
+    // FUN_0020C810 steps the one the drawn entity selected.
+    EntityModelBinding *bindingForTypeId(std::uint32_t typeId);
 
     // The map-streamed prop banks (FUN_00228e28) plus the scene's stage number,
     // which is the bank FUN_00229980 uses for the 0x272 range. Both come from

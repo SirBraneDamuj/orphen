@@ -2294,7 +2294,7 @@ namespace orphen::port
                                 orphen::ported::entity::OriginalEntity &entity,
                                 std::uint32_t frameTicks)
   {
-    const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
+    EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
     if (binding == nullptr || binding->model == nullptr)
     {
       return;
@@ -2302,6 +2302,27 @@ namespace orphen::port
     view.model = binding->model;
     view.textureSlot = binding->textureSlot;
     view.poseColumn = entity.poseColumnAc;
+
+    // FUN_0020C810 lines 209-211. The entity steps *its own* copy of the model's
+    // UV animation script -- FUN_00229F88 gave it one of the record's four by
+    // pool slot & 3 -- and then hands FUN_0020EEC0 the seven (u, v) pairs to
+    // upload. The original gates this on entity +0x08 bit 3, which FUN_00229C40
+    // raises for exactly the models whose header +0x40 is non-zero; asking the
+    // binding is the same predicate one step earlier.
+    //
+    // Once per *drawn* entity, so two entities sharing a copy step it twice in
+    // a frame. That is the original's behaviour, not an accident of this port:
+    // four copies exist to spread instances out, not to give each its own.
+    if (binding->hasUvAnimation())
+    {
+      auto &tracks = binding->uvAnimation[view.slot & 3u];
+      orphen::ported::psm2::FUN_00225940_step_uv_animation(tracks, frameTicks);
+      for (std::size_t slot = 0; slot < view.uvAnimationOffsets.size(); ++slot)
+      {
+        view.uvAnimationOffsets[slot] = orphen::ported::psm2::uvOffsetForMaterialByte9(
+            tracks, static_cast<std::uint8_t>(slot + 1u));
+      }
+    }
 
     orphen::ported::model::PoseFilterInputs inputs;
     // FUN_0020d378 line 51 takes the blend ratio straight off entity +0x13C.
@@ -4612,9 +4633,11 @@ namespace orphen::port
         // rides in byte 5 instead. Selector 0 is the plain bound-slot case and
         // 0xF is the untextured/special mode.
         //
-        // The port draws every textured pass with the entity's one bound
-        // texture, so a `sel` entry below is a pass reaching for a sheet the
-        // port never gives it.
+        // The port follows both forms: a `gslot` entry draws from that global
+        // cache slot, a `bound+N` entry draws from the entity's own. What a
+        // `bound+N` entry is worth reading for is the bound slot itself -- all
+        // 336 of grp_00a8's passes are `bound+8/9/10`, so the ring is exactly
+        // as textured as slot 37 is, and for a while slot 37 was empty.
         std::map<std::string, std::size_t> selectors;
         for (const auto &primitive : model.primitives)
         {

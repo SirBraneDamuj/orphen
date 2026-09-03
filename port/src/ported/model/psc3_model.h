@@ -28,6 +28,7 @@
 //   +0x30  u32 hit-volume column map bytes, one per pose column
 //   +0x34  u32 hit-volume records     stride 0x10
 //   +0x38  u32 motion-trail table     stride 0x0C, at most eight entries
+//   +0x40  u32 UV animation script    the same format the map's section G uses
 //
 // The first two of those three are only on weapon-effect models -- grp_0179,
 // the sword blade, has them and grp_0001, the player, does not. FUN_002148a8
@@ -35,6 +36,13 @@
 // swept hit test does nothing when it is handed anything but a weapon.
 //
 // +0x38 is FUN_0020e840's, and only seven models in s00_e000 carry one at all.
+//
+// +0x40 is the one the header map above did not have. FUN_00221e70 reads it at
+// load, raises bit 2 of the model record's +0x04, and seeds *four* runtime
+// copies of the script through FUN_002256F0 into record +0x18/+0x1C/+0x20/+0x24.
+// FUN_00229C40 then sets entity +0x08 bit 3, and FUN_00229F88 hands the entity
+// the copy its pool slot's low two bits name -- which is why two instances of
+// the same model can be at different phases of the same animation.
 //
 // Note that +0x1C..+0x28 are rewritten to absolute addresses when the game
 // relocates a model (FUN_00221f60), so a PSC3 read out of an EE dump has four
@@ -90,7 +98,7 @@ namespace orphen::ported::model
 
   struct Psc3Subdraw
   {
-    // +0x00..+0x06, one per primitive corner, packed (U << 8) | V as 8-bit
+    // +0x00..+0x06, one per primitive corner, packed (V << 8) | U as 8-bit
     // texel coordinates over a 256x256 page. FUN_00212058 line 149 hands the
     // record straight to FUN_002129b8, which copies `vertexCount` halfwords.
     std::array<std::uint16_t, 4> packedUv{};
@@ -278,6 +286,18 @@ namespace orphen::ported::model
     // Header +0x38. At most eight, because entity +0xAA only has eight bits to
     // enable them with.
     std::vector<Psc3Trail> trails;
+
+    // Header +0x40, the UV animation script -- the definition, not the running
+    // state. Byte for byte the map's section G, so it parses into and steps
+    // through the same code (psm2_uv_animation.h). A subdraw's texture bank,
+    // texFlags bits 13..11, is the 1-based track index: bank 0 means the pass
+    // does not animate.
+    //
+    // grp_00a8, the battle ground ring, is the case that shows what it is for.
+    // Its four tracks scroll U by 256, 512, 64 and 700 sixty-fourths of a texel
+    // per frame -- 4, 8, 1 and 10.94 texels -- and its six subdraw groups sit
+    // on banks 0..4. That is the whole of the ring's shimmer.
+    std::vector<orphen::ported::psm2::UvAnimationTrack> uvAnimationScript;
 
     // A **sprite strip**, not a skeletal model: no magic, no geometry, and a
     // four-byte animation timeline instead of a six-byte one. `grp_017e`, the

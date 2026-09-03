@@ -198,6 +198,45 @@ namespace orphen::ported::model
       }
     }
 
+    // Header +0x40, the UV animation script. FUN_00221E70 reads it as an offset
+    // into the model and hands it to FUN_002256D0/FUN_002256F0, which size and
+    // seed four runtime copies of it; the copies live on the model record and
+    // an entity picks one by pool slot. This parses only the definition -- the
+    // same layout the map's section G has, so it goes through the same reader
+    // shape as loadUvAnimation in decoded_psm2_loader.cpp.
+    const std::uint32_t uvAnimationOffset = fits(bytes, 0x40, 4) ? u32At(bytes, 0x40) : 0u;
+    if (uvAnimationOffset != 0 && fits(bytes, uvAnimationOffset, 2))
+    {
+      std::size_t cursor = uvAnimationOffset;
+      const std::int16_t trackCount = s16At(bytes, cursor);
+      cursor += 2;
+      for (std::int16_t track = 0; track < trackCount; ++track)
+      {
+        if (!fits(bytes, cursor, 2))
+        {
+          break;
+        }
+        const std::int16_t frameCount = s16At(bytes, cursor);
+        cursor += 2;
+        if (frameCount < 0 || !fits(bytes, cursor, static_cast<std::size_t>(frameCount) * 6))
+        {
+          break;
+        }
+        orphen::ported::psm2::UvAnimationTrack record;
+        record.frames.reserve(static_cast<std::size_t>(frameCount));
+        for (std::int16_t frame = 0; frame < frameCount; ++frame)
+        {
+          orphen::ported::psm2::UvAnimationFrame entry;
+          entry.duration = s16At(bytes, cursor);
+          entry.u = s16At(bytes, cursor + 2);
+          entry.v = s16At(bytes, cursor + 4);
+          cursor += 6;
+          record.frames.push_back(entry);
+        }
+        model.uvAnimationScript.push_back(std::move(record));
+      }
+    }
+
     if (submeshCount == 0 || submeshOffset == 0 || vertexOffset == 0 || primitiveOffset == 0)
     {
       return failure("model has no geometry sections");
