@@ -107,6 +107,9 @@ namespace orphen::ported::battle
     // divides it by 0x780, capped at 0x2580, into the level 0..4 that becomes
     // the effect entity's +0x94.
     inline constexpr std::uint32_t kChargeTimer3c = 0x3C;
+    // DAT_00355cb0[0..2], three floats. FUN_0024b7d0 stamps the target's world
+    // position here on the frame a kind-0 charge starts.
+    inline constexpr std::uint32_t kTargetPos28 = 0x28;
     inline constexpr std::uint32_t kSwingTimer3e = 0x3E;  // DAT_00355cb0 + 0x16
     inline constexpr std::uint32_t kHitCounter40 = 0x40;  // DAT_00355cb0 + 0x18
     inline constexpr std::uint32_t kReturnTimer42 = 0x42; // DAT_00355cb0 + 0x1A
@@ -195,6 +198,30 @@ namespace orphen::ported::battle
   // these are pad bits directly and need no remap.
   inline constexpr std::uint32_t kDAT_0031d168_slotButtons[3] = {0x10, 0x20, 0x40};
   inline constexpr std::uint32_t kDAT_0031d174_guardButton = 0x80;
+
+  // ------------------------------------------- the kind-0 approach constants
+  //
+  // Read out of SLUS_200.11 at the addresses FUN_0024b410 names. The first two
+  // are a pair: at the nominal 0x20 ticks a frame the run advances
+  // `(0x20 >> 4) * 0.032` == 0.064 units, which is exactly the divisor the
+  // travel timer is sized with, so `distance / kDAT_0035278c` is the trip
+  // length in frames.
+  inline constexpr float kDAT_0035278c_stepPerFrame = 0.064f;
+  inline constexpr float kDAT_003527a4_stepPerTick = 0.032f;
+  inline constexpr float kDAT_00352790_arriveDistance = 0.7f;
+  // FUN_0024a870's three thresholds. All three are 0.2 in this build, and they
+  // are kept apart because they are three different questions: is it worth
+  // walking home at all, is the walk long enough to make footstep noise, and is
+  // it long enough to owe the idle a settle timer.
+  inline constexpr float kDAT_00352780_returnDistance = 0.2f;
+  inline constexpr float kDAT_00352784_audibleDistance = 0.2f;
+  inline constexpr float kDAT_00352788_settleDistance = 0.2f;
+  inline constexpr float kDAT_00352794_hopVelocity = 0.068f;
+  inline constexpr float kDAT_00352798_stepUp = 0.3f;
+  // +/- pi/6: the cone the run holds. A target that leaves it ends the
+  // approach in a swing rather than a turn.
+  inline constexpr float kDAT_0035279c_coneLow = -0.5235986709594727f;
+  inline constexpr float kDAT_003527a0_coneHigh = 0.5235986709594727f;
 
   // FUN_00248e48: `(n << 0x15) >> 0x10`, i.e. n * 32 sign-extended through a
   // short. Ticks, at the nominal 0x20 per frame.

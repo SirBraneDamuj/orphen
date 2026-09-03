@@ -1,9 +1,13 @@
 #include "ported/battle/battle_character_update.h"
 
 #include "ported/entity/actor_frame_update.h"
+#include "ported/entity/original_entity_sound.h"
+#include "ported/model/psc3_skeleton.h"
 
 #include <array>
 #include <cmath>
+#include <algorithm>
+#include <optional>
 
 namespace orphen::ported::battle
 {
@@ -212,10 +216,18 @@ namespace orphen::ported::battle
     //   effect->+0x192 = casterSlot;  effect->+0x194 = 0x12 for class 1
     //
     // Bone 0x12 is the hand for Orphen (class 1) and 0x0E for class 4.
+    //
+    // `onlyWhenTypeChanged` is the one place the states disagree. The charge
+    // states swap the entity unconditionally; FUN_0024ac88 guards the swap with
+    // `if (*(short *)table[member] != wantedType)`, so a re-press that keeps the
+    // same slot re-uses the blade already in the caster's hand rather than
+    // dropping and rebuilding it mid-swing. The tail -- attachment, power,
+    // element block -- runs either way.
     std::int32_t respawnSlotEffect(const BattleUpdateEnvironment &environment,
                                    std::uint32_t member,
                                    std::uint32_t tableBase,
-                                   std::size_t casterSlot)
+                                   std::size_t casterSlot,
+                                   bool onlyWhenTypeChanged)
     {
       BattleParty &party = *environment.party;
       const auto &caster = environment.pool->slot(casterSlot);
@@ -224,12 +236,23 @@ namespace orphen::ported::battle
           kDAT_0031da3a_effectTypes + member * 6 + static_cast<std::uint32_t>(chosen) * 2);
 
       const std::int32_t previous = party.entitySlotAt(tableBase + member * 4);
-      if (previous != kNoEntity)
+      bool swap = true;
+      if (onlyWhenTypeChanged && previous != kNoEntity &&
+          environment.pool->slot(static_cast<std::size_t>(previous)).typeId00 ==
+              static_cast<std::int16_t>(effectType))
       {
-        environment.pool->releaseSlot(static_cast<std::size_t>(previous));
+        swap = false;
       }
-      const std::int32_t spawned = FUN_00245a00_spawn_effect(environment, effectType);
-      party.setEntitySlotAt(tableBase + member * 4, spawned);
+      std::int32_t spawned = previous;
+      if (swap)
+      {
+        if (previous != kNoEntity)
+        {
+          environment.pool->releaseSlot(static_cast<std::size_t>(previous));
+        }
+        spawned = FUN_00245a00_spawn_effect(environment, effectType);
+        party.setEntitySlotAt(tableBase + member * 4, spawned);
+      }
       if (spawned == kNoEntity)
       {
         return kNoEntity;
@@ -389,34 +412,187 @@ namespace orphen::ported::battle
       return charge;
     }
 
+    // FUN_0024a870 (state 108): the walk back to the mark. **Every attack ends
+    // here**, and until it was ported the character stopped dead in its last
+    // animation frame and stopped taking input entirely -- FUN_002462c8 returns
+    // on `current == 0x87` before it reads a single button, so a state 108 that
+    // never finishes is a soft lock.
+    //
+    // Control block +0x14/+0x16/+0x18 is where the member stood when the battle
+    // started, in tenths. The state measures how far the character has drifted
+    // from it and takes one of two exits:
+    //
+    //   under fGpffff8810 (0.2)  -> state 120 straight away, action 6
+    //   at or over it            -> a three-point path walk home, then 120
+    //
+    // Swinging in place with no target moves nobody, so the no-target case takes
+    // the first exit on its first frame. The walk is the other half and it is
+    // what a real approach needs.
+    std::uint16_t stateWalkBack108(const StateContext &context, std::uint16_t charge)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      auto &tables = party.tables();
+
+      const auto endInIdle = [&](std::uint16_t state) {
+        entity.state60 = state;
+        setAction(context, kActionIdle06);
+      };
+
+      // DAT_0031da0c bit 0 is the option that turns the return walk off; with it
+      // set the character simply stands where it is.
+      if ((tables.read<std::uint32_t>(kDAT_0031da0c_memberFlags2 + context.member * 4) & 1) != 0)
+      {
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        entity.state60 = 0x78;
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7);
+        setAction(context, kActionIdle06);
+        return 0;
+      }
+
+      const float homeX =
+          static_cast<float>(tables.read<std::int16_t>(context.control + control::kPosX14)) / 10.0f;
+      const float homeZ =
+          static_cast<float>(tables.read<std::int16_t>(context.control + control::kPosY16)) / 10.0f;
+      const float homeY =
+          static_cast<float>(tables.read<std::int16_t>(context.control + control::kPosZ18)) / 10.0f;
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        // ---- entry ----
+        const float distance =
+            std::hypot(homeZ - entity.positionZ24, homeX - entity.positionX20);
+        if (distance >= kDAT_00352780_returnDistance)
+        {
+          if (context.environment->paths == nullptr)
+          {
+            entity.state60 = 0x4078;
+            entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+            setAction(context, kActionIdle06);
+            return 0;
+          }
+          orphen::ported::psm2::Vec3 mid{(entity.positionX20 + homeX) * 0.5f,
+                                        (entity.positionZ24 + homeZ) * 0.5f,
+                                        (entity.positionY28 + homeY) * 0.5f};
+          // Walk under 1.5 units, run over it -- and between 1.5 and 2.0 the
+          // original sets the run animation, arcs the midpoint, then puts the
+          // walk back. Transcribed rather than tidied: the arc and the +0x04
+          // bit are what that band actually gets.
+          FUN_00248ee0_set_animation(entity, 0x37);
+          if (distance > 1.5f)
+          {
+            FUN_00248ee0_set_animation(entity, 0x0C);
+            entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 8);
+            mid.z += std::min(distance, 8.0f) * 0.125f;
+            if (distance < 2.0f)
+            {
+              FUN_00248ee0_set_animation(entity, 0x37);
+            }
+          }
+          const std::uint16_t duration =
+              static_cast<std::uint16_t>(static_cast<std::int32_t>(distance * 200.0f));
+          const int started = context.environment->paths->FUN_0024a870_start_return_walk(
+              context.entitySlot,
+              orphen::ported::psm2::Vec3{entity.positionX20, entity.positionZ24, entity.positionY28},
+              mid, orphen::ported::psm2::Vec3{homeX, homeZ, homeY}, duration,
+              (entity.halfword04 & 8) != 0);
+          if (started != 0)
+          {
+            entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+            entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+          }
+          // Either way the state stays 108 and the action is untouched: a full
+          // path table simply retries next frame.
+          return 1;
+        }
+        // Close enough. Straight to the battle idle.
+        entity.state60 = 0x4078;
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        setAction(context, kActionIdle06);
+        return 0;
+      }
+
+      // ---- walking ----
+      const int progress = context.environment->paths != nullptr
+                               ? context.environment->paths->FUN_002445c8_progress(context.entitySlot)
+                               : 0;
+      const float distance = std::hypot(homeZ - entity.positionZ24, homeX - entity.positionX20);
+      if (distance > kDAT_00352784_audibleDistance)
+      {
+        // +0x04 bit 0 is "make noise": footsteps only on a walk long enough to
+        // be worth hearing.
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 1);
+      }
+      // The last fifth of the walk drops the run into its slow-down. A raw write,
+      // not FUN_00248ee0 -- the timeline must not restart.
+      if (progress < 500 && entity.animationA0 == 0x0C)
+      {
+        entity.animationA0 = 0x0D;
+      }
+      if (progress != 0)
+      {
+        return 1;
+      }
+
+      // Arrived.
+      FUN_00248ee0_set_animation(entity, entity.animationA0 == 0x0D ? 0x10 : 2);
+      if (distance > kDAT_00352788_settleDistance)
+      {
+        tables.write<std::int16_t>(BattleTables::partyRecord(context.member) + record::kReturnTimer42,
+                                   FUN_00248e48_arm_timer(0x3C));
+      }
+      entity.state60 = 0x78;
+      entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF6);
+      endInIdle(0x78);
+      (void)charge;
+      return 0;
+    }
+
     // FUN_0024b7d0 (state 107): the kind-0 charge, which with the shipped
     // loadout is Cross holding Sword of the Fallen Devil.
     //
     // On entry it swaps the attack entity for the one this slot names, hangs it
     // off the hand, plays animation 0x33 and resets the charge accumulator.
-    // After that it does nothing per frame *except* grow the effect: the
-    // accumulation happens in FUN_002d9b78's branch, and the scale comes
-    // straight out of the charge level.
-    std::uint16_t stateChargeAttack107(const StateContext &context, std::uint16_t charge)
+    // After that it does nothing per frame *except* grow the effect: the blade
+    // **elongates** as the charge builds, because +0x150 -- the effect's Z
+    // scale, its length -- is written straight from the charge level.
+    std::uint16_t stateChargeAttack107(const StateContext &context, std::uint16_t)
     {
       auto &entity = *context.entity;
       BattleParty &party = *context.party;
+      auto &tables = party.tables();
 
       if (party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4) == kNoEntity)
       {
         entity.state60 = 0x4078;
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
         setAction(context, kActionIdle06);
-        return charge;
+        return 0;
       }
 
       if ((entity.state60 & 0x4000) != 0)
       {
-        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        // Unconditional here, unlike state 105's, which only respawns when the
+        // slot's type has changed under it.
         respawnSlotEffect(*context.environment, context.member, kDAT_0031da9c_attackEntity,
-                          context.entitySlot);
+                          context.entitySlot, false);
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         FUN_00248e98_set_animation_if_changed(entity, 0x33);
         party.FUN_00249108_clear_turn_flags(context.member);
+
+        // DAT_00355cb0[0..2] -- party record +0x28..+0x30 -- take the target's
+        // world position at the instant the charge starts. State 106's approach
+        // does not read it back; FUN_0023fd30's AI does.
+        const std::int16_t target = tables.read<std::int16_t>(context.control + control::kTarget2c);
+        if (target >= 0 &&
+            static_cast<std::size_t>(target) < orphen::ported::entity::kEntitySlotCount)
+        {
+          const auto &at = context.environment->pool->slot(static_cast<std::size_t>(target));
+          const std::uint32_t base = BattleTables::partyRecord(context.member) + record::kTargetPos28;
+          tables.write<float>(base, at.positionX20);
+          tables.write<float>(base + 4, at.positionZ24);
+          tables.write<float>(base + 8, at.positionY28);
+        }
       }
 
       // +0xAA bit 0x800 is the timeline marker the animation raises on the
@@ -425,67 +601,94 @@ namespace orphen::ported::battle
       if ((entity.flagsAa & 0x800) != 0 && (entity.flags06 & 4) != 0)
       {
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
-        FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
-        const std::int32_t attack = party.entitySlotAt(kDAT_0031da9c_attackEntity + context.member * 4);
-        if (attack != kNoEntity)
+        // **The gate.** FUN_002d9b78 answers whether the caster's ground ring
+        // is still open, and the charge only builds while it is -- exactly as
+        // in states 111 and 113. Accumulating without asking is what let a held
+        // Cross keep charging after the ring had closed.
+        if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0)
         {
-          auto &effect = context.environment->pool->slot(static_cast<std::size_t>(attack));
-          if (effect.animationA0 == 2)
+          const std::int32_t attack =
+              party.entitySlotAt(kDAT_0031da9c_attackEntity + context.member * 4);
+          if (attack != kNoEntity)
           {
-            FUN_00248ee0_set_animation(effect, 1);
+            auto &effect = context.environment->pool->slot(static_cast<std::size_t>(attack));
+            if (static_cast<std::int16_t>(effect.animationA0) == 2)
+            {
+              FUN_00248ee0_set_animation(effect, 1);
+            }
+            FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+            // FUN_00249270(entity, 6): the charge on a fine divisor, so the
+            // blade grows continuously rather than in the four steps the 0x780
+            // level moves in. 0x2580/6 + 700 = 2300, so a full charge is a
+            // 2.3x-long blade.
+            effect.scaleZ150 =
+                static_cast<float>(static_cast<std::int16_t>(
+                    FUN_00249270_charge(party, context.member, 6) + 700)) /
+                1000.0f;
+            effect.scale14c = 1.0f;
           }
-          // FUN_00249270(entity, 6): the same accumulator on a finer divisor,
-          // so the visible growth is continuous rather than in four steps.
-          effect.scaleZ150 =
-              static_cast<float>(FUN_00249270_charge(party, context.member, 6) + 700) / 1000.0f;
-          effect.scale14c = 1.0f;
         }
       }
-      return charge;
+      return 0;
     }
 
-    // FUN_0024ac88 (state 105): the kind-0 release -- the swing that actually
-    // fires. Ported as its state machine: the three-animation swing chain
-    // (0x33 -> 0x30 -> 0x31), the effect entity re-spawn at the charge level,
-    // and the two exits back to 108.
-    std::uint16_t stateFireAttack105(const StateContext &context, std::uint16_t charge)
+    // FUN_0024ac88 (state 105): the kind-0 release -- the swing that lands, and
+    // the two follow-ups the player can chain onto it.
+    //
+    // **This handler is entered once per press, not once per swing.** Every
+    // route into it goes through FUN_0024a360, which sets `state60 = 0x84 +
+    // 0x3FE5` -- state 105 *with bit 0x4000*. So the restart bit is the press,
+    // and the handler's first job is to tell a fresh entry from a re-press:
+    //
+    //   +0x06 bit 0x10 set   -> fresh: respawn the blade, arm the 60-frame
+    //                          swing timer, clear the bit
+    //   +0x06 bit 0x10 clear -> a re-press: step the animation chain
+    //                          0x33 -> 0x30 -> 0x31, one slash per press
+    //
+    // and the third slash, 0x31, only chains back to the first while the entity
+    // named by the blade's +0x19C is still alive -- with nothing to hit, three
+    // slashes is the end of it.
+    //
+    // **The return value is the input lock**, not a charge. FUN_00249610 writes
+    // it to +0x62 and raises control block +0x38 bit 0 whenever it is non-zero,
+    // and FUN_002462c8 refuses a re-press while that bit is up. This handler
+    // returns 0 in exactly one case: the animation has raised +0xAA bit 0x400,
+    // the cancel window, and is not already on the last slash. That window is
+    // what makes the follow-ups a timed input rather than a mash.
+    std::uint16_t stateFireAttack105(const StateContext &context, std::uint16_t)
     {
       auto &entity = *context.entity;
       BattleParty &party = *context.party;
+      auto &tables = party.tables();
+      const std::uint32_t recordBase = BattleTables::partyRecord(context.member);
       const std::uint8_t chosen = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+      const std::uint32_t attackAt = kDAT_0031da9c_attackEntity + context.member * 4;
 
-      if ((entity.state60 & 0x4000) != 0)
-      {
-        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
-        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
-        if (entity.animationA0 != 0x33)
-        {
-          FUN_00248e98_set_animation_if_changed(entity, 0x33);
-        }
-        // The effect entity is re-spawned only when the slot's type has
-        // changed under it, then stamped with the charge level: +0x94 is what
-        // the effect's own behaviour reads to decide how much of itself to
-        // produce.
-        const std::int32_t attack =
-            respawnSlotEffect(*context.environment, context.member, kDAT_0031da9c_attackEntity,
-                              context.entitySlot);
-        if (attack != kNoEntity)
-        {
-          auto &effect = context.environment->pool->slot(static_cast<std::size_t>(attack));
-          effect.spawnParam94 =
-              static_cast<std::uint8_t>(FUN_00249270_charge(party, context.member, 0x780));
-          effect.scaleZ150 =
-              static_cast<float>(FUN_00249270_charge(party, context.member, 6) + 700) / 1000.0f;
-          effect.scale14c = 1.0f;
-        }
-        (void)chosen;
-        return charge;
-      }
+      const auto attackEntity = [&]() -> OriginalEntity * {
+        const std::int32_t slot = party.entitySlotAt(attackAt);
+        return (slot == kNoEntity)
+                   ? nullptr
+                   : &context.environment->pool->slot(static_cast<std::size_t>(slot));
+      };
 
-      // The swing chain. +0xAA bit 0x200 marks the frames a swing may advance
-      // on; +0x06 bits 0 and 2 are the timeline's end and step markers.
-      if ((entity.flagsAa & 0x200) != 0 && (entity.flags06 & 5) != 0)
-      {
+      // Retire the blade and hand back to state 108, the walk home. Four call
+      // sites in the original, all identical.
+      const auto endSwing = [&] {
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        entity.state60 = 0x406C;
+        setAction(context, kActionRecover87);
+        if (OriginalEntity *effect = attackEntity())
+        {
+          FUN_00248ee0_set_animation(*effect, 2);
+        }
+      };
+
+      // Advance one link of the swing chain. Reached from a re-press only.
+      const auto advanceChain = [&] {
+        if ((entity.flagsAa & 0x200) == 0 || (entity.flags06 & 5) == 0)
+        {
+          return;
+        }
         if (entity.animationA0 == 0x33)
         {
           FUN_00248ee0_set_animation(entity, 0x30);
@@ -498,38 +701,259 @@ namespace orphen::ported::battle
         {
           FUN_00248ee0_set_animation(entity, 0x33);
         }
-      }
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+      };
 
-      // Either exit hands back to 108, the walk-back state, with action 0x87.
-      if ((entity.flags06 & 1) != 0)
+      if ((entity.flagsAa & 0x200) != 0 && (entity.flags06 & 5) != 0 &&
+          (entity.state60 & 0x4000) == 0)
       {
-        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
-        entity.state60 = 0x406C;
-        setAction(context, kActionRecover87);
-        const std::int32_t attack = party.entitySlotAt(kDAT_0031da9c_attackEntity + context.member * 4);
-        if (attack != kNoEntity)
+        // The swing ran past its marker with no new press: park the blade.
+        if (OriginalEntity *effect = attackEntity())
         {
-          FUN_00248ee0_set_animation(context.environment->pool->slot(static_cast<std::size_t>(attack)), 2);
+          FUN_00248ee0_set_animation(*effect, 2);
         }
       }
-      return charge;
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        // LAB_0024ad14. A press landed.
+        tables.write<std::int16_t>(recordBase + record::kHitCounter40, 0);
+        OriginalEntity *effect = attackEntity();
+        bool freshEntry = true;
+        if (effect != nullptr && static_cast<std::int16_t>(effect->animationA0) != 2 &&
+            (entity.flags06 & 0x10) == 0)
+        {
+          freshEntry = false;
+          bool chain = true;
+          if (entity.animationA0 == 0x31)
+          {
+            // The last slash chains back to the first only while the thing the
+            // blade is aimed at is still standing.
+            chain = false;
+            const std::int32_t aimed = effect->targetIndex19c;
+            if (aimed >= 0 &&
+                static_cast<std::size_t>(aimed) < orphen::ported::entity::kEntitySlotCount)
+            {
+              const auto &victim = context.environment->pool->slot(static_cast<std::size_t>(aimed));
+              if (static_cast<std::int16_t>(victim.staggerTimer12a) >= 1 && victim.typeId00 != 0)
+              {
+                chain = true;
+              }
+            }
+            if (!chain)
+            {
+              // Hold the press rather than spend it -- the next frame retries.
+              entity.state60 = static_cast<std::uint16_t>(entity.state60 | 0x4000);
+            }
+          }
+          if (chain)
+          {
+            advanceChain();
+          }
+        }
+
+        if (freshEntry)
+        {
+          // ---- the first swing of the press chain ----
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+          if (entity.animationA0 != 0x33)
+          {
+            FUN_00248e98_set_animation_if_changed(entity, 0x33);
+          }
+          // Wait for the animation timeline to actually start. Returning 1
+          // keeps the input locked until it does.
+          if (static_cast<std::int16_t>(entity.timelineCursorA8) < 2)
+          {
+            return 1;
+          }
+          entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+
+          respawnSlotEffect(*context.environment, context.member, attackAt, context.entitySlot, true);
+          orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+          effect = attackEntity();
+          if (effect != nullptr)
+          {
+            orphen::ported::entity::FUN_00215e48_clear_hit_set(*effect);
+          }
+          // 60 frames is how long the swing has to connect before the character
+          // gives up and walks back.
+          tables.write<std::int16_t>(recordBase + record::kSwingTimer3e,
+                                     FUN_00248e48_arm_timer(0x3C));
+          if (effect != nullptr && static_cast<std::int16_t>(effect->animationA0) == 2)
+          {
+            FUN_00248ee0_set_animation(*effect, 1);
+          }
+
+          // The blade remembers what it was swung at, and the control block's
+          // target goes negative to mark "committed".
+          const std::int16_t target = tables.read<std::int16_t>(context.control + control::kTarget2c);
+          if (target >= 1)
+          {
+            tables.write<std::int16_t>(context.control + control::kTarget2c,
+                                       static_cast<std::int16_t>(-target));
+          }
+          if (effect != nullptr)
+          {
+            effect->targetIndex19c = (target < 1) ? -static_cast<std::int32_t>(target)
+                                                  : static_cast<std::int32_t>(target);
+          }
+
+          // A charge past level 4 asks FUN_0023f620 for the heavy-swing count.
+          if (FUN_00249270_charge(party, context.member, 0x780) > 4)
+          {
+            party.FUN_0023f620_count(0, static_cast<std::int8_t>(entity.byte95));
+          }
+          if (effect != nullptr)
+          {
+            // The blade keeps the length the charge gave it.
+            effect->scaleZ150 =
+                static_cast<float>(static_cast<std::int16_t>(
+                    FUN_00249270_charge(party, context.member, 6) + 700)) /
+                1000.0f;
+            effect->scale14c = 1.0f;
+          }
+        }
+      }
+
+      // ---- LAB_0024b0bc: every frame, whichever way we got here ----
+
+      // The spell block's fourth byte is the attack id, and it names which of
+      // the three slashes landed the hit.
+      const std::uint32_t attackIdAt = recordBase + record::kSpellBlock18 + chosen * 4u + 3u;
+      if (entity.animationA0 == 0x33)
+      {
+        tables.write<std::uint8_t>(attackIdAt, 0x19);
+      }
+      else if (entity.animationA0 == 0x30)
+      {
+        tables.write<std::uint8_t>(attackIdAt, 0x1A);
+      }
+      else if (entity.animationA0 == 0x31)
+      {
+        tables.write<std::uint8_t>(attackIdAt, 0x1B);
+      }
+
+      // +0xAA bit 0x100 is the swing's own whoosh marker.
+      if ((entity.flagsAa & 0x100) != 0 && (entity.flags06 & 4) != 0)
+      {
+        if (context.environment->FUN_00267d38_play_at_entity)
+        {
+          context.environment->FUN_00267d38_play_at_entity(0xCA, context.entitySlot);
+        }
+        if (OriginalEntity *effect = attackEntity())
+        {
+          orphen::ported::entity::FUN_00215e48_clear_hit_set(*effect);
+        }
+      }
+
+      // Words 0..7 of the blade's already-hit set: any bit means this swing
+      // connected, and connecting buys another 60 frames.
+      if (OriginalEntity *effect = attackEntity())
+      {
+        std::uint32_t hits = 0;
+        for (std::size_t index = 0; index < 8; ++index)
+        {
+          hits |= effect->alreadyHitD0[index];
+        }
+        if (hits != 0)
+        {
+          tables.write<std::int16_t>(recordBase + record::kSwingTimer3e,
+                                     FUN_00248e48_arm_timer(0x3C));
+        }
+      }
+      // The third slash is the last one: no more waiting after it.
+      if (entity.animationA0 == 0x31)
+      {
+        tables.write<std::int16_t>(recordBase + record::kSwingTimer3e, 0);
+      }
+      const std::int16_t swingTimer = tables.read<std::int16_t>(recordBase + record::kSwingTimer3e);
+      if (swingTimer != 0)
+      {
+        const std::uint16_t stepped = FUN_00248e58_step_timer(
+            static_cast<std::uint16_t>(swingTimer), context.environment->frameTicks);
+        tables.write<std::int16_t>(recordBase + record::kSwingTimer3e,
+                                   static_cast<std::int16_t>(stepped));
+        if (stepped == 0)
+        {
+          endSwing();
+          return 1;
+        }
+      }
+
+      // The player's own hit-stop on the final slash: sixteen frames of freeze
+      // plus the pad rumble the port has no motor for. +0x40 is the countdown.
+      if (entity.byte95 == 1)
+      {
+        const std::uint32_t holdAt = recordBase + record::kHitCounter40;
+        const bool marker = entity.animationA0 == 0x31 && (entity.flags06 & 4) != 0 &&
+                            (entity.flagsAa & 0x800) != 0;
+        std::int16_t hold = tables.read<std::int16_t>(holdAt);
+        if (marker && hold == 0 && (entity.flags06 & 0x10) == 0)
+        {
+          party.FUN_0023f620_count(1, 1);
+          // uGpffffaf1c / uGpffffaf1e = 0x10: both rumble motors. No motor here.
+          hold = 0x10;
+          tables.write<std::int16_t>(holdAt, hold);
+        }
+        if (hold != 0)
+        {
+          tables.write<std::int16_t>(holdAt, static_cast<std::int16_t>(hold - 1));
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        }
+        else
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+        }
+      }
+
+      const std::uint16_t animation = entity.animationA0;
+      if (animation == 0x31)
+      {
+        if (entity.timelineCursorA8 == 10 && (entity.flags06 & 4) != 0)
+        {
+          if (OriginalEntity *effect = attackEntity())
+          {
+            FUN_00248ee0_set_animation(*effect, 2);
+          }
+        }
+        if (entity.animationA0 == 0x31 && (entity.flagsAa & 0x200) != 0 &&
+            (entity.flags06 & 4) != 0)
+        {
+          entity.state60 = 0x406C;
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+          setAction(context, kActionRecover87);
+          return 1;
+        }
+      }
+
+      if ((entity.flags06 & 1) != 0)
+      {
+        endSwing();
+        return 1;
+      }
+      // **The cancel window.** Only here does the handler unlock the input.
+      if ((entity.flagsAa & 0x400) == 0 || animation == 0x31)
+      {
+        return 1;
+      }
+      return ((entity.state60 & 0x4000) != 0) ? 1 : 0;
     }
 
-    // FUN_0024b410 (state 106): the approach run between releasing a kind-0
-    // charge and the swing landing. With a real target it runs the character at
-    // it; **with no target it is a pass-through**, and that is not a shortcut
-    // taken here -- it is the original's own arithmetic:
+    // FUN_0024b410 (state 106): the charge across the arena, between releasing
+    // a held Cross and the swing landing.
     //
-    //   sVar3 = block +0x20;  if (sVar3 < 1) { pending = 0x84; return 0; }
-    //   block +0x20 = -sVar3;                       // mark "approaching"
-    //   ...
-    //   iVar7 = (int)((uint)(u16)block+0x20 * -0x10000) >> 0x10;   // negate
-    //   if (iVar7 < 2) goto LAB_0024b7ac;           // pending = 0x84
+    // With a target it runs the character at it -- animation 8, a travel timer
+    // in +0x62 sized by the distance, and a velocity along +0x5C every frame --
+    // and asks for the swing when it arrives inside 0.7 units, when the target
+    // drifts outside a +/-30 degree cone, when a wall stops it, or when the
+    // timer runs out. The player can cut it short at any point: FUN_002462c8's
+    // action-0x85 arm turns a press into a pending 0x84, which is the swing.
     //
-    // FUN_0024cf20 has already forced the target positive and, when it was
-    // zero, to 1. So the negate gives 1, 1 < 2, and the state asks for 0x84 --
-    // state 105, the swing -- on its first frame. The approach body below the
-    // test needs the target's world position and cannot run without an enemy.
+    // **With no target it is a single frame.** State 120 forces control block
+    // +0x2C to 1 when it is zero, this state negates it to -1, and the read
+    // back below negates it again to 1, which fails `< 2` and asks for the
+    // swing immediately. That is why Orphen swings in place with nothing locked
+    // on -- it is the original's own arithmetic, not a stub.
     std::uint16_t stateApproach106(const StateContext &context, std::uint16_t charge)
     {
       auto &entity = *context.entity;
@@ -539,6 +963,13 @@ namespace orphen::ported::battle
 
       const auto requestSwing = [&] {
         tables.write<std::uint8_t>(context.control + control::kPendingAction0e, 0x84);
+      };
+      const auto poolEntity = [&](std::int32_t slot) -> const OriginalEntity * {
+        if (slot < 0 || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+        {
+          return nullptr;
+        }
+        return &context.environment->pool->slot(static_cast<std::size_t>(slot));
       };
 
       if ((tables.read<std::uint32_t>(kDAT_0031da0c_memberFlags2 + context.member * 4) & 3) != 0)
@@ -554,11 +985,26 @@ namespace orphen::ported::battle
         return 1;
       }
 
+      // Footsteps on timeline frames 2 and 8 of the run cycle.
+      if ((entity.timelineCursorA8 == 2 || entity.timelineCursorA8 == 8) &&
+          (entity.flags06 & 8) != 0 && context.environment->FUN_00267d38_play_at_entity)
+      {
+        const std::optional<std::uint32_t> terrain =
+            (entity.collisionFlags0c & 1u) != 0 ? std::optional<std::uint32_t>(entity.flagWord6c)
+                                                : std::nullopt;
+        context.environment->FUN_00267d38_play_at_entity(
+            orphen::ported::entity::FUN_00255d88_surface_cue(
+                entity.typeId00, terrain, entity.interactTarget68 >= 0,
+                orphen::ported::entity::SurfaceSoundKind::Run),
+            context.entitySlot);
+      }
+
+      const std::int16_t characterClass =
+          tables.read<std::int16_t>(BattleTables::partyRecord(context.member) + record::kClass00);
+
       if ((entity.state60 & 0x4000) != 0)
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
-        const std::int16_t characterClass = tables.read<std::int16_t>(
-            BattleTables::partyRecord(context.member) + record::kClass00);
         FUN_00248e98_set_animation_if_changed(entity, (characterClass == 6) ? 0xC5 : 8);
         const std::int16_t target = tables.read<std::int16_t>(targetAt);
         if (target < 1)
@@ -567,21 +1013,82 @@ namespace orphen::ported::battle
           return 0;
         }
         tables.write<std::int16_t>(targetAt, static_cast<std::int16_t>(-target));
-        // The turn timer the approach would spend is derived from the angle to
-        // the target, which there is not one of.
+        // fGpffff8848 = 0.064, which is exactly the per-frame step below at the
+        // nominal 0x20 ticks -- so this division is "distance, in frames".
+        if (const OriginalEntity *at = poolEntity(target))
+        {
+          const float distance = std::hypot(at->positionZ24 - entity.positionZ24,
+                                            at->positionX20 - entity.positionX20);
+          charge = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(
+              static_cast<std::int32_t>(distance / kDAT_0035278c_stepPerFrame)));
+        }
       }
 
       const std::uint16_t stored = tables.read<std::uint16_t>(targetAt);
       if (stored != 0)
       {
-        const std::int32_t negated =
+        const std::int32_t aimed =
             static_cast<std::int32_t>(-(static_cast<std::int32_t>(stored) << 16)) >> 16;
-        if (negated < 2)
+        if (aimed < 2)
         {
           requestSwing();
           return 0;
         }
-        party.recordTargetFacingReached();
+        const OriginalEntity *at = poolEntity(aimed);
+        if (at == nullptr)
+        {
+          requestSwing();
+          return 0;
+        }
+        const float distance =
+            std::hypot(at->positionZ24 - entity.positionZ24, at->positionX20 - entity.positionX20);
+        if (distance < kDAT_00352790_arriveDistance)
+        {
+          // Arrived. Swing, and hop if the target is standing above us.
+          requestSwing();
+          const float rise = at->positionY28 - entity.positionY28;
+          if (rise > 2.0f)
+          {
+            entity.verticalVelocity44 = kDAT_00352794_hopVelocity;
+          }
+          if (rise > entity.height58 + kDAT_00352798_stepUp)
+          {
+            float lift = at->positionY28 - (entity.positionY28 + entity.height58);
+            if (characterClass == 5)
+            {
+              lift += 2.5f;
+            }
+            entity.verticalVelocity44 = lift / 240.0f + entity.verticalAcceleration48 * 60.0f +
+                                        entity.verticalAcceleration48 * 4.0f;
+          }
+          return 0;
+        }
+        // The target has moved out of the cone the run was started along.
+        const float toTarget = std::atan2(at->positionZ24 - entity.positionZ24,
+                                          at->positionX20 - entity.positionX20);
+        const float delta =
+            orphen::ported::model::FUN_002166e8_angle_delta(entity.facingRadians5c, toTarget);
+        if (delta < kDAT_0035279c_coneLow || delta > kDAT_003527a0_coneHigh)
+        {
+          requestSwing();
+          return 0;
+        }
+      }
+
+      // +0x0C bits 0x262 are the physics results that mean "blocked": run into
+      // a wall and the approach ends in a swing rather than a shove.
+      if ((entity.collisionFlags0c & 0x262u) == 0)
+      {
+        charge = FUN_00248e58_step_timer(charge, context.environment->frameTicks);
+        if (charge != 0)
+        {
+          const std::int32_t ticks = static_cast<std::int32_t>(context.environment->frameTicks);
+          const float speed =
+              static_cast<float>((ticks < 0 ? ticks + 15 : ticks) >> 4) * kDAT_003527a4_stepPerTick;
+          entity.desiredDeltaX30 = speed * std::cos(entity.facingRadians5c);
+          entity.desiredDeltaZ34 = speed * std::sin(entity.facingRadians5c);
+          return charge;
+        }
       }
       requestSwing();
       return 0;
@@ -670,7 +1177,7 @@ namespace orphen::ported::battle
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                          context.entitySlot);
+                          context.entitySlot, false);
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
         // :37-40. Only a voiced character arms the spell voice.
         if (FUN_00249348_is_voiced_player(party, entity))
@@ -784,7 +1291,7 @@ namespace orphen::ported::battle
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         const std::int32_t shield =
             respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                              context.entitySlot);
+                              context.entitySlot, false);
         FUN_00248e98_set_animation_if_changed(entity, 0x3A);
         party.FUN_00249108_clear_turn_flags(context.member);
         party.tables().write<std::int8_t>(aimAt, -1);
@@ -877,7 +1384,7 @@ namespace orphen::ported::battle
         stateFireAttack105,    // 105 FUN_0024ac88
         stateApproach106,      // 106 FUN_0024b410
         stateChargeAttack107,  // 107 FUN_0024b7d0
-        nullptr,               // 108 FUN_0024a870, the walk back to the mark
+        stateWalkBack108,      // 108 FUN_0024a870
         stateReleaseSpell109,  // 109 FUN_0024bae0
         stateReleaseSpell109,  // 110 FUN_0024c4e0, which tail-calls it
         stateChargeSpellA111,  // 111 FUN_0024c058
@@ -1076,11 +1583,30 @@ namespace orphen::ported::battle
       return;
     }
 
-    // :145-165. The target, and the no-target branch. FUN_002493b8 answers -1
-    // for every member while the enemy table is empty, so `lVar11 < 3` is taken
-    // and the entire face-the-target block below it is skipped -- the mode this
-    // slice runs in.
-    const std::int32_t target = party.FUN_002493b8_target(member);
+    // :146-164. **The target is re-validated every frame, before the dispatch**,
+    // and an invalid one is written back to the control block as -1. Two tests:
+    // the candidate's +0x12A must be at least 1 (it is alive) and its +0x95 --
+    // the party-slot byte -- must be at least 9. The player is 1 and allies are
+    // 2..6, so only an enemy survives, and with no enemy table nothing does.
+    //
+    // The port used to skip the write-back, which left FUN_0024cf20's "if the
+    // target is zero make it 1" parked in +0x2C for the rest of the scene. State
+    // 106 then measured a distance to whatever happened to be in pool slot 1.
+    std::int32_t target = tables.read<std::int16_t>(control + control::kTarget2c);
+    if (target > 0)
+    {
+      bool valid = static_cast<std::size_t>(target) < orphen::ported::entity::kEntitySlotCount;
+      if (valid)
+      {
+        const auto &candidate = environment.pool->slot(static_cast<std::size_t>(target));
+        valid = static_cast<std::int16_t>(candidate.staggerTimer12a) >= 1 && candidate.byte95 >= 9;
+      }
+      if (!valid)
+      {
+        target = -1;
+        tables.write<std::int16_t>(control + control::kTarget2c, -1);
+      }
+    }
     if (target >= 3)
     {
       // The turn-toward-target block. Unreachable with no enemies; when the

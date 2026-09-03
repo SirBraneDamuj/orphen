@@ -1730,6 +1730,7 @@ namespace orphen::port
     environment.pool = &entityPool_;
     environment.descriptors = &descriptorTable_;
     environment.trace = &battleTrace_;
+    environment.paths = pathFollowers_.get();
     environment.frameTicks = frameTicks;
     environment.FUN_00267d38_play_at_entity = [this](std::uint16_t cue, std::size_t slot)
     {
@@ -1815,7 +1816,16 @@ namespace orphen::port
     const std::int32_t entitySlot = battleParty_.entitySlotAt(control + control::kEntity08);
     if (entitySlot != kNoEntity)
     {
-      sample.state = entityPool_.slot(static_cast<std::size_t>(entitySlot)).state60;
+      const auto &actor = entityPool_.slot(static_cast<std::size_t>(entitySlot));
+      sample.state = actor.state60;
+      sample.animation = actor.animationA0;
+    }
+    const std::int32_t bladeSlot =
+        battleParty_.entitySlotAt(kDAT_0031da9c_attackEntity + memberU * 4);
+    if (bladeSlot != kNoEntity)
+    {
+      sample.bladeLength = static_cast<std::uint16_t>(
+          entityPool_.slot(static_cast<std::size_t>(bladeSlot)).scaleZ150 * 1000.0f);
     }
     // The charge is party record +0x3C, the accumulator FUN_00249128 fills and
     // FUN_00249270 divides by 0x780 to get the 0..4 level.
@@ -3873,6 +3883,7 @@ namespace orphen::port
                 << " action=" << hex(sample.currentAction, 2)
                 << " state=" << hex(sample.state, 4) << " charge=" << sample.charge
                 << " target=" << sample.target << " slot=" << static_cast<int>(sample.selectedSlot)
+                << " anim=" << hex(sample.animation, 2) << " blade=" << sample.bladeLength
                 << " cd=[";
       for (std::size_t i = 0; i < sample.cooldowns.size(); ++i)
       {

@@ -45,6 +45,31 @@ namespace orphen::ported::entity
     started_ = 0;
   }
 
+  // FUN_00266a78(slot + 0x6A, points, count, mode). Bit 30 of the duration picks
+  // the knot spacing; every call in the executable has it clear, which is the
+  // uniform i/(n-1) spacing the camera path already uses.
+  void PathFollowerTable::buildSpline(PathFollower &slot)
+  {
+    const std::size_t count = slot.waypointCount;
+    std::array<float, kMaxPathWaypoints> knots{};
+    std::array<float, kMaxPathWaypoints> channel{};
+    const float last = count > 1 ? static_cast<float>(count - 1) : 1.0f;
+    for (std::size_t index = 0; index < count; ++index)
+    {
+      knots[index] = static_cast<float>(index) / last;
+    }
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        const Vec3 &point = slot.waypoints[index];
+        channel[index] = axis == 0 ? point.x : (axis == 1 ? point.y : point.z);
+      }
+      slot.spline[axis].build(std::span<const float>(knots.data(), count),
+                              std::span<const float>(channel.data(), count));
+    }
+  }
+
   PathFollower *PathFollowerTable::FUN_00244318_allocate()
   {
     // FUN_00244318:32-40. A slot counts as free when its mode is 0, when it has
@@ -95,27 +120,37 @@ namespace orphen::ported::entity
     slot->elapsed06 = 0;
     slot->entitySlot10 = static_cast<std::int32_t>(entitySlot);
 
-    // FUN_00266a78(slot + 0x6A, points, count, mode). Bit 30 of the duration
-    // picks the knot spacing; every call this scene makes has it clear, which is
-    // the uniform i/(n-1) spacing the camera path already uses.
-    std::array<float, kMaxPathWaypoints> knots{};
-    std::array<float, kMaxPathWaypoints> channel{};
-    const float last = count > 1 ? static_cast<float>(count - 1) : 1.0f;
-    for (std::size_t index = 0; index < count; ++index)
-    {
-      knots[index] = static_cast<float>(index) / last;
-    }
-    for (std::size_t axis = 0; axis < 3; ++axis)
-    {
-      for (std::size_t index = 0; index < count; ++index)
-      {
-        const Vec3 &point = slot->waypoints[index];
-        channel[index] = axis == 0 ? point.x : (axis == 1 ? point.y : point.z);
-      }
-      slot->spline[axis].build(std::span<const float>(knots.data(), count),
-                               std::span<const float>(channel.data(), count));
-    }
+    buildSpline(*slot);
+    ++started_;
+    return 1;
+  }
 
+  int PathFollowerTable::FUN_0024a870_start_return_walk(std::size_t entitySlot, const Vec3 &from,
+                                                        const Vec3 &mid, const Vec3 &home,
+                                                        std::uint16_t duration, bool raiseY)
+  {
+    PathFollower *slot = FUN_00244318_allocate();
+    if (slot == nullptr)
+    {
+      return 0;
+    }
+    *slot = PathFollower{};
+    slot->mode00 = 1;
+    slot->count02 = 3;
+    slot->waypointCount = 3;
+    slot->waypoints[0] = from;
+    slot->waypoints[1] = mid;
+    slot->waypoints[2] = home;
+    // FUN_0030bd20(distance * 200.0) straight into +0x04. FUN_002443f8's `<< 4`
+    // is not applied here, so this walk runs sixteen times faster per unit than
+    // a scripted path of the same nominal length.
+    slot->total04 = duration;
+    slot->elapsed06 = 0;
+    slot->entitySlot10 = static_cast<std::int32_t>(entitySlot);
+    buildSpline(*slot);
+    slot->steer09 = 0xB5;
+    slot->flags08 = static_cast<std::uint16_t>(slot->flags08 | 2u);
+    (void)raiseY; // the caller sets entity +0x04 bit 3; FUN_002446e8 reads it there
     ++started_;
     return 1;
   }

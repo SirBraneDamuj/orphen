@@ -2938,6 +2938,225 @@ namespace orphen::ported::entity
                                 origin.z, static_cast<std::int16_t>(casterSlot), environment);
   }
 
+  // FUN_002da350 (0x002da350), the behaviour of type 0x139 -- the sword the
+  // battle module puts in Orphen's hand for the kind-0 arm, and of type 0x13E,
+  // the same effect in red.
+  //
+  // **Its first four lines are why the swing looks right.** The blade forces
+  // itself back to animation 2 whenever the caster is not in action 0x84
+  // (swinging) or 0x86 (charging). State 106, the approach, is action *0x85* --
+  // neither -- so the blade lands on animation 2 on the frame 106 runs, and
+  // FUN_0024ac88's entry gate (`if (blade->anim != 2) { if (!(+0x06 & 0x10))
+  // ...re-press... }`) therefore takes the **setup** branch rather than the
+  // chain-advance one.
+  //
+  // That matters because FUN_00248e98 and FUN_00248ee0 both end in
+  // `+0x06 &= 0xFFEE`, which clears bit 0x10 -- so state 106, which sets the run
+  // animation on entry, always hands 105 a character with that bit down. Without
+  // this handler the blade stayed on animation 1, 105 read it as a re-press, and
+  // the character held the *run* animation until it happened to raise the swing
+  // marker: a visible run-up before every swing, and a first slash that never
+  // ran its setup.
+  //
+  // The rest is the blade's own life: a point light on its bone 1, the swept hit
+  // test while the caster swings, and a 1.5x damage bump on the third slash.
+  void FUN_002da350_battle_blade(OriginalEntity &blade,
+                                 std::size_t slot,
+                                 const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    // +0x192 is read as a *byte* here, not the signed halfword the attachment
+    // uses, so a detached blade reads caster 0xFF rather than -1.
+    const std::uint8_t casterIndex = static_cast<std::uint8_t>(blade.parentSlot192 & 0xFF);
+    if (casterIndex >= kEntitySlotCount)
+    {
+      return;
+    }
+    OriginalEntity &caster = pool.slot(casterIndex);
+
+    // The blade rides a bone, so its own transform is the identity the
+    // attachment is applied to. uGpffff88c0 = pi/2.
+    blade.positionX20 = 0.0f;
+    blade.positionZ24 = 0.0f;
+    blade.positionY28 = 0.0f;
+    blade.facingRadians5c = 1.57079637f;
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+    const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+
+    // ---- the four lines above ----
+    if (static_cast<std::int16_t>(blade.animationA0) != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        FUN_00225bc8_set_animation(blade, 2);
+      }
+      if (action != 0x84 && action != 0x86)
+      {
+        FUN_00225bc8_set_animation(blade, 2);
+      }
+    }
+
+    // +0x62 is the re-hit cooldown, five frames between contacts.
+    if (blade.fadeRamp62 != 0)
+    {
+      // FUN_00248e58, written out rather than reached for: the entity layer does
+      // not depend on the battle module, and this is three lines.
+      const std::uint16_t stepped =
+          static_cast<std::uint16_t>(blade.fadeRamp62 - environment.frameTicks);
+      blade.fadeRamp62 = (blade.fadeRamp62 < stepped) ? std::uint16_t{0} : stepped;
+    }
+
+    const std::int16_t step = static_cast<std::int16_t>(blade.animationA0);
+    if (step == 1)
+    {
+      // Drawing it. The light is allocated once, on the frame the blade appears.
+      if (blade.lightSlot195 < 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        // FUN_0023eb20: the high allocator first, then the low one.
+        std::int32_t allocated = environment.DAT_00343888_lights->FUN_00266008_allocateFromThree();
+        if (allocated < 0)
+        {
+          allocated = environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+        }
+        if (allocated >= 0)
+        {
+          blade.lightSlot195 = static_cast<std::int8_t>(allocated);
+          auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(allocated));
+          // 0x139 is the blue blade, everything else the red one.
+          if (blade.typeId00 == 0x139)
+          {
+            light.red = 0x96;
+            light.green = 0x96;
+            light.blue = 0xE6;
+          }
+          else
+          {
+            light.red = 0xE6;
+            light.green = 0x96;
+            light.blue = 0x96;
+          }
+          light.radius = 0.2f; // DAT_00354834
+          environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(allocated), 0.2f);
+        }
+      }
+      if ((blade.halfword08 & 1u) != 0 && environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(0xCD, blade); // the blade appearing
+      }
+      const std::uint16_t entryFlags06 = blade.flags06;
+      blade.halfword08 = static_cast<std::uint16_t>(blade.halfword08 & 0xFFFEu);
+      blade.flags06 = static_cast<std::uint16_t>(entryFlags06 & 0xFFEFu);
+      if ((entryFlags06 & 1u) != 0)
+      {
+        // The draw-on animation finished: animation 0 is the one that can hit.
+        FUN_00225bc8_set_animation(blade, 0);
+      }
+    }
+    else if (step == 2)
+    {
+      // Put away. The light fades at a thousandth of a tick and the slot goes
+      // back when it drops under 0.2.
+      if (blade.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        auto &light = environment.DAT_00343888_lights->slot(
+            static_cast<std::uint32_t>(blade.lightSlot195));
+        const float faded = light.radius - static_cast<float>(environment.frameTicks) / 1000.0f;
+        const bool spent = faded < 0.2f; // DAT_0035483c
+        light.radius = faded;
+        if (spent)
+        {
+          light.radius = 0.0f; // FUN_00266098
+          blade.lightSlot195 = -1;
+        }
+      }
+      if ((blade.flags06 & 1u) != 0)
+      {
+        blade.flags06 = static_cast<std::uint16_t>(blade.flags06 | 0x10u);
+        blade.scale14c = 1.0f;
+        blade.halfword08 = static_cast<std::uint16_t>(blade.halfword08 | 1u);
+        blade.scaleZ150 = 1.0f;
+      }
+      return;
+    }
+    else if (step != 0)
+    {
+      return;
+    }
+
+    // ---- the hit test, on animations 0 and 1 ----
+    //
+    // The blade borrows the caster's facing for the duration of the sweep and
+    // puts it back to zero afterwards, because +0x5C is also what the bone
+    // attachment composes with.
+    blade.facingRadians5c = caster.facingRadians5c;
+    std::int8_t contacts = 0;
+    if (action == 0x84 && environment.hitTest != nullptr)
+    {
+      // FUN_00267da0 copies the four attack bytes out of the party record the
+      // blade's +0x198 points at -- an address, not a value, on this path.
+      const std::uint32_t packed = environment.DAT_0031d3c8_battleTableWord
+                                       ? environment.DAT_0031d3c8_battleTableWord(blade.hitParameters198)
+                                       : 0;
+      auto parameters = orphen::ported::resource::HitParameters::unpack(packed);
+      if (caster.animationA0 == 0x31)
+      {
+        // The third slash: reaction 0x1B, and half again the power bonus with
+        // the low bit forced, so it is always a real increase.
+        parameters.reaction = 0x1B;
+        const std::int8_t bonus = parameters.powerBonus;
+        parameters.powerBonus =
+            static_cast<std::int8_t>(bonus + ((static_cast<int>(bonus) / 2) | 1));
+      }
+      // +0x96 bit 0x40 is the player's own instant-kill path in the hit test,
+      // and only the lead gets it.
+      if (casterIndex == 0)
+      {
+        blade.effectFlags96 = static_cast<std::uint8_t>(blade.effectFlags96 | 0x40u);
+      }
+      contacts = FUN_002148a8_swept_hit_test(blade, slot, parameters, *environment.hitTest);
+      blade.effectFlags96 = static_cast<std::uint8_t>(blade.effectFlags96 & 0xBFu);
+    }
+    blade.facingRadians5c = 0.0f;
+
+    if (contacts != 0 && blade.fadeRamp62 == 0)
+    {
+      if (environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(0xCE, blade); // the hit
+      }
+      // FUN_00248e48(5): `(n << 0x15) >> 0x10`, five frames of ticks.
+      blade.fadeRamp62 = static_cast<std::uint16_t>(5 * 32);
+    }
+
+    if (blade.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &light =
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(blade.lightSlot195));
+      light.radius = 1.3f; // DAT_00354838
+      environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(blade.lightSlot195),
+                                                  1.3f);
+      if (environment.FUN_0020dc88_bone_point)
+      {
+        // FUN_0020dc88(blade, 1, offset, lightSlot): bone 1 of the *blade*, not
+        // the caster, plus DAT_0034fad8's (0, 0, 0.8) -- so the light sits up
+        // the length of the blade rather than at the hilt.
+        const auto point = environment.FUN_0020dc88_bone_point(
+            slot, 1u, orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.8f});
+        light.x = point.x;
+        light.y = point.y;
+        light.z = point.z;
+      }
+    }
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -2954,6 +3173,7 @@ namespace orphen::ported::entity
     case 0x002D2470u: // FUN_002d2470, type 0x44, the homing magic projectile
     case 0x002F13D0u: // FUN_002f13d0, type 0x1E3, the shared hit effect
     case 0x002E7328u: // FUN_002e7328, type 0x1C7, the guard shield
+    case 0x002DA350u: // FUN_002da350, type 0x139, the battle sword blade
     case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
     case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
     case 0x002D9C88u: // FUN_002d9c88, type 0x18F, the ground ring
@@ -2991,6 +3211,8 @@ namespace orphen::ported::entity
       return "FUN_002f13d0 (shared hit effect)";
     case 0x002E7328u:
       return "FUN_002e7328 (guard shield)";
+    case 0x002DA350u:
+      return "FUN_002da350 (battle sword blade)";
     case 0x002DA8A0u:
       return "FUN_002da8a0 (hand of pyro)";
     case 0x002DAE60u:
@@ -3119,6 +3341,9 @@ namespace orphen::ported::entity
         break;
       case 0x002E7328u:
         FUN_002e7328_guard_shield(entity, slot, slotEnvironment);
+        break;
+      case 0x002DA350u:
+        FUN_002da350_battle_blade(entity, slot, slotEnvironment);
         break;
       case 0x002DA8A0u:
         FUN_002da8a0_hand_effect(entity, slot, slotEnvironment);

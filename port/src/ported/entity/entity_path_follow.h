@@ -73,6 +73,16 @@ namespace orphen::ported::entity
     int FUN_002443f8_start(std::size_t entitySlot, std::span<const Vec3> waypoints,
                            std::uint32_t duration);
 
+    // FUN_0024a870:57-107, battle state 108's walk back to the mark. It fills a
+    // kind-2 slot **by hand** rather than calling FUN_002443f8, and the three
+    // differences are load-bearing: mode is forced to 1, the duration is
+    // `distance * 200` with no `<< 4`, and steering is 0xB5 with flag bit 1 set
+    // -- so the character holds the facing the swing left it in rather than
+    // turning to follow the curve. `raiseY` is the original's `+0x04 |= 8`,
+    // which is what lets the walk change height at all.
+    int FUN_0024a870_start_return_walk(std::size_t entitySlot, const Vec3 &from, const Vec3 &mid,
+                                       const Vec3 &home, std::uint16_t duration, bool raiseY);
+
     // FUN_002445c8. `((total - elapsed) * 1000) / total + 1` for a live slot, so
     // non-zero the whole way; 0 once the slot is gone, which is what the script's
     // wait loop tests.
@@ -88,6 +98,8 @@ namespace orphen::ported::entity
   private:
     // FUN_00244318(2): first slot that is free, or whose entity has gone away.
     PathFollower *FUN_00244318_allocate();
+    // FUN_00266a78, shared by both starters.
+    static void buildSpline(PathFollower &slot);
 
     std::array<PathFollower, kPathFollowerCount> slots_{};
     std::uint32_t started_ = 0;

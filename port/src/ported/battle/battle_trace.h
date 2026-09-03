@@ -36,6 +36,12 @@ namespace orphen::ported::battle
       std::uint16_t charge = 0;
       std::int16_t target = -1;
       std::uint8_t selectedSlot = 0;
+      // Entity +0xA0. For the kind-0 chain this is the whole story: 0x33, 0x30
+      // and 0x31 are the three slashes, in the order a press walks them.
+      std::uint16_t animation = 0;
+      // The attack effect's +0x150 in thousandths -- the blade's length, which
+      // is what a kind-0 charge grows.
+      std::uint16_t bladeLength = 0;
       std::uint32_t heldPad = 0;
       std::array<std::uint16_t, 5> cooldowns{};
     };
@@ -105,7 +111,8 @@ namespace orphen::ported::battle
     {
       return a.pendingAction != b.pendingAction || a.currentAction != b.currentAction ||
              a.state != b.state || a.charge != b.charge || a.target != b.target ||
-             a.selectedSlot != b.selectedSlot || a.cooldowns != b.cooldowns;
+             a.selectedSlot != b.selectedSlot || a.animation != b.animation ||
+             a.bladeLength != b.bladeLength || a.cooldowns != b.cooldowns;
     }
 
     std::vector<Sample> samples_;

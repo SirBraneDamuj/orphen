@@ -34,6 +34,7 @@
 
 #include "ported/battle/battle_party.h"
 #include "ported/battle/battle_trace.h"
+#include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
 
 #include <cstdint>
@@ -48,6 +49,9 @@ namespace orphen::ported::battle
     orphen::ported::entity::EntityPool *pool = nullptr;
     const orphen::ported::entity::EntityDescriptorTable *descriptors = nullptr;
     BattleTrace *trace = nullptr;
+    // FUN_00244318's kind-2 array. State 108 walks the character back to its
+    // mark through the same follower a scripted path uses.
+    orphen::ported::entity::PathFollowerTable *paths = nullptr;
     std::uint16_t frameTicks = 0x20;
     // FUN_00267d38: play a cue at an entity. The battle states ask for the
     // charge loop (0xD7..0xDA), the guard raise (0xE7) and the guard hit
