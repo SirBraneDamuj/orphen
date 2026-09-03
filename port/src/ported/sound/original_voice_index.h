@@ -97,6 +97,44 @@ namespace orphen::ported::sound
     // Empty when the id is unknown or no audio file backs the table.
     std::vector<std::uint8_t> readClipAdpcm(std::uint32_t voiceId) const;
 
+    // == Multi-clip banks ==
+    //
+    // A VOICE.BIN entry is usually one line, but not always. FUN_00206aa0
+    // copies the first 0x40 bytes of a loaded entry into DAT_00314BD0 +
+    // channel * 0x40, and FUN_00206f08 reads them as a directory:
+    //
+    //   word 0             clip count, 1..15
+    //   word 1 + i         (offset in 16-byte units << 16) | size in 16-byte units
+    //
+    // FUN_00206d98 validates it before trusting it -- `count - 1 < 0xF` *and*
+    // the halfword at +6 (the first clip's offset) equal to
+    // `align16(count * 4 + 0x13)`, i.e. the directory's own length. An entry
+    // that fails the test is one clip and is played whole, which is what an
+    // ordinary line of dialogue is.
+    //
+    // The spells use this. Bank 7, Hand of Pyro, holds two clips: a 31,408-byte
+    // incantation and a 4,064-byte release shout. Bank 9, Bite of Lightning,
+    // holds five.
+    struct BankClip
+    {
+      std::uint32_t offsetBytes = 0; // from the start of the entry
+      std::uint32_t sizeBytes = 0;
+      bool valid = false;
+    };
+
+    // FUN_00206f08's directory read, with FUN_00206d98's fallback: a `clipIndex`
+    // of 0 on an entry with no directory answers the whole entry.
+    BankClip FUN_00206f08_bankClip(std::uint32_t voiceId, std::uint32_t clipIndex) const;
+
+    // The clip's stored ADPCM, sliced out of the bank. Empty when there is no
+    // audio file, the id is unknown, or the directory has no such clip.
+    std::vector<std::uint8_t> readBankClipAdpcm(std::uint32_t voiceId,
+                                                std::uint32_t clipIndex) const;
+
+    // How long that sub-clip holds, in frame ticks -- the same arithmetic
+    // holdTicks does for a whole entry.
+    std::uint32_t bankClipHoldTicks(std::uint32_t voiceId, std::uint32_t clipIndex) const;
+
     // Set when the entries do not tile a file cleanly. Non-fatal -- the table is
     // still used -- but it means the packing assumption is off and the holds
     // should not be trusted.

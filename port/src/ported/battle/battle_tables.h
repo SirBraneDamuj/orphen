@@ -167,6 +167,11 @@ namespace orphen::ported::battle
   inline constexpr std::uint32_t kDAT_0031da2e_kinds = 0x0031DA2E;       // + member*3 + slot, signed
   inline constexpr std::uint32_t kDAT_0031da3a_effectTypes = 0x0031DA3A; // + member*6 + slot*2, u16
   inline constexpr std::uint32_t kDAT_0031da54_family = 0x0031DA54;      // + slot*4, member 0 only
+  // The spell voice's per-slot state machine. Steps 1..3 walk the bank load,
+  // 100 means clip 0 has been spoken and the release clip is owed. Indexed by
+  // loadout slot, like DAT_0031da54, and for the same reason: only the player
+  // speaks, so one row is enough.
+  inline constexpr std::uint32_t kDAT_0031da60_voiceState = 0x0031DA60; // + slot*2, i16
   // FUN_002462c8 stores which of the three spell buttons fired here, indexed by
   // the *1-based* party slot rather than by member.
   inline constexpr std::uint32_t kDAT_0031da65_selectedSlot = 0x0031DA65; // + partySlot

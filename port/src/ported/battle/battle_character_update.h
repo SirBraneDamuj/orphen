@@ -55,6 +55,34 @@ namespace orphen::ported::battle
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
     // FUN_00216868, through the runtime's seeded LCG.
     std::function<std::uint32_t()> FUN_00216868_random;
+
+    // == The spell voice ==
+    //
+    // Casting a spell speaks two lines: an incantation as the charge builds and
+    // a shout on release. They are not sound cues -- they are VOICE.BIN clips,
+    // played through the same reserved streaming voice a line of dialogue uses,
+    // and the whole thing is driven by a four-step state machine per loadout
+    // slot in DAT_0031DA60:
+    //
+    //   1  ask for the bank (FUN_00206ae0), and on acceptance -> 2
+    //   2  poll the load (FUN_00206c28), and when it settles -> 3
+    //   3  at the charge marker, if nothing else is speaking, play clip 0 -> 100
+    //   100 on release, play clip 1 -> 101, or -> 102 if something is speaking
+    //
+    // The bank id is DAT_0031DA54, which FUN_002432d8 took from the spell
+    // table's family column at 0x00325230. Hand of Pyro is bank 7.
+    //
+    // Only FUN_00249348 characters speak: party slot 1, and not classes 4 or 7.
+
+    // FUN_00206ae0(bankId, channel, 0). True for the original's 0 -- the bank is
+    // cached or a load has been started.
+    std::function<bool(std::uint32_t bankId, std::uint32_t channel)> FUN_00206ae0_cache_voice;
+    // FUN_00206c28. True for its 1: nothing is loading.
+    std::function<bool()> FUN_00206c28_voice_load_idle;
+    // FUN_00206a90, i.e. DAT_00356788: something is already speaking.
+    std::function<bool()> FUN_00206a90_voice_busy;
+    // FUN_00206f08(channel, clipIndex). True for its 0, meaning it started.
+    std::function<bool(std::uint32_t channel, std::uint32_t clipIndex)> FUN_00206f08_play_voice;
   };
 
   // FUN_0024a360: spend the pending action byte. Returns the original's three

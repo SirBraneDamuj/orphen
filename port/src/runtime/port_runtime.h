@@ -473,6 +473,15 @@ namespace orphen::port
     // DAT_003555d0, republished into ActorEnvironment each frame.
     bool DAT_003555d0_collisionGroupMoved_ = false;
 
+    // The spell voice. DAT_00356480, the bank cached on each of FUN_00206ae0's
+    // channels, and DAT_00356788 -- "something is speaking" -- which the port
+    // models as a *tick countdown taken from the clip's own length* rather than
+    // as a mixer query. The original's flag is simulation state cleared when the
+    // stream ends, and reading the mixer instead would make `--frames` output
+    // depend on whether audio was enabled.
+    std::uint32_t DAT_00356480_voiceBankCache_[4] = {0, 0, 0, 0};
+    std::uint32_t DAT_00356788_voiceHoldTicks_ = 0;
+
     // DAT_00355588. The shared hit effect's one-frame request word: FUN_002f1380
     // raises bit 0, FUN_002f13d0 (type 0x1E3) consumes it. Nothing raises it yet
     // -- the damage paths that call FUN_002f1380 are not ported -- so it stays 0

@@ -1043,6 +1043,35 @@ int main(int argc, char **argv)
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadTriangle);
       }
 
+      // --hold-triangle / --hold-circle / --hold-cross / --hold-square. The
+      // headless loop has its own copy of this; both key on the frame number
+      // that run's schedule makes meaningful, which under --screenshot is
+      // `renderedFrames` because capture forces one simulation step per frame.
+      // Without this a capture run took the flag and silently never pressed the
+      // button, so a screenshot "during a guard" was of a character standing
+      // still.
+      {
+        constexpr std::uint16_t kHoldBits[4] = {0x0010, 0x0020, 0x0040, 0x0080};
+        for (int index = 0; index < 4; ++index)
+        {
+          for (const auto &range : config.holdFaceButtons[index])
+          {
+            const std::uint32_t frame = renderedFrames + 1;
+            if (frame < range.first || frame > range.second)
+            {
+              continue;
+            }
+            stepInput.rawHeldPad =
+                static_cast<std::uint16_t>(stepInput.rawHeldPad | kHoldBits[index]);
+            if (frame == range.first)
+            {
+              stepInput.rawPressedPad =
+                  static_cast<std::uint16_t>(stepInput.rawPressedPad | kHoldBits[index]);
+            }
+          }
+        }
+      }
+
       // Never while capturing: --screenshot promises one step per frame at a
       // named frame number, and a held key must not be able to move it.
       const bool fastForward = input.fastForwardHeld && !capturing;

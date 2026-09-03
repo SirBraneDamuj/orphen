@@ -528,6 +528,37 @@ namespace orphen::port
     environment.frameTicks = frameTicks;
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
     environment.DAT_00355588_hitEffectRequest = &DAT_00355588_hitEffectRequest_;
+    // The two reads the battle-driven effect behaviours make into the battle
+    // tables. Both answer "no battle" outside one, which every caller treats as
+    // "the caster is not acting" -- the guard shield closes, the hand effect
+    // puts itself away.
+    environment.DAT_0031d7b0_battleMember =
+        [this](std::uint32_t member,
+               orphen::ported::entity::ActorEnvironment::BattleMemberView &out) {
+          using namespace orphen::ported::battle;
+          if (!battleParty_.battleRunning() || member >= kControlBlockCount)
+          {
+            return false;
+          }
+          const auto &tables = battleParty_.tables();
+          const std::uint32_t block = BattleTables::controlBlock(member);
+          const std::uint32_t record = BattleTables::partyRecord(member);
+          out.pendingAction0e = tables.read<std::uint8_t>(block + control::kPendingAction0e);
+          out.currentAction0f = tables.read<std::uint8_t>(block + control::kCurrentAction0f);
+          out.characterClass = tables.read<std::int16_t>(record);
+          out.target = tables.read<std::int16_t>(block + control::kTarget2c);
+          out.chargeTimer3c = tables.read<std::int32_t>(record + record::kChargeTimer3c);
+          // FUN_00249308: the four attack bytes of the slot this member last
+          // fired, at record + 0x18 + slot * 4. selectedSlot is keyed by the
+          // 1-based party slot, which is the caster entity's +0x95.
+          const std::uint8_t slot =
+              battleParty_.selectedSlot(static_cast<std::int16_t>(member + 1u));
+          out.spellBlockAddress = record + 0x18u + static_cast<std::uint32_t>(slot) * 4u;
+          return true;
+        };
+    environment.DAT_0031d3c8_battleTableWord = [this](std::uint32_t address) {
+      return battleParty_.tables().read<std::uint32_t>(address);
+    };
     environment.pushOutCounter = &pushOutCount_;
     environment.frameNumber = frameCount_;
     environment.boneOverrides = DAT_004a7e00_boneOverrides_;
@@ -1706,6 +1737,56 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28);
     };
     environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+
+    // The spell voice. FUN_0024c058 walks DAT_0031da60 1 -> 2 -> 3 across the
+    // charge, and the state handlers speak clip 0 on the charge and clip 1 on
+    // the release. A VOICE.BIN entry for a spell is a *bank* -- a 0x40-byte
+    // directory of clips -- not a single line, which is what FUN_00206aa0
+    // caches and FUN_00206f08 indexes.
+    environment.FUN_00206ae0_cache_voice = [this](std::uint32_t bankId, std::uint32_t channel) {
+      if (channel >= 4)
+      {
+        return false;
+      }
+      DAT_00356480_voiceBankCache_[channel] = bankId;
+      return true;
+    };
+    // Nothing streams asynchronously here: the bank is read straight off the
+    // disc image, so a load is never in flight.
+    environment.FUN_00206c28_voice_load_idle = [] { return true; };
+    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex) {
+      if (channel >= 4)
+      {
+        return false;
+      }
+      const std::uint32_t bankId = DAT_00356480_voiceBankCache_[channel];
+      if (bankId == 0 || !voiceIndex_.valid())
+      {
+        return false;
+      }
+      const std::uint32_t hold = voiceIndex_.bankClipHoldTicks(bankId, clipIndex);
+      if (hold == 0)
+      {
+        return false;
+      }
+      // Modelled as a countdown rather than a mixer query, so --frames output
+      // does not depend on whether audio was enabled.
+      DAT_00356788_voiceHoldTicks_ = hold;
+      std::cout << "[spell voice] bank " << bankId << " clip " << clipIndex << " (" << hold
+                << " ticks)" << std::endl;
+      if (voiceAudioEnabled_ && voiceIndex_.hasAudio())
+      {
+        const std::vector<std::uint8_t> adpcm = voiceIndex_.readBankClipAdpcm(bankId, clipIndex);
+        if (!adpcm.empty())
+        {
+          soundEngine_.FUN_00207010_play_voice_line(
+              orphen::ported::sound::decodePsAdpcm(adpcm).samples,
+              static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
+        }
+      }
+      return true;
+    };
     return environment;
   }
 
@@ -5467,6 +5548,14 @@ namespace orphen::port
         commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
         orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
         sampleBattleTrace(input.rawHeldPad);
+
+        // DAT_00356788 counts the clip out. The original clears its flag when
+        // the stream ends; the port spends the clip's own length so the release
+        // shout is dropped for a short charge exactly as the original drops it.
+        DAT_00356788_voiceHoldTicks_ =
+            DAT_00356788_voiceHoldTicks_ > frameTicks
+                ? DAT_00356788_voiceHoldTicks_ - frameTicks
+                : 0u;
       }
 
       // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and

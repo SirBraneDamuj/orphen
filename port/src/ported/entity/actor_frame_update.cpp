@@ -2029,6 +2029,129 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002e7328 (0x002e7328), the behaviour of type 0x1C7 -- the guard shield.
+  // One is spawned per party member by FUN_00242df0 and parked in
+  // DAT_0031dabc; FUN_0024cba0 (class-1 state 117) raises it by setting its
+  // animation to 1 and stamping the caster's pool slot into +0x94.
+  //
+  // The handler is the whole visible half of Guard. Three things about it are
+  // worth stating, because none is guessable from the state handler alone:
+  //
+  //   **The shield is not attached, it is re-placed every frame.** There is no
+  //   +0x192 parent and no bone: the handler copies the caster's facing and XY
+  //   straight across and sits the shield at 75% of the caster's body height
+  //   (+0x58). That is why FUN_00242df0 spawns it with +0x192 = -1.
+  //
+  //   **+0xA0 is a four-step sequence, not a looping animation.** 1 is the
+  //   raise (one frame -- it unhides and immediately becomes 0), 0 is the hold,
+  //   2 is the close, and 3/4 mean "destroy me on the next finished frame".
+  //   Each step advances on +0x06 bit 0, the animation-finished flag.
+  //
+  //   **The caster's control block is what ends the guard**, not the state
+  //   handler. Every frame the shield is not already closing it reads the
+  //   caster's current action byte, and anything other than 0x90 -- state 118
+  //   writes 6 -- drops it into the close animation. So the shield outlives the
+  //   guard state by exactly the length of that animation.
+  void FUN_002e7328_guard_shield(OriginalEntity &shield,
+                                 std::size_t shieldSlot,
+                                 const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    // +0x94 is read as a *signed* char here and as an unsigned one four lines
+    // into the control-block lookup below. That is the original's own
+    // inconsistency, not a transcription slip; it only bites above slot 127,
+    // where the signed read would index behind the pool. Rejected rather than
+    // reproduced, because the original's version of it is an out-of-bounds read.
+    const std::int8_t casterIndex = static_cast<std::int8_t>(shield.spawnParam94);
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    const std::size_t casterSlot = static_cast<std::size_t>(casterIndex);
+
+    shield.depthBias133 = -0x0A;
+    shield.halfword04 = static_cast<std::uint16_t>(shield.halfword04 | 0x0010u);
+
+    const std::int16_t animation = static_cast<std::int16_t>(shield.animationA0);
+    if (animation < 5 && animation > 2)
+    {
+      // Steps 3 and 4: gone as soon as the animation reports finished.
+      if ((shield.flags06 & 1u) != 0)
+      {
+        FUN_00265ec0_destroy_entity(shieldSlot, environment);
+      }
+      return;
+    }
+
+    const OriginalEntity &caster = pool.slot(casterSlot);
+    shield.facingRadians5c = caster.facingRadians5c;
+    shield.positionX20 = caster.positionX20;
+    shield.flags06 = static_cast<std::uint16_t>(shield.flags06 & 0xFFEFu);
+    shield.positionZ24 = caster.positionZ24;
+    const float height = caster.height58 * 0.75f + caster.positionY28;
+    shield.groundHeight4c = height;
+    shield.positionY28 = height;
+    shield.previousGroundHeight50 = height;
+
+    std::int16_t step = static_cast<std::int16_t>(shield.animationA0);
+    if (step != 2)
+    {
+      // The caster's own control block, reached through *its* +0x95 rather than
+      // through the shield's -- the shield's +0x94 is a pool slot, +0x95 on that
+      // entity is the party member index.
+      ActorEnvironment::BattleMemberView view;
+      const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+      const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                             environment.DAT_0031d7b0_battleMember(member, view);
+      // 0x90 is the guard action; 0x0B pending is the one interruption that
+      // closes the shield while the action byte still reads as guarding.
+      if (!haveBlock || view.currentAction0f != 0x90 || view.pendingAction0e == 0x0B)
+      {
+        FUN_00225bc8_set_animation(shield, 2);
+      }
+      step = static_cast<std::int16_t>(shield.animationA0);
+    }
+
+    if (step == 1)
+    {
+      // The raise. This is the only place the shield becomes visible: the spawn
+      // hid it with +0x08 bit 0 and nothing in state 117 clears that.
+      shield.flags06 = static_cast<std::uint16_t>(shield.flags06 & 0xFFEFu);
+      shield.halfword08 = static_cast<std::uint16_t>(shield.halfword08 & 0xFFFEu);
+      FUN_00225bc8_set_animation(shield, 0);
+      shield.halfword08 = static_cast<std::uint16_t>(shield.halfword08 | 0x0010u);
+      return;
+    }
+    if (step < 2)
+    {
+      // step 0, the hold. It ends when the hold animation reports finished,
+      // which for a looping clip is the frame it wraps.
+      if (step != 0 || (shield.flags06 & 1u) == 0)
+      {
+        return;
+      }
+      FUN_00225bc8_set_animation(shield, 2);
+      shield.flags06 = static_cast<std::uint16_t>(shield.flags06 | 0x0010u);
+      shield.halfword08 = static_cast<std::uint16_t>(shield.halfword08 | 1u);
+      return;
+    }
+    if (step != 2)
+    {
+      return;
+    }
+    // step 2, the close. Hidden again once it finishes.
+    if ((shield.flags06 & 1u) == 0)
+    {
+      return;
+    }
+    shield.flags06 = static_cast<std::uint16_t>(shield.flags06 | 0x0010u);
+    shield.halfword08 = static_cast<std::uint16_t>(shield.halfword08 | 1u);
+  }
+
   // FUN_002f13d0 (0x002f13d0), the behaviour of type 0x1E3 -- the one shared
   // hit effect FUN_002432d8:331 spawns for the whole battle and parks in
   // DAT_0031dad0. Not in src/; recovered from SLUS_200.11 at 0x002F13D0..
@@ -2087,6 +2210,734 @@ namespace orphen::ported::entity
     entity.halfword08 = static_cast<std::uint16_t>(flags08 & 0xFFFEu);
   }
 
+  // FUN_00248e48 / FUN_00248e58, the battle module's frame timers. Duplicated
+  // here rather than reached for: these are the only two things the effect
+  // behaviours need out of that module, and both are three lines.
+  //
+  // FUN_00248e48 is `(frames << 21) >> 16` -- 32 ticks per frame, through a
+  // 16-bit truncation the caller relies on. FUN_00248e58 subtracts a frame and
+  // clamps at zero through an unsigned wrap test rather than a comparison.
+  constexpr std::int16_t FUN_00248e48_arm_timer(std::int32_t frames)
+  {
+    const std::uint32_t shifted = static_cast<std::uint32_t>(frames) << 21;
+    return static_cast<std::int16_t>(static_cast<std::int32_t>(shifted) >> 16);
+  }
+
+  constexpr std::uint16_t FUN_00248e58_step_timer(std::uint16_t value, std::uint16_t frameTicks)
+  {
+    if (value == 0)
+    {
+      return 0;
+    }
+    const std::uint16_t stepped = static_cast<std::uint16_t>(value - frameTicks);
+    return (value < stepped) ? std::uint16_t{0} : stepped;
+  }
+
+  // FUN_002d9c88 (0x002d9c88), the behaviour of type 0x18F (399) -- the ring on
+  // the ground under a battle character. FUN_00242df0 spawns one per party
+  // member and parks it in DAT_0031da8c.
+  //
+  // It is a ring *and* a ring factory: at animation 0 it periodically spawns
+  // copies of itself, and a copy is told "you are a pulse, shrink and die" by
+  // being handed a +0x198 that names another marker instead of a character.
+  // The test is `caster +0x95 == 0` -- a marker is not a party member, so it
+  // has no member index, and that single byte is the whole distinction.
+  //
+  // It also carries the charge: FUN_002d9b78 writes the accumulator into +0x19A
+  // and scales the ring by it, and +0x19A being non-zero is what lets the
+  // pulses fire at all. That is why the ring swells while a spell is held.
+  void FUN_002d9c88_cast_marker(OriginalEntity &marker,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t casterSlot = marker.markerCaster198;
+    if (casterSlot >= kEntitySlotCount)
+    {
+      return;
+    }
+    const OriginalEntity &caster = pool.slot(casterSlot);
+
+    marker.depthBias133 = -0x0C;
+    marker.fadeLevel134 = 0;
+    marker.positionX20 = caster.positionX20;
+    marker.positionZ24 = caster.positionZ24;
+    marker.positionY28 = caster.positionY28;
+    marker.groundHeight4c = caster.positionY28;
+    marker.previousGroundHeight50 = caster.positionY28;
+
+    if (caster.byte95 == 0)
+    {
+      // A pulse. It rides another marker, shrinks toward nothing, and is
+      // destroyed the moment either axis passes below 0.2.
+      const float ticks = static_cast<float>(environment.frameTicks);
+      const float sx = marker.scale14c - (marker.scale14c / 1280.0f) * ticks;
+      const float sz = marker.scaleZ150 - (marker.scaleZ150 / 1280.0f) * ticks;
+      marker.scale14c = sx;
+      marker.scaleZ150 = sz;
+      if (sx < 0.2f || sz < 0.2f) // fGpffffa8b8
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+      }
+      return;
+    }
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+    const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+    const std::uint8_t pending = haveBlock ? view.pendingAction0e : 0;
+
+    // Outside the casting band 0x85..0x8D the charge is stale, so it is dropped.
+    if (static_cast<std::uint8_t>(action + 0x7Bu) > 8u)
+    {
+      marker.markerCharge19a = 0;
+    }
+
+    bool keepOpen = false;
+    if (static_cast<std::int16_t>(marker.animationA0) != 2)
+    {
+      if (caster.typeId00 < 0 || pending == 0x0B || !haveBlock || action == 0x83 ||
+          action == 0x85 || action == 0x87)
+      {
+        FUN_00225bc8_set_animation(marker, 2);
+      }
+      // The ring only exists while the character is drawn, standing on the
+      // ground, and not flagged out by +0x96 bit 2. Anything else closes it.
+      const bool casterDrawn = (caster.halfword08 & 1u) == 0;
+      const bool casterGrounded = (caster.collisionFlags0c & 1u) != 0;
+      if (casterDrawn && casterGrounded && (caster.effectFlags96 & 4u) == 0)
+      {
+        keepOpen = true;
+      }
+      if (!keepOpen)
+      {
+        marker.halfword08 = static_cast<std::uint16_t>(marker.halfword08 | 1u);
+        FUN_00225bc8_set_animation(marker, 2);
+      }
+    }
+
+    // The open. Only from the battle idle action, which is why the ring is
+    // already up before a spell is ever cast.
+    if (haveBlock && action == 6 && pending != 0x0B && (marker.halfword08 & 1u) != 0 &&
+        (caster.collisionFlags0c & 1u) != 0)
+    {
+      FUN_00225bc8_set_animation(marker, 1);
+      marker.scaleZ150 = 0.5f;
+      marker.scale14c = 1.0f;
+    }
+    if (action == 0x83)
+    {
+      marker.halfword08 = static_cast<std::uint16_t>(marker.halfword08 | 1u);
+      FUN_00225bc8_set_animation(marker, 2);
+      marker.flags06 = static_cast<std::uint16_t>(marker.flags06 | 1u);
+    }
+
+    const std::int16_t step = static_cast<std::int16_t>(marker.animationA0);
+    if (step == 1)
+    {
+      marker.markerCharge19a = 0;
+      marker.markerFlags19e = static_cast<std::uint16_t>(marker.markerFlags19e | 1u);
+      marker.flags06 = static_cast<std::uint16_t>(marker.flags06 & 0xFFEFu);
+      marker.halfword08 = static_cast<std::uint16_t>(marker.halfword08 & 0xFFFEu);
+      marker.markerRingTimer19c = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x3C));
+      if ((marker.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(marker, 0);
+      }
+      return;
+    }
+    if (step == 0)
+    {
+      // The pulse. Gated on the charge, so a standing character's ring is
+      // still while a charging one's throbs.
+      if (marker.markerCharge19a == 0 || marker.markerRingTimer19c == 0)
+      {
+        return;
+      }
+      marker.markerRingTimer19c =
+          FUN_00248e58_step_timer(marker.markerRingTimer19c, environment.frameTicks);
+      if (marker.markerRingTimer19c != 0)
+      {
+        return;
+      }
+      if ((marker.markerFlags19e & 1u) == 0 &&
+          (action == 0x86 || action == 0x8A || action == 0x8C) &&
+          environment.DAT_0031d3c8_battleTableWord && environment.FUN_00267d38_playSound)
+      {
+        // FUN_00249308: the party record's four attack bytes for the selected
+        // slot. Its first halfword is the element bit set, and the cue is
+        // chosen off it -- 0xCB when none of them is set.
+        const std::uint32_t element =
+            environment.DAT_0031d3c8_battleTableWord(view.spellBlockAddress) & 0xFFFFu;
+        std::uint16_t cue = 0xCB;
+        if ((element & 0x004u) != 0) { cue = 0xDB; }
+        else if ((element & 0x002u) != 0) { cue = 0xDC; }
+        else if ((element & 0x020u) != 0) { cue = 0xDD; }
+        else if ((element & 0x010u) != 0) { cue = 0xDE; }
+        else if ((element & 0x400u) != 0) { cue = 0xDF; }
+        else if ((element & 0x040u) != 0) { cue = 0xDB; }
+        environment.FUN_00267d38_playSound(cue, marker);
+      }
+      marker.markerFlags19e = static_cast<std::uint16_t>(marker.markerFlags19e & 0xFFFEu);
+      const std::uint16_t armed = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x3C));
+      marker.markerRingTimer19c = armed;
+      if (marker.markerCharge19a > 299)
+      {
+        // Past two thirds of a full charge the pulses come at 5/8 the interval.
+        marker.markerRingTimer19c = static_cast<std::uint16_t>((armed >> 1) + (armed >> 3));
+      }
+      if (environment.descriptors != nullptr)
+      {
+        const std::size_t pulse =
+            pool.FUN_00265e28_allocate_and_initialize(399, *environment.descriptors);
+        if (pulse < kEntitySlotCount)
+        {
+          auto &ring = pool.slot(pulse);
+          ring.scaleZ150 = marker.scaleZ150;
+          ring.scale14c = marker.scale14c;
+          // Not the character: the pulse rides *this marker*, and reads its
+          // +0x95 of 0 as "you are a pulse".
+          ring.markerCaster198 = static_cast<std::uint16_t>(slot & 0xFFu);
+          ring.depthBias133 = marker.depthBias133;
+          ring.positionX20 = marker.positionX20;
+          ring.positionZ24 = marker.positionZ24;
+          ring.positionY28 = marker.positionY28;
+          ring.groundHeight4c = marker.positionY28;
+          marker.previousGroundHeight50 = marker.positionY28;
+        }
+      }
+      return;
+    }
+    if (step == 2)
+    {
+      marker.markerRingTimer19c = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x3C));
+      marker.markerCharge19a = 0;
+      marker.scaleZ150 *= 0.9f; // fGpffffa8b4
+      marker.scale14c *= 0.9f;
+      if ((marker.flags06 & 1u) != 0)
+      {
+        marker.flags06 = static_cast<std::uint16_t>(marker.flags06 | 0x10u);
+        marker.scale14c = 1.0f;
+        marker.halfword08 = static_cast<std::uint16_t>(marker.halfword08 | 1u);
+        marker.scaleZ150 = 0.5f;
+      }
+      return;
+    }
+    if (step == 3 && (marker.flags06 & 1u) != 0)
+    {
+      FUN_00225bc8_set_animation(marker, 0);
+    }
+  }
+
+  // ---------------------------------------------------------- Hand of Pyro
+  //
+  // Triangle's spell, and the first command whose *whole* chain is ported:
+  //
+  //   FUN_0024c058  state 111, the hold      -> charge accumulates
+  //   FUN_0024bae0  state 109, the release   -> effect +0x60 = 1, +0x94 = level
+  //   FUN_002da8a0  type 0x13D, the hand     -> FUN_002dab70 on +0x60 == 1
+  //   FUN_002dab70                           -> spawns one type 0x15B
+  //   FUN_002dae60  type 0x15B, the fireball -> flies, and spawns the next one
+  //
+  // **A cast produces exactly one fireball.** The rest of the volley is a
+  // chain: each fireball arms +0x62 and spawns its successor when it expires,
+  // one link per charge level. Nothing anywhere loops over a count.
+
+  // FUN_002da220 (0x002da220). The point light under a spell effect's hand,
+  // colour and radius passed by the caller, positioned on the caster's bone.
+  // Allocated lazily into the effect's own +0x195 so it is released with it.
+  void FUN_002da220_spell_light(OriginalEntity &effect,
+                                std::size_t casterSlot,
+                                std::int32_t chargeTimer3c,
+                                std::uint8_t red,
+                                std::uint8_t green,
+                                std::uint8_t blue,
+                                std::int16_t baseRadius,
+                                const ActorEnvironment &environment)
+  {
+    if (environment.DAT_00343888_lights == nullptr)
+    {
+      return;
+    }
+    if (effect.lightSlot195 < 0)
+    {
+      // FUN_0023eb20: the high allocator first, then the low one. Slots 0..2 are
+      // the directional lights an entity is lit by; 3.. are the flat tints, and
+      // an effect wants one of those.
+      const std::int32_t allocated =
+          environment.DAT_00343888_lights->FUN_00266008_allocateFromThree() >= 0
+              ? environment.DAT_00343888_lights->FUN_00266008_allocateFromThree()
+              : environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+      if (allocated < 0)
+      {
+        return;
+      }
+      effect.lightSlot195 = static_cast<std::int8_t>(allocated);
+      environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(allocated)).radius =
+          0.2f; // DAT_0035482c
+    }
+
+    auto &light = environment.DAT_00343888_lights->slot(
+        static_cast<std::uint32_t>(effect.lightSlot195));
+    // FUN_00249270(caster, 3): the charge accumulator, capped at 0x2580 and
+    // divided by a very fine divisor, so the glow swells continuously while the
+    // spell is held rather than in the four visible charge steps.
+    std::int32_t charge = chargeTimer3c > 0x2580 ? 0x2580 : chargeTimer3c;
+    charge /= 3;
+    light.red = red;
+    light.green = green;
+    light.blue = blue;
+    light.radius = static_cast<float>(charge + baseRadius) / 1000.0f;
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      const auto point = environment.FUN_0020dc88_bone_point(
+          casterSlot, static_cast<std::size_t>(effect.attachBone194),
+          orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+      light.x = point.x;
+      light.y = point.y;
+      light.z = point.z;
+    }
+  }
+
+  // FUN_002dab70 (0x002dab70). Spawn one type 0x15B fireball at `origin`,
+  // aimed at `target`, and arm the chain link that spawns the next one.
+  //
+  // `chainIndex` is the original's param_1: 0 for the one the hand throws, and
+  // one higher for each successor. It selects the spread -- index 0 rises,
+  // index 1 goes right, index 2 goes left, index 3+ dips -- so a volley fans
+  // out without anything computing a fan.
+  std::int32_t FUN_002dab70_spawn_fireball(std::uint8_t chainIndex,
+                                           std::uint8_t chargeLevel,
+                                           std::uint16_t attackPower,
+                                           std::int16_t target,
+                                           std::uint32_t hitParameters,
+                                           float originX,
+                                           float originZ,
+                                           float originY,
+                                           std::int16_t casterSlot,
+                                           const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(0x15B, *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &ball = pool.slot(spawned);
+
+    if (chainIndex == 0)
+    {
+      ball.effectFlags96 = static_cast<std::uint8_t>(ball.effectFlags96 | 0x40u);
+    }
+    ball.attackPower12c = attackPower;
+    ball.fireballOriginX19c = originX;
+    ball.positionX20 = originX;
+    ball.fireballOriginZ1a0 = originZ;
+    ball.positionZ24 = originZ;
+    ball.fireballOriginY1a4 = originY;
+    ball.positionY28 = originY;
+    // FUN_00267da0(ball + 0x198, source, 4): the four attack bytes are copied,
+    // not aliased. On the hand effect +0x198 is a pointer into the party
+    // record; here it is the value.
+    ball.hitParameters198 = hitParameters;
+    ball.fireballTarget1c0 = target;
+    ball.fireballCaster1c2 = casterSlot;
+    ball.fireballCharge1c7 = chargeLevel;
+    ball.fireballChain1c6 = chainIndex;
+    ball.fadeRamp62 = 0;
+    ball.animationA0 = 0;
+
+    // Its own light, orange, fixed radius 2.0.
+    if (environment.DAT_00343888_lights != nullptr)
+    {
+      if (ball.lightSlot195 < 0)
+      {
+        const std::int32_t high = environment.DAT_00343888_lights->FUN_00266008_allocateFromThree();
+        const std::int32_t allocated =
+            high >= 0 ? high : environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+        ball.lightSlot195 = static_cast<std::int8_t>(allocated);
+      }
+      if (ball.lightSlot195 >= 0)
+      {
+        auto &light =
+            environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(ball.lightSlot195));
+        light.radius = 2.0f;
+        light.red = 0x80;
+        light.green = 0x40;
+        light.blue = 0x00;
+        light.x = ball.positionX20;
+        light.y = ball.positionZ24;
+        light.z = ball.positionY28;
+      }
+    }
+
+    if (chargeLevel != 0)
+    {
+      if (chargeLevel == chainIndex)
+      {
+        // The last link. No successor timer -- this is what ends the chain.
+        if (chargeLevel == 5)
+        {
+          chargeLevel = 0x18;
+          ball.animationA0 = 1;
+        }
+        else
+        {
+          ball.fireballSparkId19b = static_cast<std::uint8_t>(chargeLevel + 0x14);
+        }
+      }
+      else
+      {
+        // The successor fires in `8 - level` frames, so a bigger charge throws
+        // a faster stream as well as a longer one.
+        ball.fadeRamp62 = FUN_00248e48_arm_timer(8u - chargeLevel);
+      }
+      if (chargeLevel == 5)
+      {
+        ball.fireballSparkId19b = 0x18;
+      }
+    }
+
+    // Aimed, or not. Slots 0 and 1 are not targets -- `1 < target` is the
+    // original's own test, and it is why the no-target case needs no special
+    // casing here either.
+    const bool aimed = target > 1 &&
+                       static_cast<std::size_t>(target) < kEntitySlotCount &&
+                       pool.slot(static_cast<std::size_t>(target)).typeId00 != 0;
+    ball.facingRadians5c = pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c;
+    ball.fireballLife1c4 = FUN_00248e48_arm_timer(0x36);
+    if (aimed)
+    {
+      const auto &victim = pool.slot(static_cast<std::size_t>(target));
+      const float dx = victim.positionX20 - originX;
+      const float dz = victim.positionZ24 - originZ;
+      const float dy = victim.positionY28 - originY;
+      // FUN_00216648: the 3D distance, divided by 1/144 -- i.e. the flight time
+      // in ticks at the fixed speed. Both rates below are "distance over that".
+      const float flight = std::sqrt(dx * dx + dz * dz + dy * dy) / 0.00694444f;
+      if (flight > 0.0f)
+      {
+        ball.fireballRise1b0 =
+            ((victim.positionY28 + victim.height58 * 0.5f) - originY) / flight;
+        ball.fireballSpeed1bc = std::sqrt(dx * dx + dz * dz) / flight;
+      }
+    }
+    else
+    {
+      ball.fireballSpeed1bc = 0.00694444f; // uGpffffa8f4
+      ball.fireballRise1b0 = 0.0f;
+    }
+    ball.fireballBaseFacing1b4 = ball.facingRadians5c;
+
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xCC, ball);
+    }
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002dae60 (0x002dae60), the behaviour of type 0x15B -- one fireball.
+  //
+  // Everything about the volley lives here: the spread that makes a chain fan
+  // out, and the +0x62 timer that spawns the next link.
+  void FUN_002dae60_fireball(OriginalEntity &ball,
+                             std::size_t slot,
+                             const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+
+    // FUN_002660d0: republish the light at the new position.
+    if (ball.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &light =
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(ball.lightSlot195));
+      light.x = ball.positionX20;
+      light.y = ball.positionZ24;
+      light.z = ball.positionY28;
+    }
+    ball.hitSourceC0 = 0;
+    ball.hitFlagsC2 = 0;
+    ball.pendingDamageBe = 0;
+    ball.hitReactionBc = 0;
+    ball.halfword08 = static_cast<std::uint16_t>(ball.halfword08 | 0x4000u);
+
+    // FUN_00215e48 then FUN_002148a8: clear the already-hit set, then sweep.
+    std::int8_t contacts = 0;
+    if (environment.hitTest != nullptr)
+    {
+      FUN_00215e48_clear_hit_set(ball);
+      const auto parameters =
+          orphen::ported::resource::HitParameters::unpack(ball.hitParameters198);
+      contacts = FUN_002148a8_swept_hit_test(ball, slot, parameters, *environment.hitTest);
+    }
+    if (contacts != 0)
+    {
+      // It hit something: burst into a type 0x173 and go. The burst inherits
+      // this one's light so the flash does not blink out on the swap.
+      if (environment.descriptors != nullptr)
+      {
+        const std::size_t burst = environment.entityPool->FUN_00265e28_allocate_and_initialize(
+            0x173, *environment.descriptors);
+        if (burst < kEntitySlotCount)
+        {
+          auto &flash = environment.entityPool->slot(burst);
+          flash.positionX20 = ball.positionX20;
+          flash.positionZ24 = ball.positionZ24;
+          flash.positionY28 = ball.positionY28;
+          flash.groundHeight4c = ball.positionY28;
+          flash.previousGroundHeight50 = ball.positionY28;
+          flash.facingRadians5c = ball.facingRadians5c + 3.14159274f; // fGpffffa8f8
+          flash.rotationX154 = -ball.rotationX154;
+          if (ball.lightSlot195 >= 0)
+          {
+            flash.lightSlot195 = ball.lightSlot195;
+            ball.lightSlot195 = -1;
+          }
+          FUN_00225bc8_set_animation(flash, 0);
+        }
+      }
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    // +0x1C4 is the life timer, and 0x6C0 is its armed value: on the first
+    // frame the facing is banked into +0x1B4 and zeroed, because the spread
+    // below is measured from it rather than added to it.
+    if (ball.fireballLife1c4 == 0x6C0)
+    {
+      ball.fireballBaseFacing1b4 = ball.facingRadians5c;
+      ball.facingRadians5c = 0.0f;
+    }
+    ball.fireballLife1c4 = FUN_00248e58_step_timer(ball.fireballLife1c4, environment.frameTicks);
+    if (ball.fireballLife1c4 == 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    // The spread, by position in the chain. Only two of the four cases turn;
+    // the others climb or dip, which is what gives a volley its arc.
+    std::int32_t rise = 0;
+    std::int32_t turn = 0;
+    const std::uint8_t chain = ball.fireballChain1c6;
+    if (chain == 0)
+    {
+      rise = 6;
+      if ((ball.fireballCharge1c7 ^ 5u) != 0)
+      {
+        rise = 0;
+      }
+    }
+    else if (chain == 1)
+    {
+      if (ball.fireballCharge1c7 == 1)
+      {
+        rise = -8;
+      }
+      else
+      {
+        turn = 0x32;
+      }
+    }
+    else if (chain == 2)
+    {
+      turn = -0x32;
+    }
+    else
+    {
+      rise = -8;
+      if ((chain ^ 3u) != 0)
+      {
+        rise = 0;
+      }
+    }
+
+    // How far through its life it is, in the original's own units: 0x360 minus
+    // the remaining ticks. Both the turn and the climb ramp with it.
+    const float elapsed = static_cast<float>(
+        static_cast<std::int16_t>(0x360 - static_cast<std::int32_t>(ball.fireballLife1c4)));
+    constexpr float kTwoPi = 6.28318548f; // fGpffffa8fc
+    ball.facingRadians5c =
+        ((static_cast<float>(turn) * kTwoPi) / 360.0f / 1728.0f) * elapsed +
+        ball.fireballBaseFacing1b4;
+    ball.fireballVelX1a8 = ball.fireballSpeed1bc * std::sin(ball.facingRadians5c);
+    ball.fireballVelZ1ac = ball.fireballSpeed1bc * std::cos(ball.facingRadians5c);
+    const float planar =
+        std::sqrt(ball.fireballVelX1a8 * ball.fireballVelX1a8 +
+                  ball.fireballVelZ1ac * ball.fireballVelZ1ac);
+    ball.fireballRiseOffset1b8 =
+        ((static_cast<float>(rise) * kTwoPi) / 360.0f / 1728.0f) * elapsed;
+    ball.desiredDeltaY38 = ball.fireballRise1b0 * static_cast<float>(environment.frameTicks) +
+                   ball.fireballRiseOffset1b8;
+    ball.rotationX154 = std::atan2(-ball.fireballRise1b0, planar);
+    ball.desiredDeltaX30 = ball.fireballVelX1a8 * static_cast<float>(environment.frameTicks);
+    ball.desiredDeltaZ34 = ball.fireballVelZ1ac * static_cast<float>(environment.frameTicks);
+
+    // The chain. +0x62 was armed by FUN_002dab70 only when this is not the last
+    // link, so an expiring timer here always means "there is another one".
+    if (ball.fadeRamp62 != 0)
+    {
+      ball.fadeRamp62 = FUN_00248e58_step_timer(ball.fadeRamp62, environment.frameTicks);
+      if (ball.fadeRamp62 == 0)
+      {
+        FUN_002dab70_spawn_fireball(static_cast<std::uint8_t>(ball.fireballChain1c6 + 1),
+                                    ball.fireballCharge1c7, ball.attackPower12c,
+                                    ball.fireballTarget1c0, ball.hitParameters198,
+                                    ball.fireballOriginX19c, ball.fireballOriginZ1a0,
+                                    ball.fireballOriginY1a4, ball.fireballCaster1c2, environment);
+      }
+    }
+
+    // +0x0C bits 0x4066: hit a wall, hit the floor, or left the map.
+    if ((ball.collisionFlags0c & 0x4066u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
+  // FUN_002da8a0 (0x002da8a0), the behaviour of type 0x13D -- the flame that
+  // gathers in Orphen's hand while Triangle is held, and throws itself when it
+  // is released.
+  //
+  // The throw is one line of it: `+0x60 == 1`, which FUN_0024bae0 writes on the
+  // frame the release animation's +0xAA bit 0x100 marker comes round. Everything
+  // before that is presentation.
+  void FUN_002da8a0_hand_effect(OriginalEntity &effect,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    const std::size_t casterSlot = static_cast<std::size_t>(casterIndex);
+    OriginalEntity &caster = pool.slot(casterSlot);
+
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C;
+    effect.facingRadians5c = 1.57079637f; // uGpffffa8e0
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+
+    std::int16_t step = static_cast<std::int16_t>(effect.animationA0);
+    if (step != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4001u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      // `1 < (byte)(current + 0x76)` -- true for anything outside the two action
+      // bytes 0x8A and 0x8B, i.e. "the caster is no longer casting this spell".
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x76u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      step = static_cast<std::int16_t>(effect.animationA0);
+    }
+
+    if (step == 1)
+    {
+      // The gather. Its tilt is the character class's, and this is where it
+      // becomes visible.
+      if (haveBlock && view.characterClass == 1)
+      {
+        effect.rotationX154 = 0.698131740f; // uGpffffa8e4
+      }
+      else if (haveBlock && view.characterClass == 4)
+      {
+        effect.rotationX154 = 1.83259571f;  // uGpffffa8e8
+        effect.rotationY158 = -0.174532920f; // uGpffffa8ec
+      }
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+    }
+    else if (step == 0)
+    {
+      // The hold. The hand light swells with the charge.
+      FUN_002da220_spell_light(effect, casterSlot, haveBlock ? view.chargeTimer3c : 0, 0x80, 0x40,
+                               0x00, 500, environment);
+    }
+    else if (step == 2)
+    {
+      // Put away. FUN_00266098 drops the light, and the scale is reset so the
+      // next cast starts from 1.
+      if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195))
+            .radius = 0.0f;
+        effect.lightSlot195 = -1;
+      }
+      if ((effect.flags06 & 1u) != 0)
+      {
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+      }
+    }
+
+    // **The throw.** State 60 is 1 for exactly one frame, written by
+    // FUN_0024bae0 when the release animation reaches its marker.
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+    effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    FUN_00225bc8_set_animation(effect, 2);
+    effect.state60 = 0;
+
+    // The fireball leaves the caster's hand bone, not the effect's position.
+    orphen::ported::psm2::Vec3 origin{effect.positionX20, effect.positionZ24, effect.positionY28};
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      origin = environment.FUN_0020dc88_bone_point(
+          casterSlot, static_cast<std::size_t>(effect.attachBone194),
+          orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+    // FUN_00267da0 copies the four attack bytes off the party record the
+    // caster's +0x198 points at; on the projectile they are a value.
+    const std::uint32_t hitParameters =
+        environment.DAT_0031d3c8_battleTableWord
+            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+            : 0;
+    FUN_002dab70_spawn_fireball(0, effect.spawnParam94, effect.attackPower12c,
+                                haveBlock ? view.target : -1, hitParameters, origin.x, origin.y,
+                                origin.z, static_cast<std::int16_t>(casterSlot), environment);
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -2102,6 +2953,10 @@ namespace orphen::ported::entity
     case 0x002D21B8u: // FUN_002d21b8, type 0x42, the sword blade
     case 0x002D2470u: // FUN_002d2470, type 0x44, the homing magic projectile
     case 0x002F13D0u: // FUN_002f13d0, type 0x1E3, the shared hit effect
+    case 0x002E7328u: // FUN_002e7328, type 0x1C7, the guard shield
+    case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
+    case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
+    case 0x002D9C88u: // FUN_002d9c88, type 0x18F, the ground ring
       return true;
     default:
       return false;
@@ -2134,6 +2989,14 @@ namespace orphen::ported::entity
       return "FUN_002d2470 (magic projectile)";
     case 0x002F13D0u:
       return "FUN_002f13d0 (shared hit effect)";
+    case 0x002E7328u:
+      return "FUN_002e7328 (guard shield)";
+    case 0x002DA8A0u:
+      return "FUN_002da8a0 (hand of pyro)";
+    case 0x002DAE60u:
+      return "FUN_002dae60 (fireball)";
+    case 0x002D9C88u:
+      return "FUN_002d9c88 (cast marker)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -2253,6 +3116,18 @@ namespace orphen::ported::entity
         break;
       case 0x002F13D0u:
         FUN_002f13d0_shared_hit_effect(entity, slotEnvironment);
+        break;
+      case 0x002E7328u:
+        FUN_002e7328_guard_shield(entity, slot, slotEnvironment);
+        break;
+      case 0x002DA8A0u:
+        FUN_002da8a0_hand_effect(entity, slot, slotEnvironment);
+        break;
+      case 0x002DAE60u:
+        FUN_002dae60_fireball(entity, slot, slotEnvironment);
+        break;
+      case 0x002D9C88u:
+        FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

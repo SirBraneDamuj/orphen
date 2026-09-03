@@ -39,6 +39,102 @@ namespace orphen::ported::battle
 
     // FUN_00249128: accumulate that timer by this frame's ticks, capped at
     // 0x2D00. The first tick also starts the charge sound loop.
+    // FUN_00249218 (0x00249218): the raw charge accumulator, party record +0x3C,
+    // divided. Unlike FUN_00249270 it does not cap.
+    std::int32_t FUN_00249218_charge(const BattleParty &party, std::uint32_t member,
+                                     std::int16_t divisor)
+    {
+      const std::int32_t timer =
+          party.tables().read<std::int16_t>(BattleTables::partyRecord(member) + record::kChargeTimer3c);
+      if (timer == 0 || divisor == 0)
+      {
+        return 0;
+      }
+      return timer / divisor;
+    }
+
+    // FUN_0024c058:60-76 and :98-103, the spell voice's load-and-speak walk.
+    // Shared verbatim by state 113, which carries the same block.
+    //
+    // The steps are the original's: 1 asks for the bank, 2 waits for the load,
+    // 3 is "loaded and not yet spoken". Step 3 becomes 100 at the charge marker
+    // once the clip actually starts, and 100 is what state 112 reads to know it
+    // owes a release line.
+    void FUN_0024c058_step_spell_voice(const BattleUpdateEnvironment &environment,
+                                       std::uint32_t slot)
+    {
+      BattleParty &party = *environment.party;
+      const std::uint32_t at = kDAT_0031da60_voiceState + slot * 2;
+      const std::int16_t step = party.tables().read<std::int16_t>(at);
+      if (step == 1)
+      {
+        const std::uint32_t bank =
+            party.tables().read<std::uint32_t>(kDAT_0031da54_family + slot * 4);
+        if (environment.FUN_00206ae0_cache_voice &&
+            environment.FUN_00206ae0_cache_voice(bank, slot))
+        {
+          party.tables().write<std::int16_t>(at, 2);
+        }
+      }
+      if (party.tables().read<std::int16_t>(at) != 2)
+      {
+        return;
+      }
+      if (environment.FUN_00206c28_voice_load_idle && environment.FUN_00206c28_voice_load_idle())
+      {
+        party.tables().write<std::int16_t>(at, 3);
+      }
+    }
+
+    // FUN_002d9b78 (0x002d9b78): drive the caster's ground ring from the charge,
+    // and answer whether the charge is allowed to keep building.
+    //
+    // **This is the gate the port was missing.** States 111, 113 and 107 do not
+    // accumulate unconditionally -- they accumulate only while this returns
+    // non-zero, and it returns non-zero only while the ring (type 0x18F,
+    // DAT_0031da8c) is at animation 0, its open state. A ring that is closed,
+    // opening, or gone stops the charge dead. That is why the ring is not
+    // decoration: it *is* the charge indicator, and the state it is in is the
+    // charge's own state.
+    //
+    // `scaleRing` is the original's param_2 as a boolean: the hold states pass
+    // 1 and get the ring resized, FUN_0024bae0's release passes 0 and only
+    // reads the gate.
+    std::int32_t FUN_002d9b78_drive_cast_ring(const BattleUpdateEnvironment &environment,
+                                              std::uint32_t member,
+                                              bool scaleRing)
+    {
+      BattleParty &party = *environment.party;
+      const std::int32_t markerSlot =
+          party.entitySlotAt(kDAT_0031da8c_slotEntity + member * 4);
+      if (markerSlot == kNoEntity)
+      {
+        return -1; // 0xffff, the original's "no ring" answer -- still non-zero.
+      }
+      auto &marker = environment.pool->slot(static_cast<std::size_t>(markerSlot));
+
+      std::int32_t charge = 0;
+      if (scaleRing)
+      {
+        charge = FUN_00249218_charge(party, member, 0x3C);
+        if (static_cast<std::int16_t>(marker.animationA0) == 2)
+        {
+          orphen::ported::entity::FUN_00225bc8_set_animation(marker, 1);
+        }
+      }
+      if (static_cast<std::int16_t>(marker.animationA0) != 0)
+      {
+        return 0;
+      }
+      // 1.4 and 1.2 over 160: at a full 0x2D00 charge the ring reaches about
+      // 7.7x wide and 6.2x tall.
+      marker.scale14c = (static_cast<float>(charge) * 1.4f) / 160.0f + 1.0f;
+      marker.scaleZ150 = (static_cast<float>(charge) * 1.2f) / 160.0f + 0.5f;
+      marker.markerCharge19a =
+          static_cast<std::uint16_t>(FUN_00249218_charge(party, member, 0x20));
+      return charge | 1;
+    }
+
     void FUN_00249128_accumulate_charge(BattleParty &party,
                                         std::uint32_t member,
                                         std::uint16_t frameTicks)
@@ -513,6 +609,8 @@ namespace orphen::ported::battle
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
+        // FUN_00215e48: forget whatever the previous cast already hit.
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
       }
 
       // +0xAA bit 0x100 is the throw marker.
@@ -531,6 +629,9 @@ namespace orphen::ported::battle
         // count for Hand of Pyro, the blade length for a sword spell.
         effect.spawnParam94 =
             static_cast<std::uint8_t>(FUN_00249270_charge(party, context.member, 0x780));
+        // FUN_0024bae0:38. Read-only here: it stops the ring pulsing without
+        // resizing it, because the charge is about to be spent.
+        FUN_002d9b78_drive_cast_ring(*context.environment, context.member, false);
       }
 
       if ((entity.flags06 & 1) == 0)
@@ -571,7 +672,21 @@ namespace orphen::ported::battle
         respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
                           context.entitySlot);
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
+        // :37-40. Only a voiced character arms the spell voice.
+        if (FUN_00249348_is_voiced_player(party, entity))
+        {
+          party.tables().write<std::int16_t>(
+              kDAT_0031da60_voiceState + party.selectedSlot(static_cast<std::int16_t>(entity.byte95)) * 2,
+              1);
+        }
         party.FUN_00249108_clear_turn_flags(context.member);
+      }
+
+      // :60-76. The bank load walks whether or not the charge is building.
+      const std::uint32_t voiceSlot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+      if (FUN_00249348_is_voiced_player(party, entity))
+      {
+        FUN_0024c058_step_spell_voice(*context.environment, voiceSlot);
       }
 
       if ((entity.flagsAa & 0x800) != 0 && (entity.flags06 & 4) != 0)
@@ -585,7 +700,24 @@ namespace orphen::ported::battle
           effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 0x10);
         }
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
-        FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+        // FUN_0024c058:95. The charge builds only while the ground ring is
+        // open; FUN_002d9b78 both resizes it and answers the gate.
+        if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0)
+        {
+          FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+          // :98-103. The incantation, clip 0, on the first charge frame after
+          // the bank has landed -- and only if nothing else is speaking, which
+          // is what stops a spell talking over a cutscene line.
+          if (FUN_00249348_is_voiced_player(party, entity) && entity.state60 != 0x6B &&
+              party.tables().read<std::int16_t>(kDAT_0031da60_voiceState + voiceSlot * 2) == 3 &&
+              context.environment->FUN_00206a90_voice_busy &&
+              !context.environment->FUN_00206a90_voice_busy() &&
+              context.environment->FUN_00206f08_play_voice &&
+              context.environment->FUN_00206f08_play_voice(voiceSlot, 0))
+          {
+            party.tables().write<std::int16_t>(kDAT_0031da60_voiceState + voiceSlot * 2, 100);
+          }
+        }
       }
       return charge;
     }
@@ -602,6 +734,30 @@ namespace orphen::ported::battle
         if (FUN_00249270_charge(*context.party, context.member, 0x780) > 4)
         {
           context.party->FUN_0023f620_count(3, static_cast<std::int8_t>(entity.byte95));
+        }
+        // :21-31. The release shout, clip 1 of the same bank. 101 means it was
+        // spoken, 102 that something else had the voice and it was dropped --
+        // the original does not queue it.
+        BattleParty &party = *context.party;
+        const std::uint32_t voiceSlot =
+            party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+        const std::uint32_t at = kDAT_0031da60_voiceState + voiceSlot * 2;
+        if (party.tables().read<std::int16_t>(at) == 100)
+        {
+          const bool busy = context.environment->FUN_00206a90_voice_busy &&
+                            context.environment->FUN_00206a90_voice_busy();
+          if (!busy)
+          {
+            if (context.environment->FUN_00206f08_play_voice)
+            {
+              context.environment->FUN_00206f08_play_voice(voiceSlot, 1);
+            }
+            party.tables().write<std::int16_t>(at, 0x65);
+          }
+          else
+          {
+            party.tables().write<std::int16_t>(at, 0x66);
+          }
         }
       }
       return stateReleaseSpell109(context, charge);

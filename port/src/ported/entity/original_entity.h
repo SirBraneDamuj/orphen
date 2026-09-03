@@ -404,6 +404,47 @@ namespace orphen::ported::entity
     // and FUN_002298d0 read it to recover the real character class.
     std::int16_t originalType1ce = 0;
 
+    // The type 0x18F (399) cast marker, FUN_002d9c88 -- the ring on the ground
+    // under a battle character. One is spawned per party member by
+    // FUN_00242df0 and parked in DAT_0031da8c; it also spawns *copies of
+    // itself* as the expanding pulses, and a copy is told to shrink and die by
+    // being given a +0x198 that names another marker rather than a character
+    // (its +0x95 is 0, which is the whole test).
+    std::uint16_t markerCaster198 = 0;   // +0x198: the pool slot it rides.
+    std::uint16_t markerCharge19a = 0;   // +0x19A: the charge, from FUN_002d9b78.
+    std::uint16_t markerRingTimer19c = 0; // +0x19C: ticks to the next pulse.
+    std::uint16_t markerFlags19e = 0;    // +0x19E: bit 0 suppresses one pulse cue.
+
+    // The type 0x15B fireball, FUN_002dae60 -- what Hand of Pyro actually
+    // launches. Another overlapping reading of the same bytes, seeded in one
+    // place (FUN_002dab70) and read in one place, so nothing else can collide
+    // with it.
+    //
+    // The chain is the interesting part. A cast produces exactly **one**
+    // fireball; each fireball arms +0x62 with FUN_00248e48(8 - chargeLevel) and
+    // spawns its own successor when that expires, passing `chainIndex + 1`.
+    // FUN_002dab70 only arms the timer while `chargeLevel != chainIndex`, so the
+    // chain stops after `chargeLevel + 1` of them -- which is why holding
+    // Triangle longer throws more fire, with tighter spacing as the charge rises.
+    float fireballOriginX19c = 0.0f; // +0x19C/+0x1A0/+0x1A4: where it was cast from,
+    float fireballOriginZ1a0 = 0.0f; // kept so the successor spawns at the same
+    float fireballOriginY1a4 = 0.0f; // point rather than at this one's position.
+    float fireballVelX1a8 = 0.0f;    // +0x1A8/+0x1AC: horizontal velocity components.
+    float fireballVelZ1ac = 0.0f;
+    float fireballRise1b0 = 0.0f;    // +0x1B0: vertical rate, per tick.
+    float fireballBaseFacing1b4 = 0.0f; // +0x1B4: the yaw the spread is measured from.
+    float fireballRiseOffset1b8 = 0.0f; // +0x1B8: this frame's vertical trim.
+    float fireballSpeed1bc = 0.0f;      // +0x1BC: horizontal speed, per tick.
+    std::int16_t fireballTarget1c0 = 0; // +0x1C0: the pool slot it was aimed at, 0/1 for none.
+    std::int16_t fireballCaster1c2 = 0; // +0x1C2: the pool slot that cast it.
+    std::uint16_t fireballLife1c4 = 0;  // +0x1C4: ticks left; 0 destroys it.
+    std::uint8_t fireballChain1c6 = 0;  // +0x1C6: position in the chain, 0 for the first.
+    std::uint8_t fireballCharge1c7 = 0; // +0x1C7: the charge level the cast was released at.
+    // +0x19B: the hit-spark variant, chargeLevel + 0x14, or 0x18 at full charge.
+    std::uint8_t fireballSparkId19b = 0;
+    // +0x96 bit 0x40: set on the first fireball of a chain only.
+    std::uint8_t effectFlags96 = 0;
+
     // The type 0x37 party follower's block, PTR_FUN_0031e1a0's states. It
     // **overlaps** the two blocks above the same way they overlap each other --
     // +0x1B0..+0x1BC are the enemy's wing phase and home position, +0x1C0 its

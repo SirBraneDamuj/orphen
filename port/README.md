@@ -1259,9 +1259,188 @@ The general lesson is worth keeping: an effect entity that a spawner leaves
 untouched is not "parked", it is **live and full-size**, and its behaviour is
 the only thing standing between it and the screen.
 
+#### Guard, end to end
+
+Guard is the one command that runs all the way through, and it is worth reading
+as the template for the rest, because **the visible half of a command is not in
+the state handler**. `FUN_0024cba0` (state 117) does almost nothing to the
+shield: on entry it sets the shield entity's animation to 1, stamps its own pool
+slot into the shield's `+0x94`, plays cue `0xE7`, and ORs `0x11` into `+0x04`.
+It never unhides it. `FUN_002e7328`, the type `0x1C7` behaviour, is the rest —
+and it is where every interesting decision lives:
+
+- **The shield is re-placed, not attached.** No `+0x192` parent, no bone: the
+  handler copies the caster's facing and XY across every frame and sits it at
+  `+0x58 * 0.75` above the caster's feet. That is why `FUN_00242df0` spawns it
+  with `+0x192 = -1`.
+- **`+0xA0` is a four-step sequence, not a looping clip.** 1 raise (one frame —
+  it unhides and immediately becomes 0), 0 hold, 2 close, 3/4 destroy. Each step
+  advances on `+0x06` bit 0, the animation-finished flag.
+- **The caster's control block ends the guard, not the state handler.** Every
+  frame it is not already closing, the shield reads the caster's current action
+  byte out of `DAT_0031d7bf`; anything but `0x90` drops it into the close.
+
+**Where "blocking wears off" comes from.** Nothing counts frames. `FUN_002462c8`
+keeps a held guard alive only while the button is down *and* the shield entity's
+`+0xA0` is not 2 — and the only thing that sets it to 2 out of the hold is clip
+0 running to its last timeline entry in `FUN_002e7328`. So the block's duration
+**is the length of the shield's hold animation**, stated in the model rather than
+in code, and read the same way by two functions that never talk to each other.
+On `s14_e012` that is 500 frames: guard at 301, `0x91` armed at 801 with the pad
+still held, shield closed at 802.
+
+What is not ported is `FUN_0024cba0`'s damage half — the halved hit, the second
+`0x1C7` spawned at the impact bearing, cue `0xE8`, and the `0x4066` guard break.
+All of it is gated on `+0xBE`, which only an attacking enemy writes, so there is
+nothing yet to test it against.
+
+#### The ground ring: what a GS dump and a save state have ruled out
+
+The ring (type `0x18F`, `grp_00a8`) draws with a hard-edged translucent box
+around it that the real game does not have, and it lacks a shimmer the real one
+has. A PCSX2 capture at max charge plus the matching `eeMemory.bin` settle most
+of the candidates, so they are written down rather than re-tried:
+
+- **The blend is right.** `ALPHA` is `0x48` — `(Cs - 0) x As + Cd`, i.e.
+  `GL_SRC_ALPHA, GL_ONE` — on every ring draw, and the port picks mode 2 for all
+  158 of the model's subdraws. `TEX0` is MODULATE/RGBA, `TEX1` bilinear, `TEST`
+  alpha-discard-at-0. All as the port already has them.
+- **The scale is exact.** The save state's live marker reads `+0x14C` 2.680 and
+  `+0x150` 1.940; `FUN_002d9b78` as ported computes exactly those from a maxed
+  `+0x3C`. The bone palette at `0x00357E00` confirms the transform too: the
+  model's rest scale is 1.30, and every ring's matrix is
+  `1.30 x +0x14C` horizontally and `1.30 x +0x150` vertically.
+- **The pose is genuinely static.** `grp_00a8` animation 0 is a *single*
+  timeline entry — column 4, 4 frames, looping — so the column never moves. All
+  four rings in the save state sit at `+0xA0 = 0`, so the original is equally
+  static. **The shimmer is not bone animation.**
+- **The tall geometry is in the original too.** Bone 12 carries the bulk of the
+  model at +/-0.4 in height, and the real capture's ring vertices span 130 GS
+  units vertically, not the ~40 the ground disc alone would. The port is not
+  drawing extra geometry.
+- **The zero-scale bones collapse correctly.** Bones 2..9 and 14..17 have scale
+  0 at column 4 in both, and the port's posed vertices for them are degenerate.
+
+One thing the max-charge capture appeared to leave: **vertex colour**. Its ring
+uses 8 distinct colours over 1,684 vertices, at two alphas only — 128 and 63 —
+and 42% of them are `(0, 0, 0, 128)`: pure black, which under additive blending
+adds nothing. *That is how the wall is hidden.* Read against that, the port's
+alpha-**12** vertices looked like an invention. They are not — see the resting
+capture below, which emits 192 of them — so this line of inquiry closes.
+Ruled out along the way: colour-table overrun (13 entries, max index 12, none over), the
+per-pass texture selector (`--entity-bound-texture` changes nothing), an
+unresolved texture slot, and the `-1` pass skip (`FUN_00212058:95-100` skips and
+continues exactly as the port does).
+
+The other always-present battle effect, type `0x118` (`FUN_002d8ce0`), is **not**
+the shimmer: `FUN_002d8b38` activates it as a *status-effect* aura, one of six
+variants selected by its `+0x19A`, and raises the matching bit in
+`DAT_0031DA6C`. It does spin continuously though —
+`+0x5C += frameTicks * 0.00226893` — so it is an animated ring, just a
+conditional one.
+
+#### The ring's shimmer is a per-frame U scroll on its subdraw UVs
+
+Two `.gs` captures of a *resting* battle ring, four frames each, settle what the
+shimmer is. It is not the pose and it is not the geometry: within a capture the
+ring's screen positions are identical frame to frame to the last sub-pixel, and
+its vertex colours never change. What changes is **U**, on every corner of every
+pass, by a whole texel, with **V** fixed:
+
+| pass | subdraw `texFlags` | U per game frame |
+|---|---|---|
+| ground layer | `0x9C7F` (bank 3) | `+1`, wrapping in the byte |
+| wall layer | `0x8C7F` (bank 1) | `+4`, wrapping at 32 |
+| the alpha-12 pass | `0x850C` (bank 0) | none |
+
+The offset is a rigid translation of the whole quad — the authored span survives
+— so it is an addend on the packed UV, not a different subdraw record and not a
+rotation of the model. Against `grp_00a8`'s authored table the two capture sets
+read:
+
+```
+capture A   frame 0..3   ground +34 +35 +35 +36   wall  +8 +12 +12 +16
+capture B   frame 0..3   ground  +1  +1  +2  +2   wall  +4  +4  +8  +8
+```
+
+Every one of those eight samples satisfies `wall == (ground * 4) & 0x1F`, across
+two captures minutes apart, so the two layers are phase-locked to **one**
+counter advancing once per game frame — not two free-running ones. The port
+emits the authored UVs unmodified, which is exactly why its ring is inert.
+
+Where the engine applies it is still open, and the usual oracle cannot answer
+it. `FUN_00212058` reads the subdraw record at model `+0x24` and
+`FUN_002129b8:151-159` copies its halfwords into the packet verbatim, so the
+scrolled values should be sitting in the model's own table — but they are not in
+`eeMemory.bin`. The pyro save state contains the *built packets* (the
+`0x6D048006` vertex tag and the `count << 16 | 0x6600C039` UV tag are
+`FUN_00212058`'s, so the mesh path built them) and nothing else: searching all
+32 MB for the eight authored UV bytes of subdraw 4 returns two hits, both
+packets, and the byte pair `7F 9C` — the ground layer's `texFlags` — appears 57
+times in the whole image against the 224 the model alone holds. `grp_00a8`'s
+subdraw table is not resident, so whatever holds the scrolled copy is transient.
+
+Two other things the same dump settles:
+
+- **The alpha-12 pass is degenerate in the original.** Its 48 draws all collapse
+  to a single screen point, so the box the port draws is those passes failing to
+  collapse — not extra geometry and not the wrong blend. They are single-pass
+  primitives, `flags 0x901`/`0x903`, colour index 0, subdraw 1 at UV
+  `(135,177)..(135,215)`.
+- **The port's alpha-12 vertices are legitimate.** An earlier note here said the
+  original emits no alpha-12 vertices at all; that was read off a max-charge
+  capture. A resting ring emits 192 of them.
+
+#### The spell voice is a multi-clip VOICE.BIN bank
+
+Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips
+played through the same reserved streaming voice a line of dialogue uses, driven
+by a per-slot state machine in `DAT_0031DA60` that states 111 and 113 walk:
+
+| step | what it does |
+|---|---|
+| 1 | ask for the bank (`FUN_00206ae0`), on acceptance → 2 |
+| 2 | poll the load (`FUN_00206c28`), when it settles → 3 |
+| 3 | at the charge marker, if nothing else is speaking, play clip 0 → 100 |
+| 100 | on release, play clip 1 → 101; → 102 if something is speaking |
+
+The bank id is `DAT_0031DA54`, which `FUN_002432d8:125` took from the spell
+table's family column at `0x00325230`. Hand of Pyro is bank 7.
+
+**A VOICE.BIN entry is not always one clip.** `FUN_00206aa0` copies the first
+`0x40` bytes of a loaded entry into `DAT_00314BD0 + channel * 0x40` and
+`FUN_00206f08` reads them as a directory: word 0 is the clip count, then one
+word per clip packing `(offset in 16-byte units << 16) | size in 16-byte units`.
+`FUN_00206d98` validates it before trusting it — `count - 1 < 0xF` **and** the
+halfword at `+6` equal to `align16(count * 4 + 0x13)`, the directory's own
+length — and an entry that fails is played whole, which is what an ordinary line
+of dialogue is. Read out of the real file:
+
+| bank | spell | clips | clip 0 | clip 1 |
+|---|---|---|---|---|
+| 4 | Sword of the Fallen Devil | 2 | 31,408 B | 4,064 B |
+| 7 | Hand of Pyro | 2 | 31,408 B | 4,064 B |
+| 9 | Bite of Lightning | 5 | 31,408 B | 4,064 B |
+
+Clip 0 is a ~2.5 s incantation, clip 1 a ~0.3 s shout. **A short charge never
+reaches the shout**: the release checks `FUN_00206a90` and drops the line rather
+than queueing it, so with the incantation still running it writes 102 and says
+nothing. That is the original's own branch, not a port limitation — hold
+Triangle past ~2.5 s and both play.
+
+`DAT_00356788` is modelled as a **tick countdown taken from the clip's own
+length**, not as a mixer query. The original's flag is simulation state cleared
+when the stream ends; reading the mixer instead would make `--frames` output
+depend on whether audio was enabled. Verified: an audible run and `--no-audio`
+produce byte-identical reports.
+
 Of the 24 class-1 state handlers at `0x0031DD60`, this slice ports 101..107 and
 109..122 except 102, 108 and 115. `--battle-report` names any state a run
 actually reached whose handler is missing.
+
+`--hold-square 300-380` works under `--screenshot` as well as `--frames`; it did
+not at first, and a capture "during a guard" was quietly of a character standing
+still. Both loops now apply the same synthetic hold.
 
 ### The close-up rig, and the draw walk's deferral queue
 

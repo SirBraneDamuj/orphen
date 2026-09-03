@@ -170,6 +170,40 @@ namespace orphen::ported::entity
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
 
+    // What an effect entity needs to know about the battle member it belongs
+    // to: the control block's two action bytes (DAT_0031d7be / DAT_0031d7bf),
+    // the party record's character class (+0x00) and the member's current
+    // target (control +0x2C). FUN_002e7328 reads the first pair, FUN_002da8a0
+    // reads all four. The tables live in the battle module, so they arrive as a
+    // callback rather than as a dependency on it.
+    //
+    // Returns false outside a running battle or for a member out of range,
+    // which every reader treats as "not acting" -- the guard shield closes and
+    // the hand effect puts itself away, which is what they do the frame the
+    // action ends anyway.
+    struct BattleMemberView
+    {
+      std::uint8_t pendingAction0e = 0;
+      std::uint8_t currentAction0f = 0;
+      std::int16_t characterClass = 0;
+      std::int16_t target = -1;
+      // Party record +0x3C, the raw charge accumulator. FUN_002da220 scales the
+      // hand light by FUN_00249270(caster, 3) of it.
+      std::int32_t chargeTimer3c = 0;
+      // FUN_00249308's answer: the PS2 address of the selected slot's four
+      // attack bytes, record + 0x18 + slot * 4. FUN_002d9c88 reads its first
+      // halfword to pick the pulse cue.
+      std::uint32_t spellBlockAddress = 0;
+    };
+    std::function<bool(std::uint32_t member, BattleMemberView &out)> DAT_0031d7b0_battleMember;
+
+    // One 32-bit word out of the battle tables, by PS2 address. An effect
+    // entity's +0x198 on the *caster's* side is a pointer into the party
+    // record's four attack bytes; FUN_002dab70 copies those four bytes onto the
+    // projectile (FUN_00267da0(dest, src, 4)), which is the port's packed
+    // HitParameters. This is that read. Returns 0 when there is no battle.
+    std::function<std::uint32_t(std::uint32_t address)> DAT_0031d3c8_battleTableWord;
+
     // DAT_00355588, the shared hit effect's one-frame request word. FUN_002f1380
     // -- the setter every damage path calls to place the effect -- raises bit 0
     // in it; FUN_002f13d0, the type 0x1E3 behaviour, is what acts on it and

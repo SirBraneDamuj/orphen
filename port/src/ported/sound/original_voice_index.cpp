@@ -182,6 +182,94 @@ namespace orphen::ported::sound
     return entries_[voiceId];
   }
 
+  VoiceIndex::BankClip VoiceIndex::FUN_00206f08_bankClip(std::uint32_t voiceId,
+                                                         std::uint32_t clipIndex) const
+  {
+    BankClip clip;
+    const std::uint32_t size = sizeBytes(voiceId);
+    if (size == 0)
+    {
+      return clip;
+    }
+    // The whole-entry answer, which is what FUN_00206d98 falls back to.
+    const auto wholeEntry = [&] {
+      BankClip whole;
+      if (clipIndex == 0)
+      {
+        whole.offsetBytes = 0;
+        whole.sizeBytes = size;
+        whole.valid = true;
+      }
+      return whole;
+    };
+
+    if (audioPath_.empty() || size < 0x40)
+    {
+      return wholeEntry();
+    }
+    std::vector<std::uint32_t> header;
+    if (!readWords(audioPath_, fileOffset(voiceId), 0x10, header))
+    {
+      return wholeEntry();
+    }
+
+    // FUN_00206d98's test, both halves. The second is what stops an ordinary
+    // line whose first word happens to be small from being read as a directory.
+    const std::uint32_t count = header[0];
+    // DAT_00314BD6 is the halfword at +6, which little-endian is the *high*
+    // half of word 1 -- clip 0's offset field, in 16-byte units.
+    const std::uint32_t offsetField = (header[1] >> 16) & 0xFFFFu;
+    if (count - 1u >= 0xFu || (offsetField << 4) != ((count * 4u + 0x13u) & 0xFFFFFFF0u))
+    {
+      return wholeEntry();
+    }
+    if (clipIndex >= count)
+    {
+      return clip;
+    }
+    const std::uint32_t entry = header[clipIndex + 1];
+    clip.offsetBytes = ((entry >> 16) & 0xFFFFu) * 0x10u;
+    clip.sizeBytes = (entry & 0xFFFFu) << 4;
+    if (clip.offsetBytes + clip.sizeBytes > size)
+    {
+      return clip; // still invalid: the directory does not fit the entry
+    }
+    clip.valid = clip.sizeBytes != 0;
+    return clip;
+  }
+
+  std::vector<std::uint8_t> VoiceIndex::readBankClipAdpcm(std::uint32_t voiceId,
+                                                          std::uint32_t clipIndex) const
+  {
+    const BankClip clip = FUN_00206f08_bankClip(voiceId, clipIndex);
+    if (!clip.valid || audioPath_.empty())
+    {
+      return {};
+    }
+    std::vector<std::uint32_t> words;
+    if (!readWords(audioPath_, fileOffset(voiceId) + clip.offsetBytes, clip.sizeBytes / 4, words))
+    {
+      return {};
+    }
+    std::vector<std::uint8_t> bytes(clip.sizeBytes);
+    std::memcpy(bytes.data(), words.data(), clip.sizeBytes);
+    return bytes;
+  }
+
+  std::uint32_t VoiceIndex::bankClipHoldTicks(std::uint32_t voiceId, std::uint32_t clipIndex) const
+  {
+    const BankClip clip = FUN_00206f08_bankClip(voiceId, clipIndex);
+    if (!clip.valid)
+    {
+      return 0;
+    }
+    const std::uint64_t samples =
+        static_cast<std::uint64_t>(clip.sizeBytes) / kAdpcmBlockBytes * kAdpcmBlockSamples;
+    const std::uint64_t ticksPerSecond =
+        60ull * static_cast<std::uint64_t>(orphen::ported::kNominalFrameTicks);
+    return static_cast<std::uint32_t>(samples * ticksPerSecond / kVoiceSampleRate);
+  }
+
   std::uint32_t VoiceIndex::holdTicks(std::uint32_t voiceId) const
   {
     const std::uint64_t bytes = sizeBytes(voiceId);
