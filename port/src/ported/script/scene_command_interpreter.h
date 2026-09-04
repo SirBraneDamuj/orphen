@@ -733,6 +733,16 @@ namespace orphen::ported::script
     std::uint16_t haltOpcode() const { return haltOpcode_; }
     std::uint32_t haltOffset() const { return haltOffset_; }
 
+    // FUN_0025d618: point the stream at `blobOffset`, read a u32 count, then
+    // evaluate count*3 expressions as x/y/z, and put the cursor back. Returns
+    // false if the offset or the data runs off the end of the blob.
+    //
+    // Public because the battle camera needs it too: FUN_00246FC0 decodes the
+    // encounter's camera spline points with the same call, out of the same
+    // blob, and the expression evaluator it goes through lives here.
+    bool decodePathWaypoints(std::uint32_t blobOffset,
+                             std::vector<orphen::ported::psm2::Vec3> &waypoints);
+
   private:
     static constexpr std::size_t kCallStackDepth = 0x10;
 
@@ -882,11 +892,6 @@ namespace orphen::ported::script
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
 
-    // FUN_0025d618: point the stream at `blobOffset`, read a u32 count, then
-    // evaluate count*3 expressions as x/y/z, and put the cursor back. Returns
-    // false if the offset or the data runs off the end of the blob.
-    bool decodePathWaypoints(std::uint32_t blobOffset,
-                             std::vector<orphen::ported::psm2::Vec3> &waypoints);
     // puGpffffb0d8, or null when nothing is in focus.
     orphen::ported::entity::OriginalEntity *focusEntity();
     void alignStreamTo4();

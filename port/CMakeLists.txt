@@ -52,6 +52,7 @@ target_sources(orphen_port
         src/harness/flat_bin_archive.cpp
         src/harness/flat_bin_archive.h
         src/ported/battle/battle_party.cpp
+        src/ported/battle/battle_camera.cpp
         src/ported/battle/battle_encounter.cpp
         src/ported/battle/battle_command_input.cpp
         src/ported/battle/battle_character_update.cpp

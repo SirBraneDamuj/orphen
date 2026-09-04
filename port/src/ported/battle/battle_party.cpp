@@ -1,5 +1,7 @@
 #include "ported/battle/battle_party.h"
 
+#include <cmath>
+
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
 
@@ -850,18 +852,29 @@ namespace orphen::ported::battle
       DAT_00354e90_ = -1;
       DAT_00354e94_ = 0;
       DAT_00354e96_ = 0;
+      DAT_00354fb2_ = 0xFFFF;
       return;
     }
-    // :41-43. No camera splines, no display. FUN_00246fc0 fills this from the
-    // encounter blob's placement sub-blob.
+    // :41-43. No camera splines, no battle camera -- and no display either,
+    // because the whole function turns round here. FUN_00246fc0 fills this from
+    // the encounter blob's placement sub-blob.
     if (encounter.DAT_00354fac_cameraSplines() == 0)
     {
       return;
     }
-    // :44-47. DAT_00354ECC is the "battle suspended" gate.
+    // :44-47. DAT_00354ECC is the "battle suspended" gate. Note it re-arms the
+    // spline rather than leaving one half-run.
     if (DAT_00354ecc_ != 0)
     {
+      DAT_00354fb2_ = 0xFFFF;
       return;
+    }
+
+    // :48-140. Nothing armed: pick a spline pair and install it. Everything
+    // else in the function assumes one is running.
+    if (DAT_00354fb2_ == 0xFFFF)
+    {
+      FUN_0023c340_select_spline(environment, encounter);
     }
 
     // :142-147. The display is down: lift the freeze once, and only once.
@@ -872,6 +885,24 @@ namespace orphen::ported::battle
         DAT_00354e90_ = -1;
         FUN_002de500_unfreeze(*environment.pool);
       }
+
+      // :299-306 and 0x0023D02C. The camera workspace's mode byte is how every
+      // other shot in FUN_0023C340 -- the target framing here, and the reaction
+      // shots that are not ported -- hands the camera back: it is left non-zero,
+      // and this frame answers by re-arming from scratch. So the shot after a
+      // target display is a *fresh* spline, not the one that was interrupted.
+      if (DAT_00571b80_cameraWork_.byte00_mode != 0)
+      {
+        DAT_00571b80_cameraWork_.FUN_00267e78_clear();
+        DAT_00354fb2_ = 0xFFFF;
+        return;
+      }
+
+      // LAB_0023D04C, by way of LAB_0023CCAC. The port reaches it unconditionally
+      // because the branches in between are the parts of FUN_0023C340 this slice
+      // leaves out: DAT_00355C90/C94/C98 are the per-action framing modes, and
+      // DAT_00354E84/E8C the reaction shots. All read zero here.
+      FUN_0023c340_step_spline(environment, frameTicks);
       return;
     }
 
@@ -883,7 +914,182 @@ namespace orphen::ported::battle
     }
     DAT_00354e96_ = FUN_00248e58_step_timer(DAT_00354e96_, static_cast<std::uint16_t>(frameTicks));
     FUN_002de5b8_freeze(*environment.pool);
+
+    FUN_0023c340_frame_target(environment, frameTicks);
   }
+
+  // :48-140 and 0x0023C3E4-0x0023C5C4. Arm one of the encounter's camera
+  // spline pairs.
+  //
+  // This is the shot the battle actually plays in: a pair of cubic curves --
+  // one for the eye, one for the look-at -- that the camera walks back and
+  // forth along, holding each pair for the better part of half a minute before
+  // picking a different one at random. It is why the battle view drifts rather
+  // than sitting behind the player's shoulder.
+  void BattleParty::FUN_0023c340_select_spline(const Environment &environment,
+                                               const BattleEncounter &encounter)
+  {
+    const std::uint32_t count = encounter.DAT_00354fb0_cameraSplineCount();
+    if (environment.camera == nullptr || count == 0 ||
+        !environment.FUN_0025d618_decode_waypoints)
+    {
+      return;
+    }
+    const auto random = [&environment] {
+      return environment.FUN_00216868_random ? environment.FUN_00216868_random() : 0u;
+    };
+
+    // :50-52. FUN_00267E78(0x571B80, 0x70) then FUN_00217E18(0): the workspace
+    // and any installed camera both go, so FUN_00217E88 below is not refused.
+    DAT_00571b80_cameraWork_.FUN_00267e78_clear();
+    environment.camera->FUN_00217e18_release_manual_camera(false);
+
+    // :53-77. Which pair. With one there is no choice; otherwise it is the next
+    // one round plus a random skip, which is a walk that never lands on the one
+    // just played. DAT_00355CA0 is the three-entry override FUN_0023C310 fills
+    // for a scripted shot -- it reads -1 here, because nothing in this slice
+    // reaches the VM opcode that sets it.
+    std::uint16_t index = 0;
+    if (count > 1)
+    {
+      index = static_cast<std::uint16_t>(
+          (DAT_00354e9a_ + 1u + random() % (count - 1u)) % count);
+    }
+
+    DAT_00354fb2_ = index;
+    DAT_00354e9a_ = index;
+
+    const auto spline = encounter.cameraSpline(index);
+    // Word 1 is the eye and word 0 the look-at -- see BattleEncounter::
+    // CameraSpline for why round that way.
+    if (!environment.FUN_0025d618_decode_waypoints(spline.eyeList, splineEyePoints_) ||
+        !environment.FUN_0025d618_decode_waypoints(spline.lookAtList, splineLookAtPoints_))
+    {
+      DAT_00354fb2_ = 0xFFFF;
+      return;
+    }
+    // FUN_00217E88: FUN_00217D70 on the first point of each, then a
+    // three-component curve over each list. It builds no roll/zoom curve, which
+    // is what the empty spans mean.
+    environment.camera->FUN_00217fe8_set_camera_path(splineEyePoints_, {}, {},
+                                                     splineLookAtPoints_);
+
+    DAT_00355c8c_ = spline.duration;
+
+    // :64-71. Where along it to start, how long to stay, and which way to run.
+    // The start is capped at five sixths of the duration so a pair never opens
+    // at its own far end, and the dwell is one of two values -- 0xB400 or
+    // 0xC300 ticks, about 24 or 26 seconds at the nominal 0x20 a frame.
+    if (DAT_00355c8c_ > 0)
+    {
+      const std::int32_t span = DAT_00355c8c_ / 2 + DAT_00355c8c_ / 3;
+      DAT_00355c88_ = span > 0 ? static_cast<std::int32_t>((random() & 0xFFFFu) % span) : 0;
+    }
+    else
+    {
+      DAT_00355c88_ = 0;
+    }
+    DAT_00355ca8_ = static_cast<std::int32_t>(((random() & 1u) * 0x780u + 0x5A00u) * 2u);
+    DAT_00355c80_ = (random() & 1u) != 0 ? 1 : -1;
+  }
+
+  // LAB_0023D04C, 0x0023D04C-0x0023D2BC minus the DAT_00354E98 debug orbit.
+  void BattleParty::FUN_0023c340_step_spline(const Environment &environment,
+                                             std::uint32_t frameTicks)
+  {
+    if (environment.camera == nullptr || DAT_00354fb2_ == 0xFFFF)
+    {
+      return;
+    }
+    auto &camera = *environment.camera;
+
+    // The battle camera owns the projection outright: zoom back to 1.0 and roll
+    // flat every frame. DAT_0035565C, written zero beside them, is not ported.
+    camera.setZoomLog2(1.0f);
+    camera.setRoll(0.0f);
+
+    camera.FUN_00217f38_step_camera_path(DAT_00355c88_, DAT_00355c8c_);
+
+    const std::int32_t ticks = static_cast<std::int32_t>(frameTicks);
+    DAT_00355ca8_ -= ticks;
+    DAT_00355c88_ += ticks * DAT_00355c80_;
+
+    // Dwell spent: drop the pair, and the next frame picks another.
+    if (DAT_00355ca8_ < 1)
+    {
+      DAT_00355ca8_ = 0;
+      DAT_00354fb2_ = 0xFFFF;
+    }
+
+    // Ping-pong. Note the test is on the position *after* the step, so a pair
+    // turns round on the frame it would have run past an end rather than
+    // clamping there.
+    if (DAT_00355c88_ >= DAT_00355c8c_ || DAT_00355c88_ <= 0)
+    {
+      DAT_00355c80_ = static_cast<std::int16_t>(-DAT_00355c80_);
+    }
+    DAT_00571b80_cameraWork_.byte00_mode = 0;
+  }
+
+  // :180-205 and 0x0023C780-0x0023C860. The camera half of the display: the
+  // first sixty frames swing onto the target, the last sixty orbit it.
+  void BattleParty::FUN_0023c340_frame_target(const Environment &environment,
+                                              std::uint32_t frameTicks)
+  {
+    if (environment.camera == nullptr || environment.pool == nullptr)
+    {
+      return;
+    }
+    const std::size_t targetSlot = static_cast<std::size_t>(DAT_00354e90_);
+    if (targetSlot >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return;
+    }
+    auto &camera = *environment.camera;
+    // DAT_0058BED0/D4/D8, DAT_0058BF08 and DAT_0058BF0C are all pool slot 0 --
+    // the player -- read straight out of the pool rather than through the
+    // control block.
+    const auto &player = environment.pool->slot(0);
+    const auto &target = environment.pool->slot(targetSlot);
+
+    // FUN_00217D40 and FUN_00217D10 are both no-ops unless cGpffffb6e1 already
+    // reads 0x23. It does: the spline the frame opened with installed one.
+    if (camera.cGpffffb6e1_subMode() != 0x23)
+    {
+      return;
+    }
+
+    if (DAT_00354e96_ > 0x780)
+    {
+      // :183-190. Once, on the frame the display opens: throw the look point
+      // eight units out in front of the player, so the swing starts from the
+      // direction the character is facing rather than from wherever the follow
+      // camera happened to be pointing.
+      if (DAT_00354e94_ != 0)
+      {
+        camera.FUN_00217d10_set_look_at(
+            {std::cos(player.facingRadians5c) * 8.0f + player.positionX20,
+             std::sin(player.facingRadians5c) * 8.0f + player.positionZ24,
+             player.positionY28 + player.height58 * 0.5f});
+      }
+
+      if (FUN_0023db98_swing_look_to_target(camera, player, target, kSwingSteps,
+                                            DAT_00571b80_cameraWork_) == -1)
+      {
+        // Too close to swing. Drop straight to the hold, which is what the
+        // second half of the window runs.
+        DAT_00354e96_ = 0x780;
+      }
+      return;
+    }
+
+    // :192-196. The hold. Entry offset zero, so the orbit opens on the
+    // player-to-target line and walks away from it at DAT_00352668 a tick.
+    FUN_0023de20_orbit_target(camera, player, target, static_cast<std::int32_t>(targetSlot),
+                              0.0f, kDAT_00352668_orbitRate, kOrbitDistanceMilli, kOrbitMode,
+                              DAT_00571b80_cameraWork_, frameTicks);
+  }
+
 
   void BattleParty::FUN_002458a8_fill_party_record(std::int32_t member,
                                                    const orphen::ported::entity::OriginalEntity &entity,

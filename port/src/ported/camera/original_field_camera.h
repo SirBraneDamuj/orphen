@@ -102,6 +102,12 @@ namespace orphen::ported::camera
     // installed on top of one that is already there.
     std::uint8_t cGpffffb6e1_subMode() const { return cGpffffb6e1_subMode_; }
 
+    // The pose itself. The battle camera reads both back before stepping them
+    // (FUN_0023DB98 turns the look point about a pivot rather than recomputing
+    // it), so they are not write-only the way the script camera treats them.
+    const orphen::ported::psm2::Vec3 &DAT_0058c0a8_eye() const { return DAT_0058c0a8_eye_; }
+    const orphen::ported::psm2::Vec3 &DAT_0058be90_lookAt() const { return DAT_0058be90_lookAt_; }
+
     // FUN_00217d40 / FUN_00217d10: move an installed script camera's eye or
     // look-at. Both are no-ops unless the submode is 0x23.
     void FUN_00217d40_set_eye(const orphen::ported::psm2::Vec3 &eye);

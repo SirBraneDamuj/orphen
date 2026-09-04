@@ -216,16 +216,25 @@ namespace orphen::ported::render
     int screenSpaceGsZ = 0;
     // Entity +0x133 raw, not scaled: the branch applies its own DAT_00352094.
     int screenSpaceDepthBias = 0;
+
+    // Entity +0x08 bit 0x400, and the seven angles at entity +0x168 it turns
+    // by. The branch rewrites the finished quad's four corners in place: the
+    // quad's centre swings about the sprite origin by `spriteAngle168[0]`, and
+    // the quad turns about its own centre by `spriteAngle168[recordIndex]`,
+    // recordIndex being the descending index of the record being drawn. Only
+    // records under index nine take it; a taller strip draws those quads
+    // unrotated.
+    bool rotatedCorners400 = false;
+    const float *spriteAngle168 = nullptr;
   };
 
   // FUN_0020f510's record loop for one entity, in draw order. Appends to `out`.
   // `poseColumn` is entity +0xAC, which the animation stepper owns.
   //
-  // NOT REPRODUCED: the rotation branch at entity +0x08 bit 0x400, which
-  // rebuilds the quad as four independently rotated corners off the per-record
-  // angle array at entity +0x168 and only for record indices under nine. No
-  // descriptor either standing scene spawns sets it, and the caller rejects an
-  // entity carrying it.
+  // The rotation branch at entity +0x08 bit 0x400 is reproduced -- see
+  // `rotatedCorners400`. FUN_002D73E8's target cursor is the one thing in the
+  // battle module that sets it, and without it the bracket sits flat-side-up
+  // instead of corner-up.
   //
   // The screen-space branch at bit 0x1000 *is* reproduced -- see
   // `screenSpace1000` below. FUN_002d73e8's target cursor is the one thing that

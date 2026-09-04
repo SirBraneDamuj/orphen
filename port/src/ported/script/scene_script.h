@@ -175,6 +175,14 @@ namespace orphen::ported::script
     SceneScriptState &state() { return state_; }
     const SceneScriptState &state() const { return state_; }
 
+    // FUN_0025d618, standing on its own. FUN_00246FC0 decodes the encounter's
+    // camera spline points out of this same blob and through this same
+    // expression evaluator, but it is called from the battle module rather than
+    // from a running script, so it gets a throwaway interpreter -- the point
+    // lists are literals and reach nothing in the environment.
+    bool FUN_0025d618_decode_waypoints(std::uint32_t blobOffset,
+                                       std::vector<orphen::ported::psm2::Vec3> &waypoints);
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t headerWords_[kSceneScriptHeaderWordCount]{};

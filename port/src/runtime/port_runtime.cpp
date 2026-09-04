@@ -1826,6 +1826,8 @@ namespace orphen::port
     environment.trace = &battleTrace_;
     environment.paths = pathFollowers_.get();
     environment.frameTicks = frameTicks;
+    environment.boneOverrides = DAT_004a7e00_boneOverrides_;
+    environment.poseFilters = DAT_003ffe00_poseFilters_;
     environment.FUN_00267d38_play_at_entity = [this](std::uint16_t cue, std::size_t slot)
     {
       const auto &at = entityPool_.slot(slot);
@@ -1913,6 +1915,20 @@ namespace orphen::port
       const auto &actor = entityPool_.slot(static_cast<std::size_t>(entitySlot));
       sample.state = actor.state60;
       sample.animation = actor.animationA0;
+      constexpr float kRadiansToDegreesLocal = 57.29578f;
+      sample.facingDegrees =
+          static_cast<std::int16_t>(actor.facingRadians5c * kRadiansToDegreesLocal);
+      // FUN_002493B8 reads the halfword back through its own negate, so a
+      // target state 106 has marked committed by negating still names a slot.
+      const std::int32_t bearingSlot = sample.target < 0 ? -sample.target : sample.target;
+      if (sample.target != -1 &&
+          static_cast<std::size_t>(bearingSlot) < orphen::ported::entity::kEntitySlotCount)
+      {
+        const auto &body = entityPool_.slot(static_cast<std::size_t>(bearingSlot));
+        sample.targetBearingDegrees = static_cast<std::int16_t>(
+            std::atan2(body.positionZ24 - actor.positionZ24, body.positionX20 - actor.positionX20) *
+            kRadiansToDegreesLocal);
+      }
     }
     const std::int32_t bladeSlot =
         battleParty_.entitySlotAt(kDAT_0031da9c_attackEntity + memberU * 4);
@@ -1956,6 +1972,15 @@ namespace orphen::port
     environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;
     environment.DAT_00343688_partyRecords = sceneScript_.state().DAT_00343688_partyRecords;
     environment.partySlotCount = orphen::ported::script::SceneScriptState::kPartySlotCount;
+    // FUN_0023C340's half of the battle: the ambient camera walks the
+    // encounter's own spline pairs, and the target display interrupts it to
+    // frame the enemy the D-pad picked.
+    environment.camera = &fieldCamera_;
+    environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+    environment.FUN_0025d618_decode_waypoints =
+        [this](std::uint32_t at, std::vector<orphen::ported::psm2::Vec3> &out) {
+          return sceneScript_.FUN_0025d618_decode_waypoints(at, out);
+        };
     return environment;
   }
 
@@ -3043,14 +3068,6 @@ namespace orphen::port
             return;
           }
 
-          // FUN_0020f510:0x0020f594. Bit 0x400 is the rotated-corner branch,
-          // which is not ported and which no descriptor either standing scene
-          // spawns sets; rejecting here rather than drawing the wrong thing.
-          if ((entity.halfword08 & 0x0400u) != 0)
-          {
-            return;
-          }
-
           // Bit 0x1000 is the screen-space branch. FUN_002d73e8 has already put
           // pixels in +0x20/+0x24 and its projected depth word in +0x28, so
           // there is nothing to transform: the position converts straight to GS
@@ -3079,6 +3096,11 @@ namespace orphen::port
                                : orphen::ported::render::kDAT_0035209c_spriteNearClip;
             inputs.screenSpaceGsZ = entity.cursorProjectedDepth28;
             inputs.screenSpaceDepthBias = entity.depthBias133;
+            // FUN_0020f510:0x0020fdb0. Bit 0x400 turns the quad about the
+            // sprite origin by the angles at +0x168 -- for the target cursor,
+            // pi/4 while selected and a slow drift otherwise.
+            inputs.rotatedCorners400 = (entity.halfword08 & 0x0400u) != 0;
+            inputs.spriteAngle168 = entity.spriteAngle168;
             inputs.flatColour = true;
             inputs.textureSlot = binding->textureSlot;
             orphen::ported::render::FUN_0020f510_build_quads(*binding->model, entity.poseColumnAc,
@@ -3142,6 +3164,8 @@ namespace orphen::port
           // FUN_0020f510:0x0020f544 latches +0x08 bit 0x40 into the workspace;
           // the record loop reads it back to pin the GS z at 0xFFFF.
           inputs.forceFront = (entity.halfword08 & 0x0040u) != 0;
+          inputs.rotatedCorners400 = (entity.halfword08 & 0x0400u) != 0;
+          inputs.spriteAngle168 = entity.spriteAngle168;
           inputs.textureSlot = binding->textureSlot;
           inputs.ambient[0] = ambient[0];
           inputs.ambient[1] = ambient[1];
@@ -4036,7 +4060,8 @@ namespace orphen::port
                 << " action=" << hex(sample.currentAction, 2)
                 << " state=" << hex(sample.state, 4) << " charge=" << sample.charge
                 << " target=" << sample.target << " slot=" << static_cast<int>(sample.selectedSlot)
-                << " anim=" << hex(sample.animation, 2) << " blade=" << sample.bladeLength
+                << " anim=" << hex(sample.animation, 2) << " face=" << sample.facingDegrees
+                << " bearing=" << sample.targetBearingDegrees << " blade=" << sample.bladeLength
                 << " ring=" << sample.ringScale << " hitfx=" << sample.hitEffectScale
                 << " cd=[";
       for (std::size_t i = 0; i < sample.cooldowns.size(); ++i)
@@ -4126,6 +4151,11 @@ namespace orphen::port
     }
     std::cout << "\n  per-actor VM scripts are installed but not stepped "
                  "(FUN_0023fd30's second loop)\n";
+    std::cout << "  camera splines: " << battleEncounter_.DAT_00354fb0_cameraSplineCount()
+              << " pairs, playing #" << battleParty_.DAT_00354fb2_spline() << " at "
+              << battleParty_.DAT_00355c88_splinePosition() << "/"
+              << battleParty_.DAT_00355c8c_splineDuration() << " dwell "
+              << battleParty_.DAT_00355ca8_splineDwell() << "\n";
   }
 
   void PortRuntime::printExitReports() const

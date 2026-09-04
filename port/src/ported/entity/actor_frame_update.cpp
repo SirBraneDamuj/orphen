@@ -2355,10 +2355,37 @@ namespace orphen::ported::entity
       cursor.cursorFlags198 |= 1u;
     }
 
-    // :215-238. The spin. An unselected cursor turns on the per-record angle
-    // array at +0x168 and a selected one is pinned flat; the port's sprite pass
-    // does not implement the +0x08 bit 0x400 rotated-corner branch that array
-    // feeds, so this is recorded rather than reproduced.
+    // :215-238. **The rotation.** +0x08 bit 0x400 switches the sprite pass from
+    // the axis-aligned quad to FUN_0020F510's rotated-corner branch, and the
+    // seven angles at +0x168 are what it turns by.
+    //
+    // A *selected* cursor -- animation 11 -- is pinned at DAT_003547A4, which is
+    // pi/4 exactly: the bracket sits with a corner pointing up. Every other
+    // cursor accumulates DAT_003555BC * DAT_003547A8 instead, 0.0002269 radians
+    // a tick, so at the nominal 0x20 ticks a frame it turns about 25 degrees a
+    // second -- the slow drift the unselected brackets have.
+    //
+    // Note the two loops fill different amounts: the pinned one writes all seven
+    // slots, the spin writes six and leaves +0x180 alone. Reproduced as written.
+    cursor.halfword08 |= 0x400u;
+    if (cursor.animationA0 == 11)
+    {
+      for (int i = 6; i >= 0; --i)
+      {
+        cursor.spriteAngle168[i] = kDAT_003547a4_selectedCursorAngle;
+      }
+    }
+    else
+    {
+      cursor.spriteAngle168[0] += static_cast<float>(environment.frameTicks) *
+                                  kDAT_003547a8_cursorSpinRate;
+      cursor.spriteAngle168[0] =
+          orphen::ported::model::FUN_00216690_wrap_angle(cursor.spriteAngle168[0]);
+      for (int i = 5; i >= 0; --i)
+      {
+        cursor.spriteAngle168[i] = cursor.spriteAngle168[0];
+      }
+    }
 
     // :239-259. Selection. The player's target is control block 0's +0x2C, a
     // pool slot; a cursor riding that slot plays the grow-in and then sits on

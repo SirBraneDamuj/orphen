@@ -407,6 +407,12 @@ namespace orphen::ported::entity
   inline constexpr float kDAT_00354530_hoverLow = -0.005f;
   inline constexpr float kDAT_00354534_hoverUp = 0.004f;
   // DAT_003525f0 / DAT_003525f4: FUN_0023a320's dead zone, half a degree.
+  // FUN_002D73E8's two rotation constants. DAT_003547A4 is pi/4 to the bit --
+  // the selected target's bracket sits corner-up, not flat -- and DAT_003547A8
+  // is the unselected drift, per tick of DAT_003555BC.
+  inline constexpr float kDAT_003547a4_selectedCursorAngle = 0.785398006f;
+  inline constexpr float kDAT_003547a8_cursorSpinRate = 0.000226900003f;
+
   inline constexpr float kAngleDeadZone = 0.00872664f;
 
   // FUN_0023a320: one capped step of `from` toward `to`, zero once inside the

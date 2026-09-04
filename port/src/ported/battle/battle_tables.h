@@ -100,7 +100,11 @@ namespace orphen::ported::battle
     // record + 0x28 -- so a `DAT_00355cb0 + N` in the decompilation is
     // record + 0x28 + N, not record + 0x38 + N. Getting that wrong puts three
     // separate timers on top of the charge accumulator.
-    inline constexpr std::uint32_t kFacing34 = 0x34;    // DAT_00355cb0 + 0x0C, float
+    // DAT_00355cb0 + 0x0C. FUN_00249610's face-the-target block writes the
+    // plain 2-D distance to the target here every frame it runs. **Nothing in
+    // the game reads it back** -- it is the only write in the ELF -- so it is
+    // reproduced for the hardware diff, not because anything depends on it.
+    inline constexpr std::uint32_t kTargetDistance34 = 0x34; // float
     inline constexpr std::uint32_t kTurnFlags38 = 0x38; // DAT_00355cb0 + 0x10, u16 bit 0 = turning
     // DAT_00355cb0 + 0x14. FUN_00249108 clears it and FUN_00249128 accumulates
     // DAT_003555bc into it, capped at 0x2D00: **the charge**. FUN_00249270

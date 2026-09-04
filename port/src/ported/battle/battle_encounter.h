@@ -238,10 +238,9 @@ namespace orphen::ported::battle
 
     // DAT_00354FAC / DAT_00354FB0, from FUN_00246fc0: the battle camera's
     // spline pairs, taken from the placement sub-blob's +0x5C count and +0x60
-    // array. The splines themselves are not ported -- the camera does not swing
-    // onto a target yet -- but the pointer is, because FUN_0023c340 returns
-    // immediately when it is null and that gate is what decides whether the
-    // target display (and the freeze behind it) runs at all.
+    // array. FUN_0023c340 returns immediately when the array is null, and that
+    // gate is what decides whether the battle camera -- and the target display
+    // and the freeze behind it -- runs at all.
     // FUN_0023fd30's master-script loop. Steps the VM at PTR_LAB_0031d118 on
     // the master pseudo-record DAT_0031DBA8 until a handler yields.
     struct MasterStepResult
@@ -266,6 +265,35 @@ namespace orphen::ported::battle
 
     std::uint32_t DAT_00354fac_cameraSplines() const { return cameraSplines_; }
     std::uint32_t DAT_00354fb0_cameraSplineCount() const { return cameraSplineCount_; }
+
+    // One 0xC-byte entry of that array. FUN_00246fc0 relocates the two words by
+    // iGpffffb0e8, the *scene script* base -- not the encounter blob's own --
+    // so in the port they are already script offsets and need no fixup. Both
+    // name a list shaped `{u32 count, then count script-encoded x/y/z triples}`,
+    // which FUN_0025d618 decodes in place.
+    //
+    // The order is the one FUN_00217e88's argument shuffle produces, and it is
+    // the wrong way round from the obvious reading: word 0 is the **look-at**
+    // list and word 1 the **eye** list.
+    struct CameraSpline
+    {
+      std::uint32_t lookAtList = 0; // +0x00
+      std::uint32_t eyeList = 0;    // +0x04
+      std::int32_t duration = 0;    // +0x08, in ticks
+    };
+    CameraSpline cameraSpline(std::uint32_t index) const
+    {
+      CameraSpline entry;
+      if (cameraSplines_ == 0 || index >= cameraSplineCount_)
+      {
+        return entry;
+      }
+      const std::uint32_t at = cameraSplines_ + index * 0x0Cu;
+      entry.lookAtList = read<std::uint32_t>(at + 0);
+      entry.eyeList = read<std::uint32_t>(at + 4);
+      entry.duration = read<std::int32_t>(at + 8);
+      return entry;
+    }
 
     std::size_t windowSize() const { return memory_.size(); }
 

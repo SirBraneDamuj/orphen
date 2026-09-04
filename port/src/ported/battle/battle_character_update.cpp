@@ -21,6 +21,39 @@ namespace orphen::ported::battle
     constexpr std::uint8_t kActionRecover87 = 0x87;  // -0x79
     constexpr std::uint8_t kActionStagger83 = 0x83;  // -0x7D
     constexpr std::uint8_t kActionSummon94 = 0x94;   // -0x6C
+    constexpr std::uint8_t kActionSpellC8e = 0x8E;   // -0x72, the kind -1 hold
+    // FUN_00249610:141, the second half of "is this character standing still".
+    // 0x96 is the pre-start hold the opener parks an idle member in.
+    constexpr std::uint8_t kActionOpenerHold96 = 0x96;
+
+    // The bones the face-the-target block drives. 10 and 9 are the two arms --
+    // FUN_0020DD78's role nibble puts them there -- and 0x20 is the spine.
+    constexpr std::size_t kBoneArm10 = 10;
+    constexpr std::size_t kBoneArm09 = 9;
+    constexpr std::size_t kBoneSpine20 = 0x20;
+
+    // The turn's thirteen constants, dumped from the ELF at 0x00352744.
+    //
+    //   +0x00 / +0x04   -+5 degrees, the snap band
+    //   +0x08 / +0x0C   -+45 degrees, fast or slow
+    //   +0x10 / +0x14   the two idle turn rates, radians a tick
+    //   +0x18           the snap band's own rate
+    //   +0x1C / +0x20   -+50 degrees, the spine twist limit
+    //   +0x24 .. +0x30  the three aim-pose biases
+    //   +0x34           the spine's lift floor
+    constexpr float kDAT_00352744_snapLow = -0.0872664452f;
+    constexpr float kDAT_00352748_snapHigh = 0.0872664452f;
+    constexpr float kDAT_0035274c_wideLow = -0.785398006f;
+    constexpr float kDAT_00352750_wideHigh = 0.785398006f;
+    constexpr float kDAT_00352754_fastTurnRate = 0.00610865094f;
+    constexpr float kDAT_00352758_slowTurnRate = 0.00261799339f;
+    constexpr float kDAT_0035275c_snapTurnRate = 0.00436332216f;
+    constexpr float kDAT_00352760_spineTwistMin = -0.872664452f;
+    constexpr float kDAT_00352764_spineTwistMax = 0.872664452f;
+    constexpr float kDAT_00352768_arm10PitchBias = 0.558f;
+    constexpr float kDAT_0035276c_arm09PitchBias = 0.118f;
+    constexpr float kDAT_00352770_arm09Roll = 0.736f;
+    constexpr float kDAT_00352774_spineLiftFloor = -0.715584815f;
 
     // FUN_00249270: min(party record +0x3C, 0x2580) / divisor. With 0x780 that
     // is the **charge level, 0..4** -- the number the fire states stamp into
@@ -1769,18 +1802,50 @@ namespace orphen::ported::battle
       }
     }
 
-    // :110-135. The per-frame reset, then FUN_0024a360.
+    // :103-118. Two zeroed seven-float poses, the per-frame freeze reset, and
+    // for class 1 the three bones the block below drives, released before
+    // anything else can look at them. The spine's read-back is the pose every
+    // write further down is layered onto -- caller order is rotation xyz,
+    // translation xyz, scale.
+    std::array<float, orphen::ported::model::kPoseFieldCount> spinePose{};
+    std::array<float, orphen::ported::model::kPoseFieldCount> armPose{};
+    orphen::ported::model::EntityBoneOverrides *overrides =
+        entitySlot < environment.boneOverrides.size() ? &environment.boneOverrides[entitySlot]
+                                                      : nullptr;
+    const orphen::ported::model::EntityPoseFilter *poseFilter =
+        entitySlot < environment.poseFilters.size() ? &environment.poseFilters[entitySlot] : nullptr;
+
     entity.freezeTimerBd = 0;
-    const std::uint8_t previousAction =
-        tables.read<std::uint8_t>(control + control::kCurrentAction0f);
-    if (previousAction == 0x0B)
+    if (characterClass == 1 && overrides != nullptr)
     {
-      // Action 0x0B is a hard park: nothing runs, not even the state handler.
+      orphen::ported::model::FUN_0020d9c8_clear_bone_override(*overrides, kBoneArm10);
+      orphen::ported::model::FUN_0020d9c8_clear_bone_override(*overrides, kBoneSpine20);
+      orphen::ported::model::FUN_0020d9c8_clear_bone_override(*overrides, kBoneArm09);
+      if (poseFilter != nullptr)
+      {
+        spinePose = orphen::ported::model::FUN_0020d9d8_read_bone_pose(*poseFilter, kBoneSpine20);
+      }
+    }
+
+    // :120-126. **The park is on the pending byte, not the current one.** A
+    // pending 0x0B with the current byte already 0x0B is a no-op; otherwise it
+    // latches and nothing else runs this frame, state handler included.
+    if (tables.read<std::uint8_t>(control + control::kPendingAction0e) == 0x0B)
+    {
+      if (tables.read<std::uint8_t>(control + control::kCurrentAction0f) != 0x0B)
+      {
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+        tables.write<std::uint8_t>(control + control::kCurrentAction0f, 0x0B);
+        entity.guardArc124 = 0.0f;
+      }
       return;
     }
     tables.write<std::uint32_t>(control + control::kFlags38,
                                 tables.read<std::uint32_t>(control + control::kFlags38) & 0xFFFFFFFEu);
     FUN_0024a360_take_pending_action(environment, entitySlot);
+    // :129. The guard arc is cleared here, *before* the dispatch, so state 117
+    // re-arms it every frame it runs and it lapses the frame the guard drops.
+    entity.guardArc124 = 0.0f;
 
     // :139-144. Two gates on running the state at all: a state of zero, and
     // DAT_00354fc2 bits 0/1, which the battle setup raises.
@@ -1817,12 +1882,130 @@ namespace orphen::ported::battle
         tables.write<std::int16_t>(control + control::kTarget2c, -1);
       }
     }
-    if (target >= 3)
+    // :166-310. **Face the target.** See the header for the five things that
+    // switch it off. FUN_002494E0 is the fifth: zero while the state's restart
+    // bit is up, otherwise the charge timer at party record +0x3C, and a
+    // non-zero charge pins the facing where the cast began.
+    const std::int32_t chargeLock =
+        ((entity.state60 & 0x4000) != 0)
+            ? 0
+            : static_cast<std::int32_t>(
+                  tables.read<std::uint16_t>(recordBase + record::kChargeTimer3c));
+    const std::uint8_t currentAction = tables.read<std::uint8_t>(control + control::kCurrentAction0f);
+    const bool standing =
+        currentAction == kActionIdle06 || currentAction == kActionOpenerHold96;
+    if (currentAction != kActionSpellC8e && target >= 3 && party.DAT_00354ecc() == 0 &&
+        (tables.read<std::uint32_t>(kDAT_0031da6c_memberFlags + member * 4u) & 0x400u) == 0)
     {
-      // The turn-toward-target block. Unreachable with no enemies; when the
-      // enemy side lands it goes here, driving entity +0x5C through
-      // FUN_0023a320 toward FUN_00305408 of the target's offset.
       party.recordTargetFacingReached();
+      const auto &body = environment.pool->slot(static_cast<std::size_t>(target));
+      const float dx = body.positionX20 - entity.positionX20;
+      const float dz = body.positionZ24 - entity.positionZ24;
+      const float horizontal = std::sqrt(dx * dx + dz * dz);
+      tables.write<float>(recordBase + record::kTargetDistance34, horizontal);
+
+      const float wanted = std::atan2(dz, dx);
+      const std::uint32_t turnFlagsAt = recordBase + record::kTurnFlags38;
+      const auto clearTurning = [&] {
+        tables.write<std::uint16_t>(
+            turnFlagsAt,
+            static_cast<std::uint16_t>(tables.read<std::uint16_t>(turnFlagsAt) & 0xFFFEu));
+      };
+      const auto stepFacing = [&](float rate) {
+        const float step = orphen::ported::entity::FUN_0023a320_approach_angle(
+            entity.facingRadians5c, wanted, rate);
+        // A zero step means FUN_0023a320's own half-degree dead zone swallowed
+        // the difference, and the original finishes the turn exactly rather
+        // than leaving the remainder.
+        entity.facingRadians5c = (step == 0.0f) ? wanted : entity.facingRadians5c + step;
+      };
+
+      if (entity.facingRadians5c == wanted || chargeLock != 0)
+      {
+        clearTurning();
+      }
+      else
+      {
+        const float delta =
+            orphen::ported::model::FUN_002166e8_angle_delta(entity.facingRadians5c, wanted);
+        if (delta > kDAT_00352744_snapLow && delta < kDAT_00352748_snapHigh)
+        {
+          // Inside five degrees the turn closes whatever the character is
+          // doing -- this is the only branch a mid-action character reaches.
+          clearTurning();
+          stepFacing(static_cast<float>(environment.frameTicks) * kDAT_0035275c_snapTurnRate);
+        }
+        else if (standing)
+        {
+          if ((tables.read<std::uint16_t>(turnFlagsAt) & 1u) == 0)
+          {
+            tables.write<std::uint16_t>(
+                turnFlagsAt,
+                static_cast<std::uint16_t>(tables.read<std::uint16_t>(turnFlagsAt) | 1u));
+            // The frame a turn starts swaps the idle animation: 2 and 7 are the
+            // two standing loops, and class 1 goes one way, everything else the
+            // other.
+            if (entity.animationA0 == 2)
+            {
+              if (characterClass == 1)
+              {
+                FUN_00248e98_set_animation_if_changed(entity, 7);
+              }
+            }
+            else if (entity.animationA0 == 7)
+            {
+              FUN_00248e98_set_animation_if_changed(entity, 2);
+            }
+          }
+          // Outside forty-five degrees the fast rate, inside it the slow one --
+          // the turn eases in as it closes.
+          stepFacing(static_cast<float>(environment.frameTicks) *
+                     ((delta <= kDAT_0035274c_wideLow || delta >= kDAT_00352750_wideHigh)
+                          ? kDAT_00352754_fastTurnRate
+                          : kDAT_00352758_slowTurnRate));
+        }
+      }
+
+      // :246-310. The upper body, class 1 only and never while staggered.
+      if (characterClass == 1 && currentAction != kActionStagger83 && overrides != nullptr)
+      {
+        const float remaining =
+            orphen::ported::model::FUN_002166e8_angle_delta(entity.facingRadians5c, wanted);
+        // Compared against the spine's *current* rotation Z: if the twist the
+        // legs have not caught up on is already in the bone there is nothing to
+        // write.
+        if (remaining != spinePose[2] && standing)
+        {
+          spinePose[2] =
+              std::clamp(remaining, kDAT_00352760_spineTwistMin, kDAT_00352764_spineTwistMax);
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(*overrides, kBoneSpine20, spinePose,
+                                                                4);
+        }
+        // Animation 0x14 is the cast and timeline cursor 4 is the beat the arms
+        // come up. The target's elevation is split three ways.
+        if (entity.animationA0 == 0x14 && entity.timelineCursorA8 == 4 && poseFilter != nullptr)
+        {
+          const float pitch = std::atan2(body.positionY28 - entity.positionY28, horizontal);
+
+          armPose = orphen::ported::model::FUN_0020d9d8_read_bone_pose(*poseFilter, kBoneArm10);
+          armPose[1] = pitch * 0.5f + kDAT_00352768_arm10PitchBias;
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(*overrides, kBoneArm10, armPose,
+                                                                0x10);
+
+          armPose = orphen::ported::model::FUN_0020d9d8_read_bone_pose(*poseFilter, kBoneArm09);
+          armPose[2] = kDAT_00352770_arm09Roll;
+          armPose[0] = pitch * -0.5f + kDAT_0035276c_arm09PitchBias;
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(*overrides, kBoneArm09, armPose,
+                                                                0x0E);
+
+          // Only an upward aim lifts the spine; a downward one leaves it alone.
+          const float lift = pitch < 0.0f ? 0.0f : pitch;
+          spinePose[0] = std::max(-lift, kDAT_00352774_spineLiftFloor);
+          spinePose[1] = -(spinePose[0] * 0.5f);
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(*overrides, kBoneSpine20, spinePose,
+                                                                8);
+        }
+      }
     }
 
     // :311-349. The dispatch. Only class 1 has a table here.

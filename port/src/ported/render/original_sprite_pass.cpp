@@ -18,6 +18,12 @@ namespace orphen::ported::render
       return static_cast<int>(value);
     }
 
+    // FUN_00216608: sqrt(x*x + y*y).
+    float FUN_00216608_length(float x, float y) { return std::sqrt(x * x + y * y); }
+
+    // DAT_003520a4, pi. The rotated-corner branch's only literal.
+    constexpr float kDAT_003520a4_pi = 3.14159203f;
+
     std::uint16_t u16At(std::span<const std::uint8_t> bytes, std::size_t at)
     {
       return static_cast<std::uint16_t>(bytes[at]) |
@@ -276,6 +282,80 @@ namespace orphen::ported::render
       quad.v0 = static_cast<float>(record.v);
       quad.u1 = static_cast<float>(record.u + w);
       quad.v1 = static_cast<float>(record.v + h);
+
+      // FUN_0020f510:0x0020fdb0-0x00210094. **The rotated-corner branch.** The
+      // axis-aligned quad has already been written into the packet by this
+      // point; the branch goes back over the four vertices and replaces their
+      // XY, leaving the texels where they were. Its guard is the record index,
+      // not the count: `if (*(short *)pauVar27[0xd] < 9)`, so record 9 and up in
+      // a tall strip stay unrotated.
+      //
+      // Everything below happens in a space where Y is **doubled**, because the
+      // GS output is 640x224 at 4:3 and its pixels are 2:1 -- rotating in raw GS
+      // units would shear the sprite. The doubling is undone by halving the sine
+      // term on the way out, which is why `fVar32` is a constant 0.5.
+      if (inputs.rotatedCorners400 && inputs.spriteAngle168 != nullptr && index < 9)
+      {
+        // Corner offsets from the projected origin, Y doubled.
+        const int rx0 = gsX0 - inputs.gsOriginX;
+        const int rx1 = gsX1 - inputs.gsOriginX;
+        const int ry0 = (gsY0 - inputs.gsOriginY) * 2;
+        const int ry1 = (gsY1 - inputs.gsOriginY) * 2;
+
+        // The quad's own centre, swung about the sprite origin by angle 0. A
+        // record whose offsetX/offsetY put it off-centre therefore orbits;
+        // a centred one contributes nothing here.
+        const int sumX = rx1 + rx0;
+        const int sumY = ry1 + ry0;
+        const int centreRadius =
+            FUN_0030bd20_trunc(FUN_00216608_length(static_cast<float>(sumX / 2),
+                                                   static_cast<float>(sumY >> 1)));
+        const float centreAngle =
+            std::atan2(static_cast<float>(sumY), static_cast<float>(sumX)) + inputs.spriteAngle168[0];
+        const int centreOffsetX =
+            FUN_0030bd20_trunc(static_cast<float>(centreRadius) * std::cos(centreAngle));
+        const int centreOffsetY =
+            FUN_0030bd20_trunc(static_cast<float>(centreRadius / 2) * std::sin(centreAngle));
+
+        // Half the diagonal, and the angle of one corner off the quad's centre.
+        const float halfDiagonal =
+            FUN_00216608_length(static_cast<float>(rx1 - rx0), static_cast<float>(ry1 - ry0)) * 0.5f;
+        float cornerAngle =
+            std::atan2(static_cast<float>(ry0 - ry1), static_cast<float>(rx1 - rx0));
+
+        // The four corners come out in the packet's own order -- (x0,y0),
+        // (x0,y1), (x1,y1), (x1,y0) -- by alternating two supplementary steps
+        // around the centre, which is what walks a rectangle rather than a
+        // square.
+        const float step = kDAT_003520a4_pi - (cornerAngle + cornerAngle);
+        const float spin = inputs.spriteAngle168[index];
+
+        int cornerX[4];
+        int cornerY[4];
+        for (int corner = 0; corner < 4; ++corner)
+        {
+          cornerAngle += (corner & 1) != 0 ? kDAT_003520a4_pi - step : step;
+          const float angle = spin + cornerAngle;
+          cornerX[corner] = FUN_0030bd20_trunc(halfDiagonal * std::cos(angle));
+          cornerY[corner] = FUN_0030bd20_trunc(halfDiagonal * 0.5f * std::sin(angle));
+        }
+
+        // Texels stay with the corner they were written for.
+        const float cornerU[4] = {quad.u0, quad.u0, quad.u1, quad.u1};
+        const float cornerV[4] = {quad.v0, quad.v1, quad.v1, quad.v0};
+
+        quad.oriented = true;
+        for (int corner = 0; corner < 4; ++corner)
+        {
+          const int finalX = inputs.gsOriginX + cornerX[corner] + centreOffsetX;
+          const int finalY = inputs.gsOriginY + cornerY[corner] + centreOffsetY;
+          quad.cornerX[corner] = (static_cast<float>(finalX) - inputs.screenCentreX) * perX;
+          quad.cornerY[corner] = (static_cast<float>(finalY) - inputs.screenCentreY) * perY;
+          quad.cornerZ[corner] = vertexDepth;
+          quad.cornerU[corner] = cornerU[corner];
+          quad.cornerV[corner] = cornerV[corner];
+        }
+      }
 
       quad.blendMode = record.flags & 3;
       quad.colour[0] = colour[0];

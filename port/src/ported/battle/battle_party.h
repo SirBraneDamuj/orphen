@@ -24,6 +24,7 @@
 // The pair FUN_002239c8:117 tests is DAT_003555d3 and bit 0 of sGpffffb052,
 // and bit 0 is exactly what method 2 sets and method 1 clears.
 
+#include "ported/battle/battle_camera.h"
 #include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_tables.h"
 #include "ported/entity/entity_descriptor_table.h"
@@ -34,6 +35,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -109,6 +111,20 @@ namespace orphen::ported::battle
       // but the lead.
       const orphen::ported::resource::StatRecord *DAT_00343688_partyRecords = nullptr;
       std::size_t partySlotCount = 0;
+      // The camera FUN_0023C340 drives -- both the ambient spline shots and the
+      // target framing. Null in a harness with no camera, which skips both.
+      orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
+      // FUN_00216868, through the runtime's seeded LCG. The ambient camera
+      // picks its spline, its starting position along it, how long it holds it
+      // and which way it runs with four draws, so a --frames run needs the
+      // seeded one to stay reproducible.
+      std::function<std::uint32_t()> FUN_00216868_random;
+      // FUN_0025d618: decode a `{count, x/y/z triples}` list out of the scene
+      // script blob at that offset. The script interpreter owns the expression
+      // evaluator this needs, so the battle module borrows it rather than
+      // carrying a second copy.
+      std::function<bool(std::uint32_t, std::vector<orphen::ported::psm2::Vec3> &)>
+          FUN_0025d618_decode_waypoints;
     };
 
     // Reads DAT_00318b50 and DAT_00324fc8 out of SLUS_200.11. Safe to call
@@ -149,11 +165,35 @@ namespace orphen::ported::battle
                                  std::uint32_t frameTicks);
 
     // FUN_0023c340, through opcode 0xBD method 0x68 (FUN_00242cf0) while script
-    // variable 25 holds 500. The target display, and the freeze it puts on
-    // every entity but the cursors while it is up.
+    // variable 25 holds 500. The target display: the freeze it puts on every
+    // entity but the cursors while it is up, and the two camera movers that
+    // frame the target for those 120 frames -- see battle_camera.h.
+    //
+    // The rest of FUN_0023C340 -- the encounter's own camera splines, the
+    // per-action framing at DAT_00355C90/C94/C98, the reaction shots -- is not
+    // ported. That matters here in one way: those are what leave the camera in
+    // manual mode 0x23 during a real battle, which is the state FUN_00217D40
+    // and FUN_00217D10 need to do anything at all. The port arms it once when
+    // the display opens, and releases it when the display closes so the field
+    // camera has the shot back.
     void FUN_0023c340_target_display(const Environment &environment,
                                      const BattleEncounter &encounter,
                                      std::uint32_t frameTicks);
+    // :48-140. Arm a spline pair: pick one, install it on the camera, choose a
+    // starting position, a dwell and a direction. Only reached with
+    // DAT_00354FB2 at 0xFFFF.
+    void FUN_0023c340_select_spline(const Environment &environment,
+                                    const BattleEncounter &encounter);
+    // LAB_0023D04C. Sample the armed spline, spend the dwell, and turn round at
+    // either end.
+    void FUN_0023c340_step_spline(const Environment &environment, std::uint32_t frameTicks);
+    void FUN_0023c340_frame_target(const Environment &environment, std::uint32_t frameTicks);
+
+    // --battle-report.
+    std::uint16_t DAT_00354fb2_spline() const { return DAT_00354fb2_; }
+    std::int32_t DAT_00355c88_splinePosition() const { return DAT_00355c88_; }
+    std::int32_t DAT_00355c8c_splineDuration() const { return DAT_00355c8c_; }
+    std::int32_t DAT_00355ca8_splineDwell() const { return DAT_00355ca8_; }
     std::uint32_t FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId);
 
     // FUN_002458a8 / FUN_00245978: stamp one entity into its party record and
@@ -330,6 +370,20 @@ namespace orphen::ported::battle
     std::uint16_t DAT_00354e96_ = 0;
     std::uint16_t DAT_00354e94_ = 0;
     std::int32_t DAT_00354e90_ = -1;
+    // DAT_00571B80, the camera workspace.
+    TargetCameraWork DAT_00571b80_cameraWork_{};
+    // The ambient camera. DAT_00354FB2 at 0xFFFF means "nothing armed", which
+    // is both the initial state and how every other camera mode hands control
+    // back: leave a non-zero mode byte in the workspace and the next frame
+    // re-arms from scratch, on a fresh spline.
+    std::uint16_t DAT_00354fb2_ = 0xFFFF;
+    std::uint16_t DAT_00354e9a_ = 0;      // the last spline picked
+    std::int32_t DAT_00355c88_ = 0;       // position along it, in ticks
+    std::int32_t DAT_00355c8c_ = 0;       // its duration
+    std::int16_t DAT_00355c80_ = 1;       // which way along it, +1 or -1
+    std::int32_t DAT_00355ca8_ = 0;       // ticks left before picking another
+    std::vector<orphen::ported::psm2::Vec3> splineEyePoints_{};
+    std::vector<orphen::ported::psm2::Vec3> splineLookAtPoints_{};
     std::uint32_t DAT_00354ec0_ = 0;
     std::uint32_t targetCycleFrames_ = 0;
     std::uint32_t targetFacingFrames_ = 0;

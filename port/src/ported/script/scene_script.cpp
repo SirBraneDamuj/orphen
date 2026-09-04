@@ -190,6 +190,16 @@ namespace orphen::ported::script
     return headerWord(static_cast<std::size_t>(entry));
   }
 
+  bool SceneScript::FUN_0025d618_decode_waypoints(
+      std::uint32_t blobOffset, std::vector<orphen::ported::psm2::Vec3> &waypoints)
+  {
+    ScriptTrace trace;
+    ScriptEnvironment environment;
+    environment.state = &state_;
+    SceneCommandInterpreter interpreter(blob_, environment, trace);
+    return interpreter.decodePathWaypoints(blobOffset, waypoints);
+  }
+
   bool SceneScript::runAtOffset(std::uint32_t offset,
                                 const ScriptEnvironment &environment,
                                 ScriptTrace &trace,

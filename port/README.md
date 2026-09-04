@@ -1339,22 +1339,27 @@ after the third slash there is nothing alive to chain against.
 ### No target is a branch, not a special case
 
 `FUN_00249610:170` is `else if (lVar11 < 3)`, where `lVar11` is control block
-`+0x2C`. With no enemy table every member keeps a target below 3, the whole
-face-the-target block is skipped, and control falls straight to the state
-dispatch. The enemy side is not in this slice, so this is the mode it runs in,
-and it costs no special case at all.
+`+0x2C`. Below 3 the whole face-the-target block is skipped and control falls
+straight to the state dispatch — no special case, the original's own branch.
+Pool slots 0..2 are the party, so "below 3" and "no enemy locked on" are the
+same statement.
 
 `FUN_0024cf20` forces that halfword positive and, when it is zero, to 1 — so the
 report prints `target=1` rather than `-1`, and the `< 3` test still takes the
 no-target branch. State 106 reads the same field and collapses to a single frame
 for the same reason; see the sword section above.
 
-One consequence worth stating plainly: **the approach run has never been
-executed.** Its four exits, its cone test and its hop are ported from
-`FUN_0024b410` line by line, but with no enemy table `aimed < 2` is taken on the
-first frame every time, so nothing below it has run once. It is written against
-the decompilation, not against observed behaviour, and the enemy slice is what
-will actually test it.
+State 106 also *negates* the halfword on the frame it commits, which is what
+`target=-12` in the report means. `FUN_002493B8` reads it back through its own
+negate so a caller still gets slot 12; `FUN_00249610` reads the raw halfword and
+therefore stops turning for the duration of the run, which is correct — the run
+does its own steering through a cone test rather than through the facing block.
+
+This was the mode the whole battle slice ran in until the enemy table landed
+with targeting. It is no longer: `s14_e012` binds five enemies, D-pad or stick
+selects one, and the approach run — its four exits, its cone test and its hop,
+ported from `FUN_0024b410` line by line — now actually executes rather than
+taking `aimed < 2` on its first frame every time.
 
 ### The lead player has had no hit points since the port began
 
@@ -1381,16 +1386,19 @@ same thing said from the other side.
 
 ### What is deliberately not here
 
-Two omissions, both named by `--battle-report` rather than left silent:
+Named by `--battle-report` rather than left silent:
 
-- **`FUN_0023fd30`'s VM.** The battle master tick runs a *second* bytecode
-  interpreter — 19 opcodes at `PTR_LAB_0031d118` (`src/PTR_LAB_0031d118.txt`) —
-  stepping a master battle script plus a per-member AI script off control block
-  `+0x30`. It drives the opener, the "battle start" beat and enemy and ally AI.
-  `FUN_00243f80` installs those scripts only on members *other* than 0, so the
-  player's control block has none and the player path does not need it.
-- **The enemy table.** `DAT_00354eb4`/`DAT_00354eba` stay empty, which is what
-  keeps every target below 3 and the no-target branch live.
+- **`FUN_0023fd30`'s second loop.** The battle master tick runs a *second*
+  bytecode interpreter — 19 opcodes at `PTR_LAB_0031d118`
+  (`src/PTR_LAB_0031d118.txt`) — over a master battle script and a per-member AI
+  script off control block `+0x30`. The master script is stepped; the per-member
+  ones are installed and then not, so the enemies stand where they spawned. The
+  player never needed them: `FUN_00243f80` installs them only on members *other*
+  than index 0.
+- **The per-action camera framing and the reaction shots.**
+  `DAT_00355C90`/`C94`/`C98` and `DAT_00354E84`/`E8C` all read zero, so
+  `FUN_0023C340` falls through to the spline walk every frame.
+- **Classes 3, 4, 5, 6 and 7,** and class 1's states 102 and 115.
 
 Of the effect entities `FUN_00242df0` and the state handlers spawn — types
 `0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7` — only `0x118` is still reported
@@ -1664,6 +1672,74 @@ facing. Note the threshold is `< 2`, where `FUN_00249610`'s face-the-target bloc
 uses `< 3` — genuinely different numbers. (`FUN_00305130` is `cosf` and
 `FUN_00305218` is `sinf`, not the other way round.)
 
+With a target it is the target, exactly: `FUN_002493f0` reads the three floats
+state 113 has been tracking there, so on `s14_e012` the landing comes out
+`(1.389, -3.188, 0.000)` against pool slot 12's `(1.39, -3.19, 0.00)`.
+
+##### The character turns onto the target, and the port had that as a stub
+
+`FUN_00249610:166-310`, between the state translation and the dispatch. It was
+the one place in the battle module the port left as a counter rather than code,
+on the reasoning that with no enemy table the branch was unreachable — which was
+true right up until targeting landed, and then it read as "Orphen ignores his
+target and fires wherever he happens to be pointing". Both halves of that were
+the same missing block.
+
+Five things switch it off, all of them the original's:
+
+| gate | what it is |
+|---|---|
+| `DAT_0031D7BF` == `0x8E` | the kind `-1` spell hold aims itself |
+| control `+0x2C` < 3 | pool slots 0..2 are the party |
+| `DAT_00354ECC` != 0 | the pre-start lock |
+| `DAT_0031DA6C[member]` bit `0x400` | confusion |
+| `FUN_002494E0` != 0 | party record `+0x3C`, the charge |
+
+The last is the interesting one: it returns 0 while the state's `0x4000` restart
+bit is up and the charge timer otherwise, so **the aim pins the instant a spell
+starts building**. Turn first, then charge.
+
+The turn itself is three bands off `FUN_002166E8(facing, wanted)`, closed with
+`FUN_0023A320` at `DAT_003555BC * rate`:
+
+| band | rate | runs when |
+|---|---|---|
+| inside 5° | `0.0043633` | always |
+| 5°..45° | `0.0026180` | idle only |
+| beyond 45° | `0.0061087` | idle only |
+
+**Only an idle character turns at all** — the two wide bands are gated on the
+current action being `0x06` or `0x96`. A spell released mid-swing goes where the
+swing left the facing, and that is the game, not a rounding error. A zero step
+back from `FUN_0023A320` means its own half-degree dead zone swallowed the
+difference, and the original then assigns the exact angle rather than leaving
+the remainder — so the facing lands on the bearing, bit for bit, which is what
+makes the `face=`/`bearing=` columns agree.
+
+The frame a wide turn starts also swaps the idle animation between 2 and 7,
+class 1 one way and everything else the other, guarded by bit 0 of party record
+`+0x38` so it fires once per turn rather than once per frame.
+
+The upper body is separate, class 1 only, and never while staggered. The spine
+(bone `0x20`) carries whatever yaw the legs have not caught up on, clamped to
+fifty degrees; during animation `0x14` at timeline cursor `+0xA8` == 4 — the beat
+the cast's arms come up — the target's elevation is split three ways, half into
+bone 10's Y, minus half into bone 9's X, and the negated whole into the spine
+with half of it back out through Y. All three are read back with `FUN_0020D9D8`
+first and written with `FUN_0020D8C0`, so the aim layers onto the animation
+rather than replacing it. Party record `+0x34`, the plain distance to the
+target, is written every frame the block runs and **read by nothing in the ELF**;
+it is reproduced for the hardware diff only.
+
+Two smaller divergences fell out of reading the block's neighbourhood:
+
+- The `0x0B` park at `:120` tests the **pending** byte (`+0x0E`), not the
+  current one. The port tested `+0x0F`.
+- `+0x124`, the guard arc, is cleared at `:129` — before the dispatch, so state
+  117 re-arms it every frame it runs and it lapses the frame the guard drops.
+  The port never cleared it, which left a guard arc up for the rest of the
+  scene after one Square press.
+
 ##### Party record `+0x45` is a frame number, not a flag
 
 It starts at `-1`. When the cast animation raises `+0xAA` bit `0x200`, state 113
@@ -1713,6 +1789,10 @@ animation-finished flag. Its 32-frame `+0x1B0` timer is never read.
 
 `ring=` is the `0x18F` marker's `+0x14C` and `hitfx=` is `DAT_0031DAD0`'s, both
 in thousandths. Without them the growth is invisible in a headless run.
+`face=` is entity `+0x5C` and `bearing=` the angle to the control block's
+target, both in whole degrees: the face-the-target block is the only thing that
+closes the gap between them, so a run where they stay apart while a target is
+held is that block failing.
 
 ```
 orphen_port.exe --disc-root . --scene s14_e012 --frames 700 --no-audio \
@@ -1922,6 +2002,106 @@ is greater than zero, so the cycler runs, `FUN_00247d80` fails to find a record
 for pool slot 1's `+0x95`, and the search starts from the top of the table and
 takes the first live enemy.
 
+##### The battle camera is a pair of splines, walked back and forth
+
+The shot a battle plays in is not a follow camera at all. `FUN_00246FC0` reads
+the encounter's placement sub-blob at `+0x5C`/`+0x60` -- a count and an array of
+`0xC`-byte entries -- and each entry is two point lists and a duration:
+
+```
++0x00  the look-at point list
++0x04  the eye point list          (that order; see below)
++0x08  duration, in ticks
+```
+
+Each list is `{u32 count, then count script-encoded x/y/z triples}`, decoded in
+place by `FUN_0025D618` -- the same decoder opcode `0xBD` method `0x70`'s
+waypoint paths go through, so the port borrows `decodePathWaypoints` rather than
+carrying a second copy. `FUN_00246FC0` relocates the two words by `iGpffffb0e8`,
+the **scene script** base rather than the encounter blob's own, which is why they
+are already script offsets in the port and need no fixup.
+
+The order is worth pinning down because it is the wrong way round from the
+obvious reading. `FUN_0023C340` calls
+`FUN_00217E88(entry[1].points, entry[1].count, entry[0].points, entry[0].count)`
+and `FUN_00217E88` hands its *first* triple to `FUN_00217D70` as the eye. So word
+0 is the look-at list and word 1 the eye list.
+
+`FUN_00217E88` then builds a cubic curve over each -- the eye and the look-at,
+and no roll/zoom curve, which is what `FUN_00217F38` samples instead of
+`FUN_00218158`. `s14_e012` ships three pairs, each 57600 ticks long.
+
+The rest is the walk, at `LAB_0023D04C`:
+
+- `DAT_00355C88` is the position along the pair and `DAT_00355C80` the direction,
+  `+1` or `-1`. Each frame adds `DAT_003555BC * direction`, and running past
+  either end flips the direction -- so a pair is a shot that drifts one way,
+  turns round, and drifts back.
+- `DAT_00355CA8` is the dwell, seeded to `(rand & 1) * 0x780 + 0x5A00`, doubled:
+  `0xB400` or `0xC300` ticks, about 24 or 26 seconds. When it runs out
+  `DAT_00354FB2` goes to `0xFFFF` and the next frame picks a different pair.
+- The pick is `(last + 1 + rand % (count - 1)) % count` -- a walk that can never
+  land on the one just played. `DAT_00355CA0` is a three-entry override that
+  `FUN_0023C310` fills for a scripted shot; it reads -1 here.
+- The opening position is `rand % (duration/2 + duration/3)`, so a pair never
+  starts at its own far end.
+- Zoom is forced back to 1.0 and roll to flat every frame. The battle camera owns
+  the projection outright.
+
+**How every other shot hands the camera back** is the mode byte at the head of
+the `0x571B80` workspace. `FUN_0023DE20` leaves its mode there; the next frame
+that reaches the idle path sees it non-zero and re-arms `DAT_00354FB2` instead of
+continuing. So the shot after a target display is a *fresh* pair, not the one it
+interrupted -- and the port needs no save-and-restore of its own.
+
+##### The camera, for those 120 frames
+
+`FUN_0023C340` is the whole battle camera and most of it is out of scope -- the
+encounter's own spline pairs, the per-action framing at `DAT_00355C90`/`C94`/
+`C98`, the reaction shots. The half the player drives is the one that runs while
+`DAT_00354E96` is up, and it is two shots with the changeover at the halfway
+mark:
+
+```
+DAT_00354E96 > 0x780   FUN_0023DB98 mode 6    swing onto the target
+DAT_00354E96 <= 0x780  FUN_0023DE20 mode 10   hold on it and orbit
+```
+
+**The swing** (`FUN_0023DB98`) puts the eye half a unit behind the player's head
+-- `player - 0.5 * (cos, sin)(atan2(player - target) + 1 degree)`, at
+`playerZ + height` -- and then turns the *look point* about that pivot by one
+sixteenth of the angle to the target each frame, so it converges rather than
+snapping. The look point's radius is the player-to-target distance, so it lands
+beyond the enemy rather than on it, and its height eases toward the target's
+middle at the same one-sixteenth. On the frame the display opens `DAT_00354E94`
+is still set, and the look point is first thrown eight units out along the
+player's facing so the swing starts from where the character is looking. Inside
+`fGpffff877c` (2.3 units) the function returns -1 without touching the camera and
+`FUN_0023C340` drops `DAT_00354E96` to `0x780` -- straight to the hold.
+
+Note what the swing does *not* interpolate: the x and y of the look point are
+computed linearly at `0x0023DC84` and then overwritten by the polar result at
+`0x0023DD4C`/`0x0023DD80`. Only the angle and the height actually move.
+
+**The hold** (`FUN_0023DE20`) installs a fresh manual camera every frame,
+`0x9C4 / 1000` = 2.5 units from the target at `playerZ + height * 1.5`, looking
+at the target's middle, walking the bearing by `DAT_00352668` (0.000192 rad a
+tick, about 21 degrees a second). The bearing opens on the target-to-player line,
+flipped 178 degrees (`fGpffff8784`) if the player is already inside 2.3 units,
+and which way it orbits is decided once from which side of the player's facing
+the target sits on -- so the sweep always goes past the player rather than away
+behind them.
+
+Both go through the manual camera at `cGpffffb6e1` = `0x23`, which the spline
+above has already installed -- `FUN_00217D40` and `FUN_00217D10` are no-ops
+without it.
+
+What is *not* ported, and is named at its site: `DAT_00355C90`/`C94`/`C98` are
+the per-action framing modes (a spell cast, a guard, a stagger each get their own
+shot through `FUN_0023E090` / `FUN_0023D730` / `FUN_0023D8B0`), and
+`DAT_00354E84`/`E8C` the reaction shots and their screen flash. All read zero in
+the port, so `FUN_0023C340` falls through to the idle path every frame.
+
 ##### The pause is one bit on everything
 
 Every D-pad step re-arms `DAT_00354E96` to 120 frames, and **that is the pause**:
@@ -1969,6 +2149,14 @@ bit 0 stops the sprite walk too, and `FUN_002d73e8` raises it only when `+0x198`
 came out of the frame non-zero -- off screen, retired, or **not the current
 target while the display timer is running**. So the resting state is five
 brackets, one per enemy, and the 120 frames after a D-pad step show one.
+
+They are not squares, either. `FUN_002D73E8` raises `+0x08` bit `0x400` on every
+cursor and writes the angle table at `+0x168` that `FUN_0020F510`'s
+rotated-corner branch turns by: a flat `DAT_003547A4` -- pi/4 exactly -- while
+the cursor is the player's target, so the selected bracket stands on a corner,
+and `DAT_003555BC * DAT_003547A8` accumulated per tick, about 25 degrees a
+second, for every other one. See "What is still missing" under the sprite pass
+for the branch itself.
 
 Type `0x192` doubles as a scripted marker when its `+0x19A` names its own slot;
 that is the branch `FUN_002d8808` sets up and it has nothing to do with targeting.
@@ -3278,20 +3466,32 @@ uses. The far one is the scene's draw distance.
 
 ### What is still missing
 
-Two things in `FUN_0020f510`, both flagged at their sites:
+Nothing, now. Both of the branches this section used to list as missing landed
+with the battle target cursor, which is the one thing in the executable that
+takes them together:
 
-- **The rotation branch**, `+0x08` bit `0x400`. It rebuilds the quad as four
-  independently rotated corners off a per-entity angle table at `+0x168`, and
-  only for runs of fewer than nine records. Nothing in `s01_e024` or `s01_e012`
-  sets the bit.
-- **The HUD branch**, `+0x08` bit `0x1000`, which takes a position that is
-  already in screen space rather than projecting one. That is the 2D overlay
-  path; the port's dialogue sprites already cover the same ground by a different
-  route.
+- **The rotation branch**, `+0x08` bit `0x400`, rebuilds the quad as four
+  rotated corners off the angle table at entity `+0x168`, for record indices
+  under nine. Angle 0 swings the quad's *centre* about the sprite origin; angle
+  N -- N being the record's own descending index -- spins the quad about its own
+  centre. Everything is done with Y doubled, because the GS output is 640x224 at
+  4:3 and rotating in raw GS units would shear the sprite; the sine term is
+  halved on the way back out.
 
-`publishSpriteQuads` rejects an entity carrying either bit outright rather than
-drawing it wrong. No descriptor in `s01_e024` or `s01_e012` sets one; type `0x44`
-reads `+0x08 = 0` and `+0x133 = 0`.
+  `FUN_002D73E8` writes those angles: `DAT_003547A4`, which is pi/4 to the bit,
+  while the cursor is the player's target, and an accumulation of `DAT_003555BC
+  * DAT_003547A8` -- about 25 degrees a second -- when it is not. That is the
+  difference between the selected bracket sitting corner-up and the rest slowly
+  drifting.
+- **The HUD branch**, `+0x08` bit `0x1000`, takes a position that is already in
+  screen space rather than projecting one: a flat `+0x14C * 256` scale with no
+  perspective divide, and a GS z read back out of `+0x28` as an integer.
+
+Note the aliasing on `+0x168`. For a skinned entity those 42 bytes are the
+per-bone override modes (see "`+0x168` is inside the slot"); for a sprite entity
+-- which carries `+0x02` bit `0x200` and can never reach `FUN_0020C5A8` -- they
+are seven floats of quad angles. The two never coexist. The port splits them:
+bone modes live in `EntityBoneOverrides`, angles in `OriginalEntity`.
 
 ### Checking it
 

@@ -51,6 +51,12 @@ namespace orphen::ported::battle
       // column the growth is invisible in a headless run.
       std::uint16_t hitEffectScale = 0;
       std::uint32_t heldPad = 0;
+      // Entity +0x5C and the bearing to the control block's target, both in
+      // whole degrees. FUN_00249610's face-the-target block is the only thing
+      // that closes the gap between them, so a run where they stay apart while
+      // a target is held is that block failing.
+      std::int16_t facingDegrees = 0;
+      std::int16_t targetBearingDegrees = 0;
       std::array<std::uint16_t, 5> cooldowns{};
     };
 
@@ -126,7 +132,9 @@ namespace orphen::ported::battle
       return a.pendingAction != b.pendingAction || a.currentAction != b.currentAction ||
              a.state != b.state || a.charge != b.charge || a.target != b.target ||
              a.selectedSlot != b.selectedSlot || a.animation != b.animation ||
-             a.bladeLength != b.bladeLength || a.cooldowns != b.cooldowns;
+             a.bladeLength != b.bladeLength || a.cooldowns != b.cooldowns ||
+             a.facingDegrees != b.facingDegrees ||
+             a.targetBearingDegrees != b.targetBearingDegrees;
     }
 
     std::vector<Sample> samples_;

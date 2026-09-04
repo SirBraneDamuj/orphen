@@ -566,6 +566,18 @@ namespace orphen::ported::entity
     float rotationX154 = 0.0f;
     float rotationY158 = 0.0f;
 
+    // +0x168..+0x180: seven per-quad rotation angles, in radians. **This
+    // aliases the 42 per-bone override modes** the skinned path keeps at the
+    // same offset -- a sprite entity carries +0x02 bit 0x200 and can never
+    // reach FUN_0020C5A8, so the two uses never coexist. The port splits them:
+    // bone modes live in EntityBoneOverrides, angles here. FUN_0020F510
+    // reads them only when +0x08 carries bit 0x400, and then uses index 0 to
+    // swing the quad's centre about the sprite origin and index N -- N being
+    // the sprite record's own descending index -- to spin the quad about its
+    // own centre. Every writer so far fills them all with the same value, so
+    // the two indices only differ in principle.
+    float spriteAngle168[7] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
     std::uint16_t idleTimer1b6 = 0;          // +0x1B6: idle fidget timer, 16-bit wrap.
     std::uint8_t motionFlags1bb = 0;
 

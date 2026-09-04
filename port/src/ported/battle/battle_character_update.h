@@ -26,19 +26,35 @@
 // there, so that round trip is load-bearing: break it and charging looks like
 // it does nothing.
 //
-// **No target.** FUN_00249610:170 is `else if (lVar11 < 3)`, where lVar11 is
-// control block +0x2C. With no enemy table every member keeps -1 there, the
-// whole face-the-target block is skipped, and control falls straight to the
-// state dispatch. That is the mode this slice runs in, and it costs no special
-// case -- it is the original's own branch.
+// **Facing the target.** FUN_00249610:166-310 is the block between the state
+// translation and the dispatch, and it is what turns a character onto whatever
+// control block +0x2C names. Four things switch it off, all of them the
+// original's: action 0x8E, a target below 3 (pool slots 0..2 are the party), the
+// pre-start lock DAT_00354ECC, and bit 0x400 of the member's DAT_0031DA6C flags.
+// A fifth stops the turn without stopping the block -- a non-zero charge timer
+// at party record +0x3C, read through FUN_002494E0, so the aim is pinned once a
+// spell starts building.
+//
+// **Only an idle character turns at all.** The wide branch is gated on the
+// current action being 0x06 or 0x96; inside five degrees the snap branch runs
+// whatever the action is. So a spell released mid-swing goes where the swing
+// left the facing, which is the original's behaviour and not a bug to smooth
+// over.
+//
+// The upper body is separate, and class 1 only: the spine (bone 0x20) carries
+// the yaw the legs have not caught up on, clamped to fifty degrees, and during
+// animation 0x14 at timeline cursor 4 -- the beat the cast's arms come up --
+// bones 10 and 9 take the target's elevation.
 
 #include "ported/battle/battle_party.h"
 #include "ported/battle/battle_trace.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/model/psc3_skeleton.h"
 
 #include <cstdint>
 #include <functional>
+#include <span>
 
 namespace orphen::ported::battle
 {
@@ -53,6 +69,11 @@ namespace orphen::ported::battle
     // mark through the same follower a scripted path uses.
     orphen::ported::entity::PathFollowerTable *paths = nullptr;
     std::uint16_t frameTicks = 0x20;
+    // The face-the-target block drives three bones directly, and reads two of
+    // them back first: DAT_004A7E00 is the override table FUN_0020D8C0 writes
+    // and DAT_003FFE00 the smoothed pose FUN_0020D9D8 reads.
+    std::span<orphen::ported::model::EntityBoneOverrides> boneOverrides;
+    std::span<const orphen::ported::model::EntityPoseFilter> poseFilters;
     // FUN_00267d38: play a cue at an entity. The battle states ask for the
     // charge loop (0xD7..0xDA), the guard raise (0xE7) and the guard hit
     // (0xE8).
