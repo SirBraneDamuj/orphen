@@ -532,6 +532,39 @@ namespace orphen::port
     // tables. Both answer "no battle" outside one, which every caller treats as
     // "the caster is not acting" -- the guard shield closes, the hand effect
     // puts itself away.
+    // FUN_0020b600, for FUN_002d73e8. The target cursor is the one behaviour
+    // that needs the camera: it projects its target and keeps the answer in
+    // +0x20/+0x24 for the screen-space draw branch. `renderCamera_` is the same
+    // matrix the sprite pass projects with, so the two agree exactly.
+    environment.FUN_0020b600_project =
+        [this](const orphen::ported::psm2::Vec3 &world,
+               orphen::ported::entity::ActorEnvironment::ProjectedPoint &out) {
+          const auto viewSpace = renderCamera_.toViewSpace(world);
+          if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+          {
+            return false;
+          }
+          out.gsX = static_cast<std::int32_t>(viewSpace.x * renderCamera_.projection.at(0, 0) /
+                                                  viewSpace.z +
+                                              renderCamera_.projection.at(2, 0));
+          out.gsY = static_cast<std::int32_t>(viewSpace.y * renderCamera_.projection.at(1, 1) /
+                                                  viewSpace.z +
+                                              renderCamera_.projection.at(2, 1));
+          out.viewZ = viewSpace.z;
+          // FUN_0020f510's own depth key, so a screen-space sprite lands in the
+          // same bucket range as a projected one.
+          out.gsZ = static_cast<std::int32_t>(
+              orphen::ported::render::kDAT_003555a4_depthNumerator / viewSpace.z +
+              orphen::ported::render::kDAT_003555a0_depthOffset);
+          return true;
+        };
+
+    // DAT_00354E96 / DAT_00354ECC, which FUN_002d73e8 reads to decide whether
+    // the target display is up and whether the cursors draw at all.
+    environment.DAT_00354e96_targetDisplayTicks = battleParty_.DAT_00354e96_displayTimer();
+    environment.DAT_00354ecc_battleSuspended =
+        static_cast<std::uint16_t>(battleParty_.DAT_00354ecc());
+
     environment.DAT_0031d7b0_battleMember =
         [this](std::uint32_t member,
                orphen::ported::entity::ActorEnvironment::BattleMemberView &out) {
@@ -1022,9 +1055,36 @@ namespace orphen::port
       case 3:
         battleTrace_.recordBattleBuilt(frameCount_ + 1);
         return battleParty_.FUN_002432d8_build_battle_party(battle, arg3, arg4);
+      case 0x68:
+        // FUN_00242cf0: script variable 25 holding 500 is what makes this the
+        // *target display* rather than one of the other camera modes, and the
+        // battle VM's opcode 12 is what puts 500 there. The port has no VM, so
+        // the variable is read straight out of the script's own work memory --
+        // s14_e012's master script sets it with the first opcode it runs.
+        if (sceneScript_.state().DAT_00355060_work[25] == 500)
+        {
+          battleParty_.FUN_0023c340_target_display(battle, battleEncounter_,
+                                                   orphen::ported::kNominalFrameTicks);
+        }
+        return 0;
       case 0x78:
         return battleParty_.FUN_00244cc0_equip_spell(static_cast<std::uint32_t>(arg3), arg4);
       default: return 0;
+      }
+    };
+
+    // FUN_0025eb48's stat stamp, and FUN_0023f8b8 behind it. Together these are
+    // what turn a group-2 placement into a targetable enemy: the stat record
+    // gives it hit points, and the bind puts it in the actor table under the id
+    // the placement's +0x0F byte named.
+    environment.uGpffffadf8_stats = &characterStats_;
+    environment.FUN_0023f8b8_bind_battle_actor = [this](std::size_t entitySlot)
+    {
+      const std::uint32_t bound =
+          battleEncounter_.FUN_0023f8b8_bind_entity(entityPool_, entitySlot, &DAT_00354d6c_hitParameters_);
+      if (bound == 0)
+      {
+        battleTrace_.recordUnboundBattleActor(entityPool_.slot(entitySlot).byte95);
       }
     };
 
@@ -2003,6 +2063,7 @@ namespace orphen::port
     // FUN_0023f288, which FUN_0022a418 runs on every scene load: wipe the
     // battle module, then re-seed the loadout the way the same function does.
     battleParty_.FUN_0023f288_reset();
+    battleEncounter_.FUN_0023f288_reset();
     battleParty_.FUN_0022a418_propagate_loadout();
     battleParty_.FUN_002239c8_fill_empty_loadout_slots(DAT_003551f4_sceneSection_);
 
@@ -2179,6 +2240,16 @@ namespace orphen::port
       return;
     }
     sceneScript_.state().FUN_002294d0_load_party_records(characterStats_);
+
+    // FUN_0022a418:261 -> FUN_0023f318(0). The scene's encounter data is the
+    // first entry of the script's own section table at header word 7; a scene
+    // with no battle leaves that entry zero and the call is a no-op.
+    if (battleEncounter_.FUN_0023f318_load(decoded, sceneScript_.headerWord(7)))
+    {
+      std::cout << "[battle] encounter table at 0x" << std::hex
+                << battleEncounter_.DAT_00354eb4_actorArray() << ", master script at 0x"
+                << battleEncounter_.DAT_0031dbd8_masterScript() << std::dec << "\n";
+    }
 
     // FUN_0022a418:185 applies the scene block's draw distance before it seeds
     // the environment and before either script entry runs, so the whole chain
@@ -2972,12 +3043,47 @@ namespace orphen::port
             return;
           }
 
-          // FUN_0020f510:0x0020f594. Bit 0x1000 takes the screen-space branch
-          // and bit 0x400 the rotated-corner one; neither is ported, and no
-          // descriptor either scene spawns sets them. Rejecting here rather
-          // than drawing the wrong thing.
-          if ((entity.halfword08 & 0x1400u) != 0)
+          // FUN_0020f510:0x0020f594. Bit 0x400 is the rotated-corner branch,
+          // which is not ported and which no descriptor either standing scene
+          // spawns sets; rejecting here rather than drawing the wrong thing.
+          if ((entity.halfword08 & 0x0400u) != 0)
           {
+            return;
+          }
+
+          // Bit 0x1000 is the screen-space branch. FUN_002d73e8 has already put
+          // pixels in +0x20/+0x24 and its projected depth word in +0x28, so
+          // there is nothing to transform: the position converts straight to GS
+          // 12.4 units. 5120 is 320 * 16 and 1792 is 224 * 8 -- note the Y
+          // origin the cursor writes is 220, four pixels above the one the draw
+          // subtracts, which is the original's own asymmetry.
+          const bool screenSpace = (entity.halfword08 & 0x1000u) != 0;
+          if (screenSpace)
+          {
+            orphen::ported::render::SpriteBuildInputs inputs;
+            inputs.screenSpace1000 = true;
+            inputs.scaleX14c = entity.scale14c;
+            inputs.scaleY150 = entity.scaleZ150;
+            inputs.gsOriginX = static_cast<int>(entity.positionX20 * 16.0f + 32768.0f - 5120.0f);
+            inputs.gsOriginY = static_cast<int>(entity.positionZ24 * 8.0f + 32768.0f - 1792.0f);
+            inputs.projectionScaleX = viewProjection.projection.at(0, 0);
+            inputs.projectionScaleY = viewProjection.projection.at(1, 1);
+            inputs.screenCentreX = viewProjection.projection.at(2, 0);
+            inputs.screenCentreY = viewProjection.projection.at(2, 1);
+            // The inverse of FUN_0020f3e0's depth key, so the re-projected quad
+            // lands at the depth the GS z names.
+            const float keyed = static_cast<float>(entity.cursorProjectedDepth28) -
+                                orphen::ported::render::kDAT_003555a0_depthOffset;
+            inputs.viewZ = keyed > 0.0f
+                               ? orphen::ported::render::kDAT_003555a4_depthNumerator / keyed
+                               : orphen::ported::render::kDAT_0035209c_spriteNearClip;
+            inputs.screenSpaceGsZ = entity.cursorProjectedDepth28;
+            inputs.screenSpaceDepthBias = entity.depthBias133;
+            inputs.flatColour = true;
+            inputs.textureSlot = binding->textureSlot;
+            orphen::ported::render::FUN_0020f510_build_quads(*binding->model, entity.poseColumnAc,
+                                                             inputs, quads);
+            entity.collisionFlags0c |= 0x1000u;
             return;
           }
 
@@ -3954,11 +4060,72 @@ namespace orphen::port
       }
     }
 
-    // The two deliberate omissions, named rather than left as silent gaps.
-    std::cout << "not in this slice: the FUN_0023fd30 battle VM (19 opcodes at "
-                 "PTR_LAB_0031d118, the opener and enemy/ally AI) and the enemy table "
-                 "(DAT_00354eb4/DAT_00354eba stay empty, which is what keeps every target -1)\n";
+    printEncounterReport();
     std::cout << "=== end battle report ===\n";
+  }
+
+  // FUN_0023f318's table, as it stands right now: what the scene shipped, and
+  // which records actually have an entity behind them. A target the player can
+  // aim at is a row with an entity, an id below 0x50 and hit points left.
+  void PortRuntime::printEncounterReport() const
+  {
+    using namespace orphen::ported::battle;
+    if (!battleEncounter_.available())
+    {
+      std::cout << "encounter table: this scene ships none (script header word 7 entry 0 is zero)\n";
+      return;
+    }
+    const std::int32_t count = battleEncounter_.DAT_00354eba_actorCount();
+    std::cout << "encounter table: DAT_00354eb4=0x" << std::hex
+              << battleEncounter_.DAT_00354eb4_actorArray() << std::dec
+              << " DAT_00354eba=" << count << " master script=0x" << std::hex
+              << battleEncounter_.DAT_0031dbd8_masterScript() << std::dec << "\n";
+    for (std::int32_t index = 0; index < count; ++index)
+    {
+      const std::uint32_t at = battleEncounter_.record(static_cast<std::size_t>(index));
+      const std::int32_t slot = battleEncounter_.entitySlot(at);
+      const std::uint8_t id = battleEncounter_.read<std::uint8_t>(at + actor::kId00);
+      std::cout << "  [" << index << "] id=0x" << std::hex << static_cast<int>(id) << std::dec
+                << (id < kFirstFriendlyId ? " enemy" : " party") << " entity=" << slot;
+      if (slot >= 0)
+      {
+        const auto &entity = entityPool_.slot(static_cast<std::size_t>(slot));
+        std::cout << " type=0x" << std::hex << entity.typeId00 << std::dec
+                  << " hp=" << static_cast<std::int16_t>(entity.staggerTimer12a);
+      }
+      std::cout << " action=0x" << std::hex
+                << static_cast<int>(battleEncounter_.read<std::uint8_t>(at + actor::kCurrentAction0f))
+                << std::dec
+                << " target=" << battleEncounter_.read<std::int16_t>(at + actor::kTarget2c)
+                << " script=0x" << std::hex
+                << battleEncounter_.read<std::uint32_t>(at + actor::kScriptPc30) << std::dec << "\n";
+    }
+    std::cout << "  live enemies: " << battleEncounter_.FUN_0023f080_living_enemy_count(entityPool_)
+              << " of " << battleEncounter_.FUN_0023eff8_enemy_count(entityPool_) << " bound\n";
+    if (battleEncounter_.FUN_0023eff8_enemy_count(entityPool_) == 0)
+    {
+      // Named rather than left as a silent gap. An enemy binds itself through
+      // FUN_0023f8b8 from its own state 0, off the +0x95 that FUN_0025eb48
+      // stamped from the placement record's +0x0F byte -- so an empty table
+      // here means either the scene has no group-2 placements in the 0x1E..0x31
+      // range or their ids do not line up with the encounter data.
+      std::cout << "  nothing bound: no group-2 placement carried an actor id this "
+                   "table names (FUN_0025eb48 -> +0x95 -> FUN_0023f8b8)\n";
+    }
+
+    // The master battle script, which is what installs the per-actor AI and
+    // arms the target display. Its second half -- stepping those actor scripts
+    // -- is not ported, so a record with a script offset here is one the port
+    // has installed and is not running.
+    std::cout << "  master script pc=0x" << std::hex << battleEncounter_.DAT_0031dbd8_pc()
+              << std::dec << " countdown=" << battleEncounter_.sGpffffb054_countdown();
+    if (battleEncounter_.masterHalted())
+    {
+      std::cout << " HALTED on VM opcode " << static_cast<int>(battleEncounter_.masterHaltOpcode())
+                << " at 0x" << std::hex << battleEncounter_.masterHaltOffset() << std::dec;
+    }
+    std::cout << "\n  per-actor VM scripts are installed but not stepped "
+                 "(FUN_0023fd30's second loop)\n";
   }
 
   void PortRuntime::printExitReports() const
@@ -5621,8 +5788,38 @@ namespace orphen::port
       // need the VM. --battle-report says so rather than leaving it silent.
       if (battleParty_.battleRunning())
       {
+        // FUN_0023fd30:42. The first thing the battle tick does is recount the
+        // actor table and drop any binding whose entity has gone -- so a target
+        // can never outlive the thing it was aimed at by a frame.
+        battleEncounter_.FUN_0023fc08_bind(entityPool_);
+
+        // FUN_0023fd30:43-46 and :354-375. The pre-battle countdown, and the
+        // 0x192 cursors it hands out when it runs out.
+        battleParty_.FUN_0023fd30_pre_battle(battleEnvironment(), battleEncounter_, frameTicks);
+
+        // FUN_0023fd30:44-53. Once the countdown is spent the master battle
+        // script runs, one step a frame. Its second loop -- the per-actor AI
+        // scripts opcode 18 installs -- is not stepped yet; --battle-report
+        // says how far the master got and on what.
+        if (battleEncounter_.sGpffffb054_countdown() == 0)
+        {
+          auto &work = sceneScript_.state().DAT_00355060_work;
+          const auto step = battleEncounter_.FUN_0023fd30_step_master_script(
+              entityPool_, work,
+              orphen::ported::script::SceneScriptState::kWorkWordCount,
+              static_cast<std::int32_t>(frameTicks));
+          if (step.halted && !battleMasterHaltReported_)
+          {
+            battleMasterHaltReported_ = true;
+            std::cout << "[battle] master script halted: unimplemented VM opcode "
+                      << static_cast<int>(step.haltOpcode) << " at 0x" << std::hex
+                      << step.haltOffset << std::dec << "\n";
+          }
+        }
+
         orphen::ported::battle::CommandInputEnvironment commandInput;
         commandInput.party = &battleParty_;
+        commandInput.encounter = &battleEncounter_;
         commandInput.pool = &entityPool_;
         commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
         commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);

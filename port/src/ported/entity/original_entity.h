@@ -113,6 +113,12 @@ namespace orphen::ported::entity
     // once per party member. FUN_0025c8f8 writes it unsigned and FUN_0025c548
     // reads it back *signed*, which is the pair's only asymmetry.
     std::uint8_t byte95 = 0;
+    // +0x96: bit 0 is raised by FUN_0023f8b8 the moment the entity is bound
+    // into a battle actor record, so "this thing is a battle participant" can be
+    // asked without walking the table. FUN_00216140's hit test and
+    // FUN_002446e8 both gate on bits of this byte; neither is ported yet, so
+    // only bit 0 is written.
+    std::uint8_t battleFlags96 = 0;
     // +0x98: index of the map placement record this entity was built from.
     // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.
     std::int32_t placementRecordIndex98 = -1;
@@ -414,6 +420,25 @@ namespace orphen::ported::entity
     std::uint16_t markerCharge19a = 0;   // +0x19A: the charge, from FUN_002d9b78.
     std::uint16_t markerRingTimer19c = 0; // +0x19C: ticks to the next pulse.
     std::uint16_t markerFlags19e = 0;    // +0x19E: bit 0 suppresses one pulse cue.
+
+    // The type 0x192 target cursor, FUN_002d73e8 -- the marker drawn over an
+    // enemy while a battle is running. One is spawned per bound actor record by
+    // FUN_002d86b0 the frame the pre-battle countdown reaches zero, and its
+    // pool slot is parked in the record's +0x0D. Yet another reading of the
+    // same bytes; a cursor is never a marker, a fireball or a follower.
+    std::int16_t cursorTarget19a = -1;   // +0x19A: the pool slot it rides.
+    std::uint8_t cursorFlags198 = 0;     // +0x198: bit 4 hides it, bit 0x20 dims it.
+    float cursorOffsetX1a0 = 0.0f;       // +0x1A0/+0x1A4/+0x1A8: a world offset,
+    float cursorOffsetY1a4 = 0.0f;       // zero for a battle cursor and non-zero
+    float cursorOffsetZ1a8 = 0.0f;       // only for the scripted markers.
+    float cursorScreenX1ac = 0.0f;       // +0x1AC/+0x1B0/+0x1B4: where FUN_002d73e8
+    float cursorScreenY1b0 = 0.0f;       // last projected it, which FUN_002d8690
+    float cursorScreenZ1b4 = 0.0f;       // hands back to the on-screen pickers.
+    // +0x28 again. A screen-space entity keeps FUN_0020b600's *integer* depth
+    // word there rather than a world z, and FUN_0020f510's bit-0x1000 branch
+    // reads it back as an int -- so the port holds it beside +0x28 rather than
+    // reinterpreting a float.
+    std::int32_t cursorProjectedDepth28 = 0;
 
     // The type 0x15B fireball, FUN_002dae60 -- what Hand of Pyro actually
     // launches. Another overlapping reading of the same bytes, seeded in one

@@ -49,6 +49,12 @@ namespace
                  "                  pairs are press-and-release, so a one-frame\n"
                  "                  --press-* pulse enters a charge and leaves it on\n"
                  "                  the same frame and never fires anything.\n"
+                 "  --hold-up       <first>-<last>   hold one D-pad direction the\n"
+                 "  --hold-down     <first>-<last>   same way. The target cycler\n"
+                 "  --hold-left     <first>-<last>   reads the newly-pressed word,\n"
+                 "  --hold-right    <first>-<last>   so a range is one step: Left and\n"
+                 "                  Right walk the enemies one at a time and Up and\n"
+                 "                  Down jump half the table across.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
                  "                  print its geometry counts.\n"
                  "  --no-screen-smear  skip FUN_00201a38's feedback quad, so the same\n"
@@ -585,7 +591,9 @@ namespace
       {
         static const struct { const char *flag; int index; } kHoldFlags[] = {
             {"--hold-triangle", 0}, {"--hold-circle", 1},
-            {"--hold-cross", 2},    {"--hold-square", 3}};
+            {"--hold-cross", 2},    {"--hold-square", 3},
+            {"--hold-up", 4},       {"--hold-right", 5},
+            {"--hold-down", 6},     {"--hold-left", 7}};
         bool matched = false;
         for (const auto &entry : kHoldFlags)
         {
@@ -828,8 +836,9 @@ int main(int argc, char **argv)
         // for the whole inclusive range, pressed only on its first frame, which
         // is exactly what FUN_002462c8's press-then-release pair reads.
         {
-          constexpr std::uint16_t kHoldBits[4] = {0x0010, 0x0020, 0x0040, 0x0080};
-          for (int index = 0; index < 4; ++index)
+          constexpr std::uint16_t kHoldBits[8] = {0x0010, 0x0020, 0x0040, 0x0080,
+                                                  0x1000, 0x2000, 0x4000, 0x8000};
+          for (int index = 0; index < 8; ++index)
           {
             for (const auto &range : config.holdFaceButtons[index])
             {
@@ -1051,8 +1060,9 @@ int main(int argc, char **argv)
       // button, so a screenshot "during a guard" was of a character standing
       // still.
       {
-        constexpr std::uint16_t kHoldBits[4] = {0x0010, 0x0020, 0x0040, 0x0080};
-        for (int index = 0; index < 4; ++index)
+        constexpr std::uint16_t kHoldBits[8] = {0x0010, 0x0020, 0x0040, 0x0080,
+                                                0x1000, 0x2000, 0x4000, 0x8000};
+        for (int index = 0; index < 8; ++index)
         {
           for (const auto &range : config.holdFaceButtons[index])
           {

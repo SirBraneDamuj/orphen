@@ -231,6 +231,23 @@ namespace orphen::ported::battle
     return static_cast<std::int16_t>(static_cast<std::int32_t>(shifted) >> 16);
   }
 
+  // FUN_00248e00: a *slower* countdown than FUN_00248e58 -- it subtracts
+  // `frameTicks / 16` rather than the whole tick, and takes one extra off when
+  // that quotient is zero so a stalled frame still makes progress. Floored at
+  // zero. FUN_0023fd30 calls it three times a frame on the pre-battle
+  // countdown, which is what makes 0x5A ticks about a second and a half.
+  constexpr std::int16_t FUN_00248e00_step_slow(std::int16_t value, std::int32_t frameTicks)
+  {
+    const std::int32_t rounded = frameTicks < 0 ? frameTicks + 15 : frameTicks;
+    const std::int32_t step = rounded >> 4;
+    std::int32_t next = static_cast<std::int16_t>(value - step);
+    if (step == 0)
+    {
+      next = static_cast<std::int16_t>(next - 1);
+    }
+    return next < 1 ? std::int16_t{0} : static_cast<std::int16_t>(next);
+  }
+
   // FUN_00248e58: subtract this frame ticks, clamped at zero through an
   // unsigned wrap test rather than a comparison against zero.
   constexpr std::uint16_t FUN_00248e58_step_timer(std::uint16_t value, std::uint16_t frameTicks)

@@ -20,6 +20,7 @@
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/input/mapped_action_history.h"
+#include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_party.h"
 #include "ported/battle/battle_character_update.h"
 #include "ported/battle/battle_command_input.h"
@@ -212,7 +213,10 @@ namespace orphen::port
     // when the *held* word it latched goes clear -- so a one-frame pulse enters
     // a charge and leaves it the same frame. The charge level a spell fires at
     // is how many ticks separated the two.
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[4];
+    // Four face buttons, then the four D-pad directions -- the target cycler
+    // reads the pad's newly-pressed word, so a "hold" is one step at the start
+    // of the range, which is exactly one cycle.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[8];
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -607,11 +611,17 @@ namespace orphen::port
     // low methods are what set the second of those. See
     // ported/battle/battle_party.h.
     orphen::ported::battle::BattleParty battleParty_;
+    // The scene's own encounter data: every actor the player can target.
+    // Loaded by FUN_0023f318 out of the scene script, not out of the
+    // executable, so it lives beside the script rather than in BattleParty.
+    orphen::ported::battle::BattleEncounter battleEncounter_;
+    bool battleMasterHaltReported_ = false;
     orphen::ported::battle::BattleParty::Environment battleEnvironment();
     orphen::ported::battle::BattleUpdateEnvironment battleUpdateEnvironment(std::uint16_t frameTicks);
     void sampleBattleTrace(std::uint32_t heldPad);
     orphen::ported::battle::BattleTrace battleTrace_;
     void printBattleReport() const;
+    void printEncounterReport() const;
     // uGpffffadf8, the character stat table. DAT_00343688's seven party
     // records come out of it; see FUN_002294d0_load_party_records.
     orphen::ported::resource::CharacterStats characterStats_;

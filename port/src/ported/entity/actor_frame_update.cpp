@@ -2233,6 +2233,210 @@ namespace orphen::ported::entity
     return (value < stepped) ? std::uint16_t{0} : stepped;
   }
 
+  // FUN_002d73e8 (0x002d73e8), the behaviour of type 0x192 -- **the target
+  // cursor**, the marker drawn over an enemy while a battle is running.
+  //
+  // One is spawned per bound actor record by FUN_002d86b0 the frame the
+  // pre-battle countdown reaches zero, and +0x19A names the pool slot it rides.
+  // Everything below is the "+0x19A names somebody else" half; the other half,
+  // taken when +0x19A names the cursor's own slot, is the scripted set-piece
+  // marker of FUN_002d8808 and has nothing to do with targeting.
+  //
+  //   +0x04 |= 0x100          physics off: the cursor is placed, never simulated
+  //   +0x08  = (h & 0xFBFE) | 0x4080   flat lighting, no rotation branch
+  //   +0x14C = +0x150 = 1.0   scale reset every frame
+  //   position = target +0x20/+0x24, and +0x28 + 0.75 * the target's height,
+  //              plus the cursor's own +0x1A0..+0x1A8 offset and the target's
+  //              hit-volume centre z
+  //
+  // Then it projects that point and **stores the screen position back into
+  // +0x20/+0x24**, in pixels: (gsX >> 4) + 320 and (gsY >> 3) + 220, with the
+  // projected depth word in +0x28 and +0x08 bit 0x1000 raised. That bit is what
+  // tells FUN_0020f510 the position is already in screen space, and this is the
+  // only entity in either scene that takes that branch.
+  //
+  // The animations are the whole of the selection feedback: 10 unselected, 12
+  // the grow-in played when this cursor becomes the target, 11 selected, 13 the
+  // shrink-in it spawns with. 12 and 13 both fall through to their resting
+  // state when the clip ends.
+  void FUN_002d73e8_target_cursor(OriginalEntity &cursor,
+                                  std::size_t slot,
+                                  const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int32_t targetSlot = cursor.cursorTarget19a;
+    if (targetSlot < 0 || static_cast<std::size_t>(targetSlot) >= kEntitySlotCount ||
+        static_cast<std::size_t>(targetSlot) == slot)
+    {
+      // FUN_002d8808's scripted-marker branch. Not reached by a battle cursor.
+      return;
+    }
+    const auto &target = pool.slot(static_cast<std::size_t>(targetSlot));
+
+    // :92-96.
+    cursor.halfword04 |= 0x100u;
+    cursor.flags06 = static_cast<std::uint16_t>(cursor.flags06 & 0xFFEFu);
+    cursor.halfword08 = static_cast<std::uint16_t>((cursor.halfword08 & 0xFBFEu) | 0x4080u);
+    cursor.scale14c = 1.0f;
+    cursor.scaleZ150 = 1.0f;
+
+    // :103-118. The point the marker sits on, then the target's hit-volume
+    // centre z folded in on top of it.
+    cursor.positionX20 = target.positionX20 + cursor.cursorOffsetX1a0;
+    cursor.positionZ24 = target.positionZ24 + cursor.cursorOffsetY1a4;
+    const float lift =
+        cursor.cursorOffsetZ1a8 == 0.0f ? target.height58 * 0.75f : cursor.cursorOffsetZ1a8;
+    const float worldZ = target.positionY28 + lift + target.hitVolumeOffset110[2];
+    cursor.positionY28 = worldZ;
+    cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xFDu);
+
+    // :198-205. The battle is over: the cursor shrinks out and stops drawing.
+    // DAT_0031d7be is control block 0's +0x0E, and 0x0B is the action every
+    // member is put into when the fight ends.
+    ActorEnvironment::BattleMemberView member;
+    const bool haveMember =
+        environment.DAT_0031d7b0_battleMember && environment.DAT_0031d7b0_battleMember(0, member);
+    if (haveMember && member.pendingAction0e == 0x0B)
+    {
+      FUN_00225bc8_set_animation(cursor, 13);
+      cursor.halfword08 = static_cast<std::uint16_t>((cursor.halfword08 & 0xFBFFu) | 1u);
+      cursor.flags06 |= 0x10u;
+      cursor.cursorFlags198 |= 2u;
+      return;
+    }
+
+    // :210-213. The target died; the cursor goes with it.
+    if (static_cast<std::int16_t>(target.staggerTimer12a) < 1)
+    {
+      pool.releaseSlot(slot);
+      return;
+    }
+
+    // :123-197. The projection. The original stages the point through VU0 and
+    // reads back integer GS units; the port asks the runtime for the same
+    // numbers. Off screen sets +0x198 bit 0, which the draw pass honours.
+    if (!environment.FUN_0020b600_project)
+    {
+      return;
+    }
+    ActorEnvironment::ProjectedPoint projected;
+    const orphen::ported::psm2::Vec3 world{cursor.positionX20, cursor.positionZ24, worldZ};
+    if (!environment.FUN_0020b600_project(world, projected))
+    {
+      cursor.cursorFlags198 |= 1u;
+      return;
+    }
+    // :151-162. The GS origin is 0x8000 in both axes, and the subtraction is
+    // biased so the arithmetic shift that follows truncates toward zero rather
+    // than down: -0x7FF1 is -0x8000 + 15 for the >> 4, -0x7FF9 is -0x8000 + 7
+    // for the >> 3. X divides by 16 and Y by 8 because the GS output is 2:1.
+    const std::int32_t rawX = projected.gsX - 0x8000;
+    const std::int32_t rawY = projected.gsY - 0x8000;
+    const std::int32_t biasedX = rawX >= 0 ? rawX : projected.gsX - 0x7FF1;
+    const std::int32_t biasedY = rawY >= 0 ? rawY : projected.gsY - 0x7FF9;
+    cursor.cursorScreenX1ac = static_cast<float>(biasedX >> 4);
+    cursor.cursorScreenY1b0 = static_cast<float>(biasedY >> 3);
+    cursor.cursorScreenZ1b4 = static_cast<float>(projected.gsZ);
+    const float screenX = static_cast<float>((biasedX >> 4) + 320);
+    const float screenY = static_cast<float>((biasedY >> 3) + 220);
+    cursor.positionX20 = screenX;
+    cursor.positionZ24 = screenY;
+    cursor.cursorProjectedDepth28 = projected.gsZ;
+    cursor.halfword08 |= 0x1000u;
+
+    // :180-198. The window the original rejects on, in pixels.
+    cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xFEu);
+    if (screenX < 0.0f || screenX > 640.0f || screenY < 0.0f || screenY > 440.0f)
+    {
+      cursor.cursorFlags198 |= 1u;
+    }
+
+    // :215-238. The spin. An unselected cursor turns on the per-record angle
+    // array at +0x168 and a selected one is pinned flat; the port's sprite pass
+    // does not implement the +0x08 bit 0x400 rotated-corner branch that array
+    // feeds, so this is recorded rather than reproduced.
+
+    // :239-259. Selection. The player's target is control block 0's +0x2C, a
+    // pool slot; a cursor riding that slot plays the grow-in and then sits on
+    // 11, and every other cursor goes back to 10.
+    const std::int32_t playerTarget = haveMember ? member.target : -1;
+    if (playerTarget > 0)
+    {
+      if (targetSlot == playerTarget)
+      {
+        if (cursor.animationA0 == 10)
+        {
+          cursor.flags06 = static_cast<std::uint16_t>(cursor.flags06 & 0xFFEFu);
+          FUN_00225bc8_set_animation(cursor, 12);
+        }
+      }
+      else if (cursor.animationA0 != 10)
+      {
+        cursor.flags06 = static_cast<std::uint16_t>(cursor.flags06 & 0xFFEFu);
+        FUN_00225bc8_set_animation(cursor, 10);
+      }
+    }
+
+    // :261-266 and :283-285. DAT_00354ECC hides every cursor outright;
+    // otherwise bit 0x40 of +0x08 is the brightener the D-pad's 120-frame
+    // display timer drives.
+    if (environment.DAT_00354ecc_battleSuspended != 0)
+    {
+      cursor.halfword08 |= 1u;
+      cursor.cursorFlags198 |= 0x40u;
+      return;
+    }
+    if ((cursor.cursorFlags198 & 0x40u) == 0)
+    {
+      cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xEFu);
+      if (environment.DAT_00354e96_targetDisplayTicks == 0)
+      {
+        cursor.halfword08 = static_cast<std::uint16_t>(cursor.halfword08 & 0xFFBFu);
+      }
+      else
+      {
+        // While the display is up, every cursor that is *not* the target takes
+        // +0x198 bit 4 -- and that, through the tail below, is what hides it.
+        // So the 120 frames after a D-pad step show one marker, not five.
+        if (targetSlot != playerTarget)
+        {
+          cursor.cursorFlags198 |= 0x10u;
+        }
+        cursor.halfword08 |= 0x40u;
+      }
+
+      // :322-345. The two transient clips resolve when their animation ends;
+      // +0x06 bit 0 is the clip-finished flag FUN_00225c90 raises.
+      if (cursor.animationA0 == 12 && (cursor.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(cursor, 11);
+      }
+      else if (cursor.animationA0 == 13 && (cursor.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(cursor, 10);
+      }
+    }
+    else
+    {
+      cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xBFu);
+    }
+
+    // :347-370. **+0x08 bit 0 is what stops the draw**, and it is raised only
+    // when +0x198 came out of all of the above non-zero -- off screen, hidden
+    // by the display, or retired. A cursor that reaches here with a clear
+    // +0x198 leaves bit 0 down and FUN_0020f3e0's pass picks it up, which is
+    // the whole reason the type carries +0x02 bit 0x200: it is a sprite, and
+    // FUN_0020c5a8's model walk is meant to refuse it.
+    if (cursor.cursorFlags198 != 0)
+    {
+      cursor.halfword08 |= 1u;
+    }
+  }
+
   // FUN_002d9c88 (0x002d9c88), the behaviour of type 0x18F (399) -- the ring on
   // the ground under a battle character. FUN_00242df0 spawns one per party
   // member and parks it in DAT_0031da8c.
@@ -3627,6 +3831,7 @@ namespace orphen::ported::entity
     case 0x002DA350u: // FUN_002da350, type 0x139, the battle sword blade
     case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
     case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
+    case 0x002D73E8u: // FUN_002d73e8, type 0x192, the target cursor
     case 0x002D9C88u: // FUN_002d9c88, type 0x18F, the ground ring
     case 0x002DEAE8u: // FUN_002deae8, type 0x174, Bite of Lightning's hand effect
     case 0x002DEE08u: // FUN_002dee08, type 0x15C, its ground disc and victim sparks
@@ -3671,6 +3876,8 @@ namespace orphen::ported::entity
       return "FUN_002da8a0 (hand of pyro)";
     case 0x002DAE60u:
       return "FUN_002dae60 (fireball)";
+    case 0x002D73E8u:
+      return "FUN_002d73e8 (target cursor)";
     case 0x002D9C88u:
       return "FUN_002d9c88 (cast marker)";
     case 0x002DEAE8u:
@@ -3810,6 +4017,9 @@ namespace orphen::ported::entity
         break;
       case 0x002DAE60u:
         FUN_002dae60_fireball(entity, slot, slotEnvironment);
+        break;
+      case 0x002D73E8u:
+        FUN_002d73e8_target_cursor(entity, slot, slotEnvironment);
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);

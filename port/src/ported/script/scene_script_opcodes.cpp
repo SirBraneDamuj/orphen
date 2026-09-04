@@ -3259,6 +3259,77 @@ namespace orphen::ported::script
       currentEntity_ = slot;
       placeFromRecord(slot, recordIndex, record, spawnRecord);
 
+      if (group != 3)
+      {
+        // :60-73. Everything spawned from a non-3 group gets its body from the
+        // stat blob -- FUN_0025bae8(group, type, r) then FUN_0023a518 -- and
+        // that is where an enemy's hit points come from. Without them
+        // FUN_002476c0 will not target it: its predicate wants +0x12A > 0.
+        auto &entity = environment_.entityPool->slot(slot);
+        if (environment_.uGpffffadf8_stats != nullptr)
+        {
+          const auto stat = environment_.uGpffffadf8_stats->FUN_0025bae8_record(
+              group, static_cast<std::int16_t>(typeId));
+          if (stat.has_value())
+          {
+            FUN_0023a518_apply_party_record(entity, *stat);
+          }
+        }
+
+        // The enemy's own state 0 -- FUN_0028ae10:16-21 for type 0x8A -- opens
+        // with FUN_0025bae8(**0**, type, r), which is group 0 indexed by
+        // `type - 0x7C`, and inlines FUN_0023a518 over the result. That, not
+        // the group lookup above, is where an enemy's radius, height and hit
+        // points come from: group 2 holds only ids 0x62..0x79 and knows nothing
+        // about a 0x8A. The port has no enemy state machines, so it runs the
+        // same load here, for the same reason the bind below happens here.
+        if (group == 2 && environment_.DAT_003555d3_groupEScene &&
+            environment_.uGpffffadf8_stats != nullptr)
+        {
+          const auto enemy = environment_.uGpffffadf8_stats->FUN_0025bae8_record(
+              0, static_cast<std::int16_t>(typeId));
+          if (enemy.has_value())
+          {
+            FUN_0023a518_apply_party_record(entity, *enemy);
+          }
+        }
+
+        // Group 2 in a section-14 scene is the battle roster. The placement
+        // record's +0x0F byte is the **actor id** when it falls in 0x1E..0x31,
+        // and otherwise the scene hands out ids from script variable 26 --
+        // which FUN_0025b6d0 seeds to 0x32 for exactly this, one past the top
+        // of the authored range.
+        //
+        // s14_e012's group 2 carries params 30..35, and its actor table names
+        // 0x1E 0x1F 0x20 0x22 0x23 on the enemy side: the placement table and
+        // the encounter table are two halves of one list.
+        if (group == 2 && environment_.DAT_003555d3_groupEScene)
+        {
+          const auto param = static_cast<std::uint8_t>(record.param);
+          if (static_cast<std::uint8_t>(param - 0x1Eu) < 0x14u)
+          {
+            entity.byte95 = param;
+          }
+          else if (environment_.state != nullptr)
+          {
+            std::uint32_t &next = environment_.state->DAT_00355060_work[0x1A];
+            entity.byte95 = static_cast<std::uint8_t>(next);
+            next += 1;
+          }
+
+          // The original defers this to the enemy's own state 0 -- FUN_0028ae10
+          // for type 0x8A, FUN_0027f978 for type 0x80, thirty of them in all,
+          // each calling FUN_0023f8b8 immediately after the stat stamp above.
+          // The port has none of those state machines yet, so the bind happens
+          // at the spawn instead: same frame, same observable result, and the
+          // record stops being a name with nothing behind it.
+          if (environment_.FUN_0023f8b8_bind_battle_actor)
+          {
+            environment_.FUN_0023f8b8_bind_battle_actor(slot);
+          }
+        }
+      }
+
       if (group == 3)
       {
         // The group-3 tail of FUN_0025eb48: the record's id byte and its param
@@ -4401,6 +4472,11 @@ namespace orphen::ported::script
       case 1:
       case 2:
       case 3:
+      // 0x68 -> FUN_00242cf0, the battle camera. With script variable 25 at 500
+      // it is FUN_0023c340, the *target display* -- which is also what freezes
+      // every entity but the cursors while the D-pad timer runs. s14_e012 calls
+      // it once a frame for the whole battle.
+      case 0x68:
       case 0x78:
         if (environment_.FUN_00242a18_battle_method)
         {

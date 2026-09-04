@@ -1746,6 +1746,221 @@ target > 1`. It spawns type `0x13E` at animation 5 (behaviour `FUN_002df018`, in
 battle-interrupt flag that stops the rest of the battle while the spirit plays.
 The port returns 0 from that branch with a comment rather than approximating it.
 
+#### Targeting: where the enemies come from, and how the cursor finds them
+
+The battle module has two 0x3C-byte record arrays with the same field layout,
+and confusing them costs a lot of time:
+
+| | where | what it holds |
+|---|---|---|
+| control blocks | `0x0031D7B0`, 10 records | the *party*, indexed by member |
+| the actor table | inside the scene script, `DAT_00354EB4` | every battle participant the encounter data names |
+
+`FUN_0023eba0` hands both back through one pointer and picks between them on the
+id: below 10 is a control block, 10 and up is an actor record. **Ids at and
+above `0x50` are the party side** -- `FUN_0023eff8` and `FUN_0023f080` both stop
+counting there, and `FUN_00241a88`'s AI skips anything above `'O'`.
+
+##### Where the actor table comes from
+
+Not the executable. `FUN_0022a418:261` calls `FUN_0023f318(0)`, which calls
+`FUN_0025ba28(0)` -- the scene script's **own section table**, at script header
+word 7, entry 0. A section-14 scene with no battle leaves that entry zero.
+
+```
+blob +0x00  flags; bit 31 = already relocated
+     +0x04  -> the camera/placement sub-blob (DAT_00354FA8)
+     +0x10  encounter group count            (DAT_00354F9C)
+     +0x14  two offsets per group: the actor array, then the master script
+            (DAT_00354FA0), and the word past the table is DAT_00354FA4
+```
+
+Group 0 is taken unconditionally: its first word becomes `DAT_00354EB4` and its
+second becomes `DAT_0031DBD8`, which is the master pseudo-record `DAT_0031DBA8`'s
+own `+0x30` -- the battle VM's program counter. The port keeps the whole thing as
+offsets into a mutable copy of the decoded script, so a value in
+`--battle-report` can be looked up directly in a `--scr-dump`.
+
+s14_e012 ships six records: `0x1E 0x1F 0x20 0x22 0x23` on the enemy side and
+`0x50` on the party side.
+
+##### The enemies are placement records, and they bind themselves
+
+This is the part that is easy to get exactly backwards, and doing so costs a day:
+**the actor table never goes looking for entities. An enemy registers itself.**
+
+`FUN_0025eb48` -- opcode 0x51, the same walk that spawns a scene's props -- has
+a tail that only fires for **group 2 in a section-14 scene**:
+
+```c
+FUN_0025bae8(group, type, r);  FUN_0023a518(entity, r);   // a body
+if ((group == 2) && (cGpffffb663 != '\0')) {
+  bVar2 = placement[0x0F];
+  if (bVar2 - 0x1e < 0x14) entity->+0x95 = bVar2;          // the actor id
+  else { entity->+0x95 = scriptVar[26]; scriptVar[26]++; } // or the next free one
+}
+```
+
+So the placement record's `+0x0F` byte **is the actor id**, when it falls in
+`0x1E..0x31`; otherwise the scene hands out ids from script variable 26, which
+`FUN_0025b6d0`'s group-0xE write seeds to `0x32` -- one past the top of the
+authored range. s14_e012's group 2 carries params 30..35 and its actor table
+names `0x1E 0x1F 0x20 0x22 0x23`: the placement table and the encounter table are
+two halves of one list.
+
+The bind itself is **`FUN_0023f8b8`**, called from each enemy type's *state 0* --
+`FUN_0028ae10` for type 0x8A, `FUN_0027f978` for type 0x80, thirty of them in all,
+each doing the same three things: `FUN_0025bae8(0, type, r)` for the stat record,
+`FUN_0023f8b8(self)` for the bind, and park the returned pointer in `+0x198`.
+`FUN_0023f8b8` walks **every** encounter group -- `uGpffffb02c` groups at
+`iGpffffb030`, not just the one `FUN_0023f318` selected -- takes the first record
+whose id byte equals the entity's `+0x95`, wipes its per-battle fields, writes the
+entity into `+0x08` and raises the entity's own `+0x96` bit 0.
+
+Note the two different stat lookups. `FUN_0025eb48`'s is
+`FUN_0025bae8(group, type)`, and for group 2 that scans the stat blob's group 2 --
+which holds ids `0x62..0x79` and knows nothing about a `0x8A`, so for these
+enemies it finds nothing and leaves the destination alone. The one that gives an
+enemy its radius, height and **hit points** is the state-0 call, and that one asks
+for **group 0** indexed by `type - 0x7C`. Without it `FUN_002476c0` will not
+target anything: its predicate wants `+0x12A > 0`.
+
+`FUN_0023fc08` runs at the top of every battle tick and *drops* a binding unless
+the entity is live, has a type, and still carries the record's own id in `+0x95`.
+It never creates one. `+0x0C` counts up while a *downed* enemy sits in a record --
+Ghidra spells that test `psVar3[0x95] < 1` off a `short *`, which is the halfword
+at `+0x12A`, the hit points, not the byte at `+0x95` beside it.
+
+**`FUN_00240870` is the third way in, not the only one.** It is the trigger-table
+walker: kinds 4 and 5 spawn `FUN_002d6c68(type)`, stamp `+0x12A = 0x78`, take the
+position from the record's own `+0x14/+0x16/+0x18` (each `/10`), write the id into
+the new entity's `+0x95`, and bind. The trigger table is installed by VM opcode 9.
+That is how *reinforcement waves* arrive; it is not how the enemies standing in
+the arena when the battle opens got there.
+
+The port does the bind at the spawn site rather than in a per-type state 0,
+because it has no enemy state machines yet. Same frame, same observable result,
+and it is named as a stand-in where it happens.
+
+##### The master battle script
+
+`FUN_0023fd30` steps a second bytecode VM -- nineteen opcodes at
+`PTR_LAB_0031d118` -- on the master pseudo-record, and then the same VM on every
+actor record carrying `+0x38` bit `0x20`. A handler returning a negative value
+continues to the next opcode in the same frame; anything `>= 0` is stored in
+`+0x2E` and ends the step. Every handler moves the program counter itself,
+through the global `DAT_00354EAC`.
+
+Seven of the nineteen are bare `LAB_` blocks with no `src/FUN_*.c`; recovered
+from `SLUS_200.11`:
+
+| | | |
+|---|---|---|
+| 0 `LAB_00241A58` | `pc += 4`, yield 0 | 10 `LAB_00240C98` | return `yield + 1`, pc unmoved |
+| 1 `LAB_00241A70` | `pc -= *(u16*)(pc+2)`, yield 0 | 11 `LAB_00240CB0` | script var `[pc+2]` vs `*(u32*)(pc+4)` |
+| 8 `LAB_00240C58` | `pc += 6`, yield 0 | 14 `LAB_00241640` | return `yield`, pc unmoved |
+| 9 `LAB_00240C70` | install `record->+0x34`, `pc += count*16 + 4` | | |
+
+s14_e012's master script, at `0x1A0C`, is five instructions and it is the whole
+shape of the thing:
+
+```
+1a0c  12  FUN_00242c40(500, 0)     script variable 25 = 500
+1a14  18  install actor script, id 0x1E   ... then 0x1F, 0x20, 0x22, 0x23
+1a3c   5  sub-op 1: wait 2 ticks
+1a40   3  living enemies == 0 ? jump +0x14 (out) : fall through
+1a48   3  unconditional jump -12, back to the wait
+```
+
+"Arm the target display, give every enemy its AI, then spin until they are all
+dead." The port runs the master half; the per-actor scripts opcode 18 installs
+are recorded but not stepped, and `--battle-report` names any opcode the master
+halts on.
+
+Variable 25 is the point of the first instruction. Opcode `0xBD` method `0x68`
+(`FUN_00242cf0`) reads it every frame -- s14_e012's per-frame entry calls the
+method 400 times in 400 frames -- and 500 is what makes it `FUN_0023c340`, the
+target display.
+
+##### The D-pad, and why Up feels different from Right
+
+`FUN_002462c8:73-148`, and the bit tests are the whole of it:
+
+```
+0x3000  Up or Right   -> step forward
+0xC000  Down or Left  -> step backward
+0x5000  Up or Down    -> *also* half-wrap: start the search half a table away
+```
+
+so Left and Right walk the line of enemies one at a time and Up and Down jump
+across it, with `DAT_00354F80` holding a 120-frame lockout so the jump cannot be
+mashed. `DAT_00355600`, ORed into the same test, is **the right stick** mapped
+onto those four bits by `FUN_0023B4E8` -- not a second pad. The port has no
+right-stick word, so that is the one input the block cannot answer to.
+
+The block is gated on the member having a target at all (`0 < FUN_002493b8`), and
+the player's first one does not come from `FUN_0023fd30`'s auto-acquire loop:
+that loop skips member 0 unless control block 0's `+0x38` carries bit `0x100`,
+and **nothing in the executable ever sets that bit** -- the only writer is VM
+opcode 4 sub-op 5, out of script data. What actually happens is that
+`FUN_00243f80` parks the target at -1 and the class-1 state handler flips a
+negative target positive and a zero one to 1 (`battle_character_update.cpp:361`).
+Target 1 is below the `< 3` "no target" threshold everything else tests, but it
+is greater than zero, so the cycler runs, `FUN_00247d80` fails to find a record
+for pool slot 1's `+0x95`, and the search starts from the top of the table and
+takes the first live enemy.
+
+##### The pause is one bit on everything
+
+Every D-pad step re-arms `DAT_00354E96` to 120 frames, and **that is the pause**:
+while it is non-zero `FUN_0023c340` calls `FUN_002de5b8(1)`, which sets `+0x02`
+bit `0x800` on every entity except type `0x192`, type `0x6A` and anything with
+`+0x02 & 0x180`. Bit `0x800` is the gate `FUN_00239ce0` and `FUN_002261e0` both
+skip on, so the field freezes and only the cursors keep updating.
+`FUN_002de500` lifts it. `FUN_0023c340` also returns immediately when
+`DAT_00354FAC` is null -- the battle camera's spline pairs, which `FUN_00246fc0`
+takes from the placement sub-blob's `+0x5C` count and `+0x60` array -- so the
+port carries that pointer even though the camera swing itself is not reproduced.
+
+There is a second targeting mode, taken when `DAT_00354EC0` is non-zero: a static
+20-entry marker table at `0x003253C0`, cycled by `FUN_002481F0` and refreshed by
+`FUN_00248108`, which does **not** freeze anything. Every caller of
+`FUN_00247F18`, the only thing that installs it, is in the `0x0026Cxxx` block --
+the scripted set pieces. A normal battle leaves it null.
+
+##### The cursor is a type `0x192`, and it is a sprite
+
+`FUN_002d86b0` spawns one per bound record, from `FUN_0023fd30` on the frame the
+pre-battle countdown `sGpffffb054` reaches zero (`FUN_0023fb50` seeds that with
+half the halfword at `DAT_00354FA4`, floored at 0x5A), and stores its pool slot in
+the record's `+0x0D`. `+0x19A` is the pool slot it rides.
+
+Its behaviour `FUN_002d73e8` places it at the target's position plus 0.75 of the
+target's height, projects that through the same VU0 path the sprites use, and
+**writes the screen position back into `+0x20`/`+0x24`** as pixels -- `(gsX >> 4)
++ 320` and `(gsY >> 3) + 220`, with the GS origin 0x8000 subtracted first -- the
+projected depth word into `+0x28`, and `+0x08` bit `0x1000`. That bit is
+`FUN_0020f510`'s screen-space branch: no perspective divide, a flat `+0x14C * 256`
+scale, a GS z re-keyed off `+0x28` through `DAT_00352090/94/98`, and a flat 0x80
+vertex colour. It is the only entity in either standing scene that takes it, and
+the port implements it for exactly this.
+
+The animations are the whole of the selection feedback: `10` unselected, `12` the
+grow-in played on the frame this cursor becomes the target, `11` selected (and the
+frame it reaches 11 it also drives the `DAT_00354EC8` light onto the target at
+colour `0xB4`), `13` the shrink-in it spawns with.
+
+Two things decide whether it draws at all, and they pull in opposite directions.
+Type `0x192`'s descriptor sets `+0x02` bit `0x200`, which makes `FUN_0020c5a8`'s
+*model* walk refuse it and `FUN_0020f3e0`'s *sprite* walk take it. Then `+0x08`
+bit 0 stops the sprite walk too, and `FUN_002d73e8` raises it only when `+0x198`
+came out of the frame non-zero -- off screen, retired, or **not the current
+target while the display timer is running**. So the resting state is five
+brackets, one per enemy, and the 120 frames after a D-pad step show one.
+
+Type `0x192` doubles as a scripted marker when its `+0x19A` names its own slot;
+that is the branch `FUN_002d8808` sets up and it has nothing to do with targeting.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips

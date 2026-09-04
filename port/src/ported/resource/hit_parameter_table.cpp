@@ -55,6 +55,29 @@ namespace orphen::ported::resource
     return true;
   }
 
+  std::uint32_t HitParameterTable::FUN_00216078_count(std::int16_t typeId) const
+  {
+    if (blob_.empty() || tripleTableOffset_ == 0)
+    {
+      return 0;
+    }
+    std::size_t at = tripleTableOffset_;
+    while (at + kTripleStride <= blob_.size())
+    {
+      const std::int32_t entryType = static_cast<std::int32_t>(u32At(blob_, at));
+      if (entryType == 0)
+      {
+        break;
+      }
+      if (entryType == static_cast<std::int32_t>(typeId))
+      {
+        return u32At(blob_, at + 8);
+      }
+      at += kTripleStride;
+    }
+    return 0;
+  }
+
   std::optional<HitParameters> HitParameterTable::FUN_00216078_record(std::int16_t typeId,
                                                                      std::uint32_t index) const
   {

@@ -30,6 +30,7 @@
 // the port already publishes as InputSnapshot::rawPressedPad / rawHeldPad in
 // the same post-CONCAT11 bit layout.
 
+#include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_party.h"
 #include "ported/battle/battle_tables.h"
 
@@ -42,12 +43,17 @@ namespace orphen::ported::battle
   struct CommandInputEnvironment
   {
     BattleParty *party = nullptr;
+    // DAT_00354EB4 / DAT_00354EBA, the actor table target cycling walks.
+    const BattleEncounter *encounter = nullptr;
     orphen::ported::entity::EntityPool *pool = nullptr;
     std::uint16_t DAT_003555f4_heldPad = 0;
     std::uint16_t DAT_003555f6_pressedPad = 0;
-    // DAT_00355600, the second controller's pressed word. The port has no
-    // second pad, so it is zero -- FUN_002462c8 only ORs it into the *target
-    // cycling* test, which this slice cannot act on anyway.
+    // DAT_00355600: **the right stick**, not a second pad. FUN_0023b5d8 runs
+    // the right stick through FUN_0023b4e8, which maps its angle onto the same
+    // four direction bits the D-pad uses, and DAT_00355600 is that word's
+    // newly-pressed edge. FUN_002462c8 ORs it into the target-cycling test and
+    // nowhere else. The port's InputSnapshot carries no right stick, so this
+    // stays zero and stick targeting is the one input the block cannot answer.
     std::uint16_t DAT_00355600_pressedPad2 = 0;
     std::uint16_t frameTicks = 0x20;
     // FUN_00216868. Reached only through the confusion branch
@@ -56,6 +62,10 @@ namespace orphen::ported::battle
     // --frames run stays deterministic.
     std::function<std::uint32_t()> FUN_00216868_random;
   };
+
+  // FUN_00248e48(0x78). Both target timers are armed with 0xF00 -- 120 frames
+  // at 32 ticks each -- and both are stepped by FUN_00248e58.
+  inline constexpr std::uint16_t kTargetDisplayTicks = 0x0F00;
 
   // FUN_002462c8. Returns the same diagnostic codes the original does; nothing
   // reads them (FUN_0023fd30 discards the value), they are kept because they

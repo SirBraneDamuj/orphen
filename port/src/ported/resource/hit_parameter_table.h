@@ -87,6 +87,12 @@ namespace orphen::ported::resource
     std::optional<HitParameters> FUN_00216078_record(std::int16_t typeId,
                                                      std::uint32_t index) const;
 
+    // DAT_00354C64 (iGpffffacf4): the type's attack count, which FUN_00216078
+    // publishes as a side effect of every successful lookup. FUN_0023f8b8 reads
+    // it back to bound its own walk over the same records, so the port exposes
+    // it directly rather than reproducing the global.
+    std::uint32_t FUN_00216078_count(std::int16_t typeId) const;
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t tripleTableOffset_ = 0;

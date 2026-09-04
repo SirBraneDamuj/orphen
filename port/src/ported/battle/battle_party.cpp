@@ -1,5 +1,6 @@
 #include "ported/battle/battle_party.h"
 
+#include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
 
 #include <algorithm>
@@ -115,9 +116,13 @@ namespace orphen::ported::battle
     tables_.clearAll();
     sGpffffb052_ = 0;
     DAT_00354ebc_ = 0;
-    DAT_00354eba_enemyCount_ = 0;
     DAT_00354ecc_ = 0;
     DAT_0031dad0_ = kNoEntity;
+    DAT_00354e90_ = kNoEntity;
+    DAT_00354e94_ = 0;
+    DAT_00354e96_ = 0;
+    DAT_00354f80_ = 0;
+    DAT_00354ec0_ = 0;
     // See the header: not one of FUN_0023f288's clears, and nothing in src/
     // writes it. 1 is what the save state reads and the only value that makes
     // FUN_002432d8's player pass address member 0's masks.
@@ -685,6 +690,201 @@ namespace orphen::ported::battle
     return 0;
   }
 
+  // FUN_002d86b0(targetSlot, offset): one 0x192 target cursor, riding the pool
+  // slot named. Returns the cursor's own slot, or -1.
+  //
+  //   +0x19A  the slot it rides
+  //   +0x1A0..+0x1A8  a world offset, zero for a battle cursor
+  //   +0x133  -(trunc(target +0x54 / 160) + 12), the depth bias that pulls the
+  //           marker in front of the thing it is drawn over
+  //   animation 13, the shrink-in; FUN_002d73e8 takes it to 10 when it ends
+  //
+  // The two conditional +0x198 bits are skipped: bit 4 comes from the member's
+  // 0x31DA6C word bit 0x20 (a state the port never raises) and bit 0x20 from
+  // the target being one of the types 0x6E..0x7A with a non-zero +0x60.
+  static std::int32_t FUN_002d86b0_spawn_cursor(const BattleParty::Environment &environment,
+                                                std::int32_t targetSlot)
+  {
+    const std::int32_t slot = FUN_002d6c68_spawn(environment, 0x192);
+    if (slot < 0)
+    {
+      return -1;
+    }
+    auto &cursor = environment.pool->slot(static_cast<std::size_t>(slot));
+    const auto &target = environment.pool->slot(static_cast<std::size_t>(targetSlot));
+    cursor.cursorTarget19a = static_cast<std::int16_t>(targetSlot);
+    cursor.cursorOffsetX1a0 = 0.0f;
+    cursor.cursorOffsetY1a4 = 0.0f;
+    cursor.cursorOffsetZ1a8 = 0.0f;
+    const auto scaled = static_cast<std::int8_t>(static_cast<std::int32_t>(target.radius54 / 160.0f));
+    cursor.depthBias133 = static_cast<std::int8_t>(-(scaled + 12));
+    orphen::ported::entity::FUN_00225bc8_set_animation(cursor, 13);
+    return slot;
+  }
+
+  void BattleParty::FUN_0023fd30_pre_battle(const Environment &environment,
+                                            BattleEncounter &encounter,
+                                            std::uint32_t frameTicks)
+  {
+    if (environment.pool == nullptr || !encounter.available())
+    {
+      return;
+    }
+    const std::int16_t before = encounter.sGpffffb054_countdown();
+    if (before == 0)
+    {
+      return;
+    }
+
+    // :354-356. Three steps a frame, each FUN_00248e00's sixteenth of a tick.
+    std::int16_t countdown = before;
+    for (int step = 0; step < 3; ++step)
+    {
+      countdown = FUN_00248e00_step_slow(countdown, static_cast<std::int32_t>(frameTicks));
+    }
+    encounter.setSGpffffb054_countdown(countdown);
+    if (countdown != 0)
+    {
+      return;
+    }
+
+    // :358-375. The frame it lands on zero, every record holding an entity gets
+    // a cursor and keeps its slot in +0x0D. The `iGpffffaf50 == 0` gate is the
+    // 0x3253C0 marker mode, which a normal battle leaves null.
+    if (DAT_00354ec0_ != 0)
+    {
+      return;
+    }
+    const std::int32_t count = encounter.DAT_00354eba_actorCount();
+    for (std::int32_t index = 0; index < count; ++index)
+    {
+      const std::uint32_t at = encounter.record(static_cast<std::size_t>(index));
+      const std::int32_t entity = encounter.entitySlot(at);
+      if (entity < 0)
+      {
+        continue;
+      }
+      const std::int32_t cursor = FUN_002d86b0_spawn_cursor(environment, entity);
+      if (cursor < 0)
+      {
+        continue;
+      }
+      encounter.write<std::uint8_t>(at + actor::kCursor0d, static_cast<std::uint8_t>(cursor));
+      // FUN_002d73c0(cursor, 1): a record already out of the fight gets its
+      // cursor dimmed the moment it appears.
+      if ((encounter.read<std::uint32_t>(at + actor::kFlags38) & 0x40u) != 0)
+      {
+        environment.pool->slot(static_cast<std::size_t>(cursor)).cursorFlags198 |= 0x20u;
+      }
+    }
+  }
+
+  // FUN_002de5b8(1) and FUN_002de500 (0x002de5b8 / 0x002de500): **the pause.**
+  //
+  // Both walk the whole 256-slot entity pool and set or clear bit 0x800 of
+  // +0x02 on every live slot. Bit 0x800 is the gate FUN_00239ce0 and
+  // FUN_002261e0 already skip on, so raising it stops every behaviour and every
+  // physics step in the scene at once -- there is no separate "battle paused"
+  // state anywhere, just this one bit on everything.
+  //
+  // FUN_002de5b8's argument 1 is the *battle* form, and its three exemptions
+  // are what keep the display alive while the field is frozen: type 0x192 (the
+  // target cursors), type 0x6A, and anything already carrying +0x02 bits
+  // 0x180. FUN_002de500 has no exemptions -- it lifts the bit off everything.
+  static void FUN_002de5b8_freeze(orphen::ported::entity::EntityPool &pool)
+  {
+    for (std::size_t slot = 0; slot < pool.slotCount(); ++slot)
+    {
+      if (pool.status(slot) == orphen::ported::entity::SlotStatus::Free)
+      {
+        continue;
+      }
+      auto &entity = pool.slot(slot);
+      if (entity.typeId00 == 0x192 || entity.typeId00 == 0x6A ||
+          (entity.descriptorFlags02 & 0x180u) != 0)
+      {
+        continue;
+      }
+      entity.descriptorFlags02 = static_cast<std::uint16_t>(entity.descriptorFlags02 | 0x800u);
+    }
+  }
+
+  static void FUN_002de500_unfreeze(orphen::ported::entity::EntityPool &pool)
+  {
+    for (std::size_t slot = 0; slot < pool.slotCount(); ++slot)
+    {
+      if (pool.status(slot) == orphen::ported::entity::SlotStatus::Free)
+      {
+        continue;
+      }
+      auto &entity = pool.slot(slot);
+      entity.descriptorFlags02 = static_cast<std::uint16_t>(entity.descriptorFlags02 & 0xF7FFu);
+    }
+  }
+
+  // FUN_0023c340 (0x0023c340), reached from opcode 0xBD method 0x68
+  // (FUN_00242cf0) whenever script variable 25 holds 500 -- which the master
+  // battle script sets with VM opcode 12, and which s14_e012's per-frame entry
+  // then calls once a frame, 400 times in 400 frames.
+  //
+  // Most of it is the camera: it picks a spline pair out of DAT_00354FAC and
+  // swings the view onto the target while the display is up. That half is not
+  // ported. What is ported is the half the player feels -- **while
+  // DAT_00354E96 is running, every entity except the cursors is frozen** -- and
+  // the timer that spends it. Every D-pad step in FUN_002462c8 re-arms the
+  // timer to 0xF00, so holding a direction keeps the field stopped.
+  //
+  // DAT_00354E90 is the entity the display is aimed at, and the whole block is
+  // skipped without one: a battle with nothing targetable never freezes.
+  void BattleParty::FUN_0023c340_target_display(const Environment &environment,
+                                                const BattleEncounter &encounter,
+                                                std::uint32_t frameTicks)
+  {
+    if (environment.pool == nullptr)
+    {
+      return;
+    }
+    // :34-40. Not in a battle: everything the display owns is dropped.
+    if ((DAT_00354fc2() & 1) == 0)
+    {
+      DAT_00354e90_ = -1;
+      DAT_00354e94_ = 0;
+      DAT_00354e96_ = 0;
+      return;
+    }
+    // :41-43. No camera splines, no display. FUN_00246fc0 fills this from the
+    // encounter blob's placement sub-blob.
+    if (encounter.DAT_00354fac_cameraSplines() == 0)
+    {
+      return;
+    }
+    // :44-47. DAT_00354ECC is the "battle suspended" gate.
+    if (DAT_00354ecc_ != 0)
+    {
+      return;
+    }
+
+    // :142-147. The display is down: lift the freeze once, and only once.
+    if (DAT_00354e96_ == 0)
+    {
+      if (DAT_00354e90_ > 0)
+      {
+        DAT_00354e90_ = -1;
+        FUN_002de500_unfreeze(*environment.pool);
+      }
+      return;
+    }
+
+    // :148-179. The display is up. DAT_00354E8C is the cinematic-camera mode
+    // the port does not model, so it is always zero here.
+    if (DAT_00354e90_ <= 0)
+    {
+      return;
+    }
+    DAT_00354e96_ = FUN_00248e58_step_timer(DAT_00354e96_, static_cast<std::uint16_t>(frameTicks));
+    FUN_002de5b8_freeze(*environment.pool);
+  }
+
   void BattleParty::FUN_002458a8_fill_party_record(std::int32_t member,
                                                    const orphen::ported::entity::OriginalEntity &entity,
                                                    std::int32_t poolSlot)
@@ -762,9 +962,10 @@ namespace orphen::ported::battle
     // :62-84. Every member starts with no target and action 6, the neutral
     // idle FUN_002462c8 tests for before it will accept a button. Members
     // other than 0 also get an AI script installed at control +0x30
-    // (PTR_DAT_0031d1a8, or PTR_DAT_0031d1f0 for class 3) -- that is the
-    // FUN_0023fd30 VM, which this slice does not run, so the pointer is left
-    // null and the member simply stands still.
+    // (PTR_DAT_0031d1a8, or PTR_DAT_0031d1f0 for class 3) -- executable-
+    // resident battle scripts for the same VM the encounter data supplies the
+    // master one for. FUN_0023fd30 steps those from its per-member loop, which
+    // is not ported, so the pointer is left null and the ally stands still.
     for (std::int32_t member = 0; member < DAT_00354ebc_; ++member)
     {
       const std::uint32_t base = BattleTables::controlBlock(static_cast<std::uint32_t>(member));

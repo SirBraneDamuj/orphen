@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "ported/resource/character_stats.h"
 
 #include <cstring>
@@ -136,10 +137,14 @@ namespace orphen::ported::resource
     }
 
     // `if (*(short *)(groupTable + 0xc) < id)` -- the count beside group 1's
-    // offset, read as a halfword. Group 1 holds 27 records and the largest party
-    // character id is 0x16, so the party always takes the direct path; the scan
-    // is here because the original has it.
-    const std::int16_t directCount = i16At(blob_, groupTableOffset_ + group * 8 + 4);
+    // offset, read as a halfword, and **read at 0x0C whatever group was asked
+    // for**. Group 1 holds 27 records and the largest party character id is
+    // 0x16, so the party always takes the direct path. Group 2 is the enemy
+    // table and its ids are all far above 27, so every enemy takes the scan --
+    // which is the whole point of the branch. Indexing this by `group` made it
+    // read group 2's own count for a group-2 lookup, which sent every enemy
+    // down the direct path and off the end of the group.
+    const std::int16_t directCount = i16At(blob_, groupTableOffset_ + 0x0C);
     if (directCount < id)
     {
       const std::uint32_t scanCount = u32At(blob_, groupTableOffset_ + 0x14);

@@ -104,13 +104,26 @@ namespace orphen::ported::render
     // integers** and then used as fixed point, so a distant sprite's size
     // quantises in visible steps. Y only gets its own divide when +0x150
     // differs from +0x14C.
-    const int projScaleX = FUN_0030bd20_trunc(inputs.scaleX14c * kSpriteProjectionScale *
-                                              inputs.projectionG / inputs.viewZ);
-    int projScaleY = projScaleX;
-    if (inputs.scaleX14c != inputs.scaleY150)
+    // 0x0020f6dc-0x0020f6f0, the bit-0x1000 branch: a flat `+0x14C * 256` with
+    // no perspective divide, so a screen-space sprite is the same size wherever
+    // its target stands.
+    int projScaleX = 0;
+    int projScaleY = 0;
+    if (inputs.screenSpace1000)
     {
-      projScaleY = FUN_0030bd20_trunc(inputs.scaleY150 * kSpriteProjectionScale *
+      projScaleX = FUN_0030bd20_trunc(inputs.scaleX14c * 256.0f);
+      projScaleY = FUN_0030bd20_trunc(inputs.scaleY150 * 256.0f);
+    }
+    else
+    {
+      projScaleX = FUN_0030bd20_trunc(inputs.scaleX14c * kSpriteProjectionScale *
                                       inputs.projectionG / inputs.viewZ);
+      projScaleY = projScaleX;
+      if (inputs.scaleX14c != inputs.scaleY150)
+      {
+        projScaleY = FUN_0030bd20_trunc(inputs.scaleY150 * kSpriteProjectionScale *
+                                        inputs.projectionG / inputs.viewZ);
+      }
     }
 
     // FUN_0020f510:0x0020f6b0. Either a flat 0x80 or the average of the staged
@@ -119,7 +132,7 @@ namespace orphen::ported::render
     for (int channel = 0; channel < 3; ++channel)
     {
       const int level =
-          inputs.flatColour
+          (inputs.flatColour || inputs.screenSpace1000)
               ? 0x80
               : std::min(0xFF, (static_cast<int>(inputs.ambient[channel]) +
                                 static_cast<int>(inputs.dynamic[channel])) >>
@@ -148,7 +161,28 @@ namespace orphen::ported::render
       const float depth =
           inputs.viewZ + inputs.entityDepthBias + static_cast<float>(record.depthBias) / 100.0f;
       int gsZ = 0;
-      if (inputs.forceFront)
+      if (inputs.screenSpace1000)
+      {
+        // 0x0020f6a0: the branch reads +0x28 back as an integer, and only
+        // rescales it when the entity carries a +0x133 bias.
+        gsZ = inputs.screenSpaceGsZ;
+        if (inputs.screenSpaceDepthBias != 0 && gsZ != 0)
+        {
+          float keyed = kDAT_00352090_screenDepthNumerator / static_cast<float>(gsZ) +
+                        static_cast<float>(inputs.screenSpaceDepthBias) *
+                            kDAT_00352094_screenDepthBiasScale;
+          if (keyed < kDAT_00352098_screenDepthFloor)
+          {
+            keyed = kDAT_00352098_screenDepthFloor;
+          }
+          gsZ = FUN_0030bd20_trunc(kDAT_00352090_screenDepthNumerator / keyed);
+        }
+        if (gsZ < 0)
+        {
+          gsZ = 0;
+        }
+      }
+      else if (inputs.forceFront)
       {
         // 0x0020f9a0: +0x08 bit 0x40 pins the GS z at 0xFFFF and buckets the
         // packet at 0x1005, past the 1..0xFFF the sorted ones use.
@@ -212,7 +246,17 @@ namespace orphen::ported::render
       // of the transform two lines up, not a restatement of it -- and the sprite
       // then depth-tests against world geometry with the record bias applied.
       float vertexDepth = depth;
-      if (inputs.forceFront || vertexDepth < kDAT_0035209c_spriteNearClip)
+      if (inputs.screenSpace1000)
+      {
+        // The original hands the GS four numbers and never has a world point at
+        // all. The port re-projects, so the quad needs *a* depth: any value
+        // reproduces the same pixels, but only the one the GS z was keyed off
+        // depth-tests against the world the way the original's z does. The
+        // caller recovers it by inverting the depth key, so the cursor sits at
+        // its target's distance and is occluded by anything in front of it.
+        vertexDepth = inputs.viewZ;
+      }
+      else if (inputs.forceFront || vertexDepth < kDAT_0035209c_spriteNearClip)
       {
         vertexDepth = inputs.viewZ;
       }

@@ -152,15 +152,112 @@ namespace orphen::ported::battle
                                   (controlFlags() & 0xFFFFFFFBu) | 8u);
     }
 
-    // :73-148. Target cycling, skipped while the character is mid-action.
-    // Reproduced as its gate only: the enemy table (DAT_00354eb4 /
-    // DAT_00354eba) is empty in this slice, so FUN_002493b8 answers -1 for
-    // every member and FUN_002476c0 has nothing to cycle through.
+    // :73-148. Target cycling, on the D-pad. Skipped while the character is
+    // mid-action -- the fifteen action bytes from 0x84 to 0x92 -- or while the
+    // member's flag word carries bit 0x20.
+    //
+    // The direction bits are the reason Up and Down feel different from Left
+    // and Right in the real game: **0x3000 (Up or Right) steps forward, 0xC000
+    // (Down or Left) steps backward, and 0x5000 (Up or Down) *also* sets the
+    // half-wrap flag**, which starts the search half the table away instead of
+    // one place. So Left/Right walk the line of enemies and Up/Down jump across
+    // it, with a 120-frame lockout (DAT_00354F80) so the jump cannot be mashed.
     const bool midAction = static_cast<std::uint8_t>(action() + 0x7C) < 0x0F ||
                            (memberFlags() & 0x20) != 0;
-    if (!midAction)
+    if (!midAction && party.FUN_002494e0_elapsed(environment.pool, memberU, 1) == 0)
     {
       party.recordTargetCycleReached();
+
+      // DAT_003555FE is the *right stick* mapped onto the same four direction
+      // bits by FUN_0023b4e8, and DAT_00355600 is its newly-pressed edge. The
+      // port's InputSnapshot has no such word, so stick targeting is the one
+      // input this block does not answer to.
+      const std::uint32_t directions = environment.DAT_003555f6_pressedPad;
+
+      bool halfWrap = false;
+      if (party.DAT_00354f80_cycleLockout() == 0 && party.DAT_00354e96_displayTimer() == 0 &&
+          (directions & 0x5000) != 0)
+      {
+        halfWrap = true;
+        party.setDAT_00354f80_cycleLockout(kTargetDisplayTicks);
+      }
+
+      const std::int32_t currentTarget = party.FUN_002493b8_target(memberU);
+      if (party.DAT_00354ec0_markerTable() == 0)
+      {
+        // :86. Not a typo for the timer: DAT_00354E94 is set to whether the
+        // display is *down*, and FUN_0023c340 uses it to decide the camera
+        // still has to be swung onto the target.
+        party.setDAT_00354e94_displayIdle(party.DAT_00354e96_displayTimer() == 0 ? 1 : 0);
+
+        // Pool slots 0, 1 and 2 are the party's own; a target at or below them
+        // is "none", which is why the whole block is gated on `0 < target`
+        // rather than on `!= -1`.
+        if (currentTarget > 0 && environment.encounter != nullptr && environment.pool != nullptr)
+        {
+          const BattleEncounter &encounter = *environment.encounter;
+          std::int32_t record = encounter.FUN_002476c0_cycle(*environment.pool, currentTarget, 0, false);
+
+          std::int16_t direction = 0;
+          if ((directions & 0x3000) != 0)
+          {
+            direction = 1;
+          }
+          else if ((directions & 0xC000) != 0)
+          {
+            direction = -1;
+          }
+          if (direction != 0)
+          {
+            // Every step re-arms the display. That is the whole of "the D-pad
+            // pauses the battle": FUN_0023c340 freezes every entity for as
+            // long as this timer is running, and holding a direction keeps
+            // pushing it back to 120 frames.
+            party.setDAT_00354e96_displayTimer(kTargetDisplayTicks);
+            record = encounter.FUN_002476c0_cycle(*environment.pool, currentTarget, direction, halfWrap);
+          }
+
+          if (record < 0)
+          {
+            // Nothing left to aim at. Drop the target, and only fall through to
+            // the action machine if dropping it actually left one behind.
+            party.FUN_00249388_set_target(memberU, 0x4000, -1);
+            if (party.FUN_002493b8_target(memberU) <= 2)
+            {
+              party.setDAT_00354e96_displayTimer(0);
+            }
+          }
+          else
+          {
+            const std::uint32_t at = encounter.record(static_cast<std::size_t>(record));
+            const std::int32_t slot = encounter.entitySlot(at);
+            party.setDAT_00354e90_displayedTarget(slot);
+            if (slot < 0 && party.DAT_00354e96_displayTimer() != 0)
+            {
+              party.setDAT_00354e96_displayTimer(0);
+              party.setDAT_00354f80_cycleLockout(0);
+            }
+            // :120-124. Only write the target back when it has really moved.
+            // The comparison is the *record's* id against the *old* target
+            // entity's +0x95, which is the same join FUN_0023fc08 validates on.
+            const std::uint8_t recordId = encounter.read<std::uint8_t>(at + actor::kId00);
+            if (slot >= 0 &&
+                recordId != environment.pool->slot(static_cast<std::size_t>(currentTarget)).byte95)
+            {
+              party.FUN_00249388_set_target(memberU, 0x4000, static_cast<std::int16_t>(slot));
+            }
+          }
+        }
+      }
+      else
+      {
+        // The 0x3253C0 marker mode, which only the scripted set pieces in the
+        // 0x26Cxxx block install. FUN_00248108 refreshes its markers and
+        // FUN_002481f0 cycles them, and it does *not* freeze the field -- it
+        // clears DAT_00354E96 outright. Not reachable from a normal battle and
+        // not ported; named here rather than left as a silent fallthrough.
+        party.setDAT_00354e96_displayTimer(0);
+      }
     }
 
     // ------------------------------------------------------------ LAB_00246770

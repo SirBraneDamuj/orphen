@@ -24,6 +24,7 @@
 // The pair FUN_002239c8:117 tests is DAT_003555d3 and bit 0 of sGpffffb052,
 // and bit 0 is exactly what method 2 sets and method 1 clears.
 
+#include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_tables.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
@@ -134,6 +135,25 @@ namespace orphen::ported::battle
     std::uint32_t FUN_00243f80_start_battle(const Environment &environment);
     std::uint32_t FUN_00242de0_end_battle();
     std::uint32_t FUN_00243d18_teardown(const Environment &environment);
+
+    // FUN_0023fd30's pre-battle half: spend the countdown, and on the frame it
+    // reaches zero give every bound actor record its 0x192 target cursor.
+    //
+    // The master half of the VM at PTR_LAB_0031d118 runs -- see
+    // BattleEncounter::FUN_0023fd30_step_master_script -- but the per-actor
+    // scripts opcode 18 installs are not stepped yet. Neither is needed for
+    // the cursors: the enemies are already bound, because FUN_0025eb48 spawns
+    // them and each one's state 0 registers itself through FUN_0023f8b8.
+    void FUN_0023fd30_pre_battle(const Environment &environment,
+                                 BattleEncounter &encounter,
+                                 std::uint32_t frameTicks);
+
+    // FUN_0023c340, through opcode 0xBD method 0x68 (FUN_00242cf0) while script
+    // variable 25 holds 500. The target display, and the freeze it puts on
+    // every entity but the cursors while it is up.
+    void FUN_0023c340_target_display(const Environment &environment,
+                                     const BattleEncounter &encounter,
+                                     std::uint32_t frameTicks);
     std::uint32_t FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId);
 
     // FUN_002458a8 / FUN_00245978: stamp one entity into its party record and
@@ -188,6 +208,27 @@ namespace orphen::ported::battle
     // steps the first at its very top and clears both on any face-button press.
     void stepTargetTimers(std::uint16_t frameTicks);
     void clearTargetTimers();
+    // DAT_00354F80: the half-wrap lockout, 120 frames. DAT_00354E96: how much
+    // longer the target display stays up, also 120 frames, re-armed on every
+    // step. While it is non-zero FUN_0023c340 freezes the field.
+    std::uint16_t DAT_00354f80_cycleLockout() const { return DAT_00354f80_; }
+    void setDAT_00354f80_cycleLockout(std::uint16_t ticks) { DAT_00354f80_ = ticks; }
+    std::uint16_t DAT_00354e96_displayTimer() const { return DAT_00354e96_; }
+    void setDAT_00354e96_displayTimer(std::uint16_t ticks) { DAT_00354e96_ = ticks; }
+    // DAT_00354E90: the entity the display is showing, as a pool slot. The
+    // original keeps a pointer and tests it against null, so -1 is "none".
+    std::int32_t DAT_00354e90_displayedTarget() const { return DAT_00354e90_; }
+    void setDAT_00354e90_displayedTarget(std::int32_t slot) { DAT_00354e90_ = slot; }
+    // DAT_00354E94: set every frame the cycle block runs, to whether the
+    // display is *down*. FUN_0023c340 reads it to decide whether the camera
+    // still has to swing onto the target.
+    std::uint16_t DAT_00354e94_displayIdle() const { return DAT_00354e94_; }
+    void setDAT_00354e94_displayIdle(std::uint16_t value) { DAT_00354e94_ = value; }
+    // DAT_00354EC0 / DAT_00354EC4: the *other* targeting mode's marker table.
+    // FUN_00247f18(0x3253C0, 20) installs it, and every caller of that is in
+    // the 0x26Cxxx block -- the scripted set pieces. A normal battle leaves it
+    // null, which is the branch FUN_002462c8 takes to cycle the actor table.
+    std::uint32_t DAT_00354ec0_markerTable() const { return DAT_00354ec0_; }
     // Counts the frames the target-cycle block and the turn-toward-target block
     // were reachable. Both are enemy-side work this slice defers, so the report
     // says how often a run would have needed them rather than leaving them as
@@ -278,16 +319,18 @@ namespace orphen::ported::battle
     std::int16_t DAT_00354ebc_ = 0;
     // sGpffffaf4e = DAT_00354ebe: which member the player drives, 1-based.
     std::int16_t DAT_00354ebe_ = 1;
-    // The enemy side, deliberately left empty in this slice. cGpffffaf4a is
-    // DAT_00354eba and iGpffffaf44 is DAT_00354eb4; with the count at zero
-    // every control block keeps target -1 and FUN_00249610 takes its no-target
-    // branch, which is the mode this slice runs in.
-    std::int16_t DAT_00354eba_enemyCount_ = 0;
+    // cGpffffaf4a / DAT_00354eba and iGpffffaf44 / DAT_00354eb4 -- the actor
+    // table -- moved to BattleEncounter, because they are loaded out of the
+    // scene script rather than out of the executable and have to be reloaded
+    // per scene along with it.
 
     // DAT_00354f80 / DAT_00354e96: the target-cycle repeat timer and the
     // pentagon's on-screen timer. Both stepped by FUN_00248e58.
     std::uint16_t DAT_00354f80_ = 0;
     std::uint16_t DAT_00354e96_ = 0;
+    std::uint16_t DAT_00354e94_ = 0;
+    std::int32_t DAT_00354e90_ = -1;
+    std::uint32_t DAT_00354ec0_ = 0;
     std::uint32_t targetCycleFrames_ = 0;
     std::uint32_t targetFacingFrames_ = 0;
     std::array<std::uint32_t, 12> DAT_0031dbf8_counters_{};

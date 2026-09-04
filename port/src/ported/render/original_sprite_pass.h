@@ -66,6 +66,13 @@ namespace orphen::ported::render
   // The depth key FUN_0020f3e0 stages into its workspace at +0x8C / +0x90.
   inline constexpr float kDAT_003555a4_depthNumerator = 19706.0859f;
   inline constexpr float kDAT_003555a0_depthOffset = -152.953781f;
+  // The bit-0x1000 branch has its own three constants, and they are *not* the
+  // ones the projected path uses even where the value agrees: DAT_00352090 is
+  // 19660.5 against DAT_003555A4's 19706.0859, DAT_00352094 is the same 0.08 as
+  // DAT_003520A0, and DAT_00352098 the same 0.3 as the near clip.
+  inline constexpr float kDAT_00352090_screenDepthNumerator = 19660.5f;
+  inline constexpr float kDAT_00352094_screenDepthBiasScale = 0.0799999982f;
+  inline constexpr float kDAT_00352098_screenDepthFloor = 0.300000012f;
 
   // FUN_0020f510:0x0020f594-0x0020f5cc. The cull window around the GS centre,
   // in 1/16 pixel units: +/-448 px in X and +/-176 px in Y, both generous
@@ -200,17 +207,32 @@ namespace orphen::ported::render
     bool flatColour = false;
 
     int textureSlot = -1;
+
+    // Entity +0x08 bit 0x1000. `gsOriginX`/`gsOriginY` are then the *screen*
+    // position converted straight to GS units by the caller rather than
+    // FUN_0020b600's output, `screenSpaceGsZ` replaces the computed depth key,
+    // and the colour is the flat 0x80 the branch writes unconditionally.
+    bool screenSpace1000 = false;
+    int screenSpaceGsZ = 0;
+    // Entity +0x133 raw, not scaled: the branch applies its own DAT_00352094.
+    int screenSpaceDepthBias = 0;
   };
 
   // FUN_0020f510's record loop for one entity, in draw order. Appends to `out`.
   // `poseColumn` is entity +0xAC, which the animation stepper owns.
   //
-  // NOT REPRODUCED, and neither bit is set by any descriptor either scene
-  // spawns: the rotation branch at entity +0x08 bit 0x400, which rebuilds the
-  // quad as four independently rotated corners off the per-record angle array at
-  // entity +0x168 and only for record indices under nine; and the screen-space
-  // branch at bit 0x1000, which takes a position that is already in GS units
-  // instead of projecting one. The caller rejects an entity carrying either.
+  // NOT REPRODUCED: the rotation branch at entity +0x08 bit 0x400, which
+  // rebuilds the quad as four independently rotated corners off the per-record
+  // angle array at entity +0x168 and only for record indices under nine. No
+  // descriptor either standing scene spawns sets it, and the caller rejects an
+  // entity carrying it.
+  //
+  // The screen-space branch at bit 0x1000 *is* reproduced -- see
+  // `screenSpace1000` below. FUN_002d73e8's target cursor is the one thing that
+  // takes it: its +0x20/+0x24 are already pixels, so nothing is projected, the
+  // scale is a flat +0x14C * 256 with no perspective divide, and the GS z comes
+  // out of the depth word the behaviour parked in +0x28 rather than a view
+  // depth.
   std::size_t FUN_0020f510_build_quads(const orphen::ported::model::Psc3Model &model,
                                        std::uint16_t poseColumn,
                                        const SpriteBuildInputs &inputs,

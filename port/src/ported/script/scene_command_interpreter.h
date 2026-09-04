@@ -431,6 +431,16 @@ namespace orphen::ported::script
     const orphen::ported::entity::EntityDescriptorTable *descriptors = nullptr;
     SceneScriptState *state = nullptr;
 
+    // uGpffffadf8. FUN_0025eb48 stamps a stat record on every placement it
+    // spawns from a group other than 3 -- collision radius, body height and hit
+    // points -- which is the only thing that gives an enemy a body.
+    const orphen::ported::resource::CharacterStats *uGpffffadf8_stats = nullptr;
+
+    // FUN_0023f8b8, reached from the enemy's own state 0. See
+    // ported/battle/battle_encounter.h: this is what binds a spawned enemy into
+    // the battle actor table, and therefore what makes it targetable.
+    std::function<void(std::size_t entitySlot)> FUN_0023f8b8_bind_battle_actor;
+
     // DAT_00571DC0/DAT_00571DD0, the one fullscreen fade. Opcodes 0x85/0x87 arm
     // it and 0x86/0x88 step it, and the chest cutscene's player states drive the
     // same object -- in the original they are literally the same two banks of

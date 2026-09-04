@@ -231,6 +231,28 @@ namespace orphen::ported::entity
     std::function<std::int32_t(std::size_t casterSlot, orphen::ported::psm2::Vec3 &out)>
         FUN_002493f0_spell_landing;
 
+    // FUN_0020b600 (0x0020b600), the VU0 transform-and-project, as the
+    // *behaviour* layer needs it rather than the renderer. FUN_002d73e8 is the
+    // one actor update that projects: a 0x192 target cursor is drawn in screen
+    // space, so it has to know where its target lands on screen before the
+    // draw pass runs. Returns nothing when the point is behind the camera.
+    struct ProjectedPoint
+    {
+      std::int32_t gsX = 0; // integer GS 12.4, the same units FUN_0020b600 writes
+      std::int32_t gsY = 0;
+      std::int32_t gsZ = 0; // the projected depth word, which lands in +0x28
+      float viewZ = 0.0f;
+    };
+    std::function<bool(const orphen::ported::psm2::Vec3 &world, ProjectedPoint &out)>
+        FUN_0020b600_project;
+
+    // DAT_00354E96 and DAT_00354ECC. The first is the target-display timer the
+    // D-pad re-arms and the second the "battle is suspended" gate; FUN_002d73e8
+    // reads both to decide whether the cursor is lit and whether it draws at
+    // all. Zero outside a battle, which is what leaves the cursor idle.
+    std::uint16_t DAT_00354e96_targetDisplayTicks = 0;
+    std::uint16_t DAT_00354ecc_battleSuspended = 0;
+
     // DAT_003555d0. FUN_00208450 clears it at the top of every frame and raises
     // it for any collision group whose dirty byte is live -- i.e. "movable
     // collision moved this frame". FUN_002262c0:112 reads it, and it is the

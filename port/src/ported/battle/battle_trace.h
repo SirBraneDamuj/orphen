@@ -71,6 +71,12 @@ namespace orphen::ported::battle
         partyBuiltFrame_ = frame;
       }
     }
+    // A group-2 placement whose actor id is not in the encounter table. The
+    // original has no such case -- the two tables ship together -- so this
+    // firing means the port got one of them wrong.
+    void recordUnboundBattleActor(std::uint8_t id) { unboundBattleActors_.push_back(id); }
+    const std::vector<std::uint8_t> &unboundBattleActors() const { return unboundBattleActors_; }
+
     void recordBattleStarted(std::uint32_t frame)
     {
       if (battleStartedFrame_ == 0)
@@ -129,6 +135,7 @@ namespace orphen::ported::battle
     std::optional<Sample> lastSample_;
     std::uint32_t partyBuiltFrame_ = 0;
     std::uint32_t battleStartedFrame_ = 0;
+    std::vector<std::uint8_t> unboundBattleActors_;
   };
 
 } // namespace orphen::ported::battle
