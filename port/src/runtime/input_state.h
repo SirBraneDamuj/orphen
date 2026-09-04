@@ -55,6 +55,13 @@ namespace orphen::port
     std::uint16_t rawHeldPad = 0;    // DAT_003555f4
     std::uint16_t rawPressedPad = 0; // DAT_003555f6
 
+    // The movement stick quantised onto the same four direction bits the D-pad
+    // occupies, by FUN_0023b4e8, plus its newly-pressed edge. FUN_0023b5d8
+    // keeps both words beside the pad ones; FUN_002462c8 reads the edge and ORs
+    // it into DAT_003555f6, which is what makes the stick cycle targets.
+    std::uint16_t rawStickDirection = 0;        // DAT_003555fe
+    std::uint16_t rawPressedStickDirection = 0; // DAT_00355600
+
     // Analog stick, in the original's units. fGpffffb678 is compared against
     // 40.0 by the camera and 100.0 by the grounded player state, and
     // FUN_00253488 scales by it directly, so full deflection is 128.

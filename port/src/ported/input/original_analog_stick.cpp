@@ -28,4 +28,55 @@ namespace orphen::ported::input
     return {magnitude, std::atan2(rawUp, rawRight)};
   }
 
+  std::uint16_t FUN_0023b4e8_stick_direction_bits(float magnitude, float angle)
+  {
+    // if (100.0 < param_1) -- and nothing else; below the gate the word is 0
+    // and DAT_00355600 never sees an edge.
+    if (magnitude <= kDirectionMagnitudeGate)
+    {
+      return 0;
+    }
+
+    // if (param_2 < 0.0) param_2 = param_2 + DAT_00352624;  (atan2 returns
+    // -pi..pi, the sector table is written for 0..2pi)
+    if (angle < 0.0f)
+    {
+      angle += kDAT_00352624_twoPi;
+    }
+
+    if (angle < kDAT_00352628_deg210)
+    {
+      if (angle < kDAT_0035262c_deg120)
+      {
+        if (angle < kDAT_00352630_deg30)
+        {
+          return kPadRight;
+        }
+        if (angle < kDAT_00352634_deg60)
+        {
+          return kPadUp | kPadRight;
+        }
+        return kPadUp;
+      }
+      if (angle < kDAT_00352638_deg150)
+      {
+        return kPadUp | kPadLeft;
+      }
+      return kPadLeft;
+    }
+    if (angle < kDAT_0035263c_deg300)
+    {
+      if (angle < kDAT_00352640_deg240)
+      {
+        return kPadDown | kPadLeft;
+      }
+      return kPadDown;
+    }
+    if (angle < kDAT_00352644_deg330)
+    {
+      return kPadDown | kPadRight;
+    }
+    return kPadRight;
+  }
+
 } // namespace orphen::ported::input

@@ -52,6 +52,9 @@ namespace orphen::port
     void *window_ = nullptr;
     void *controller_ = nullptr;
     std::uint16_t previousRawHeldPad_ = 0;
+    // DAT_003555fe from the previous frame; FUN_0023b5d8 keeps it in uVar1 and
+    // masks the new word with it to build DAT_00355600.
+    std::uint16_t previousRawStickDirection_ = 0;
     void *glContext_ = nullptr;
     int width_ = 0;
     int height_ = 0;

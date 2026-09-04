@@ -28,7 +28,8 @@
 //
 // The pad words are DAT_003555f6 (newly pressed) and DAT_003555f4 (held), which
 // the port already publishes as InputSnapshot::rawPressedPad / rawHeldPad in
-// the same post-CONCAT11 bit layout.
+// the same post-CONCAT11 bit layout. Target cycling additionally reads
+// DAT_00355600, the movement stick's direction edge -- see the field comment.
 
 #include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_party.h"
@@ -48,12 +49,13 @@ namespace orphen::ported::battle
     orphen::ported::entity::EntityPool *pool = nullptr;
     std::uint16_t DAT_003555f4_heldPad = 0;
     std::uint16_t DAT_003555f6_pressedPad = 0;
-    // DAT_00355600: **the right stick**, not a second pad. FUN_0023b5d8 runs
-    // the right stick through FUN_0023b4e8, which maps its angle onto the same
-    // four direction bits the D-pad uses, and DAT_00355600 is that word's
-    // newly-pressed edge. FUN_002462c8 ORs it into the target-cycling test and
-    // nowhere else. The port's InputSnapshot carries no right stick, so this
-    // stays zero and stick targeting is the one input the block cannot answer.
+    // DAT_00355600: the **movement stick** quantised onto the same four
+    // direction bits the D-pad occupies, not a second pad. FUN_0023b5d8 runs
+    // the pair it just read into DAT_003555e8 / DAT_003555e4 -- the stick the
+    // player walks on -- through FUN_0023b4e8 and keeps the result in
+    // DAT_003555fe; DAT_00355600 is that word's newly-pressed edge.
+    // FUN_002462c8 ORs it into the target-cycling test and nowhere else, which
+    // is why the stick aims but never presses a button.
     std::uint16_t DAT_00355600_pressedPad2 = 0;
     std::uint16_t frameTicks = 0x20;
     // FUN_00216868. Reached only through the confusion branch

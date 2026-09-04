@@ -39,6 +39,13 @@ namespace orphen::port
     // Shoulder bits live in the same low byte: FUN_002000c0's fast-forward test
     // is DAT_003555f4 & 2.
     constexpr std::uint16_t kRawPadR2 = 0x0002;
+    // The D-pad occupies the high nibble. FUN_0023b358 maps these four bits to
+    // a movement angle and FUN_002462c8 tests them for target cycling, so they
+    // have to be in DAT_003555f4 for either to work.
+    using orphen::ported::input::kPadDown;
+    using orphen::ported::input::kPadLeft;
+    using orphen::ported::input::kPadRight;
+    using orphen::ported::input::kPadUp;
 
     float axisToUnit(int rawAxis)
     {
@@ -264,6 +271,28 @@ namespace orphen::port
     bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
+    // WASD is the D-pad. On hardware these four bits sit in DAT_003555f4 and
+    // FUN_0023b5d8's digital branch turns them into the movement angle above;
+    // FUN_002462c8 reads the same bits to cycle the battle target, so the keys
+    // that walk also aim.
+    std::uint16_t directionBits = 0;
+    if (keys[SDL_SCANCODE_W] != 0)
+    {
+      directionBits |= kPadUp;
+    }
+    if (keys[SDL_SCANCODE_D] != 0)
+    {
+      directionBits |= kPadRight;
+    }
+    if (keys[SDL_SCANCODE_S] != 0)
+    {
+      directionBits |= kPadDown;
+    }
+    if (keys[SDL_SCANCODE_A] != 0)
+    {
+      directionBits |= kPadLeft;
+    }
+
     // Fast forward. Held, never edge-triggered, so it can be leaned on through
     // a long cutscene the same way R2 is on hardware.
     input.fastForwardHeld = keys[SDL_SCANCODE_P] != 0;
@@ -316,6 +345,30 @@ namespace orphen::port
         input.rawHeldPad |= orphen::ported::camera::kRawPadR3;
       }
 
+      // The pad's own D-pad, into the same four bits.
+      if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP) != 0)
+      {
+        directionBits |= kPadUp;
+      }
+      if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) != 0)
+      {
+        directionBits |= kPadRight;
+      }
+      if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN) != 0)
+      {
+        directionBits |= kPadDown;
+      }
+      if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT) != 0)
+      {
+        directionBits |= kPadLeft;
+      }
+
+      // DAT_003555fe. FUN_0023b5d8 runs the movement stick through
+      // FUN_0023b4e8 every frame and keeps the result beside the pad word; its
+      // gate is 100 of 128, so this only fires on a decisive push.
+      input.rawStickDirection =
+          orphen::ported::input::FUN_0023b4e8_stick_direction_bits(stick.magnitude, stick.angle);
+
       // R2 is analog on a DualShock 2 and the original only ever tests the
       // digital bit, so treat anything past half travel as held. Half of
       // SDL's 0..32767 trigger range, well clear of a resting trigger.
@@ -359,15 +412,34 @@ namespace orphen::port
       input.rawHeldPad |= kRawPadR2;
     }
 
+    input.rawHeldPad |= directionBits;
+
     // DAT_003555f6: newly pressed = held & ~previously held.
     input.rawPressedPad = static_cast<std::uint16_t>(input.rawHeldPad & ~previousRawHeldPad_);
     previousRawHeldPad_ = input.rawHeldPad;
+
+    // DAT_00355600 = DAT_003555fe & ~uVar1, the stick word's own edge.
+    input.rawPressedStickDirection =
+        static_cast<std::uint16_t>(input.rawStickDirection & ~previousRawStickDirection_);
+    previousRawStickDirection_ = input.rawStickDirection;
 
     // FUN_00256bb8 jumps on the mapped action bit 0x80, taken from the newly
     // pressed set. Deriving it here means keyboard and pad share one path --
     // previously the pad set the raw bit but never this flag, so jumping did
     // not work on a controller at all.
     input.jumpRequested = (input.rawPressedPad & kRawPadSquare) != 0;
+
+    // FUN_0023b5d8:47-58. The digital word wins outright: with any direction
+    // bit held the stick is ignored and DAT_003555e8 is a flat 0x43000000
+    // (128.0), which is why a D-pad direction always runs. Without this the
+    // pad's D-pad moved nothing, and WASD did nothing at all once a controller
+    // was plugged in.
+    if (directionBits != 0)
+    {
+      input.moveX = keyAxis((directionBits & kPadLeft) != 0, (directionBits & kPadRight) != 0);
+      input.moveY = keyAxis((directionBits & kPadDown) != 0, (directionBits & kPadUp) != 0);
+      usingAnalogStick = false;
+    }
 
     if (!usingAnalogStick)
     {

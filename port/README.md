@@ -1894,9 +1894,21 @@ target display.
 
 so Left and Right walk the line of enemies one at a time and Up and Down jump
 across it, with `DAT_00354F80` holding a 120-frame lockout so the jump cannot be
-mashed. `DAT_00355600`, ORed into the same test, is **the right stick** mapped
-onto those four bits by `FUN_0023B4E8` -- not a second pad. The port has no
-right-stick word, so that is the one input the block cannot answer to.
+mashed. `DAT_00355600`, ORed into the same test, is **the movement stick**
+mapped onto those same four bits by `FUN_0023B4E8` -- not the camera stick and
+not a second pad. `FUN_0023B5D8` runs the pair it just read into `DAT_003555E8`
+/ `DAT_003555E4`, the stick `FUN_00256BB8` walks on, through it and keeps the
+word in `DAT_003555FE`; `DAT_00355600` is that word's newly-pressed edge. Its
+gate is magnitude > 100 of 128, well clear of `FUN_0023B3F0`'s 60 deadzone, so a
+nudge that moves the character does not also move the cursor.
+
+Both are live in the port: `sdl_gl_window.cpp` puts WASD and the pad's D-pad
+into the high nibble of `rawHeldPad` where the hardware pad has them, and runs
+the left stick through `FUN_0023b4e8_stick_direction_bits` for
+`rawPressedStickDirection`. That is the same nibble `FUN_0023B5D8`'s digital
+branch turns into a movement angle, so those keys walk and aim through one word,
+as they do on hardware -- which is also why the pad's D-pad now moves the
+character and WASD keeps working with a controller plugged in.
 
 The block is gated on the member having a target at all (`0 < FUN_002493b8`), and
 the player's first one does not come from `FUN_0023fd30`'s auto-acquire loop:

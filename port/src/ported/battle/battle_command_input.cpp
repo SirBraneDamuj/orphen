@@ -168,11 +168,12 @@ namespace orphen::ported::battle
     {
       party.recordTargetCycleReached();
 
-      // DAT_003555FE is the *right stick* mapped onto the same four direction
-      // bits by FUN_0023b4e8, and DAT_00355600 is its newly-pressed edge. The
-      // port's InputSnapshot has no such word, so stick targeting is the one
-      // input this block does not answer to.
-      const std::uint32_t directions = environment.DAT_003555f6_pressedPad;
+      // uVar3 = DAT_003555f6 | DAT_00355600. The second word is the movement
+      // stick run through FUN_0023b4e8 and edge-detected, so a decisive push of
+      // the stick cycles exactly as a D-pad tap does -- its gate is 100 of 128,
+      // well above the 60 that starts a walk.
+      const std::uint32_t directions = static_cast<std::uint32_t>(environment.DAT_003555f6_pressedPad) |
+                                       static_cast<std::uint32_t>(environment.DAT_00355600_pressedPad2);
 
       bool halfWrap = false;
       if (party.DAT_00354f80_cycleLockout() == 0 && party.DAT_00354e96_displayTimer() == 0 &&

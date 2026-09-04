@@ -5823,6 +5823,8 @@ namespace orphen::port
         commandInput.pool = &entityPool_;
         commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
         commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
+        commandInput.DAT_00355600_pressedPad2 =
+            static_cast<std::uint16_t>(input.rawPressedStickDirection);
         commandInput.frameTicks = frameTicks;
         commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
         orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
