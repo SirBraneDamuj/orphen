@@ -58,6 +58,13 @@ namespace orphen::ported::entity
     void recordSuspended() { ++suspendedCount_; }
     void recordFading() { ++fadingCount_; }
 
+    // An enemy attack state reached the frame its damage call fires on.
+    // FUN_002ebde0, FUN_002ebad8, FUN_002ec920 and FUN_002ecc68 -- the four
+    // that spawn the hit volume -- are not ported, so the attack plays through
+    // and lands on nobody. Counted rather than left silent.
+    void recordEnemyAttackHit() { ++enemyAttackHitCount_; }
+    std::uint32_t enemyAttackHitCount() const { return enemyAttackHitCount_; }
+
     // True once the table could not be read at all, so the report can say the
     // executable was missing rather than listing 256 unresolved types.
     void noteTableUnavailable() { tableUnavailable_ = true; }
@@ -85,6 +92,7 @@ namespace orphen::ported::entity
     std::uint32_t hiddenCount_ = 0;
     std::uint32_t suspendedCount_ = 0;
     std::uint32_t fadingCount_ = 0;
+    std::uint32_t enemyAttackHitCount_ = 0;
     bool tableUnavailable_ = false;
   };
 

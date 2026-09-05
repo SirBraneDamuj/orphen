@@ -629,6 +629,10 @@ namespace orphen::port
           out.currentAction0f = battleEncounter_.read<std::uint8_t>(at + actor::kCurrentAction0f);
           out.target2c = battleEncounter_.read<std::int16_t>(at + actor::kTarget2c);
           out.flags38 = battleEncounter_.read<std::uint32_t>(at + actor::kFlags38);
+          out.spawnX14 = battleEncounter_.read<std::int16_t>(at + actor::kSpawnX14);
+          out.spawnZ16 = battleEncounter_.read<std::int16_t>(at + actor::kSpawnY16);
+          out.spawnY18 = battleEncounter_.read<std::int16_t>(at + actor::kSpawnZ18);
+          out.attackRange1a = battleEncounter_.read<std::int16_t>(at + 0x1A);
           return true;
         };
     environment.DAT_00354eb4_setBattleActor =
@@ -4265,8 +4269,15 @@ namespace orphen::port
       std::cout << " HALTED on VM opcode " << static_cast<int>(battleEncounter_.masterHaltOpcode())
                 << " at 0x" << std::hex << battleEncounter_.masterHaltOffset() << std::dec;
     }
-    std::cout << "\n  per-actor VM scripts are installed but not stepped "
-                 "(FUN_0023fd30's second loop)\n";
+    std::cout << "\n  per-actor VM: " << battleActionsRequested_ << " orders taken, "
+              << battleActionsRefused_ << " bounced by the busy bit";
+    if (battleEncounter_.actorHalted())
+    {
+      std::cout << " -- HALTED on VM opcode "
+                << static_cast<int>(battleEncounter_.actorHaltOpcode()) << " at 0x" << std::hex
+                << battleEncounter_.actorHaltOffset() << std::dec;
+    }
+    std::cout << "\n";
     std::cout << "  camera splines: " << battleEncounter_.DAT_00354fb0_cameraSplineCount()
               << " pairs, playing #" << battleParty_.DAT_00354fb2_spline() << " at "
               << battleParty_.DAT_00355c88_splinePosition() << "/"
@@ -5585,6 +5596,14 @@ namespace orphen::port
         std::cout << "unimplemented state handlers: " << actorTrace_.unimplementedStateCount() << '\n';
       }
 
+      if (actorTrace_.enemyAttackHitCount() != 0)
+      {
+        std::cout << "enemy attacks that reached their damage frame: "
+                  << actorTrace_.enemyAttackHitCount()
+                  << " (FUN_002ebde0 / FUN_002ebad8 / FUN_002ec920 / FUN_002ecc68 unported,"
+                     " so they land on nobody)\n";
+      }
+
       std::cout << "skipped: hidden=" << actorTrace_.hiddenCount()
                 << " suspended=" << actorTrace_.suspendedCount()
                 << " fading=" << actorTrace_.fadingCount() << '\n';
@@ -5989,9 +6008,8 @@ namespace orphen::port
         }
 
         // FUN_0023fd30:44-53. Once the countdown is spent the master battle
-        // script runs, one step a frame. Its second loop -- the per-actor AI
-        // scripts opcode 18 installs -- is not stepped yet; --battle-report
-        // says how far the master got and on what.
+        // script runs, one step a frame, and :57-130 then steps every actor's
+        // own AI script and re-aims any record whose target has gone.
         //
         // **The countdown gates the command input too.** FUN_002462C8 sits at
         // :350, inside this same `sGpffffb054 == 0` block and after an early
@@ -6001,10 +6019,67 @@ namespace orphen::port
         if (countdownSpent)
         {
           auto &work = sceneScript_.state().DAT_00355060_work;
-          const auto step = battleEncounter_.FUN_0023fd30_step_master_script(
-              entityPool_, work,
-              orphen::ported::script::SceneScriptState::kWorkWordCount,
-              static_cast<std::int32_t>(frameTicks));
+          orphen::ported::battle::BattleEncounter::VmEnvironment vm;
+          vm.pool = &entityPool_;
+          vm.scriptVars = work;
+          vm.scriptVarCount = orphen::ported::script::SceneScriptState::kWorkWordCount;
+          vm.frameTicks = static_cast<std::int32_t>(frameTicks);
+          vm.DAT_00354ecc_suspended = battleParty_.DAT_00354ecc();
+          vm.sGpffffaf4c_memberCount = battleParty_.DAT_00354ebc_memberCount();
+          vm.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+          // (&DAT_0031D7B8)[member * 0xF] -- the control block's +0x08.
+          vm.DAT_0031d7b8_memberEntity = [this](std::int32_t member) -> std::int32_t {
+            if (member < 0 ||
+                member >= static_cast<std::int32_t>(orphen::ported::battle::kControlBlockCount))
+            {
+              return -1;
+            }
+            return battleParty_.entitySlotAt(
+                orphen::ported::battle::BattleTables::controlBlock(
+                    static_cast<std::uint32_t>(member)) +
+                orphen::ported::battle::control::kEntity08);
+          };
+          // FUN_00244248's party half. The block is `DAT_0031D780 + slot *
+          // 0x3C`, which is controlBlock(slot - 1) + 0x0C, so the pending and
+          // current action bytes land on +0x0E and +0x0F exactly as they do on
+          // an actor record -- the same 0x0C bias, spelled a second way.
+          vm.FUN_00244248_party = [this](std::uint8_t partySlot, std::uint8_t action,
+                                         bool force) -> std::int32_t {
+            if (partySlot == 0 ||
+                partySlot > static_cast<std::uint8_t>(orphen::ported::battle::kControlBlockCount))
+            {
+              return 0;
+            }
+            auto &tables = battleParty_.tables();
+            const std::uint32_t block = orphen::ported::battle::BattleTables::controlBlock(
+                static_cast<std::uint32_t>(partySlot - 1));
+            if (!force)
+            {
+              const std::uint32_t flags =
+                  tables.read<std::uint32_t>(block + orphen::ported::battle::control::kFlags38);
+              const std::int8_t pending = tables.read<std::int8_t>(
+                  block + orphen::ported::battle::control::kPendingAction0e);
+              if ((flags & 1u) != 0 && pending != 0x0A && pending != 0x06)
+              {
+                if (pending == 0x0B)
+                {
+                  tables.write<std::uint8_t>(
+                      block + orphen::ported::battle::control::kPendingAction0e, action);
+                  return 1;
+                }
+                if (tables.read<std::int8_t>(
+                        block + orphen::ported::battle::control::kCurrentAction0f) != 0x06)
+                {
+                  return -1;
+                }
+              }
+            }
+            tables.write<std::uint8_t>(block + orphen::ported::battle::control::kPendingAction0e,
+                                       action);
+            return 1;
+          };
+
+          const auto step = battleEncounter_.FUN_0023fd30_step_master_script(vm);
           if (step.halted && !battleMasterHaltReported_)
           {
             battleMasterHaltReported_ = true;
@@ -6012,6 +6087,22 @@ namespace orphen::port
                       << static_cast<int>(step.haltOpcode) << " at 0x" << std::hex
                       << step.haltOffset << std::dec << "\n";
           }
+
+          // FUN_0023fd30:57-130. The per-actor loop, in its own slot right
+          // after the master one and before FUN_002462C8 -- so an order the
+          // master script hands out this frame is acted on by its actor on the
+          // next one, and the player's command input is read last of all.
+          const auto actorStep = battleEncounter_.FUN_0023fd30_step_actor_scripts(vm);
+          if (actorStep.halted && !battleActorHaltReported_)
+          {
+            battleActorHaltReported_ = true;
+            std::cout << "[battle] actor script halted: unimplemented VM opcode "
+                      << static_cast<int>(actorStep.haltOpcode) << " at 0x" << std::hex
+                      << actorStep.haltOffset << std::dec << "\n";
+          }
+          battleActionsRequested_ +=
+              actorStep.actionsRequested + step.actionsRequested;
+          battleActionsRefused_ += actorStep.actionsRefused + step.actionsRefused;
 
           // FUN_0023fd30:350. **This frame of delay is load-bearing.** The
           // cursors are spawned on animation 13 by the block below, and

@@ -52,6 +52,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <vector>
 
 namespace orphen::ported::battle
@@ -241,9 +242,45 @@ namespace orphen::ported::battle
     // array. FUN_0023c340 returns immediately when the array is null, and that
     // gate is what decides whether the battle camera -- and the target display
     // and the freeze behind it -- runs at all.
-    // FUN_0023fd30's master-script loop. Steps the VM at PTR_LAB_0031d118 on
-    // the master pseudo-record DAT_0031DBA8 until a handler yields.
-    struct MasterStepResult
+    // ------------------------------------------------------------- the VM
+    //
+    // Everything FUN_0023FD30 reaches for that does not live in the encounter
+    // blob. The party half is passed in rather than linked against, because
+    // BattleParty already depends on this class and the VM only needs three
+    // things from it.
+    struct VmEnvironment
+    {
+      const orphen::ported::entity::EntityPool *pool = nullptr;
+      std::uint32_t *scriptVars = nullptr;    // DAT_00355060
+      std::size_t scriptVarCount = 0;
+      std::int32_t frameTicks = 0;            // iGpffffb64c / DAT_003555BC
+      std::uint32_t DAT_00354ecc_suspended = 0;
+      std::int16_t sGpffffaf4c_memberCount = 0; // DAT_00354EBC
+      std::function<std::uint32_t()> FUN_00216868_random;
+      // (&DAT_0031D7B8)[member * 0xF] -- control block +0x08 -- as a pool slot
+      // or -1. The retarget block below is the only thing that reads it.
+      std::function<std::int32_t(std::int32_t member)> DAT_0031d7b8_memberEntity;
+      // FUN_00244248's party half. An entity whose +0x95 is below 11 lands on
+      // a control block, not on a record here, and only BattleParty owns
+      // those. 1 = accepted, -1 = busy, 0 = no such block.
+      std::function<std::int32_t(std::uint8_t partySlot, std::uint8_t action, bool force)>
+          FUN_00244248_party;
+    };
+
+    // One block the VM can be running on: the master pseudo-record DAT_0031DBA8
+    // or one 0x3C actor record. The original keeps the master's three fields in
+    // globals and an actor's in the record, but the handlers cannot tell them
+    // apart -- they address everything through the PC global DAT_00354EAC and
+    // the `param_1` block pointer -- so one struct serves both.
+    struct VmBlock
+    {
+      std::uint32_t record = 0; // 0 for the master pseudo-record
+      std::uint32_t pc = 0;     // +0x30 / DAT_0031DBD8
+      std::int16_t yield = 0;   // +0x2E / DAT_0031DBD6
+      std::uint32_t triggers = 0; // +0x34 / DAT_0031DBDC
+    };
+
+    struct VmStepResult
     {
       bool halted = false;
       std::uint8_t haltOpcode = 0;
@@ -251,14 +288,32 @@ namespace orphen::ported::battle
       int actorScriptsInstalled = 0;
       bool triggerTableInstalled = false;
       std::int16_t cameraMode = 0;
+      int actionsRequested = 0;
+      int actionsRefused = 0;
     };
-    MasterStepResult FUN_0023fd30_step_master_script(const orphen::ported::entity::EntityPool &pool,
-                                                     std::uint32_t *scriptVars,
-                                                     std::size_t scriptVarCount,
-                                                     std::int32_t frameTicks);
+    using MasterStepResult = VmStepResult;
+
+    // FUN_0023fd30's master-script loop. Steps the VM at PTR_LAB_0031d118 on
+    // the master pseudo-record DAT_0031DBA8 until a handler yields.
+    MasterStepResult FUN_0023fd30_step_master_script(const VmEnvironment &environment);
+
+    // FUN_0023fd30:57-130, **the enemy AI**. Two things per record, in this
+    // order and both unconditional on the other:
+    //
+    //   1. step the record's own +0x30 script, when it has an entity, a script
+    //      and bit 0x20 of +0x38 -- the bit opcode 18 sets when it installs one
+    //   2. validate +0x2C and, when it has gone negative, walk the +0x1D..+0x1F
+    //      preference ring for a new party member to aim at
+    //
+    // Step 2 is why an enemy under AI aims at a *chosen* member rather than
+    // falling back on pool slot 0 the way an idle one does.
+    VmStepResult FUN_0023fd30_step_actor_scripts(const VmEnvironment &environment);
     static std::int32_t FUN_00248f18_find_by_tag(const orphen::ported::entity::EntityPool &pool,
                                                  std::uint8_t id);
     bool masterHalted() const { return masterHalted_; }
+    bool actorHalted() const { return actorHalted_; }
+    std::uint8_t actorHaltOpcode() const { return actorHaltOpcode_; }
+    std::uint32_t actorHaltOffset() const { return actorHaltOffset_; }
     std::uint8_t masterHaltOpcode() const { return masterHaltOpcode_; }
     std::uint32_t masterHaltOffset() const { return masterHaltOffset_; }
     std::uint32_t DAT_0031dbd8_pc() const { return masterPc_; }
@@ -324,6 +379,37 @@ namespace orphen::ported::battle
     std::uint8_t masterHaltOpcode_ = 0;
     std::uint32_t masterHaltOffset_ = 0;
     std::int16_t countdown_ = 0;     // sGpffffb054
+    bool actorHalted_ = false;
+    std::uint8_t actorHaltOpcode_ = 0;
+    std::uint32_t actorHaltOffset_ = 0;
+
+    // One step of the VM on `block`, running opcodes until a handler yields a
+    // value that is not negative. False means an opcode this port does not
+    // implement; `result` names it and the caller parks the script.
+    bool stepVmBlock(VmBlock &block, const VmEnvironment &environment, VmStepResult &result);
+
+    // FUN_00244248. `entityId` is the entity's +0x95: below 11 it is a party
+    // slot and the request goes through the environment, otherwise it is an
+    // actor id and FUN_00247d80 finds the record here. 1 = accepted, -1 = the
+    // actor is busy and the caller should retry, 0 = no such block.
+    std::int32_t FUN_00244248_request_action(const VmEnvironment &environment,
+                                             std::int32_t entityId,
+                                             std::uint8_t action,
+                                             bool force);
+
+    // FUN_00247d80: the index of the record carrying this id, or -1.
+    std::int32_t FUN_00247d80_index_for_id(std::uint8_t id) const;
+
+    // FUN_0023eff8: how many records hold a bound *enemy* entity -- id below
+    // 0x50, and the entity still carrying that id in +0x95. VM opcode 16's
+    // sub-ops 2 and 3 scale their delay by it, so a crowded fight makes every
+    // enemy wait proportionally longer between attacks.
+    std::int32_t FUN_0023eff8_bound_enemy_count(
+        const orphen::ported::entity::EntityPool &pool) const;
+
+    // The three-way test the retarget block applies to a control block's
+    // entity before it will aim an enemy at that member.
+    bool memberIsTargetable(const VmEnvironment &environment, std::int32_t slot) const;
   };
 
 } // namespace orphen::ported::battle

@@ -621,6 +621,14 @@ namespace orphen::port
     // executable, so it lives beside the script rather than in BattleParty.
     orphen::ported::battle::BattleEncounter battleEncounter_;
     bool battleMasterHaltReported_ = false;
+    // FUN_0023fd30's second loop, reported the same way and separately: an
+    // actor script reaches further into PTR_LAB_0031d118 than a master one.
+    bool battleActorHaltReported_ = false;
+    // How many orders FUN_00244248 took and how many it bounced, for
+    // --battle-report. A bounce is not a fault -- it is the busy handshake
+    // doing its job -- but the ratio is what says the AI is running at all.
+    std::uint32_t battleActionsRequested_ = 0;
+    std::uint32_t battleActionsRefused_ = 0;
     orphen::ported::battle::BattleParty::Environment battleEnvironment();
     orphen::ported::battle::BattleUpdateEnvironment battleUpdateEnvironment(std::uint16_t frameTicks);
     void sampleBattleTrace(std::uint32_t heldPad);

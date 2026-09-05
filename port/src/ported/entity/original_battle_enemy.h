@@ -35,10 +35,35 @@
 // in an arena with nothing else happening still turns to face Orphen, and holds
 // that facing while a randomised 100..199-tick timer runs down.
 //
-// Nothing here needs the PTR_LAB_0031d118 battle VM. The VM's job is to write
+// None of that needs the PTR_LAB_0031d118 battle VM. The VM's job is to write
 // the record's pending action byte; when it writes nothing, the idle default is
-// what the enemy does, and it is the whole of the behaviour the port was
-// missing.
+// what the enemy does.
+//
+// ----------------------------------------------------------- and what it does
+//
+// When the VM *is* running -- BattleEncounter::FUN_0023fd30_step_actor_scripts
+// -- the pending byte arrives and the action table runs instead. s14_e012's
+// five AI scripts are five overlapping tails of one body, and between them they
+// only ever ask for three of the eight actions:
+//
+//   6  go idle and face the target -- the same code as the idle default
+//   2  close: type 0x80 leaps along a Bezier arc that ends two units past the
+//      target; type 0x8A, which is rooted, simply bites where it stands
+//   4  strike: 0x80 lunges to a point two units *short* of the target and
+//      slams down; 0x8A winds up for 100 ticks and spits
+//
+// The handshake between the two halves is entity +0x198's +0x2C -- record
+// +0x38 bit 0. FUN_00244248 refuses a new order while it is set and the current
+// action is not 6; the attack states hold it up; and each type releases it in
+// its own place -- 0x80 when state 6 has walked it home to its spawn point,
+// 0x8A when the attack animation comes round with nothing left in flight. The
+// script's own `gate` opcode then waits for the current action byte to be 6
+// again before it asks for the next one, which is why enemies take turns.
+//
+// **The damage half is not here.** FUN_002ebde0, FUN_002ebad8, FUN_002ec920,
+// FUN_002ecc68 and FUN_00280698 are the five calls that would spawn the hit
+// volume; each attack plays through to its damage frame, counts itself in
+// ActorTrace::recordEnemyAttackHit, and lands on nobody.
 //
 // ------------------------------------------------------------ the record bias
 //

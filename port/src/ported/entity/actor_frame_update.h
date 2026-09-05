@@ -232,6 +232,15 @@ namespace orphen::ported::entity
       std::uint8_t currentAction0f = 0;  // record +0x0F, entity +0x198 + 3
       std::int16_t target2c = -1;        // record +0x2C, entity +0x198 + 0x20
       std::uint32_t flags38 = 0;         // record +0x38, entity +0x198 + 0x2C
+      // Read-only, and all four spelled through the same 0x0C bias. The spawn
+      // triple is world position times ten -- it is where type 0x80's state 6
+      // teleports back to after a leap -- and +0x1A is a per-record reach the
+      // action bodies add to their own 40 / 60, so one record can make its
+      // actor strike from further out without changing the type.
+      std::int16_t spawnX14 = 0;         // record +0x14, entity +0x198 + 8
+      std::int16_t spawnZ16 = 0;         // record +0x16, entity +0x198 + 0x0A
+      std::int16_t spawnY18 = 0;         // record +0x18, entity +0x198 + 0x0C
+      std::int16_t attackRange1a = 0;    // record +0x1A, entity +0x198 + 0x0E
     };
     // `record` is the entity's +0x198 as the port spells it: an offset into the
     // encounter blob, or one of the two sentinels below. Both are false/no-ops

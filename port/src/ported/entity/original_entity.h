@@ -344,6 +344,31 @@ namespace orphen::ported::entity
     // the placement's own +0x5C and the idle default (FUN_0027f5c0) re-aims it
     // at the target -- pool slot 0, the player, when there is none.
     float battleDesiredFacing19c = 0.0f;
+    // +0x1A0. The two types read this word as different things, and the
+    // original can overlay them because a pool slot is a pointer there: type
+    // 0x80 parks a plain reach -- 40.0 to close, 60.0 to strike, 30.0 to back
+    // off -- and type 0x8A parks the *target*, which 0x80 keeps at +0x1A4
+    // instead. The port cannot overlay a float on an index, so both names
+    // exist and each type touches only its own.
+    float enemyReach1a0 = 0.0f;
+    std::int32_t enemyTargetSlot1a0 = -1;
+    std::int32_t enemyTargetSlot1a4 = -1;
+    // +0x1A4 and +0x1A8 on type 0x8A: the two effect entities an attack links
+    // to itself -- the bite volume FUN_002ec920 spawns and the spit
+    // FUN_002ecc68 does. Neither is spawned yet, so both stay -1 and the state
+    // handlers take their "nothing in flight" branch, which is the branch the
+    // original takes between attacks too.
+    std::int32_t enemyAttackLink1a4 = -1;
+    std::int32_t enemyAttackLink1a8 = -1;
+    // +0x1A8..+0x1C8 on type 0x80: three quadratic Bezier control points, one
+    // array per axis, that FUN_0023a990 walks to carry a leaping enemy from
+    // where it stood to a point two units past its target. +0x1CC accumulates
+    // ticks and +0x62 is the total the ratio is taken against, so the leap
+    // lasts exactly the travel time FUN_0023a6d0 costed when the order landed.
+    std::array<float, 3> enemyArcX1a8{};
+    std::array<float, 3> enemyArcZ1b4{};
+    std::array<float, 3> enemyArcY1c0{};
+    float enemyArcProgress1cc = 0.0f;
     // +0x1D0: FUN_00280850's wobble phase in degrees, swept 25 per frame and
     // wrapped from 60 back to -40. Type 0x80 only.
     float enemyWobblePhase1d0 = 0.0f;

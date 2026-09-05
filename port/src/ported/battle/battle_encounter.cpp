@@ -24,6 +24,9 @@ namespace orphen::ported::battle
     masterHalted_ = false;
     masterHaltOpcode_ = 0;
     masterHaltOffset_ = 0;
+    actorHalted_ = false;
+    actorHaltOpcode_ = 0;
+    actorHaltOffset_ = 0;
   }
 
   bool BattleEncounter::FUN_0023f318_load(const std::vector<std::uint8_t> &script,
@@ -513,15 +516,122 @@ namespace orphen::ported::battle
     return at;
   }
 
-  // FUN_0023fd30:44-53, the master battle script, stepped through the
-  // nineteen-entry table at PTR_LAB_0031d118.
+  // FUN_00247d80: the index of the record carrying this id, or -1. The scan
+  // stops at DAT_00354EBA, so it only ever sees records FUN_0023fc08 counted.
+  std::int32_t BattleEncounter::FUN_00247d80_index_for_id(std::uint8_t id) const
+  {
+    for (std::int32_t index = 0; index < actorCount_; ++index)
+    {
+      if (read<std::uint8_t>(record(static_cast<std::size_t>(index)) + actor::kId00) == id)
+      {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  // FUN_0023eff8. A record counts when it has an entity, its id is below 0x50
+  // -- the enemy side of the line -- and the entity is still carrying that id
+  // in +0x95. Hit points are *not* tested, so this is "how many enemies are in
+  // the fight", not "how many are still standing"; FUN_0023f080 is the one
+  // that checks.
+  std::int32_t BattleEncounter::FUN_0023eff8_bound_enemy_count(
+      const orphen::ported::entity::EntityPool &pool) const
+  {
+    std::int32_t count = 0;
+    for (std::int32_t index = 0; index < actorCount_; ++index)
+    {
+      const std::uint32_t at = record(static_cast<std::size_t>(index));
+      const std::int32_t slot = entitySlot(at);
+      if (slot < 0 || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+      {
+        continue;
+      }
+      const std::uint8_t id = read<std::uint8_t>(at + actor::kId00);
+      if (id >= kFirstFriendlyId)
+      {
+        continue;
+      }
+      if (pool.slot(static_cast<std::size_t>(slot)).byte95 == id)
+      {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  // FUN_00244248, **the action request**, and the one function that decides
+  // whether an AI script's order is taken or bounced.
+  //
+  // The block it writes into is chosen by the entity's +0x95: below 11 that is
+  // a party slot and the block is `DAT_0031D780 + slot * 0x3C`, which is the
+  // control block *plus 0x0C*; from 11 up it is an actor id and the block is
+  // `DAT_00354EB4 + FUN_00247d80(id) * 0x3C + 0x0C`. Both are biased by the
+  // same 0x0C, which is why the decompilation spells the pending and current
+  // action bytes `[2]` and `[3]` -- they are the record's +0x0E and +0x0F, the
+  // same two bytes an enemy reaches through its entity's +0x198.
+  //
+  //   if (!force && (flags38 & 1) && pending != 0x0A && pending != 0x06) {
+  //     if (pending == 0x0B) { pending = action; return 1; }
+  //     if (current != 0x06) return -1;          // busy: bounce it
+  //   }
+  //   pending = action; return 1;
+  //
+  // So bit 0 of +0x38 -- the bit the enemy's own action check sets when it
+  // takes an order, and its state 1 clears when it goes idle again -- is what
+  // makes the AI script's `aiact` opcode spin instead of stamping over an
+  // attack in progress.
+  std::int32_t BattleEncounter::FUN_00244248_request_action(const VmEnvironment &environment,
+                                                            std::int32_t entityId,
+                                                            std::uint8_t action,
+                                                            bool force)
+  {
+    if (entityId < 11)
+    {
+      if (!environment.FUN_00244248_party)
+      {
+        return 0;
+      }
+      return environment.FUN_00244248_party(static_cast<std::uint8_t>(entityId), action, force);
+    }
+
+    const std::int32_t index = FUN_00247d80_index_for_id(static_cast<std::uint8_t>(entityId));
+    if (index < 0)
+    {
+      return 0;
+    }
+    const std::uint32_t at = record(static_cast<std::size_t>(index));
+
+    if (!force)
+    {
+      const std::uint32_t flags = read<std::uint32_t>(at + actor::kFlags38);
+      const std::int8_t pending = read<std::int8_t>(at + actor::kPendingAction0e);
+      if ((flags & 1u) != 0 && pending != 0x0A && pending != 0x06)
+      {
+        if (pending == 0x0B)
+        {
+          write<std::uint8_t>(at + actor::kPendingAction0e, action);
+          return 1;
+        }
+        if (read<std::int8_t>(at + actor::kCurrentAction0f) != 0x06)
+        {
+          return -1;
+        }
+      }
+    }
+    write<std::uint8_t>(at + actor::kPendingAction0e, action);
+    return 1;
+  }
+
+  // FUN_0023fd30:44-53 and :57-90, the VM loop, in the one form both callers
+  // use:
   //
   //   while (true) {
-  //     pbGpffffaf3c = DAT_0031dbd8;
-  //     DAT_0031dbd6 = handler[*DAT_0031dbd8](0x31dba8, DAT_0031dbd6);
-  //     DAT_0031dbd8 = pbGpffffaf3c;
-  //     if (0 <= (short)DAT_0031dbd6) break;
-  //     DAT_0031dbd6 = 0;
+  //     pbGpffffaf3c = block->pc;
+  //     yield = handler[*pc](block, yield);
+  //     block->pc = pbGpffffaf3c;
+  //     if (0 <= (short)yield) break;
+  //     yield = 0;
   //   }
   //
   // A handler that returns a negative value has not finished the frame's work
@@ -532,9 +642,6 @@ namespace orphen::ported::battle
   //
   // Seven of the nineteen are bare LAB_ blocks with no src/FUN_*.c; their
   // bodies were recovered from SLUS_200.11 and are named in the table below.
-  // The ones this port implements are the ones a master script uses; an actor
-  // AI script reaches further into the table and is not stepped yet (see
-  // FUN_0023fd30's second loop, which this does not run).
   //
   // s14_e012's master script, at 0x1A0C, is the whole shape of the thing:
   //
@@ -546,34 +653,42 @@ namespace orphen::ported::battle
   //   1a40   3  living enemies == 0 ? jump +0x14 (out) : fall through
   //   1a48   3  unconditional jump -12, back to the wait
   //
-  // So the master script is "arm the target display, give every enemy its AI,
-  // then spin until they are all dead".
-  BattleEncounter::MasterStepResult BattleEncounter::FUN_0023fd30_step_master_script(
-      const orphen::ported::entity::EntityPool &pool, std::uint32_t *scriptVars,
-      std::size_t scriptVarCount, std::int32_t frameTicks)
+  // and the five scripts it installs are five overlapping tails of one body:
+  //
+  //   1a8c   5  sub-op 1: wait 0x78            (only the two longest have it)
+  //   1a94  16  sub-op 0: 0..0x3B ticks, randomised
+  //   1a98  13  sub-op 0x80: request action 6  -- go idle, face the target
+  //   1a9c  17  sub-op 1: hold while any actor is attacking
+  //   1aa0  13  sub-op 0x80: request action 2  -- close and strike
+  //   1aa4  17  sub-op 0: hold until this record's +0x0F is back to 6
+  //   1aa8  16  sub-op 0: another 0..0x3B
+  //   1aac  16  sub-op 2: 0x1E ticks per enemy still in the fight
+  //   ...   the same again with action 4, then a jump back to 1a94
+  //
+  // So an enemy's whole behaviour is: wait a random beat, take a turn only
+  // when nobody else is mid-attack, close, wait for the strike to finish, wait
+  // a beat scaled by how crowded the fight is, repeat.
+  bool BattleEncounter::stepVmBlock(VmBlock &block, const VmEnvironment &environment,
+                                    VmStepResult &result)
   {
-    MasterStepResult result;
-    if (!available() || masterPc_ == 0 || masterHalted_)
-    {
-      return result;
-    }
+    const orphen::ported::entity::EntityPool *pool = environment.pool;
 
     for (int guard = 0; guard < 256; ++guard)
     {
-      const std::uint8_t opcode = read<std::uint8_t>(masterPc_);
-      const std::uint32_t pc = masterPc_;
+      const std::uint8_t opcode = read<std::uint8_t>(block.pc);
+      const std::uint32_t pc = block.pc;
       std::int32_t yield = 0;
       bool handled = true;
 
       switch (opcode)
       {
       case 0: // LAB_00241A58: pc += 4, yield 0.
-        masterPc_ = pc + 4;
+        block.pc = pc + 4;
         yield = 0;
         break;
 
       case 1: // LAB_00241A70: pc -= *(u16 *)(pc + 2), yield 0.
-        masterPc_ = pc - read<std::uint16_t>(pc + 2);
+        block.pc = pc - read<std::uint16_t>(pc + 2);
         yield = 0;
         break;
 
@@ -592,13 +707,14 @@ namespace orphen::ported::battle
         const std::int8_t compare = read<std::int8_t>(pc + 1);
         if (mode == 0)
         {
-          const std::int32_t slot = FUN_00248f18_find_by_tag(pool, read<std::uint8_t>(pc + 3));
+          const std::int32_t slot =
+              pool != nullptr ? FUN_00248f18_find_by_tag(*pool, read<std::uint8_t>(pc + 3)) : -1;
           if (slot < 1)
           {
-            masterPc_ = pc + read<std::int16_t>(pc + 6);
+            block.pc = pc + read<std::int16_t>(pc + 6);
             continue;
           }
-          count = static_cast<std::int16_t>(pool.slot(static_cast<std::size_t>(slot)).staggerTimer12a);
+          count = static_cast<std::int16_t>(pool->slot(static_cast<std::size_t>(slot)).staggerTimer12a);
           if (count < 0)
           {
             count = 0;
@@ -606,21 +722,21 @@ namespace orphen::ported::battle
         }
         else if (mode == 1)
         {
-          count = FUN_0023f080_living_enemy_count(pool);
+          count = pool != nullptr ? FUN_0023f080_living_enemy_count(*pool) : 0;
         }
         else
         {
-          masterPc_ = pc + read<std::int16_t>(pc + 6);
+          block.pc = pc + read<std::int16_t>(pc + 6);
           continue;
         }
 
         const std::int16_t operand = read<std::int16_t>(pc + 4);
         if (compare == 0 ? (count == operand) : (compare != 1 ? true : (count < operand)))
         {
-          masterPc_ = pc + read<std::int16_t>(pc + 6);
+          block.pc = pc + read<std::int16_t>(pc + 6);
           continue;
         }
-        masterPc_ = pc + 8;
+        block.pc = pc + 8;
         continue;
       }
 
@@ -636,39 +752,40 @@ namespace orphen::ported::battle
           handled = false;
           break;
         }
-        if (masterYield_ == 0)
+        if (block.yield == 0)
         {
           yield = static_cast<std::int16_t>(read<std::uint16_t>(pc + 2) << 1);
         }
         else
         {
-          yield = FUN_00248e00_step_slow(static_cast<std::int16_t>(masterYield_), frameTicks);
+          yield = FUN_00248e00_step_slow(static_cast<std::int16_t>(block.yield),
+                                         environment.frameTicks);
           if (yield == 0)
           {
-            masterPc_ = pc + 4;
+            block.pc = pc + 4;
           }
         }
         break;
       }
 
       case 8: // LAB_00240C58: pc += 6, yield 0.
-        masterPc_ = pc + 6;
+        block.pc = pc + 6;
         yield = 0;
         break;
 
       case 9:
-        // LAB_00240C70: `record->+0x34 = pc; pc += count * 16 + 4`, return -1.
+        // LAB_00240C70: `block->+0x34 = pc; pc += count * 16 + 4`, return -1.
         // The pointer is installed, but FUN_00240870 -- the trigger walker that
         // spawns reinforcement waves off it -- is not run yet, so a script that
         // uses this gets its table remembered and nothing spawned. Recorded
         // rather than left silent.
-        masterTriggers_ = pc;
-        masterPc_ = pc + 4 + static_cast<std::uint32_t>(read<std::int16_t>(pc + 2)) * 16u;
+        block.triggers = pc;
+        block.pc = pc + 4 + static_cast<std::uint32_t>(read<std::int16_t>(pc + 2)) * 16u;
         result.triggerTableInstalled = true;
         continue;
 
       case 10: // LAB_00240C98: return yield + 1, pc unmoved.
-        yield = static_cast<std::int16_t>(masterYield_ + 1);
+        yield = static_cast<std::int16_t>(block.yield + 1);
         break;
 
       case 11:
@@ -678,10 +795,11 @@ namespace orphen::ported::battle
         // with a yield of 1, so the comparison is retried next frame.
         const std::uint32_t index = read<std::uint16_t>(pc + 2);
         const std::uint32_t wanted = read<std::uint32_t>(pc + 4);
-        const std::uint32_t value = index < scriptVarCount ? scriptVars[index] : 0u;
+        const std::uint32_t value =
+            index < environment.scriptVarCount ? environment.scriptVars[index] : 0u;
         if (value == wanted)
         {
-          masterPc_ = pc + 8;
+          block.pc = pc + 8;
           continue;
         }
         yield = 1;
@@ -697,19 +815,268 @@ namespace orphen::ported::battle
         if (read<std::int8_t>(pc + 1) == 0)
         {
           const std::int16_t mode = read<std::int16_t>(pc + 4);
-          if (mode > 0 && scriptVarCount > 25 && static_cast<std::int32_t>(scriptVars[25]) < 1000)
+          if (mode > 0 && environment.scriptVarCount > 25 &&
+              static_cast<std::int32_t>(environment.scriptVars[25]) < 1000)
           {
-            scriptVars[25] = static_cast<std::uint32_t>(mode);
+            environment.scriptVars[25] = static_cast<std::uint32_t>(mode);
             result.cameraMode = mode;
           }
         }
-        masterPc_ = pc + 8;
+        block.pc = pc + 8;
         continue;
       }
 
-      case 14: // LAB_00241640: return the yield unchanged, pc unmoved.
-        yield = static_cast<std::int16_t>(masterYield_);
+      case 13:
+      {
+        // FUN_00240d78, **the order**. `+0x03` names the record -- zero means
+        // the one the VM is running on -- and the sub-op at `+0x01` picks how
+        // hard the request pushes:
+        //
+        //   0x01  FUN_00244248(entity, +0x02, force)   always taken
+        //   0x02  FUN_00244248(entity, +0x02, 0)       taken or dropped
+        //   0x80  the same, but a bounce parks the script here and it is tried
+        //         again next frame -- unless the actor has died in the meantime
+        //
+        // The sub-ops this port does not carry -- 0x40, the party-side spell
+        // chooser that rolls DAT_0031DA2E against the four button masks, 0x10
+        // and 0x20 -- are player auto-battle and are not on an enemy's path.
+        //
+        // Every path returns 0, so an order is the last thing a script does in
+        // a frame.
+        const std::int8_t sub = read<std::int8_t>(pc + 1);
+        if (sub != 1 && sub != 2 && sub != -0x80)
+        {
+          handled = false;
+          break;
+        }
+
+        std::uint32_t at = block.record;
+        const std::uint8_t named = read<std::uint8_t>(pc + 3);
+        if (named != 0)
+        {
+          at = FUN_0023eba0_find(named, true);
+        }
+        if (at == 0)
+        {
+          block.pc = pc + 4;
+          continue;
+        }
+
+        const std::int32_t slot = entitySlot(at);
+        const bool bound = slot >= 0 &&
+                           static_cast<std::size_t>(slot) < orphen::ported::entity::kEntitySlotCount &&
+                           pool != nullptr;
+        std::int32_t accepted = 1;
+        if (bound)
+        {
+          const std::int32_t entityId =
+              static_cast<std::int8_t>(pool->slot(static_cast<std::size_t>(slot)).byte95);
+          accepted = FUN_00244248_request_action(environment, entityId,
+                                                 read<std::uint8_t>(pc + 2), sub == 1);
+        }
+
+        if (accepted < 0)
+        {
+          ++result.actionsRefused;
+        }
+        else
+        {
+          ++result.actionsRequested;
+        }
+
+        // Only sub-op 0x80 waits for a bounce, and only while the actor is
+        // still alive -- a dead one would spin here forever.
+        bool advance = true;
+        if (sub == -0x80 && accepted < 0 && bound &&
+            static_cast<std::int16_t>(pool->slot(static_cast<std::size_t>(slot)).staggerTimer12a) > 0)
+        {
+          advance = false;
+        }
+        if (advance)
+        {
+          block.pc = pc + 4;
+        }
+        yield = 0;
         break;
+      }
+
+      case 14: // LAB_00241640: return the yield unchanged, pc unmoved.
+        yield = static_cast<std::int16_t>(block.yield);
+        break;
+
+      case 16:
+      {
+        // FUN_00241698, the delay. The first visit rolls a tick count and arms
+        // it with FUN_00248e48 -- `(n << 21) >> 16`, which is n truncated to
+        // eleven bits and multiplied by 32, the same 32-ticks-per-unit the
+        // enemy idle hold uses -- and every visit after that spends it with
+        // FUN_00248e58, advancing four bytes on the frame it lands on zero.
+        //
+        //   0  a random 0..(operand|1)-1, or nothing at all when the operand
+        //      is zero
+        //   1  the same, biased by the member's DAT_0031DAD4 aggression
+        //   2  the operand times the number of enemies in the fight
+        //   3  a random operand, times the same
+        //
+        // Sub-op 1 reads a party table this class does not own and no enemy
+        // script uses it; it halts rather than guessing.
+        std::int16_t remaining = block.yield;
+        if (remaining == 0)
+        {
+          const std::int8_t sub = read<std::int8_t>(pc + 1);
+          const std::uint16_t operand = read<std::uint16_t>(pc + 2);
+          std::int32_t ticks = 0;
+          if (sub == 0)
+          {
+            if (operand != 0 && environment.FUN_00216868_random)
+            {
+              ticks = static_cast<std::int16_t>(
+                  static_cast<std::int32_t>(environment.FUN_00216868_random() & 0xFFFFu) %
+                  static_cast<std::int32_t>(static_cast<std::int16_t>(operand | 1u)));
+            }
+          }
+          else if (sub == 2 || sub == 3)
+          {
+            std::int16_t base = static_cast<std::int16_t>(operand);
+            if (sub == 3)
+            {
+              base = environment.FUN_00216868_random
+                         ? static_cast<std::int16_t>(
+                               static_cast<std::int32_t>(environment.FUN_00216868_random() & 0xFFFFu) %
+                               static_cast<std::int32_t>(static_cast<std::int16_t>(operand | 1u)))
+                         : static_cast<std::int16_t>(0);
+            }
+            const std::int32_t enemies = pool != nullptr ? FUN_0023eff8_bound_enemy_count(*pool) : 0;
+            ticks = static_cast<std::int16_t>(base * enemies);
+            if (ticks == 0)
+            {
+              ticks = 1;
+            }
+          }
+          else
+          {
+            handled = false;
+            break;
+          }
+          // FUN_00248e48.
+          remaining = static_cast<std::int16_t>(
+              (static_cast<std::int32_t>(ticks) << 21) >> 16);
+          if (remaining == 0)
+          {
+            remaining = 1;
+          }
+        }
+        // FUN_00248e58: spend a whole frame's ticks, floored at zero.
+        const std::uint16_t before = static_cast<std::uint16_t>(remaining);
+        std::uint16_t after = 0;
+        if (before != 0)
+        {
+          after = static_cast<std::uint16_t>(before -
+                                             static_cast<std::uint16_t>(environment.frameTicks));
+          if (before < after)
+          {
+            after = 0;
+          }
+        }
+        if (after == 0)
+        {
+          block.pc = pc + 4;
+        }
+        yield = static_cast<std::int16_t>(after);
+        break;
+      }
+
+      case 17:
+      {
+        // FUN_00241830, the gate. It never advances until its condition is met,
+        // and when it is met it returns -1 so the next opcode runs in the same
+        // frame.
+        //
+        //   0  hold until the record at +0x02 -- zero meaning this one -- has
+        //      its *current* action byte equal to +0x03, or has died. This is
+        //      the "wait for the strike to finish" half of an enemy's loop, and
+        //      it is skipped entirely while DAT_00354ECC has the battle
+        //      suspended.
+        //   1  hold while **any** record is attacking: current or pending in
+        //      2..5. One actor at a time is the whole reason enemies take
+        //      turns instead of swarming.
+        //   2  the same, but only counting records aimed at the same target.
+        const std::int8_t sub = read<std::int8_t>(pc + 1);
+        if (sub == 0)
+        {
+          yield = block.yield;
+          if (environment.DAT_00354ecc_suspended == 0)
+          {
+            std::uint32_t at = block.record;
+            const std::uint8_t named = read<std::uint8_t>(pc + 2);
+            if (named != 0)
+            {
+              at = FUN_0023eba0_find(named, false);
+            }
+            bool done = at == 0;
+            if (!done)
+            {
+              const std::int32_t slot = entitySlot(at);
+              if (slot < 0 ||
+                  static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount ||
+                  pool == nullptr ||
+                  static_cast<std::int16_t>(
+                      pool->slot(static_cast<std::size_t>(slot)).staggerTimer12a) < 1)
+              {
+                done = true;
+              }
+              else if (read<std::int8_t>(at + actor::kCurrentAction0f) == read<std::int8_t>(pc + 3))
+              {
+                done = true;
+              }
+            }
+            if (done)
+            {
+              block.pc = pc + 4;
+              yield = -1;
+            }
+          }
+        }
+        else if (sub == 1 || sub == 2)
+        {
+          const std::int16_t ownTarget = read<std::int16_t>(block.record + actor::kTarget2c);
+          bool busy = false;
+          for (std::int32_t index = 0; index < actorCount_ && !busy; ++index)
+          {
+            const std::uint32_t at = record(static_cast<std::size_t>(index));
+            if (entitySlot(at) < 0)
+            {
+              continue;
+            }
+            if (sub == 2 && read<std::int16_t>(at + actor::kTarget2c) != ownTarget)
+            {
+              continue;
+            }
+            const std::uint8_t current =
+                static_cast<std::uint8_t>(read<std::uint8_t>(at + actor::kCurrentAction0f) - 2u);
+            const std::uint8_t pending =
+                static_cast<std::uint8_t>(read<std::uint8_t>(at + actor::kPendingAction0e) - 2u);
+            if (current < 4 || pending < 4)
+            {
+              busy = true;
+            }
+          }
+          if (busy)
+          {
+            yield = block.yield;
+          }
+          else
+          {
+            block.pc = pc + 4;
+            yield = -1;
+          }
+        }
+        else
+        {
+          yield = block.yield;
+        }
+        break;
+      }
 
       case 18:
       {
@@ -719,19 +1086,19 @@ namespace orphen::ported::battle
         // this instruction to the script body. +0x38 bit 0x20 is what makes
         // FUN_0023fd30's second loop step it.
         const std::int16_t id = read<std::int16_t>(pc + 2);
+        std::uint32_t at = block.record;
         if (id != 0)
         {
-          const std::uint32_t at = FUN_0023eba0_find(static_cast<std::uint16_t>(id), false);
-          if (at != 0)
-          {
-            write<std::uint32_t>(at + actor::kScriptPc30,
-                                 pc + read<std::uint32_t>(pc + 4));
-            write<std::uint32_t>(at + actor::kFlags38,
-                                 read<std::uint32_t>(at + actor::kFlags38) | 0x20u);
-            ++result.actorScriptsInstalled;
-          }
+          at = FUN_0023eba0_find(static_cast<std::uint16_t>(id), false);
         }
-        masterPc_ = pc + 8;
+        if (at != 0)
+        {
+          write<std::uint32_t>(at + actor::kScriptPc30, pc + read<std::uint32_t>(pc + 4));
+          write<std::uint32_t>(at + actor::kFlags38,
+                               read<std::uint32_t>(at + actor::kFlags38) | 0x20u);
+          ++result.actorScriptsInstalled;
+        }
+        block.pc = pc + 8;
         continue;
       }
 
@@ -742,24 +1109,192 @@ namespace orphen::ported::battle
 
       if (!handled)
       {
-        masterHalted_ = true;
-        masterHaltOpcode_ = opcode;
-        masterHaltOffset_ = pc;
         result.halted = true;
         result.haltOpcode = opcode;
         result.haltOffset = pc;
-        return result;
+        return false;
       }
 
-      masterYield_ = static_cast<std::int16_t>(yield);
+      block.yield = static_cast<std::int16_t>(yield);
       if (static_cast<std::int16_t>(yield) >= 0)
       {
         break;
       }
-      masterYield_ = 0;
+      block.yield = 0;
+    }
+    return true;
+  }
+
+  BattleEncounter::MasterStepResult BattleEncounter::FUN_0023fd30_step_master_script(
+      const VmEnvironment &environment)
+  {
+    MasterStepResult result;
+    if (!available() || masterPc_ == 0 || masterHalted_)
+    {
+      return result;
+    }
+
+    VmBlock block;
+    block.record = 0; // DAT_0031DBA8, which has no record fields of its own
+    block.pc = masterPc_;
+    block.yield = masterYield_;
+    block.triggers = masterTriggers_;
+
+    if (!stepVmBlock(block, environment, result))
+    {
+      masterHalted_ = true;
+      masterHaltOpcode_ = result.haltOpcode;
+      masterHaltOffset_ = result.haltOffset;
+    }
+
+    masterPc_ = block.pc;
+    masterYield_ = block.yield;
+    masterTriggers_ = block.triggers;
+    return result;
+  }
+
+  // FUN_0023fd30:57-130. One pass over the actor table doing two independent
+  // things per record.
+  BattleEncounter::VmStepResult BattleEncounter::FUN_0023fd30_step_actor_scripts(
+      const VmEnvironment &environment)
+  {
+    VmStepResult result;
+    if (!available())
+    {
+      return result;
+    }
+    const orphen::ported::entity::EntityPool *pool = environment.pool;
+
+    for (std::int32_t index = 0; index < actorCount_; ++index)
+    {
+      const std::uint32_t at = record(static_cast<std::size_t>(index));
+
+      // :62-64. All three have to hold: an entity, a script, and the bit
+      // opcode 18 raised when it installed one.
+      if (entitySlot(at) >= 0 && read<std::uint32_t>(at + actor::kScriptPc30) != 0 &&
+          (read<std::uint32_t>(at + actor::kFlags38) & 0x20u) != 0)
+      {
+        VmBlock block;
+        block.record = at;
+        block.pc = read<std::uint32_t>(at + actor::kScriptPc30);
+        block.yield = read<std::int16_t>(at + actor::kYield2e);
+        block.triggers = read<std::uint32_t>(at + actor::kTriggers34);
+
+        if (!stepVmBlock(block, environment, result))
+        {
+          // The script is left parked on the opcode rather than dropped, so a
+          // later frame reports the same halt and nothing is silently skipped.
+          if (!actorHalted_)
+          {
+            actorHalted_ = true;
+            actorHaltOpcode_ = result.haltOpcode;
+            actorHaltOffset_ = result.haltOffset;
+          }
+        }
+
+        write<std::uint32_t>(at + actor::kScriptPc30, block.pc);
+        write<std::int16_t>(at + actor::kYield2e, block.yield);
+        write<std::uint32_t>(at + actor::kTriggers34, block.triggers);
+      }
+
+      // :92-130, the target validation, which runs whether or not the record
+      // has a script. `+0x1F` is the tail of the three-byte preference ring at
+      // +0x1D; a positive value names a party member, one-based.
+      const std::int16_t target = read<std::int16_t>(at + actor::kTarget2c);
+      if (target >= 1)
+      {
+        const std::int8_t preferred = read<std::int8_t>(at + actor::kRing1d + 2);
+        if (preferred < 1)
+        {
+          // No preference: drop the target once the thing it names is down.
+          // Ghidra spells this `(&DAT_0058bfda)[target * 0xEC]`, which is the
+          // halfword at pool[target] + 0x12A -- the hit points.
+          if (pool == nullptr ||
+              static_cast<std::size_t>(target) >= orphen::ported::entity::kEntitySlotCount ||
+              static_cast<std::int16_t>(
+                  pool->slot(static_cast<std::size_t>(target)).staggerTimer12a) < 1)
+          {
+            write<std::int16_t>(at + actor::kTarget2c, -1);
+          }
+        }
+        else
+        {
+          const std::int32_t slot = environment.DAT_0031d7b8_memberEntity
+                                        ? environment.DAT_0031d7b8_memberEntity(preferred - 1)
+                                        : -1;
+          if (!memberIsTargetable(environment, slot))
+          {
+            write<std::int16_t>(at + actor::kTarget2c, -1);
+          }
+        }
+      }
+
+      if (read<std::int16_t>(at + actor::kTarget2c) < 0)
+      {
+        // :106-130. Rotate the ring one place -- +0x1D takes +0x1E, +0x1E takes
+        // +0x1F, and +0x1F takes the *negated* byte that fell off the front, so
+        // a member that has just been tried goes to the back marked used -- and
+        // take the first rotation whose member is targetable. Three tries; if
+        // none of them lands, pick a member at random.
+        int tries = 0;
+        bool found = false;
+        for (; tries < 3 && !found; ++tries)
+        {
+          const std::int8_t front = read<std::int8_t>(at + actor::kRing1d);
+          write<std::int8_t>(at + actor::kRing1d, read<std::int8_t>(at + actor::kRing1d + 1));
+          write<std::int8_t>(at + actor::kRing1d + 1, read<std::int8_t>(at + actor::kRing1d + 2));
+          write<std::int8_t>(at + actor::kRing1d + 2, static_cast<std::int8_t>(-front));
+
+          if (front > 0 && front <= environment.sGpffffaf4c_memberCount + 1)
+          {
+            const std::int32_t slot = environment.DAT_0031d7b8_memberEntity
+                                          ? environment.DAT_0031d7b8_memberEntity(front - 1)
+                                          : -1;
+            if (memberIsTargetable(environment, slot))
+            {
+              write<std::int16_t>(at + actor::kTarget2c, static_cast<std::int16_t>(slot));
+              found = true;
+            }
+          }
+        }
+
+        if (!found && environment.sGpffffaf4c_memberCount > 0)
+        {
+          const std::uint32_t roll =
+              environment.FUN_00216868_random ? environment.FUN_00216868_random() : 0u;
+          const std::int32_t member =
+              static_cast<std::int32_t>((roll & 0xFFFFu) %
+                                        static_cast<std::uint32_t>(
+                                            environment.sGpffffaf4c_memberCount));
+          const std::int32_t slot = environment.DAT_0031d7b8_memberEntity
+                                        ? environment.DAT_0031d7b8_memberEntity(member)
+                                        : -1;
+          write<std::int16_t>(at + actor::kTarget2c,
+                              memberIsTargetable(environment, slot)
+                                  ? static_cast<std::int16_t>(slot)
+                                  : static_cast<std::int16_t>(-1));
+        }
+      }
     }
     return result;
   }
+
+  // The test the retarget block applies to a control block's entity, in the
+  // original's order: it must exist, it must have hit points (Ghidra reads
+  // `psVar3[0x95]` off a *short* pointer, so that is +0x12A, not +0x95), and
+  // its type id at +0x00 must not be negative.
+  bool BattleEncounter::memberIsTargetable(const VmEnvironment &environment,
+                                           std::int32_t slot) const
+  {
+    if (slot < 0 || environment.pool == nullptr ||
+        static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return false;
+    }
+    const auto &entity = environment.pool->slot(static_cast<std::size_t>(slot));
+    return static_cast<std::int16_t>(entity.staggerTimer12a) > 0 && entity.typeId00 >= 0;
+  }
+
 
   // FUN_00248f18: the pool slot whose +0x95 carries this id, or -1.
   std::int32_t BattleEncounter::FUN_00248f18_find_by_tag(

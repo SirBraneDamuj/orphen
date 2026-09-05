@@ -2602,19 +2602,110 @@ re-rolling its idle animation through `FUN_00225BF0`, which resets the timeline
 cursor. Its pose therefore sits on frame 0 and its animation index flickers
 between 0, 2 and 3.
 
-That is not a port bug and it is not visible on hardware, because on hardware
-the record is never idle for long: `FUN_0023FD30`'s second loop steps a
-per-actor script out of the encounter blob (`s14_e012` gives its five enemies
-scripts at 0x1A8C, 0x1A90, 0x1AB0, 0x1AD4 and 0x1AF8) and that script writes
-the pending action byte. The port installs those scripts and does not step
-them, so until the `PTR_LAB_0031D118` VM lands the 0x8A holds a static pose.
+That is not a port bug and it is what hardware does too, but it is only visible
+while the record is idle -- and once the AI is running it rarely is.
 
-Also deliberately short of the original, and unreachable rather than wrong: the
-action bodies. `FUN_0027F5C8` / `FUN_0028AC40` turn actions 1..8 into approach,
-strike and back-off states, and nothing in the port can request one, because
-only that VM writes the byte. The check itself is complete -- latch the busy
-bit, publish the action, clear the request, and the two special cases (0x0A
-parks in state 1 and reports busy, 0x0B publishes without clearing).
+#### The enemy AI is a second bytecode VM, and it only needs five opcodes
+
+`FUN_0023FD30` runs a VM that has nothing to do with the scene script's 271
+opcodes. It has nineteen, at `PTR_LAB_0031D118`, and three loops that step them:
+the master battle script on the pseudo-record at `DAT_0031DBA8`, every *actor*
+record's own `+0x30` script, and every party control block's. The handler
+signature is `handler(block, yield) -> u16`, a negative return means "not
+finished, run the next opcode now", and the program counter is a single global
+at `DAT_00354EAC` that each handler moves itself -- the loops only save and
+restore it around the call.
+
+Seven of the nineteen have no `src/FUN_*.c` at all; they are bare `LAB_` blocks
+Ghidra never turned into functions, and they had to come out of `SLUS_200.11`
+with a disassembler. They are also the cheapest ones: opcode 0 is `pc += 4`,
+opcode 1 is a backward jump, opcode 8 is `pc += 6`, opcode 10 is
+"return yield + 1", opcode 14 parks forever, opcode 9 installs a trigger table
+and opcode 11 waits on a script variable. Recovering them is what made
+`-0x50C4($gp)` -- `0x00354EAC`, the PC -- and `-0x4F10($gp)` -- `DAT_00355060`,
+the script work memory -- fall out.
+
+The surprise is how little of it an enemy uses. `s14_e012`'s five AI scripts are
+five overlapping tails of one twenty-instruction body and between them they
+touch **five** opcodes:
+
+```
+1a94  16  delay   sub 0: a random 0..0x3B ticks
+1a98  13  order   sub 0x80: request action 6 -- go idle, face the target
+1a9c  17  gate    sub 1: hold while ANY record is mid-attack
+1aa0  13  order   sub 0x80: request action 2 -- close and strike
+1aa4  17  gate    sub 0: hold until this record's +0x0F is back to 6
+1aa8  16  delay   sub 0: another random beat
+1aac  16  delay   sub 2: 0x1E ticks per enemy still in the fight
+...   the same again with action 4, then opcode 3 jumps back to 1a94
+```
+
+That is the whole of it. Wait a random beat, take a turn only when nobody else
+is mid-attack, strike, wait for your own strike to finish, wait a beat scaled by
+how crowded the fight is, repeat. **Opcode 17 sub-op 1 is why enemies take turns
+instead of swarming** -- it scans the entire actor table and holds while any
+record's current *or* pending action is in 2..5.
+
+##### FUN_00244248 is the handshake, and it is biased by 0x0C twice
+
+An order does not simply overwrite the pending byte. `FUN_00244248` picks its
+block by the entity's `+0x95`: below 11 it is a party slot and the block is
+`DAT_0031D780 + slot * 0x3C`, from 11 up it is an actor id and the block is
+`DAT_00354EB4 + FUN_00247d80(id) * 0x3C + 0x0C`. Both are the record **plus
+0x0C** -- the same bias `FUN_0023F8B8` hands an enemy in its `+0x198` -- which
+is why the decompilation spells the two action bytes `[2]` and `[3]`. Read them
+unbiased and the whole handshake looks like it is writing into the wrong fields.
+
+The rule itself is four lines: while `+0x38` bit 0 is set and the pending byte
+is neither 0x0A nor 6, an order is refused with -1 unless the *current* action
+is already 6. Opcode 13's sub-op 0x80 parks the script on itself when it gets
+that -1 and tries again next frame -- unless the actor has died, which is the
+one thing that stops it spinning forever.
+
+##### An idle enemy aims at slot 0; an enemy under AI is *assigned* a target
+
+The second loop does one more thing per record, and it runs whether or not the
+record has a script: it validates `+0x2C` and, when it has gone negative, walks
+the three-byte preference ring at `+0x1D`. Each rotation moves `+0x1E` into
+`+0x1D`, `+0x1F` into `+0x1E`, and the *negated* byte that fell off the front
+into `+0x1F`, so a member that has just been tried goes to the back marked used.
+Three tries, then a random member. The bytes it reads are `psVar3[0x95]` off a
+**short** pointer, which is `+0x12A` -- hit points -- not `+0x95`.
+
+With one party member the ring never matches and the random fallback picks
+member 0 every time, so the port's enemies end up aimed at pool slot 0 anyway.
+The difference is that they are now aimed there *by the retargeter* rather than
+by `FUN_0023A958`'s no-target fallback, and a second party member would split
+them.
+
+##### What the actions actually do
+
+`FUN_0027F5C8` and `FUN_0028AC40` are the two action tables, and they are not
+symmetrical, because the two enemies are not the same shape. Type 0x80 flies:
+action 2 builds a quadratic Bezier -- start where it stands, end two units
+*past* the target along its own facing, apex 0.3 above the target -- and
+`FUN_0023A990` walks it over exactly the travel time `FUN_0023A6D0` costed when
+the order landed. Action 4 is the same machinery aimed two units *short* of the
+target with a flat 1.5 apex, so it slams down in front rather than through. Both
+end in state 6, which teleports the enemy back to its record's spawn position
+(`+0x14`/`+0x16`/`+0x18`, world times ten) two units up and lets it sink.
+
+Type 0x8A is a Maneater and is rooted to the floor. It never moves: action 2
+turns, bites where it stands and spawns the hit volume on timeline cursor 10;
+action 4 winds up for 100 ticks and spits. Action 4 publishes current action
+**2**, not 4 -- so the gate that waits for a strike to finish cannot tell the
+two attacks apart, which is what lets one script drive both.
+
+Each type releases the busy bit in its own place, and that is what closes the
+loop: 0x80 when state 6 has landed it back home, 0x8A when the attack animation
+comes round with nothing left in flight. Only then does the idle default stamp
+the current action back to 6 and let the script's gate through.
+
+**The damage half is not ported.** `FUN_002EBDE0`, `FUN_002EBAD8`,
+`FUN_002EC920`, `FUN_002ECC68` and `FUN_00280698` are the five calls that spawn
+the hit volume. Every attack plays through to its damage frame and counts itself
+-- `--actor-report` prints "enemy attacks that reached their damage frame" --
+and lands on nobody.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 
