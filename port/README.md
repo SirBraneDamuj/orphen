@@ -1624,6 +1624,102 @@ as a translucent textured swirl with the UV animation running on it. `--frames
 3000 --actor-report --scr-report` on `s01_e024` and `s01_e012` is unchanged
 except for the texture cache's generation counter, which counts one more load.
 
+#### The lead is placed *before* the script entries, not after
+
+`FUN_0022a418` in order: `:206` `FUN_00251DC0` loads the player stats, `:214-224`
+places the lead, `:265` runs the init entry, `:370` runs the start entry. The
+port had its own placement *after* both, which quietly threw away every scene
+that places the lead itself.
+
+A section-14 scene does exactly that. `s14_e012`'s start entry, at `0x13C3`:
+
+```
+0x13C3  0x55  entity=(0x62 tag 1) x=-900 y=300 z=0     -> pool slot 0 to (-0.9, 0.3, 0)
+0x13DE  0x77  entity=(0x62 tag 1) reg=0x0D value=575960 -> +0x5C = 5.7596 rad
+```
+
+`FUN_0025F548` (opcode `0x62`) searches from pool slot 10 for `+0x95 == tag` and
+returns **0** when nothing matches — which is the lead, so "tag 1" resolves to
+the player either way. Object register `0x0D` is `+0x5C` scaled by 100000 and
+wrapped, and 575960 → 5.7596 → **−0.5236 rad, −30°**. Both were being overwritten
+a few lines later by the port's own spawn guess.
+
+Confirmed against two PCSX2 save states taken either side of a debug-menu battle
+load. In the loaded one `DAT_003555D3` is 1, `DAT_00354FC2` is `0x0002` — the
+party is built, the battle has not started, so nothing in `FUN_0023FD30` has run
+— and pool slot 0 is already at `(-0.900, 0.300, 0.000)` facing `-0.5235839`.
+The port now reproduces that exactly. Note the original's placement block is
+*conditional*: `DAT_003551EC` bit 0 for the position and bit `0x80000` for the
+facing, and both save states have that word at **zero**, so on hardware neither
+block runs and the script's placement is the only one there is. That is also why
+the facing cannot be carry-over from a previous scene — there was no previous
+scene.
+
+It changes what the player's turn onto the first target looks like, which is the
+point: from `(-0.9, 0.3)` facing −29°, the first target sits at bearing −34°, so
+the turn is a **single frame** through the ±5° snap band instead of an eight-frame
+swing from due east.
+
+One line of the standing regression moves with it: `s01_e012`'s
+`[nav] follower graph ... reachable from` seed goes from `(-0.12, -2.699, -1.5)`
+to `(-8.371, 0.024, -1.5)`. That is `FUN_0022a418:374`, which reads the lead's
+position *after* the start entry — so seeding from the script's placement rather
+than from the port's guess is the correction, not a regression. Reachability
+(159/3948) and the 900-frame capture are unchanged, and `s01_e024` is untouched.
+
+Two things the same save-state diff turned up that are **not** fixed:
+
+- Every enemy on hardware is turned to face the player at spawn — slots 11..14
+  carry `2.7909`, `2.1516`, `1.5819`, `2.5425`, and each is `atan2` of the
+  offset to `(-0.9, 0.3)` to four decimals. The port leaves them all at the
+  placement default `1.5708`, because the type `0x8A`/`0x80` behaviours
+  (`FUN_002484D0` / `FUN_00248888`) are still `UNIMPLEMENTED`.
+- Hardware slot 10 is type `0x072` with `+0x95 = 0x50`, bound to the encounter's
+  party record `[4]`. The port spawns the same placement as a streamed prop
+  (`0x37C`) and leaves that record unbound.
+
+#### One frame of `FUN_0023FD30` decides how the first target appears
+
+`FUN_0023FD30`'s two arms are exclusive, and the countdown is tested **before**
+it is stepped:
+
+```c
+FUN_0023fc08();
+if (sGpffffb054 == 0) { ...master script...; FUN_002462c8(); FUN_002f1680(); return; }
+sGpffffb054 = FUN_00248e00(); x3
+if (sGpffffb054 == 0) { ...spawn one 0x192 cursor per bound record...; }
+```
+
+So `FUN_002462C8` — the command input, and the only thing that assigns the
+player a real target — cannot run until the frame **after** the cursors appear.
+The port ran it every battle frame, and stepped the countdown before testing it,
+which got the ordering wrong twice over: the target was assigned fifteen frames
+early, and again on the very frame the cursors spawned.
+
+**That one frame is what the grow-in looks like.** `FUN_002D86B0` spawns every
+cursor on animation 13, and `FUN_002D73E8` only moves a cursor off 13 through
+its *"not the player's target"* branch:
+
+```c
+if (0 < FUN_002493b8(control)) {
+  if (cursor->+0x19A == target) { if (cursor->anim == 10) -> 12 }   // grow-in
+  else if (cursor->anim != 10)  { -> 10 }                           // idle
+}
+```
+
+With no target yet on the spawn frame, all five cursors take the second branch
+and are on animation 10 immediately; the next frame the target is assigned and
+its cursor goes 10 → 12, the twelve-column grow-in at one frame a column. With
+the target already assigned, the first branch is taken instead, does nothing at
+animation 13, and that cursor sits out all eight columns of 13 at **four frames
+each** before it can even reach the grow-in. 32 frames of stall in front of a
+12-frame animation, which is the quarter-speed the first bracket appeared at.
+
+Timings on `s14_e012` after the fix: cursors spawn at frame 260, the target is
+assigned at 261, every other cursor is idle from 261, the target's grows in
+262–274 and settles into animation 11 at 278. The player's turn onto it runs
+262–269.
+
 #### Hand of Pyro flies along the caster's facing, and nothing else
 
 Worth stating because it is the only thing aiming the volley. `FUN_002DAB70`
@@ -1754,7 +1850,7 @@ Five things switch it off, all of them the original's:
 |---|---|
 | `DAT_0031D7BF` == `0x8E` | the kind `-1` spell hold aims itself |
 | control `+0x2C` < 3 | pool slots 0..2 are the party |
-| `DAT_00354ECC` != 0 | the pre-start lock |
+| `DAT_00354ECC` != 0 | a cinematic spell owns the screen |
 | `DAT_0031DA6C[member]` bit `0x400` | confusion |
 | `FUN_002494E0` != 0 | party record `+0x3C`, the charge |
 
@@ -1778,6 +1874,12 @@ back from `FUN_0023A320` means its own half-degree dead zone swallowed the
 difference, and the original then assigns the exact angle rather than leaving
 the remainder — so the facing lands on the bearing, bit for bit, which is what
 makes the `face=`/`bearing=` columns agree.
+
+`DAT_00354ECC` is **not** a pre-battle lock, which is what this file and the
+port's comments used to call it. `FUN_002432D8` clears it, and the only writers
+that raise it are five effect-entity behaviours in the `0x2Exxxx` block —
+`FUN_002E01F8`, `FUN_002E1320`, `FUN_002E23E8`, `FUN_002E34B8`, `FUN_002E65D0` —
+each setting it on entry and clearing it on the way out.
 
 The frame a wide turn starts also swaps the idle animation between 2 and 7,
 class 1 one way and everything else the other, guarded by bit 0 of party record

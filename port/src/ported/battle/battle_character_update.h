@@ -30,7 +30,14 @@
 // translation and the dispatch, and it is what turns a character onto whatever
 // control block +0x2C names. Four things switch it off, all of them the
 // original's: action 0x8E, a target below 3 (pool slots 0..2 are the party), the
-// pre-start lock DAT_00354ECC, and bit 0x400 of the member's DAT_0031DA6C flags.
+// suspend flag DAT_00354ECC, and bit 0x400 of the member's DAT_0031DA6C flags.
+//
+// DAT_00354ECC is **not** a pre-battle lock, which is what the port's comments
+// used to call it. FUN_002432D8 clears it, and the only things that raise it
+// are five effect-entity behaviours in the 0x2Exxxx block -- FUN_002E01F8,
+// FUN_002E1320, FUN_002E23E8, FUN_002E34B8 and FUN_002E65D0 -- each setting it
+// on entry and clearing it on the way out. It means "a cinematic spell owns the
+// screen", and it holds the whole party still while one plays.
 // A fifth stops the turn without stopping the block -- a non-zero charge timer
 // at party record +0x3C, read through FUN_002494E0, so the aim is pinned once a
 // spell starts building.

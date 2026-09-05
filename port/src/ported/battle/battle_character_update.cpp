@@ -2045,7 +2045,7 @@ namespace orphen::ported::battle
                                   tables.read<std::uint32_t>(control + control::kFlags38) | 1u);
     }
 
-    // :366-373. The pre-start lock: while DAT_00354ecc is set an idle member is
+    // :366-373. While DAT_00354ecc is set an idle member is
     // forced into state 122, which is the battle opener holding it still.
     if (party.DAT_00354ecc() != 0 &&
         tables.read<std::uint8_t>(control + control::kCurrentAction0f) == kActionIdle06)

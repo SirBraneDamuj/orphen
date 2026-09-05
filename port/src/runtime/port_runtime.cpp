@@ -1,6 +1,5 @@
 #include "runtime/port_runtime.h"
 
-#include <cstdio>
 
 #include "harness/flat_bin_archive.h"
 
@@ -2292,6 +2291,29 @@ namespace orphen::port
     // either script entry.
     startSceneMusic();
 
+    // **FUN_0022a418 places the lead before either script entry, not after.**
+    // :206 is FUN_00251dc0 (the stats) and :214-224 the placement, and
+    // FUN_0025b6d0 -- the init entry -- is not reached until :265. The port had
+    // both after the start entry, which quietly threw away every scene that
+    // places the lead itself. A section-14 scene does exactly that: s14_e012's
+    // start entry runs opcode 0x55 on pool slot 0 with (-900, 300, 0) and then
+    // opcode 0x77 on object register 0x0D with 575960 -- (-0.9, 0.3, 0) facing
+    // 5.7596 rad, which wraps to -30 degrees. Both were being overwritten a
+    // few lines later by the port's own spawn guess.
+    //
+    // Note the original's placement is *conditional* -- `DAT_003551EC` bit 0
+    // for the position and bit 0x80000 for the facing -- and a battle entered
+    // from the debug menu has that word at zero, so on hardware neither block
+    // runs and the script's own placement is the only one there is.
+    applySceneMarkerSpawn();
+
+    // FUN_0022a418:206. The port's placement goes through
+    // OriginalPlayerController::resetAt, a port-side construct that begins
+    // `entity() = OriginalEntity{}`, so the stats have to be re-applied after
+    // it rather than before. The original has no such problem: its placement
+    // only moves the entity.
+    sceneScript_.state().FUN_00251dc0_load_player_stats(entityPool_.leadPlayer());
+
     // FUN_0022a418 runs header word 0 and word 1 at load, from different points
     // in the bootstrap. The per-frame entry and the actor-state entries exist
     // but are not driven yet.
@@ -2306,24 +2328,6 @@ namespace orphen::port
 
     applySceneEnvironment();
     reportSceneEnvironment();
-
-    applySceneMarkerSpawn();
-
-    // FUN_0022a418 calls FUN_00251dc0 at :206 and places the lead at :372-375,
-    // and nothing between those two lines touches the entity -- the placement
-    // only moves it. The port's placement goes through
-    // OriginalPlayerController::resetAt, which is a port-side construct and
-    // begins `entity() = OriginalEntity{}`, so it threw the stats away every
-    // time. Re-applying them here restores the original's net effect.
-    //
-    // This had been true of every scene the port ever loaded: the lead has been
-    // running with 0 hit points, 0 attack power and 0 defence. Nothing noticed
-    // because nothing read them -- FUN_00216140 floors a hit at one point, so
-    // the damage the player deals looked plausible. The battle module is what
-    // surfaced it: FUN_00249610:84 abandons the whole character update when
-    // +0x12A minus +0xBE falls below 1, so a lead with no hit points reads as a
-    // corpse and never dispatches a state.
-    sceneScript_.state().FUN_00251dc0_load_player_stats(entityPool_.leadPlayer());
 
     // FUN_0022a418:372-375, right after the start entry has run and the lead is
     // wherever the scene put it.
@@ -5823,15 +5827,29 @@ namespace orphen::port
         // can never outlive the thing it was aimed at by a frame.
         battleEncounter_.FUN_0023fc08_bind(entityPool_);
 
-        // FUN_0023fd30:43-46 and :354-375. The pre-battle countdown, and the
-        // 0x192 cursors it hands out when it runs out.
-        battleParty_.FUN_0023fd30_pre_battle(battleEnvironment(), battleEncounter_, frameTicks);
+        // FUN_0023fd30:43-46 and :354-375. **The countdown is tested before it
+        // is stepped**, and the two arms are exclusive: a zero countdown runs
+        // the master script and the command input and returns, and a non-zero
+        // one steps it and, on the frame it lands, hands out the 0x192 cursors.
+        // So the frame the cursors appear is the last frame with no command
+        // input, not the first frame with one.
+        const bool countdownSpent = battleEncounter_.sGpffffb054_countdown() == 0;
+        if (!countdownSpent)
+        {
+          battleParty_.FUN_0023fd30_pre_battle(battleEnvironment(), battleEncounter_, frameTicks);
+        }
 
         // FUN_0023fd30:44-53. Once the countdown is spent the master battle
         // script runs, one step a frame. Its second loop -- the per-actor AI
         // scripts opcode 18 installs -- is not stepped yet; --battle-report
         // says how far the master got and on what.
-        if (battleEncounter_.sGpffffb054_countdown() == 0)
+        //
+        // **The countdown gates the command input too.** FUN_002462C8 sits at
+        // :350, inside this same `sGpffffb054 == 0` block and after an early
+        // `return` -- so on the frame the countdown lands, the cursors spawn
+        // and the command input does *not* run. See the note below for what
+        // that one frame is worth.
+        if (countdownSpent)
         {
           auto &work = sceneScript_.state().DAT_00355060_work;
           const auto step = battleEncounter_.FUN_0023fd30_step_master_script(
@@ -5845,19 +5863,29 @@ namespace orphen::port
                       << static_cast<int>(step.haltOpcode) << " at 0x" << std::hex
                       << step.haltOffset << std::dec << "\n";
           }
-        }
 
-        orphen::ported::battle::CommandInputEnvironment commandInput;
-        commandInput.party = &battleParty_;
-        commandInput.encounter = &battleEncounter_;
-        commandInput.pool = &entityPool_;
-        commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
-        commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
-        commandInput.DAT_00355600_pressedPad2 =
-            static_cast<std::uint16_t>(input.rawPressedStickDirection);
-        commandInput.frameTicks = frameTicks;
-        commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
-        orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
+          // FUN_0023fd30:350. **This frame of delay is load-bearing.** The
+          // cursors are spawned on animation 13 by the block below, and
+          // FUN_002d73e8 only moves a cursor off 13 through its "not the
+          // player's target" branch. Run the command input before the cursors
+          // exist and the player already owns a target when they appear, so
+          // *that* cursor sits out all eight columns of animation 13 at four
+          // frames each -- 32 frames -- before it can reach the 12-frame
+          // grow-in. Run it a frame later, as the original does, and every
+          // cursor including the target's is switched to 10 on its first frame
+          // and the grow-in starts immediately.
+          orphen::ported::battle::CommandInputEnvironment commandInput;
+          commandInput.party = &battleParty_;
+          commandInput.encounter = &battleEncounter_;
+          commandInput.pool = &entityPool_;
+          commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
+          commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
+          commandInput.DAT_00355600_pressedPad2 =
+              static_cast<std::uint16_t>(input.rawPressedStickDirection);
+          commandInput.frameTicks = frameTicks;
+          commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+          orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
+        }
         sampleBattleTrace(input.rawHeldPad);
 
         // DAT_00356788 counts the clip out. The original clears its flag when
