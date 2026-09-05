@@ -3005,8 +3005,13 @@ namespace orphen::ported::entity
     ball.facingRadians5c =
         ((static_cast<float>(turn) * kTwoPi) / 360.0f / 1728.0f) * elapsed +
         ball.fireballBaseFacing1b4;
-    ball.fireballVelX1a8 = ball.fireballSpeed1bc * std::sin(ball.facingRadians5c);
-    ball.fireballVelZ1ac = ball.fireballSpeed1bc * std::cos(ball.facingRadians5c);
+    // **FUN_00305130 is cosf and FUN_00305218 is sinf.** +0x1A8 takes the
+    // cosine and becomes +0x30, the X delta; +0x1AC takes the sine and becomes
+    // +0x34, the Z delta. Swapping them mirrors the whole volley about the 45
+    // degree diagonal, which reads as the fireballs flying off sideways or
+    // backwards no matter where the caster is pointing.
+    ball.fireballVelX1a8 = ball.fireballSpeed1bc * std::cos(ball.facingRadians5c);
+    ball.fireballVelZ1ac = ball.fireballSpeed1bc * std::sin(ball.facingRadians5c);
     const float planar =
         std::sqrt(ball.fireballVelX1a8 * ball.fireballVelX1a8 +
                   ball.fireballVelZ1ac * ball.fireballVelZ1ac);
@@ -3620,6 +3625,34 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002db230 (0x002db230), the behaviour of type 0x173 -- the burst a
+  // fireball turns into when it hits something. Not in src/ and, unlike
+  // FUN_002e4c00, not even a defined function in Ghidra; recovered from
+  // SLUS_200.11, where it is ten instructions:
+  //
+  //     lhu   v0, 8(a0)
+  //     lhu   v1, 6(a0)
+  //     ori   v0, v0, 0x4000
+  //     andi  v1, v1, 1
+  //     beqz  v1, +
+  //     sh    v0, 8(a0)        <- delay slot, so the store always happens
+  //     j     FUN_00265ec0
+  //
+  // The same one-shot shape as the lightning flash, plus the +0x08 bit 0x4000
+  // the fireball also carries. Without it nothing destroys the burst: it has no
+  // timer of its own, so the explosion stood at the point of impact for the
+  // rest of the scene.
+  void FUN_002db230_fireball_burst(OriginalEntity &burst,
+                                   std::size_t slot,
+                                   const ActorEnvironment &environment)
+  {
+    burst.halfword08 = static_cast<std::uint16_t>(burst.halfword08 | 0x4000u);
+    if ((burst.flags06 & 1u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
   // FUN_002da350 (0x002da350), the behaviour of type 0x139 -- the sword the
   // battle module puts in Orphen's hand for the kind-0 arm, and of type 0x13E,
   // the same effect in red.
@@ -3863,6 +3896,7 @@ namespace orphen::ported::entity
     case 0x002DEAE8u: // FUN_002deae8, type 0x174, Bite of Lightning's hand effect
     case 0x002DEE08u: // FUN_002dee08, type 0x15C, its ground disc and victim sparks
     case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
+    case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
       return true;
     default:
       return false;
@@ -3913,6 +3947,8 @@ namespace orphen::ported::entity
       return "FUN_002dee08 (lightning disc)";
     case 0x002E4C00u:
       return "FUN_002e4c00 (lightning flash)";
+    case 0x002DB230u:
+      return "FUN_002db230 (fireball burst)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -4059,6 +4095,9 @@ namespace orphen::ported::entity
         break;
       case 0x002E4C00u:
         FUN_002e4c00_lightning_flash(entity, slot, slotEnvironment);
+        break;
+      case 0x002DB230u:
+        FUN_002db230_fireball_burst(entity, slot, slotEnvironment);
         break;
       case kFUN_00239e78_noOp:
       default:

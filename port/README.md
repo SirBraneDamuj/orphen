@@ -1401,8 +1401,9 @@ Named by `--battle-report` rather than left silent:
 - **Classes 3, 4, 5, 6 and 7,** and class 1's states 102 and 115.
 
 Of the effect entities `FUN_00242df0` and the state handlers spawn — types
-`0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7` — only `0x118` is still reported
-`UNIMPLEMENTED` by `--actor-report`. It sits where `FUN_00242df0` left it,
+`0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7`, and the `0x15B`/`0x15C`/`0x173`/
+`0x178` the casts throw — only `0x118` is still reported `UNIMPLEMENTED` by
+`--actor-report`. It sits where `FUN_00242df0` left it,
 hidden by the `+0x08` bit 0 it spawns it with.
 
 #### `uGpffffb052` and `DAT_00354fc2` are one halfword
@@ -1622,6 +1623,68 @@ With the third table walked, the port's slot table on `s01_e012` matches
 as a translucent textured swirl with the UV animation running on it. `--frames
 3000 --actor-report --scr-report` on `s01_e024` and `s01_e012` is unchanged
 except for the texture cache's generation counter, which counts one more load.
+
+#### Hand of Pyro flies along the caster's facing, and nothing else
+
+Worth stating because it is the only thing aiming the volley. `FUN_002DAB70`
+takes the target only to compute two *scalars* — `+0x1BC`, the horizontal speed,
+and `+0x1B0`, the climb — as "distance over flight time". The **direction** is a
+straight copy of the caster's `+0x5C` at the moment of the throw:
+
+```c
+ball->facing5c = pool[casterSlot].facing5c;   // param_7, not param_4
+```
+
+`FUN_002DAE60` then resolves that into velocity every frame, and the order here
+is the whole ballgame:
+
+```c
++0x1A8 = +0x1BC * FUN_00305130(+0x5C);   // cosf -> +0x30, the X delta
++0x1AC = +0x1BC * FUN_00305218(+0x5C);   // sinf -> +0x34, the Z delta
+```
+
+The port had those two swapped, which mirrors every fireball about the 45°
+diagonal — it reads as the volley flying off sideways or backwards no matter
+where Orphen is pointing, and it is invisible while the caster happens to face
+along an axis. `FUN_00305130` is `cosf` and `FUN_00305218` is `sinf`; the same
+pair is spelled the same way round in `FUN_002493F0` and in opcode `0x5E`/`0x5F`,
+so the convention across the whole port is cos into `+0x20` and sin into `+0x24`.
+
+With it fixed and a target held, a fireball walks `(0.40, −0.96)` →
+`(0.84, −1.95)` → `(1.27, −2.94)` — a heading of −66.5°, which is both the
+caster's facing and the bearing to pool slot 12 at `(1.39, −3.19)`.
+
+The volley's fan is not computed as a fan: `+0x1C6`, the link's index in the
+chain, picks one of four fixed spreads (0 rises only at charge 5, 1 turns right,
+2 turns left, 3 dips), and each is ramped by elapsed life over `1728`. So a
+five-link chain arcs apart because its links disagree, not because anything
+divides an angle.
+
+##### `FUN_002DB230`, type `0x173`: recovered from the ELF, ten instructions
+
+The burst a fireball turns into on contact. It is not in `src/` and — unlike
+`FUN_002E4C00`, the lightning flash it is shaped like — Ghidra has no function
+defined at the address either, so it came out of `SLUS_200.11` directly:
+
+```
+002db230  lhu   v0, 8(a0)
+002db234  lhu   v1, 6(a0)
+002db238  ori   v0, v0, 0x4000
+002db23c  andi  v1, v1, 1
+002db240  beqz  v1, +
+002db244  sh    v0, 8(a0)      <- delay slot, so the store always happens
+002db248  j     FUN_00265ec0
+```
+
+Raise `+0x08` bit `0x4000`, then destroy on `+0x06` bit 0, the
+animation-finished flag. **The burst has no timer of its own**, so with no
+handler nothing ever destroyed it and the explosion stood at the point of impact
+for the rest of the scene. With it, the burst lives out animation 0 — about 60
+frames on `s14_e012` — and goes.
+
+Two effect types on the spell paths were in this position; the other,
+`FUN_002E4C00`, was already recovered the same way. Nothing on the Hand of Pyro
+or Bite of Lightning chain is reported `UNIMPLEMENTED` now.
 
 #### Bite of Lightning, end to end
 
