@@ -27,6 +27,7 @@
 #include "ported/battle/battle_camera.h"
 #include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_tables.h"
+#include "ported/battle/battle_target_display.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/resource/elf_data_reader.h"
@@ -111,6 +112,13 @@ namespace orphen::ported::battle
       // but the lead.
       const orphen::ported::resource::StatRecord *DAT_00343688_partyRecords = nullptr;
       std::size_t partySlotCount = 0;
+      // uGpffffadf8 and uGpffffadf4 -- SCR.BIN 0xBF and 0xBD -- plus the glyph
+      // widths and the scene's MCB section. FUN_0023C340's target readout needs
+      // all four; see battle_target_display.h.
+      const orphen::ported::resource::CharacterStats *stats = nullptr;
+      const orphen::ported::resource::CharacterStats *objectStats = nullptr;
+      const orphen::ported::text::DialogueFont *font = nullptr;
+      int DAT_00355208_objectGroup = 0;
       // The camera FUN_0023C340 drives -- both the ambient spline shots and the
       // target framing. Null in a harness with no camera, which skips both.
       orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
@@ -188,6 +196,9 @@ namespace orphen::ported::battle
     // either end.
     void FUN_0023c340_step_spline(const Environment &environment, std::uint32_t frameTicks);
     void FUN_0023c340_frame_target(const Environment &environment, std::uint32_t frameTicks);
+    // FUN_0023C340:159-175: the two type fixups, then FUN_002334E8.
+    void FUN_0023c340_build_target_display(const Environment &environment);
+    TargetDisplayEnvironment targetDisplayEnvironment(const Environment &environment) const;
 
     // --battle-report.
     std::uint16_t DAT_00354fb2_spline() const { return DAT_00354fb2_; }
@@ -259,6 +270,22 @@ namespace orphen::ported::battle
     // original keeps a pointer and tests it against null, so -1 is "none".
     std::int32_t DAT_00354e90_displayedTarget() const { return DAT_00354e90_; }
     void setDAT_00354e90_displayedTarget(std::int32_t slot) { DAT_00354e90_ = slot; }
+
+    const TargetDisplayRecord &DAT_005715b8_targetDisplay() const
+    {
+      return DAT_005715b8_targetDisplay_;
+    }
+
+    // FUN_00233818's output for the frame, rebuilt on every call to
+    // FUN_0023C340 and empty on any frame the readout is down.
+    const std::vector<orphen::ported::text::DialogueSprite> &targetDisplaySprites() const
+    {
+      return targetDisplaySprites_;
+    }
+    const std::vector<orphen::ported::render::HudQuad> &targetDisplayQuads() const
+    {
+      return targetDisplayQuads_;
+    }
     // DAT_00354E94: set every frame the cycle block runs, to whether the
     // display is *down*. FUN_0023c340 reads it to decide whether the camera
     // still has to swing onto the target.
@@ -370,6 +397,10 @@ namespace orphen::ported::battle
     std::uint16_t DAT_00354e96_ = 0;
     std::uint16_t DAT_00354e94_ = 0;
     std::int32_t DAT_00354e90_ = -1;
+    // The 0xE8 block at 0x005715B8 and the two lists FUN_00233818 fills from it.
+    TargetDisplayRecord DAT_005715b8_targetDisplay_;
+    std::vector<orphen::ported::text::DialogueSprite> targetDisplaySprites_;
+    std::vector<orphen::ported::render::HudQuad> targetDisplayQuads_;
     // DAT_00571B80, the camera workspace.
     TargetCameraWork DAT_00571b80_cameraWork_{};
     // The ambient camera. DAT_00354FB2 at 0xFFFF means "nothing armed", which

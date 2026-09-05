@@ -301,6 +301,8 @@ namespace orphen::port
     if (!discRoot_.empty())
     {
       characterStats_.load(discRoot_);
+      // FUN_00228e28:150, uGpffffadf4. Same layout, different resource.
+      DAT_00354d64_objectStats_.load(discRoot_, 0xBD);
       // FUN_00228e28:155, the blob loaded right after it. Nothing warns when it
       // is missing: an attack whose record cannot be read deals the floor of
       // one point, which is what the original's `return 0` leaves it doing.
@@ -591,6 +593,81 @@ namespace orphen::port
     environment.DAT_0031d3c8_battleTableWord = [this](std::uint32_t address) {
       return battleParty_.tables().read<std::uint32_t>(address);
     };
+
+    // The enemy side. `record` is the entity's +0x198 as the port spells it:
+    // the actor record's offset in the encounter blob, or -1 for the scratch
+    // FUN_0023f8b8 hands back when no group names the entity's id.
+    //
+    // DAT_0031D178 is a real global in the original and it overlaps its
+    // neighbours -- FUN_0023f8b8 writes 0xFF into what an unbound enemy then
+    // reads as its pending action, and the byte after that is the unbound tally
+    // DAT_0031D17B. The port keeps the 0xFF (it is what drives the unbound
+    // enemy down the original's "unknown action" branch) and keeps the tally
+    // separate, in BattleTrace.
+    environment.sGpffffb052_battleFlags = battleParty_.sGpffffb052();
+    environment.uGpffffadf8_stats = &characterStats_;
+    environment.DAT_00354eb4_battleActor =
+        [this](std::int32_t record,
+               orphen::ported::entity::ActorEnvironment::BattleActorView &out) {
+          using namespace orphen::ported::battle;
+          using View = orphen::ported::entity::ActorEnvironment;
+          if (record == View::kDAT_0031d178_scratchRecord)
+          {
+            out = DAT_0031d178_unboundActor_;
+            return true;
+          }
+          if (record < 0)
+          {
+            return false; // the original's null +0x198
+          }
+          if (!battleEncounter_.available())
+          {
+            return false;
+          }
+          const auto at = static_cast<std::uint32_t>(record);
+          out.pendingAction0e = battleEncounter_.read<std::uint8_t>(at + actor::kPendingAction0e);
+          out.currentAction0f = battleEncounter_.read<std::uint8_t>(at + actor::kCurrentAction0f);
+          out.target2c = battleEncounter_.read<std::int16_t>(at + actor::kTarget2c);
+          out.flags38 = battleEncounter_.read<std::uint32_t>(at + actor::kFlags38);
+          return true;
+        };
+    environment.DAT_00354eb4_setBattleActor =
+        [this](std::int32_t record,
+               const orphen::ported::entity::ActorEnvironment::BattleActorView &in) {
+          using namespace orphen::ported::battle;
+          using View = orphen::ported::entity::ActorEnvironment;
+          if (record == View::kDAT_0031d178_scratchRecord)
+          {
+            DAT_0031d178_unboundActor_ = in;
+            return;
+          }
+          if (record < 0)
+          {
+            return;
+          }
+          if (!battleEncounter_.available())
+          {
+            return;
+          }
+          const auto at = static_cast<std::uint32_t>(record);
+          battleEncounter_.write<std::uint8_t>(at + actor::kPendingAction0e, in.pendingAction0e);
+          battleEncounter_.write<std::uint8_t>(at + actor::kCurrentAction0f, in.currentAction0f);
+          battleEncounter_.write<std::int16_t>(at + actor::kTarget2c, in.target2c);
+          battleEncounter_.write<std::uint32_t>(at + actor::kFlags38, in.flags38);
+        };
+    environment.FUN_0023f8b8_bind_battle_actor = [this](std::size_t entitySlot) -> std::int32_t
+    {
+      const std::uint32_t bound = battleEncounter_.FUN_0023f8b8_bind_entity(
+          entityPool_, entitySlot, &DAT_00354d6c_hitParameters_);
+      if (bound == 0)
+      {
+        battleTrace_.recordUnboundBattleActor(entityPool_.slot(entitySlot).byte95);
+        DAT_0031d178_unboundActor_ = {};
+        DAT_0031d178_unboundActor_.pendingAction0e = 0xFF;
+        return orphen::ported::entity::ActorEnvironment::kDAT_0031d178_scratchRecord;
+      }
+      return static_cast<std::int32_t>(bound);
+    };
     // FUN_002f1380: place, size and un-hide the one shared hit effect. The
     // entity it moves is the battle module's DAT_0031DAD0; the word it raises
     // is the runtime's DAT_00355588. FUN_002deae8 calls it every frame Bite of
@@ -811,6 +888,8 @@ namespace orphen::port
     environment.FUN_00267d38_playSound =
         [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
     { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
+    environment.FUN_002057c8_keyOn = [this](std::uint16_t cue, int volumeLeft, int volumeRight)
+    { soundEngine_.FUN_002057c8_key_on(cue, volumeLeft, volumeRight); };
 
     // FUN_00216868. A plain LCG rather than the original's generator, which has
     // not been analysed; what matters here is that it is seeded once and stepped
@@ -1077,6 +1156,12 @@ namespace orphen::port
     // gives it hit points, and the bind puts it in the actor table under the id
     // the placement's +0x0F byte named.
     environment.uGpffffadf8_stats = &characterStats_;
+    // FUN_0025BA98's table, and the bank that picks its low group. Together
+    // with the damage rows these are what FUN_002F0608 needs to turn a tagged
+    // group-4 placement into an element the player can lock onto.
+    environment.uGpffffadf4_objectStats = &DAT_00354d64_objectStats_;
+    environment.DAT_00355208_mapPropBank = DAT_00355208_mapPropBank_;
+    environment.DAT_0058b970_elementDamage = &DAT_0058b970_elementDamage_;
     environment.FUN_0023f8b8_bind_battle_actor = [this](std::size_t entitySlot)
     {
       const std::uint32_t bound =
@@ -1975,6 +2060,13 @@ namespace orphen::port
     // encounter's own spline pairs, and the target display interrupts it to
     // frame the enemy the D-pad picked.
     environment.camera = &fieldCamera_;
+    // FUN_002334E8's four tables, and the glyph widths FUN_00238E68 measures
+    // the two captions with.
+    environment.stats = &characterStats_;
+    environment.objectStats = &DAT_00354d64_objectStats_;
+    environment.font = &dialogueFont_;
+    // DAT_00355208, FUN_0022A418:50.
+    environment.DAT_00355208_objectGroup = static_cast<int>(DAT_003551f4_sceneSection_);
     environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
     environment.FUN_0025d618_decode_waypoints =
         [this](std::uint32_t at, std::vector<orphen::ported::psm2::Vec3> &out) {
@@ -4141,6 +4233,26 @@ namespace orphen::port
       std::cout << "  nothing bound: no group-2 placement carried an actor id this "
                    "table names (FUN_0025eb48 -> +0x95 -> FUN_0023f8b8)\n";
     }
+    if (!battleTrace_.unboundBattleActors().empty())
+    {
+      // FUN_0023F8B8 walks every group and, finding no record, bumps its own
+      // DAT_0031D17B counter and hands back a scratch block. That is not an
+      // error: a scene's tagged placements outnumber its encounter records --
+      // s14_e012 has sixteen elemental damage zones all tagged 0x7D and nothing
+      // claims them -- so this is the same tally the original keeps.
+      std::map<std::uint8_t, std::size_t> byId;
+      for (const auto id : battleTrace_.unboundBattleActors())
+      {
+        ++byId[id];
+      }
+      std::cout << "  tagged entities with no record:";
+      for (const auto &entry : byId)
+      {
+        std::cout << " 0x" << std::hex << static_cast<int>(entry.first) << std::dec << " x"
+                  << entry.second;
+      }
+      std::cout << '\n';
+    }
 
     // The master battle script, which is what installs the per-actor AI and
     // arms the target display. Its second half -- stepping those actor scripts
@@ -4160,6 +4272,43 @@ namespace orphen::port
               << battleParty_.DAT_00355c88_splinePosition() << "/"
               << battleParty_.DAT_00355c8c_splineDuration() << " dwell "
               << battleParty_.DAT_00355ca8_splineDwell() << "\n";
+
+    printTargetDisplayReport();
+  }
+
+  // FUN_002334E8's block and what FUN_00233818 makes of it. Printed even when
+  // the readout is down, because "no row for this type" and "the display never
+  // opened" look the same from the outside otherwise.
+  void PortRuntime::printTargetDisplayReport() const
+  {
+    const auto &record = battleParty_.DAT_005715b8_targetDisplay();
+    std::cout << "target readout: DAT_00354e90=" << battleParty_.DAT_00354e90_displayedTarget()
+              << " timer=" << battleParty_.DAT_00354e96_displayTimer();
+    if (record.DAT_005715e0_name.empty())
+    {
+      std::cout << "  (no row; nothing drawn)\n";
+      return;
+    }
+    std::cout << "  \"" << record.DAT_005715e0_name << "\" \""
+              << record.DAT_00571660_hitPoints << "\"\n";
+    static constexpr std::array<const char *, 5> kArmNames{"lightning", "fire", "wind", "dark",
+                                                           "ice"};
+    for (std::size_t arm = 0; arm < kArmNames.size(); ++arm)
+    {
+      const int element = orphen::ported::battle::kDAT_0031c240_elements[arm];
+      const auto value = static_cast<int>(static_cast<std::int8_t>(
+          record.DAT_005715d0_effectiveness[static_cast<std::size_t>(element)]));
+      int pips = 0;
+      if (value != 0)
+      {
+        pips = value > 0x22 ? (value < 0x4B ? 2 : 3) : 1;
+      }
+      std::cout << "  arm " << arm << " element " << element << " " << kArmNames[arm]
+                << " effectiveness=" << value << " pips=" << pips << " clut bank "
+                << orphen::ported::battle::kDAT_0031c250_clutBanks[arm] << "\n";
+    }
+    std::cout << "  " << battleParty_.targetDisplayQuads().size() << " pip quads, "
+              << battleParty_.targetDisplaySprites().size() << " caption glyphs\n";
   }
 
   void PortRuntime::printExitReports() const
@@ -6000,6 +6149,9 @@ namespace orphen::port
     dialogueStream_.setMovieMode(DAT_00355054_letterbox_.DAT_00355054_mode());
     dialogueStream_.FUN_00237fc0_update(frameTicks);
     mapViewer_.setDialogueSprites(buildDialogueSprites());
+    // FUN_00233818's pentagon. Its captions ride the dialogue list, which is
+    // the same FUN_00239020 path they take in the original.
+    mapViewer_.setHudQuads(battleParty_.targetDisplayQuads());
 
     // FUN_00267a80 measures against DAT_0058C0A8 and uGpffffb6d4 -- the camera,
     // not the player. Published after the camera has run for the frame.
@@ -6312,6 +6464,12 @@ namespace orphen::port
     // mid-cutscene -- but appending rather than choosing keeps that an
     // observation about the data instead of an assumption in the code.
     std::vector<text::DialogueSprite> sprites = dialogueStream_.sprites();
+
+    // FUN_00233818's two captions, right-aligned down the same edge. They are
+    // built on the simulation step, inside FUN_0023C340, and only collected
+    // here.
+    const auto &target = battleParty_.targetDisplaySprites();
+    sprites.insert(sprites.end(), target.begin(), target.end());
 
     if (!itemWindow_.FUN_00237c60_isOpen())
     {

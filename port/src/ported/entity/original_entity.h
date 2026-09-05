@@ -239,6 +239,10 @@ namespace orphen::ported::entity
     // +0x130: the placement record's id byte for a spawned prop. Script opcode
     // 0xB7 also writes it outright, which is how s01_e012's init tags its cast.
     std::int16_t recordId130 = -1;
+    // +0x132: the object record's +0x09, copied by FUN_0025E7C0. A non-zero
+    // value is what makes it raise +0x02 bit 0x100 beside it; nothing else in
+    // the port reads either yet.
+    std::uint8_t objectByte132 = 0;
     std::uint16_t staggerTimer12a = 0;       // +0x12A: hit points the +0xBE drain eats into.
     // +0x192: the pool slot of the entity this one is *attached to*, -1 when it
     // stands on its own. FUN_00229c40 seeds it to 0xFFFF for everything it
@@ -322,6 +326,27 @@ namespace orphen::ported::entity
     // aliased, the same way eventFlagId198 and interactTarget198 are -- an
     // entity is never both a party follower and a type 0x62 enemy.
     std::int16_t partyOriginalType1a0 = 0;
+
+    // The *battle enemy* block: types 0x80, 0x8A and the twenty-eight others
+    // whose behaviour is a preamble plus a dispatch on +0x60. See
+    // ported/entity/original_battle_enemy.h.
+    //
+    // +0x198 is what FUN_0023f8b8 handed back, which is the battle actor record
+    // **plus 0x0C** -- not the record itself. Every read the enemy makes off it
+    // is therefore biased: +0x198 + 2 is the record's +0x0E pending action,
+    // + 3 is +0x0F, + 0x20 is the +0x2C target and + 0x2C is the +0x38 flag
+    // word. The port stores the record's own offset in the encounter blob and
+    // does the bias in ActorEnvironment::battleActorRecord, so the field is
+    // spelled as a plain record index; -1 is the original's unbound case, where
+    // FUN_0023f8b8 returns the scratch at DAT_0031D178 rather than null.
+    std::int32_t battleActorRecord198 = -1;
+    // +0x19C: the facing the enemy is turning *toward*. State 0 seeds it with
+    // the placement's own +0x5C and the idle default (FUN_0027f5c0) re-aims it
+    // at the target -- pool slot 0, the player, when there is none.
+    float battleDesiredFacing19c = 0.0f;
+    // +0x1D0: FUN_00280850's wobble phase in degrees, swept 25 per frame and
+    // wrapped from 60 back to -40. Type 0x80 only.
+    float enemyWobblePhase1d0 = 0.0f;
 
     // Type 0x28's block. FUN_002d2f40 builds a three-entity rig the first time
     // it runs -- FUN_00265e28(0x27), (0x26) and (0x19) -- parks the three pool
@@ -420,6 +445,12 @@ namespace orphen::ported::entity
     std::uint16_t markerCharge19a = 0;   // +0x19A: the charge, from FUN_002d9b78.
     std::uint16_t markerRingTimer19c = 0; // +0x19C: ticks to the next pulse.
     std::uint16_t markerFlags19e = 0;    // +0x19E: bit 0 suppresses one pulse cue.
+
+    // +0x19E again, under the elemental-object reading: FUN_002F0608 parks the
+    // type id the placement spawned -- a streamed 0x373-band id -- here before
+    // it overwrites +0x00 with the 0x6C..0x74 element type the readout knows.
+    // Nothing reads it back yet; it is stored because the original stores it.
+    std::int16_t elementOriginalType19e = 0;
 
     // The type 0x192 target cursor, FUN_002d73e8 -- the marker drawn over an
     // enemy while a battle is running. One is spawned per bound actor record by

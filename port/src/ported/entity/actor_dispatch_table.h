@@ -74,6 +74,13 @@ namespace orphen::ported::entity
   constexpr std::size_t kPartyStateCount = 12;
   constexpr std::uint32_t kPTR_FUN_00326660_enemy62States = 0x00326660;
   constexpr std::size_t kEnemy62StateCount = 20;
+  // The two battle enemies s14_e012 fields. Both tables are followed in the
+  // executable by unrelated data -- 0x00325970's tenth word is already a float
+  // -- so the counts are the handler runs, not a guess.
+  constexpr std::uint32_t kPTR_FUN_00325970_enemy80States = 0x00325970;
+  constexpr std::size_t kEnemy80StateCount = 9;
+  constexpr std::uint32_t kPTR_FUN_00325B40_enemy8aStates = 0x00325B40;
+  constexpr std::size_t kEnemy8aStateCount = 20;
 
   // 0x0025ABB8: `jr ra; nop`, verified in the executable.
   constexpr std::uint32_t kLAB_0025abb8_noOp = 0x0025ABB8;

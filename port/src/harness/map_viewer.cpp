@@ -2337,6 +2337,11 @@ namespace orphen::harness
     screenFadeAlpha_ = alpha;
   }
 
+  void MapViewer::setHudQuads(std::vector<orphen::ported::render::HudQuad> quads)
+  {
+    hudQuads_ = std::move(quads);
+  }
+
   void MapViewer::setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites)
   {
     dialogueSprites_ = std::move(sprites);
@@ -2429,6 +2434,162 @@ namespace orphen::harness
       glEnable(GL_DEPTH_TEST);
     }
 
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
+  // A slot at or above 0x18 is a 4-bit page on the GS and its 16-entry CLUT is
+  // chosen per draw. GL has no CSA, so each bank the frame asks for becomes its
+  // own RGBA texture -- built once and kept until the slot cache turns over.
+  unsigned int MapViewer::clutBankTexture(int slot, int bank) const
+  {
+    if (textureSlots_ == nullptr || slot < 0 || bank < 0 ||
+        bank >= orphen::ported::resource::kClutBankCount ||
+        static_cast<std::size_t>(slot) >= orphen::ported::resource::kTextureSlotCount)
+    {
+      return 0;
+    }
+    const unsigned int key = (static_cast<unsigned int>(slot) << 8) | static_cast<unsigned int>(bank);
+    const auto existing = clutBankTextureIds_.find(key);
+    if (existing != clutBankTextureIds_.end())
+    {
+      return existing->second;
+    }
+
+    const auto &texture = textureSlots_->slot(static_cast<std::size_t>(slot)).texture;
+    const std::vector<std::uint8_t> pixels = texture.clutBankPixels(bank);
+    if (pixels.empty())
+    {
+      clutBankTextureIds_.emplace(key, 0u);
+      return 0;
+    }
+
+    GLuint textureId = 0;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture.width, texture.height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels.data());
+    clutBankTextureIds_.emplace(key, static_cast<unsigned int>(textureId));
+    return textureId;
+  }
+
+  void MapViewer::drawHudQuads(int framebufferWidth, int framebufferHeight) const
+  {
+    if (hudQuads_.empty() || textureSlots_ == nullptr || framebufferWidth <= 0 ||
+        framebufferHeight <= 0)
+    {
+      return;
+    }
+
+    const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0,
+            -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_FOG);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glEnable(GL_BLEND);
+
+    unsigned int boundTexture = 0;
+    int boundBlend = -1;
+    for (const auto &quad : hudQuads_)
+    {
+      const unsigned int textureId =
+          quad.clutBank >= 0
+              ? clutBankTexture(quad.textureSlot, quad.clutBank)
+              : (static_cast<std::size_t>(quad.textureSlot) < slotTextureIds_.size()
+                     ? slotTextureIds_[static_cast<std::size_t>(quad.textureSlot)]
+                     : 0u);
+      if (textureId == 0)
+      {
+        continue;
+      }
+      const auto &texture = textureSlots_->slot(static_cast<std::size_t>(quad.textureSlot)).texture;
+      if (texture.width == 0 || texture.height == 0)
+      {
+        continue;
+      }
+      if (textureId != boundTexture)
+      {
+        boundTexture = textureId;
+        glBindTexture(GL_TEXTURE_2D, boundTexture);
+      }
+      if (quad.blendMode != boundBlend)
+      {
+        boundBlend = quad.blendMode;
+        // FUN_00207de8's ladder. Mode 2 is the additive one; 1 and 3 both
+        // resolve to ordinary source-alpha blending on this path.
+        if (boundBlend == 2)
+        {
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        }
+        else
+        {
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
+      }
+
+      // FUN_00207DE8:130-141, the fold every packet's RGBAQ goes through on
+      // the way to the GS. An *untextured* packet keeps its rgb and halves
+      // only the alpha; a textured one halves all four channels:
+      //
+      //   uVar8 = (uVar8 & 0xfefefefe) >> 1;
+      //
+      // A HudQuad always names a sheet, so it always takes the second branch,
+      // and FUN_0022EB00's two colours reach the GS as 0x7F7F7F7F and
+      // 0x207F7F7F -- 0x80 being 1.0, that is a lit pip at 0.99 and a dark one
+      // at **0.25**, not the 0.5 the authored 0x40 reads as. Skipping the fold
+      // drew every dark pip at twice its alpha, which is most of why the
+      // pentagon's rings ran together.
+      const std::uint32_t packed =
+          quad.textureSlot >= 0 ? ((quad.color & 0xFEFEFEFEu) >> 1)
+                                : ((quad.color & 0x00FFFFFFu) | ((quad.color & 0xFE000000u) >> 1));
+      const float scale = 1.0f / 128.0f;
+      glColor4f(static_cast<float>(packed & 0xFF) * scale,
+                static_cast<float>((packed >> 8) & 0xFF) * scale,
+                static_cast<float>((packed >> 16) & 0xFF) * scale,
+                static_cast<float>((packed >> 24) & 0xFF) * scale);
+
+      // The packet is a four-vertex triangle fan; a quad draws the same shape.
+      glBegin(GL_TRIANGLE_FAN);
+      for (int corner = 0; corner < 4; ++corner)
+      {
+        glTexCoord2f(quad.u[corner] / texture.width, quad.v[corner] / texture.height);
+        glVertex2f(fit.offsetX + quad.x[corner] * fit.scaleX,
+                   fit.offsetY + quad.y[corner] * fit.scaleY);
+      }
+      glEnd();
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_BLEND);
+    glDisable(GL_TEXTURE_2D);
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
     glMatrixMode(GL_PROJECTION);
@@ -2684,6 +2845,13 @@ namespace orphen::harness
       glDeleteTextures(static_cast<GLsizei>(slotTextureIds_.size()), slotTextureIds_.data());
       slotTextureIds_.clear();
     }
+    // The bank views are the same sheets read 4-bit, so they go stale together.
+    for (const auto &entry : clutBankTextureIds_)
+    {
+      const GLuint id = entry.second;
+      glDeleteTextures(1, &id);
+    }
+    clutBankTextureIds_.clear();
     if (textureSlots_ == nullptr)
     {
       return;
@@ -3502,6 +3670,11 @@ namespace orphen::harness
       glMatrixMode(GL_PROJECTION);
       glPopMatrix();
       glMatrixMode(GL_MODELVIEW);
+    }
+
+    if (!hudQuads_.empty())
+    {
+      drawHudQuads(framebufferWidth, framebufferHeight);
     }
 
     if (!dialogueSprites_.empty())

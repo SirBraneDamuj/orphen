@@ -1,5 +1,7 @@
 #include "ported/entity/actor_frame_update.h"
 
+#include "ported/entity/original_battle_enemy.h"
+
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/party_follower.h"
 #include "ported/original_frame_timing.h"
@@ -2399,6 +2401,16 @@ namespace orphen::ported::entity
         {
           cursor.flags06 = static_cast<std::uint16_t>(cursor.flags06 & 0xFFEFu);
           FUN_00225bc8_set_animation(cursor, 12);
+          // :248. The selection chime, and the one sound in the battle HUD.
+          // It is FUN_002057c8 directly rather than FUN_00267d38, so it is
+          // never placed at the enemy: a flat cue at 0x80 on both channels,
+          // one volume step above the 0x7F FUN_00267d38 would have used. It
+          // fires on the *transition* only -- holding the D-pad on the same
+          // target leaves the cursor on 12 and plays nothing.
+          if (environment.FUN_002057c8_keyOn)
+          {
+            environment.FUN_002057c8_keyOn(kDAT_002d73e8_selectCue, 0x80, 0x80);
+          }
         }
       }
       else if (cursor.animationA0 != 10)
@@ -3897,6 +3909,8 @@ namespace orphen::ported::entity
     case 0x002DEE08u: // FUN_002dee08, type 0x15C, its ground disc and victim sparks
     case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
     case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
+    case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
+    case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
       return true;
     default:
       return false;
@@ -3949,6 +3963,10 @@ namespace orphen::ported::entity
       return "FUN_002e4c00 (lightning flash)";
     case 0x002DB230u:
       return "FUN_002db230 (fireball burst)";
+    case 0x0027F288u:
+      return "FUN_0027f288 (battle enemy 0x80)";
+    case 0x0028A958u:
+      return "FUN_0028a958 (battle enemy 0x8a)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -4098,6 +4116,12 @@ namespace orphen::ported::entity
         break;
       case 0x002DB230u:
         FUN_002db230_fireball_burst(entity, slot, slotEnvironment);
+        break;
+      case 0x0027F288u:
+        FUN_0027f288_enemy80(entity, slot, slotEnvironment, trace);
+        break;
+      case 0x0028A958u:
+        FUN_0028a958_enemy8a(entity, slot, slotEnvironment, trace);
         break;
       case kFUN_00239e78_noOp:
       default:

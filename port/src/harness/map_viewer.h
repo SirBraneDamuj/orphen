@@ -7,6 +7,7 @@
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_hud_quads.h"
 #include "ported/render/original_sprite_pass.h"
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_map_visibility.h"
@@ -19,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <iosfwd>
 #include <string>
@@ -179,6 +181,12 @@ namespace orphen::harness
     // fade, out of the texture slots, in the order given. Empty hides it.
     void setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites);
 
+    // FUN_00207de8's screen-space UI quads for this frame -- the battle target
+    // pentagon so far. Four free corners each, so they cannot go through the
+    // dialogue path, and a CLUT bank that picks one of a 4-bit sheet's sixteen
+    // palettes. Drawn with the captions, over the fade. Empty hides them.
+    void setHudQuads(std::vector<orphen::ported::render::HudQuad> quads);
+
     // FUN_0020f3e0's output: the billboard quads of every entity the skeletal
     // pass refused. Already in the original's view space and already in draw
     // order, so this pass only has to bind and submit.
@@ -293,6 +301,11 @@ namespace orphen::harness
     std::uint32_t screenFadeRgb_ = 0;
     std::uint8_t screenFadeAlpha_ = 0;
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
+    std::vector<orphen::ported::render::HudQuad> hudQuads_;
+    // One GL texture per (slot, CLUT bank) the frame actually asks for, keyed
+    // `slot << 8 | bank`. Built on demand and thrown away with the slot
+    // textures, because it is the same sheet read a different way.
+    mutable std::map<unsigned int, unsigned int> clutBankTextureIds_;
     std::vector<orphen::ported::render::SpriteQuad> spriteQuads_;
     // FUN_0025cfb8's `iGpffffbd8c >> 5`, 0..60.
     int letterboxBarHeight_ = 0;
@@ -366,6 +379,11 @@ namespace orphen::harness
     void drawLetterboxBars(int framebufferWidth, int framebufferHeight) const;
     // FUN_00239020's sprites, in the same screen the bars use.
     void drawDialogueSprites(int framebufferWidth, int framebufferHeight) const;
+    // FUN_00207de8's UI quads, in that same screen.
+    void drawHudQuads(int framebufferWidth, int framebufferHeight) const;
+    // The 4-bit read of a slot's sheet through one CLUT bank; 0 when the slot
+    // is empty. See BmpaTexture::clutBankPixels.
+    unsigned int clutBankTexture(int slot, int bank) const;
     void applyFogState(bool enabled) const;
   };
 

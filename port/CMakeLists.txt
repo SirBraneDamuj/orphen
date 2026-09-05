@@ -56,6 +56,9 @@ target_sources(orphen_port
         src/ported/battle/battle_encounter.cpp
         src/ported/battle/battle_command_input.cpp
         src/ported/battle/battle_character_update.cpp
+        src/ported/battle/battle_target_display.cpp
+        src/ported/battle/battle_target_display.h
+        src/ported/render/original_hud_quads.h
         src/ported/entity/map_prop_descriptor_table.cpp
         src/ported/entity/map_prop_descriptor_table.h
         src/ported/debug/original_debug_text.cpp
@@ -127,16 +130,20 @@ target_sources(orphen_port
     src/ported/entity/original_hit_sparks.cpp
     src/ported/entity/original_hit_sparks.h
     src/ported/entity/entity_pool.h
+    src/ported/entity/original_element_object.cpp
+    src/ported/entity/original_element_object.h
     src/ported/entity/original_entity.h
     src/ported/entity/actor_dispatch_table.cpp
     src/ported/entity/actor_dispatch_table.h
     src/ported/entity/actor_frame_update.cpp
     src/ported/entity/entity_collision.cpp
     src/ported/entity/follower_navmesh.cpp
+    src/ported/entity/original_battle_enemy.cpp
     src/ported/entity/party_follower.cpp
     src/ported/entity/entity_path_follow.cpp
     src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h
+    src/ported/entity/original_battle_enemy.h
     src/ported/entity/original_entity_sound.cpp
     src/ported/entity/original_entity_sound.h
     src/ported/entity/actor_trace.cpp

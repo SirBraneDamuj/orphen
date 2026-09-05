@@ -2087,6 +2087,111 @@ The port does the bind at the spawn site rather than in a per-type state 0,
 because it has no enemy state machines yet. Same frame, same observable result,
 and it is named as a stand-in where it happens.
 
+##### An enemy is not the only thing in the actor table
+
+s14_e012's sixth record is `id 0x50`, and no group-2 placement carries that id.
+It belongs to a **group 4** one, and it arrives through the other placement
+walk -- `FUN_0025E7C0`, opcode 0x4F -- which has a tail of its own:
+
+```c
+if (*(char *)(placement + 0xf) < '\0') {          // the tag byte, read signed
+  entity->+0x95 = -placement[0x0F];               // the actor-record id
+  entity->+0x08 |= 1;                             // spawned hidden
+  entity->+0x04 |= 1;
+  entity->+0x02 |= 0x4000;
+  if (cGpffffb663 != '\0') {                      // a section-14 scene
+    entity->+0x12A = 1;
+    FUN_0023fb20(entity);                         // -> FUN_0023f8b8, the bind
+    entity->+0x08 &= ~1;                          // and unhide
+    if (FUN_002f0608(entity) != 0) continue;
+  }
+}
+```
+
+The tag is the *negated* byte, so s14_e012's placement #104 -- group 4, id 10,
+`+0x0F` = `0xB0` -- answers to record `0x50`. In a field scene the branch stops
+at the first half, which is what s01_e012's seven `group 0 id 34` markers are:
+`0xFF..0xF9` gives them `+0x95` = 1..7 and they stay invisible, because they are
+the party's standing marks and not props. The EE dump settles both halves --
+its slots 20 and 22 read `+0x02 = 0x4080`, `+0x04 = 0x00D9`, `+0x08 = 0x0011`,
+`+0x95 = 3` and `5`, against `+0x02 = 0x0080`, `+0x04 = 0x00D8`, `+0x95 = 0` on
+every untagged prop beside them.
+
+###### FUN_002F0608 retypes the entity
+
+`FUN_0025E7C0` spawned it as `(id - 1) + 0x373` = `0x37C`, a plain streamed prop.
+`FUN_002F0608` then looks *that* type up through `FUN_0025BA98` -- SCR.BIN `0xBD`
+group 15, index 9 -- and reads the row's `+0x27` **kind** byte. For a kind of
+1..9 it saves the old type in `+0x19E` and overwrites `+0x00` with `kind + 0x6B`:
+
+| kind | type | name in SCR.BIN 0xBF group 2 | 0xBD row |
+|---|---|---|---|
+| 1 | 0x6C | Candlestick | `shokudai` |
+| 2 | 0x6D | Lamp | `ramp` |
+| 3 | 0x6E | Fire Element | `kaendamege` |
+| 4 | 0x6F | Water Element | `zettaidamege` |
+| 5 | 0x70 | Electric Element | `koudendamege` |
+| 6 | 0x71 | Wind Element | `kazedamege` |
+| 7 | 0x72 | **Darkness Element** | `ankokudamege` |
+| 8 | 0x73 | Healing Element | `partykaifuku` |
+| 9 | 0x74 | -- | the five `*kouka*` rows |
+
+**The model does not follow the retype.** `FUN_00229C40` bound it at spawn into
+`+0x15C`/`+0x160` off the placement's own type, and `FUN_002F0608` rewrites only
+`+0x00` -- so the object keeps the `0x37C` prop it was placed as. The port
+re-resolves a model from the live type id every frame, so it needs `+0x15C`
+filled in here, the same field `FUN_002DE650`'s retype trick already uses.
+Without it the element draws as `0x72`, which is a party character: a second
+Orphen standing in the arena.
+
+`0x6C..0x73` is exactly the band `FUN_002334E8` scans group 2 for, so the retype
+is what makes the readout say "Darkness Element" rather than `ankokudamege`. It
+is also what puts the entity in `FUN_0023C340`'s `0x6C..0x7A` fixup, so the
+caption reads `HP:  1` no matter what the row's real hit points are -- 5, here.
+
+Kind 9 is the odd one and stays hidden: those are the elemental damage *zones*,
+sixteen of them in s14_e012, all tagged `0x7D` and claimed by nothing. Their
+`+0x04` bit `0x10` is set, which is what stops `FUN_002F08F8` giving them the
+hit reaction every other kind gets. The port drew them until this was ported.
+
+The damage each object deals is not on the entity. `FUN_002F0608` writes it into
+`DAT_0058B970 + type * 4` -- element mask, power, and the row's `+0x08` -- one
+row per *type*, which `FUN_002F08F8` hands straight to the hit test. That
+behaviour is not ported; the table is filled anyway.
+
+###### The tail every other placement takes
+
+`FUN_002F0608` returning 1 is the only way past `FUN_0025E7C0:81-119`, which
+stamps the same `FUN_0025BA98` row onto the entity:
+
+| row | entity | |
+|---|---|---|
+| `+0x0C` | `+0x54`, `+0x11C` | collision and hit radius |
+| `+0x10` | `+0x58`, `+0x120` | body height |
+| `+0x14` | `+0x133` | depth bias, over `DAT_00352B98` = 0.08 |
+| `+0x06` | `+0x12A` **and** `+0x128` | hit points, live and maximum |
+| `+0x07` | `+0x12C` | attack |
+| `+0x08` | `+0x12E` | defence |
+| `+0x09` | `+0x132`, and `+0x02 \|= 0x100` when non-zero | |
+| `+0x00` bit `0x2000` | `+0x02 \|= 0x10` | |
+| `+0x00` bit `0x4000` | set: `+0x06 = 0`; clear: `+0xAE = +0xA0` | |
+| `+0x00` bit `0x8000` | `+0x04 &= ~8`, and `+0x4C` = a `FUN_00227798` ground sample | |
+| `+0x00` bit `0x1000` | `+0x04 \|= 1` | |
+
+The first three are a second write of numbers the entity already has:
+`FUN_00229980` synthesises a streamed prop's descriptor out of `+0x0C`, `+0x10`
+and `+0x14` of this same row, so the two agree by construction. The rest lives
+nowhere else. `+0x02` bit `0x100` is `FUN_00252828`'s examine branch -- the
+thing that makes a prop respond to the action button -- and bit `0x2000`'s
+`+0x02` bit `0x10` is a class bit `FUN_00215670`'s hit test masks against, which
+is what a breakable barrel needs. Bit `0x8000` is also the **only** place
+`FUN_0025E7C0` samples terrain; every other prop keeps its authored z.
+
+Neither standing scene exercises any of it: 152 rows across the twenty banks
+carry stats or those flag bits, and `s01_e012` and `s01_e024` place none of them,
+which is why the guard did not move. `s03_e001` does -- its `0x272` rows carry
+`+0x00 = 0x6000` and `+0x09 = 1`, and come out at `+0x02 = 0x0190`.
+
 ##### The master battle script
 
 `FUN_0023fd30` steps a second bytecode VM -- nineteen opcodes at
@@ -2325,6 +2430,191 @@ for the branch itself.
 
 Type `0x192` doubles as a scripted marker when its `+0x19A` names its own slot;
 that is the branch `FUN_002d8808` sets up and it has nothing to do with targeting.
+
+##### The readout: a name, the hit points, and the elemental pentagon
+
+`FUN_0023C340` calls two more things while the display is up. `FUN_002334E8`
+fills one 0xE8-byte block at `0x005715B8`, once, on the frame the timer is armed;
+`FUN_00233818` draws it every frame after. The block is not just a stat record --
+`0x005715E0` (the name) and `0x00571660` (the caption `HP:%3d`) are the same
+allocation at `+0x28` and `+0xA8`, which is why `FUN_00233818`'s only guard is
+"the name is not empty". A type with no row leaves it cleared and nothing is
+drawn.
+
+`FUN_002334E8` splits four ways on the entity's type id -- its `+0x1CE` when the
+type is `0x38`:
+
+| type id | table | index |
+|---|---|---|
+| `< 0x7C` | `uGpffffadf8` group 2, **scanned** for a row whose `+0x02` matches | -- |
+| `0x7C..0xFA` | `uGpffffadf8` group 0 | `type - 0x7C` |
+| `0x272..0x371` | `uGpffffadf4` group `DAT_00355208` | `type - 0x272` |
+| `0x373..0x472` | `uGpffffadf4` group 15 | `type - 0x373` |
+| `0x474..0x573` | `uGpffffadf4` group 16 | `type - 0x474` |
+
+`uGpffffadf8` is SCR.BIN `0xBF`, already loaded for the party records;
+`uGpffffadf4` is SCR.BIN `0xBD` beside it, and the port now loads that too. The
+scene's enemies land in the second row of the table, not the first: s14_e012's
+Maneater is type `0x8A`, so group 0 index 14, whose name is "Maneater" and whose
+`+0x18` block is `30 80 50 80 100 20 50 100 100 30 50 ...`.
+
+It also counts **duplicates**. The walk is pool slots 10..255 against
+`DAT_005A96B0`, collecting every live entity of the same type; if there is more
+than one, the caption becomes `%s-%d` with this one's position in that list. Two
+Maneaters and the second reads "Maneater-2".
+
+Two fixups sit either side of the call and neither is cosmetic. A `0x192` -- the
+cursor itself -- has no row, so it is stamped `0x86`, or `0x87` when its `+0x94`
+says so, for the length of the lookup. And a party character (types `0x6C..0x7A`)
+has its `+0x12A` forced to **1** while the caption is formatted, so an ally's
+readout always says `HP:  1` rather than its real total.
+
+**The pentagon** (`FUN_0022EC30`) is five arms at 72 degrees, in the order
+`DAT_0031C240` gives -- element 1 lightning at 38 degrees up-left, then 4 fire,
+2 wind, 5 dark, 10 ice, counter-clockwise. Each arm is three stacked bars from
+`DAT_0031C260`, 30, 56 and 78 wide by 16 tall, pivoting about `DAT_0031C290`'s
+6, 22 and 38 units out, so the three read as concentric pentagon rings. How many
+are lit is the effectiveness byte banded at `0x22` and `0x4B`: 1, 2 or 3 pips,
+and 0 lights nothing. A dark pip is the same quad at alpha `0x40`.
+
+That `0x40` is **not** half brightness, and reading it as half is what made the
+port's rings run together. `FUN_00207DE8:130-141` folds every packet's RGBAQ on
+the way to the GS -- an untextured packet keeps its rgb and halves the alpha, a
+textured one halves all four channels:
+
+```c
+uVar8 = (uVar8 & 0xfefefefe) >> 1;   // textured
+```
+
+A pip is textured, so `FUN_0022EB00`'s `0xFF'FFFFFF` and `0x40'FFFFFF` reach the
+GS as `0x7F7F7F7F` and `0x207F7F7F`. With `0x80` as 1.0 that is a lit pip at 0.99
+and a dark one at **0.25**. The sprite pass and the weapon trail already applied
+this fold; the HUD quads did not, and drew every dark pip at twice its alpha.
+
+**The colour is not in the vertex.** Every pip samples the same 87x16 texel patch
+of slot `0x2A` and `DAT_0031C250` picks a CLUT bank -- 14 lightning, 13 fire,
+12 wind, 11 dark, 15 ice. That is worth spelling out, because the port had no
+concept of it before and the sheet looks like noise without it:
+
+> **A texture slot at or above 0x18 is a 4-bit page on the GS.**
+> `FUN_002103D0:66-80` walks the BMPA index array two bytes at a time and writes
+> `(a & 0xF) | ((b & 0xF) << 4)`, so the texel is the low nibble of the index and
+> the high nibble is thrown away. The 16-entry CLUT then comes from CSA, and one
+> 256-entry palette holds sixteen independent ramps. `FUN_00207DE8` carries the
+> bank in the high byte of the packet's texture halfword -- `(bank << 8) | slot`
+> -- and writes `bank + 1` into the packet, zero meaning "8-bit page". The
+> s01_e012 GS dump shows the consumer plainly: 783 ordinary PSMT8 draws at CSA 0,
+> and then TEX2_1 writes with PSM PSMT4 at CSA 9, 10, 12 and 13. CSA 9 is the
+> character shadow -- `FUN_0020DDC8` writes `0x092A` -- and slot `0x2A`'s bank 9
+> is a grey ramp with rising alpha, which is exactly what a shadow blob needs.
+>
+> Read the sheet 8-bit and none of this exists: bank 9's palette entries decode
+> to a green blob and banks 11..15 look empty, because the arithmetic that finds
+> them is the 4-bit read. The port keeps the index array and the palette on
+> `BmpaTexture` now and builds one GL texture per (slot, bank) the frame asks
+> for.
+
+`--battle-report` prints the readout with the arms broken out, so the banding can
+be checked against the table without a screenshot:
+
+```
+target readout: DAT_00354e90=12 timer=3520  "Maneater-2" "HP: 75"
+  arm 0 element 1 lightning effectiveness=80 pips=3 clut bank 14
+  arm 1 element 4 fire effectiveness=100 pips=3 clut bank 13
+  arm 2 element 2 wind effectiveness=50 pips=2 clut bank 12
+  arm 3 element 5 dark effectiveness=20 pips=1 clut bank 11
+  arm 4 element 10 ice effectiveness=50 pips=2 clut bank 15
+  15 pip quads, 16 caption glyphs
+```
+
+The chime that goes with a target step is not in either of those functions. It
+belongs to the cursor: `FUN_002D73E8:248` keys cue `0xC9` on the frame a cursor
+goes from animation 10 to 12, which is the frame it becomes the selected target.
+It calls `FUN_002057C8` directly rather than `FUN_00267D38`, so it is never
+panned by where the enemy stands -- a flat cue at `0x80` on both channels, one
+step above the `0x7F` `FUN_00267D38` would have used. Because the trigger is the
+*transition*, holding a direction on the same target is silent, and the first
+chime of a fight is the one the initial selection fires when the cursors appear.
+
+What is **not** here: the player's own panel. `FUN_00230E50` draws a second
+pentagon with `FUN_0022EC30`'s other banding -- `param_4` 0, effectiveness over
+ten capped at three -- from `DAT_00570DB0` at `(0x220, 0xD0)`, plus a bar through
+`FUN_00230DB0` and `FUN_0022EF10`. It hangs off `FUN_0022E910`, the battle UI
+state machine at `DAT_00354DA0`, which is a layer the port has none of.
+
+#### An enemy turns to face you without any AI at all
+
+The enemies in `s14_e012` all stood facing the same way -- 1.571 radians, which
+is the placement byte's own `0 * 45 + 90`. The placement angle was never the
+bug; `FUN_0025E7C0` reads it and the port applies it. What was missing is that
+an enemy immediately turns off it.
+
+Every enemy type is one wrapper plus a state table, and the two this scene
+fields are `FUN_0027F288` (type 0x80, `PTR_FUN_00325970`, nine states) and
+`FUN_0028A958` (type 0x8A, `PTR_FUN_00325B40`, twenty). The wrapper is the same
+four steps in both: clear a couple of `+0x08` bits, run the *action check*, run
+the freeze gate and the `+0xBE` hit reaction, then dispatch `+0x60`.
+
+The action check -- `FUN_0027F4B0` / `FUN_0028AB28` -- is where the facing comes
+from:
+
+```c
+if (record[2] != 0) { record[0x2c] |= 1; dispatch(record[2]); record[2] = 0; }
+else if ((record[0x2c] & 1) == 0) { FUN_0027f5c0(entity); }
+```
+
+`record` here is entity `+0x198`, and **that is not the actor record: it is the
+record plus 0x0C**, because that is what `FUN_0023F8B8` returns. So `+2` is the
+record's `+0x0E` pending action, `+3` its `+0x0F`, `+0x20` its `+0x2C` target
+and `+0x2C` its `+0x38` flag word.
+
+With no pending action and the busy bit clear, `FUN_0027F5C0` runs. It sets
+`+0x19C` to the bearing to the target, rolls a 100..199-tick hold into `+0x62`,
+drops into state 1 and stamps the record's current action 6. State 1
+(`FUN_0027FA88`) then walks `+0x5C` toward `+0x19C` at ten degrees a frame
+through `FUN_0023A320`.
+
+The target is the thing to notice. `FUN_0023A958` reads the record's `+0x2C`
+and, **when it is negative, returns `&DAT_0058BEB0` -- pool slot 0**. Type
+0x8A's variant, `FUN_0023A480`, does not even ask: it reads `DAT_0058BED0` and
+`DAT_0058BED4` outright. So "no target" is not "no angle", it is "the player",
+and an enemy standing in an arena with no script running still turns to face
+Orphen. All five in `s14_e012` now land on the bearing to the lead to three
+decimal places.
+
+State 0 (`FUN_0027F978` / `FUN_0028AE10`) is the other half and is identical
+between the two types: scale to 1.0, `FUN_0025BAE8(**0**, type)` -- group 0 of
+SCR.BIN 0xBF at `type - 0x7C`, the enemy table -- inlined through
+`FUN_0023A518`, `+0x19C` seeded with the placement facing, `+0x96` bit 0, an
+animation, then `FUN_0023F8B8`. Its three `FUN_00216078` calls are deliberately
+absent from the port: they fill globals at `0x005739B0` / `0x0058B140` that
+nothing reads back, and their one lasting effect -- `DAT_00354C64` -- the bind
+on the next line re-establishes for itself.
+
+##### Type 0x8A re-aims every frame, and that is the original
+
+`FUN_0027FA88` **sets** the busy bit and only clears it when the turn has
+finished and the hold has run out, so a type 0x80 aims once and then holds.
+`FUN_0028AF28` **clears** it unconditionally (`and v0,v0,0xfffffffe` at
+`0x0028AF48`, checked against the disassembly because it reads like a typo), so
+a type 0x8A runs the idle default again on the very next frame -- re-aiming, and
+re-rolling its idle animation through `FUN_00225BF0`, which resets the timeline
+cursor. Its pose therefore sits on frame 0 and its animation index flickers
+between 0, 2 and 3.
+
+That is not a port bug and it is not visible on hardware, because on hardware
+the record is never idle for long: `FUN_0023FD30`'s second loop steps a
+per-actor script out of the encounter blob (`s14_e012` gives its five enemies
+scripts at 0x1A8C, 0x1A90, 0x1AB0, 0x1AD4 and 0x1AF8) and that script writes
+the pending action byte. The port installs those scripts and does not step
+them, so until the `PTR_LAB_0031D118` VM lands the 0x8A holds a static pose.
+
+Also deliberately short of the original, and unreachable rather than wrong: the
+action bodies. `FUN_0027F5C8` / `FUN_0028AC40` turn actions 1..8 into approach,
+strike and back-off states, and nothing in the port can request one, because
+only that VM writes the byte. The check itself is complete -- latch the busy
+bit, publish the action, clear the request, and the two special cases (0x0A
+parks in state 1 and reports busy, 0x0B publishes without clearing).
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 

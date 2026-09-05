@@ -158,6 +158,11 @@ namespace orphen::ported::sound
     void FUN_00267d38_play_at(std::uint16_t cue, float x, float y, float z);
     // FUN_00267d38 with a null entity, which reaches FUN_002057c8 at full pan.
     void FUN_00267d38_play_flat(std::uint16_t cue);
+    // FUN_002057c8 itself. Public because two callers reach it without going
+    // through FUN_00267d38 at all and pick their own volumes -- the target
+    // cursor's selection chime (FUN_002D73E8:248) is one, at 0x80/0x80 rather
+    // than FUN_00267d38's 0x7F.
+    void FUN_002057c8_key_on(std::uint16_t cue, int volumeLeft, int volumeRight);
 
     // Takes the queue over to the mixer's own voices. mix() does this itself;
     // a headless run calls it directly so the queue cannot grow without bound.
@@ -281,7 +286,6 @@ namespace orphen::ported::sound
       bool active = false;
     };
 
-    void FUN_002057c8_key_on(std::uint16_t cue, int volumeLeft, int volumeRight);
     void startVoice(const KeyOn &request);
     const SoundBank *bankFor(const KeyOn &request) const;
 

@@ -144,4 +144,74 @@ namespace orphen::ported::text
     return sprite;
   }
 
+  int FUN_00238e68_measure(std::string_view text, const DialogueFont &font, int cellWidth)
+  {
+    const int scale = (cellWidth * 100) / kCellSize;
+    int width = 0;
+    for (const char raw : text)
+    {
+      if (raw < 0)
+      {
+        // The escape characters are not measured; they bill a fixed cell.
+        width += 0x20;
+        continue;
+      }
+      width += (static_cast<int>(font.FUN_00238e50_width(static_cast<unsigned char>(raw))) * scale) / 100;
+    }
+    return width;
+  }
+
+  std::vector<DialogueSprite> FUN_00238608_layout(int x,
+                                                  int y,
+                                                  std::string_view text,
+                                                  std::uint32_t color,
+                                                  int cellWidth,
+                                                  int cellHeight,
+                                                  const DialogueFont &font)
+  {
+    std::vector<DialogueSprite> sprites;
+    // FUN_00238608:22 and :30. Both are percentages of the 22-texel cell, and
+    // the vertical one is rounded through the cell before it is used.
+    const int horizontalScale = (cellWidth * 100) / kCellSize;
+    const int drawnHeight = (((cellHeight * 100) / kCellSize) * kCellSize) / 100;
+
+    int penX = x;
+    for (const char raw : text)
+    {
+      const auto character = static_cast<unsigned char>(raw);
+      if (character >= 0xFC || character < kFirstCharacter)
+      {
+        continue;
+      }
+
+      const int index = character - kFirstCharacter;
+      int v = (index / kColumns) * kCellSize;
+      DialogueSprite sprite;
+      sprite.textureSlot = kFontSlotLow;
+      sprite.u = (index % kColumns) * kCellSize;
+      // FUN_00238608:44-47, the same low/high sheet split FUN_00238a08 makes.
+      if (character > 0x98)
+      {
+        sprite.textureSlot = kFontSlotHigh;
+        const int highIndex = character - 0x99;
+        sprite.u = (highIndex % kColumns) * kCellSize;
+        v = (highIndex / kColumns) * kCellSize;
+      }
+      sprite.v = v;
+
+      const int width = font.FUN_00238e50_width(character);
+      sprite.sourceWidth = width;
+      sprite.sourceHeight = kCellSize;
+      sprite.width = (width * horizontalScale) / 100;
+      sprite.height = drawnHeight;
+      sprite.x = screenX(penX);
+      sprite.y = screenY(y);
+      sprite.color = color;
+
+      penX += sprite.width;
+      sprites.push_back(sprite);
+    }
+    return sprites;
+  }
+
 } // namespace orphen::ported::text

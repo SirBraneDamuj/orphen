@@ -9,6 +9,7 @@
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_hit_test.h"
 #include "ported/entity/player_bandana.h"
+#include "ported/resource/character_stats.h"
 #include "ported/resource/hit_parameter_table.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/render/original_light_table.h"
@@ -170,6 +171,10 @@ namespace orphen::ported::entity
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
 
+    // uGpffffb052. Bit 0 is "a battle is running"; type 0x8A's wrapper reads
+    // bit 3, the broadcast that sends every enemy to its stand-down state.
+    std::uint16_t sGpffffb052_battleFlags = 0;
+
     // What an effect entity needs to know about the battle member it belongs
     // to: the control block's two action bytes (DAT_0031d7be / DAT_0031d7bf),
     // the party record's character class (+0x00) and the member's current
@@ -203,6 +208,47 @@ namespace orphen::ported::entity
     // projectile (FUN_00267da0(dest, src, 4)), which is the port's packed
     // HitParameters. This is that read. Returns 0 when there is no battle.
     std::function<std::uint32_t(std::uint32_t address)> DAT_0031d3c8_battleTableWord;
+
+    // The other half of the battle module: the *actor* record an enemy is bound
+    // to. DAT_0031d7b0_battleMember above is the party side; this is
+    // DAT_00354EB4, the encounter's own table, and it is what every enemy
+    // behaviour talks to.
+    //
+    // The four fields here are all of it that an enemy reads or writes.
+    // FUN_0027f4b0 and FUN_0028ab28 take the pending byte, dispatch on it and
+    // clear it; the idle default writes the current byte; FUN_0023a958 reads
+    // the target; and the flag word's bit 0 is the "still turning" latch that
+    // stops the idle default re-aiming every frame.
+    // The two values of +0x198 that are not a record. The original spells the
+    // first as a null pointer -- FUN_0027f4b0 returns 0 on it and the enemy
+    // does nothing at all -- and the second as DAT_0031D178, a scratch block
+    // FUN_0023f8b8 hands back when no group names the entity's id.
+    static constexpr std::int32_t kNoBattleActorRecord = -1;
+    static constexpr std::int32_t kDAT_0031d178_scratchRecord = -2;
+
+    struct BattleActorView
+    {
+      std::uint8_t pendingAction0e = 0;  // record +0x0E, entity +0x198 + 2
+      std::uint8_t currentAction0f = 0;  // record +0x0F, entity +0x198 + 3
+      std::int16_t target2c = -1;        // record +0x2C, entity +0x198 + 0x20
+      std::uint32_t flags38 = 0;         // record +0x38, entity +0x198 + 0x2C
+    };
+    // `record` is the entity's +0x198 as the port spells it: an offset into the
+    // encounter blob, or one of the two sentinels below. Both are false/no-ops
+    // outside a battle, which leaves an enemy in whatever state it was last
+    // given.
+    std::function<bool(std::int32_t record, BattleActorView &out)> DAT_00354eb4_battleActor;
+    std::function<void(std::int32_t record, const BattleActorView &in)> DAT_00354eb4_setBattleActor;
+
+    // FUN_0023f8b8, from the caller the original actually uses: the enemy's own
+    // state 0. Returns the record offset, or kDAT_0031d178_scratchRecord.
+    std::function<std::int32_t(std::size_t slot)> FUN_0023f8b8_bind_battle_actor;
+
+    // uGpffffadf8, SCR.BIN 0xBF. An enemy's state 0 opens with
+    // FUN_0025bae8(0, type, r) -- group 0 at `type - 0x7C` -- and inlines
+    // FUN_0023a518 over the answer, which is where its radius, height, hit
+    // points, attack and defence come from.
+    const orphen::ported::resource::CharacterStats *uGpffffadf8_stats = nullptr;
 
     // DAT_00355588, the shared hit effect's one-frame request word. FUN_002f1380
     // -- the setter every damage path calls to place the effect -- raises bit 0
@@ -287,6 +333,13 @@ namespace orphen::ported::entity
     // small wrappers -- FUN_002d59e0 is the chest's -- so this is the shape
     // they all have: a cue number and the entity to place it at.
     std::function<void(std::uint16_t cue, const OriginalEntity &at)> FUN_00267d38_playSound;
+
+    // FUN_002057c8(cue, left, right), the layer under that one. The target
+    // cursor is the only behaviour that skips FUN_00267d38 and keys a cue on
+    // itself, because its selection chime is a flat UI sound at 0x80/0x80 --
+    // it must not be panned by where the enemy happens to stand.
+    std::function<void(std::uint16_t cue, int volumeLeft, int volumeRight)>
+        FUN_002057c8_keyOn;
 
     // DAT_003555b4, the global frame counter. Type 0x62's wing cue fires when
     // it divides by the entity's own period, so the sound is phase-locked to
@@ -412,6 +465,9 @@ namespace orphen::ported::entity
   // is the unselected drift, per tick of DAT_003555BC.
   inline constexpr float kDAT_003547a4_selectedCursorAngle = 0.785398006f;
   inline constexpr float kDAT_003547a8_cursorSpinRate = 0.000226900003f;
+  // FUN_002D73E8:248's literal. The chime a target cursor keys on the frame it
+  // becomes the selected one.
+  inline constexpr std::uint16_t kDAT_002d73e8_selectCue = 0xC9;
 
   inline constexpr float kAngleDeadZone = 0.00872664f;
 

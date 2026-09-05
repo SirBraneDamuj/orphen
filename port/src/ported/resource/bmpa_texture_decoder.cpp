@@ -32,6 +32,9 @@ namespace orphen::ported::resource
 
     BmpaTexture texture;
     texture.rgbaPixels.resize(kImageBytes * 4);
+    texture.indices.resize(kImageBytes);
+    texture.palette.assign(bmpaBytes.begin() + kPaletteOffset,
+                           bmpaBytes.begin() + kPaletteOffset + kPaletteBytes);
 
     for (std::size_t y = 0; y < BmpaTexture::kHeight; ++y)
     {
@@ -41,6 +44,7 @@ namespace orphen::ported::resource
         const std::uint8_t paletteIndex = bmpaBytes[kIndexOffset + sourceY * BmpaTexture::kWidth + x];
         const std::size_t paletteOffset = kPaletteOffset + static_cast<std::size_t>(paletteIndex) * 4;
         const std::size_t pixelOffset = (y * BmpaTexture::kWidth + x) * 4;
+        texture.indices[y * BmpaTexture::kWidth + x] = paletteIndex;
 
         // PS2 palette alpha runs 0..0x80, where 0x80 is fully opaque -- not
         // 0..0xFF. Copying it verbatim into an 8-bit GL alpha drew every opaque
@@ -61,6 +65,32 @@ namespace orphen::ported::resource
     }
 
     return texture;
+  }
+
+  // The 4-bit read of the same sheet. `indices` is already stored in GS v order,
+  // so only the palette lookup changes: mask the index to its low nibble and
+  // offset into the palette by the CSA window.
+  std::vector<std::uint8_t> BmpaTexture::clutBankPixels(int bank) const
+  {
+    if (indices.empty() || palette.size() < kPaletteBytes || bank < 0 || bank >= kClutBankCount)
+    {
+      return {};
+    }
+
+    std::vector<std::uint8_t> pixels(indices.size() * 4);
+    const std::size_t bankBase = static_cast<std::size_t>(bank) * kClutBankEntries;
+    for (std::size_t at = 0; at < indices.size(); ++at)
+    {
+      const std::size_t entry = (bankBase + (indices[at] & 0x0Fu)) * 4;
+      // Same 0..0x80 alpha the 8-bit path expands; see the note above.
+      const std::uint8_t rawAlpha = palette[entry + 3];
+      pixels[at * 4] = palette[entry + 2];
+      pixels[at * 4 + 1] = palette[entry + 1];
+      pixels[at * 4 + 2] = palette[entry];
+      pixels[at * 4 + 3] =
+          rawAlpha >= 0x80 ? 0xFF : static_cast<std::uint8_t>(rawAlpha * 2);
+    }
+    return pixels;
   }
 
 } // namespace orphen::ported::resource

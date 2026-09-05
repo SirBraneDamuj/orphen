@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "ported/battle/battle_command_input.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
 
@@ -842,6 +843,11 @@ namespace orphen::ported::battle
                                                 const BattleEncounter &encounter,
                                                 std::uint32_t frameTicks)
   {
+    // FUN_00233818 runs from inside this function, so its output is rebuilt
+    // here and stays empty on every frame the readout is down.
+    targetDisplaySprites_.clear();
+    targetDisplayQuads_.clear();
+
     if (environment.pool == nullptr)
     {
       return;
@@ -912,10 +918,66 @@ namespace orphen::ported::battle
     {
       return;
     }
+    // :156-176. The readout is built once, on the frame the timer is armed,
+    // and drawn every frame until it runs out.
+    if (DAT_00354e96_ == kTargetDisplayTicks)
+    {
+      FUN_0023c340_build_target_display(environment);
+    }
+    FUN_00233818_draw(DAT_005715b8_targetDisplay_, targetDisplayEnvironment(environment),
+                      targetDisplaySprites_, targetDisplayQuads_);
+
     DAT_00354e96_ = FUN_00248e58_step_timer(DAT_00354e96_, static_cast<std::uint16_t>(frameTicks));
     FUN_002de5b8_freeze(*environment.pool);
 
     FUN_0023c340_frame_target(environment, frameTicks);
+  }
+
+  TargetDisplayEnvironment BattleParty::targetDisplayEnvironment(const Environment &environment) const
+  {
+    TargetDisplayEnvironment display;
+    display.pool = environment.pool;
+    display.stats = environment.stats;
+    display.objectStats = environment.objectStats;
+    display.DAT_00355208_objectGroup = environment.DAT_00355208_objectGroup;
+    display.font = environment.font;
+    return display;
+  }
+
+  // FUN_0023C340:159-175, the two type fixups either side of FUN_002334E8.
+  //
+  // Neither is cosmetic. A 0x192 is the target cursor itself, which has no row
+  // of its own: it is stamped 0x86, or 0x87 when its +0x94 says so, only for
+  // the length of the lookup. And a party character -- types 0x6C..0x7A -- has
+  // its hit points forced to 1 while the caption is formatted, so an ally's
+  // readout always says HP:  1 rather than its real total.
+  void BattleParty::FUN_0023c340_build_target_display(const Environment &environment)
+  {
+    const auto slot = static_cast<std::size_t>(DAT_00354e90_);
+    if (environment.pool == nullptr || slot >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return;
+    }
+    auto &entity = environment.pool->slot(slot);
+    const TargetDisplayEnvironment display = targetDisplayEnvironment(environment);
+
+    if (entity.typeId00 == 0x192)
+    {
+      const std::int16_t saved = entity.typeId00;
+      entity.typeId00 = entity.spawnParam94 == 1 ? 0x87 : 0x86;
+      FUN_002334e8_build(DAT_005715b8_targetDisplay_, display, slot);
+      entity.typeId00 = saved;
+      return;
+    }
+    if (static_cast<std::uint16_t>(entity.typeId00 - 0x6C) < 0x0F)
+    {
+      const std::uint16_t saved = entity.staggerTimer12a;
+      entity.staggerTimer12a = 1;
+      FUN_002334e8_build(DAT_005715b8_targetDisplay_, display, slot);
+      entity.staggerTimer12a = saved;
+      return;
+    }
+    FUN_002334e8_build(DAT_005715b8_targetDisplay_, display, slot);
   }
 
   // :48-140 and 0x0023C3E4-0x0023C5C4. Arm one of the encounter's camera

@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace orphen::ported::resource
@@ -52,7 +53,11 @@ namespace orphen::ported::resource
   class CharacterStats
   {
   public:
-    bool load(const std::filesystem::path &discRoot);
+    // `scrResource` is the SCR.BIN id the blob comes from. 0xBF is uGpffffadf8,
+    // the character and enemy table; FUN_00228e28 loads 0xBD the same way into
+    // uGpffffadf4, and FUN_002334e8 reads that one for the object type ranges
+    // above 0x272.
+    bool load(const std::filesystem::path &discRoot, std::uint32_t scrResource = 0xBF);
     bool loaded() const { return !blob_.empty(); }
 
     // FUN_0025bae8(group, id, dest) for a non-zero group: index group `group`
@@ -62,6 +67,28 @@ namespace orphen::ported::resource
 
     // FUN_00229688 with only its destination set.
     std::optional<StatRecord> FUN_00229688_record(std::size_t group, std::int32_t index) const;
+
+    // FUN_0025BA98(type, dest), the *object* table's three-way split. Only
+    // meaningful on the 0xBD blob (uGpffffadf4):
+    //
+    //   0x272..0x372  group iGpffffb298 (DAT_00355208, the map-prop bank),
+    //                 indexed by `type - 0x272`
+    //   0x373..0x473  group 15, indexed by `type - 0x373`
+    //   0x474 and up  group 16, indexed by `type - 0x474`
+    //
+    // FUN_002334E8 splits the same three ways, which is why a streamed prop and
+    // the target readout agree about what a placement is.
+    std::optional<StatRecord> FUN_0025ba98_record(int DAT_00355208_mapPropBank,
+                                                  std::int16_t typeId) const;
+
+    // FUN_00229688's param_5: the row's name. The group's second dword is a
+    // table of u32 offsets, each pointing at a u16 that in turn gives the
+    // string's offset in the blob -- the same two-step the item database uses.
+    std::string FUN_00229688_name(std::size_t group, std::int32_t index) const;
+
+    // The count beside a group's offset in the index table. FUN_002334e8 walks
+    // group 2 with it looking for a matching type id.
+    std::uint32_t groupCount(std::size_t group) const;
 
   private:
     std::vector<std::uint8_t> blob_;

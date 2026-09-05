@@ -491,6 +491,11 @@ namespace orphen::port
     // -- the damage paths that call FUN_002f1380 are not ported -- so it stays 0
     // and the effect stays hidden, which is what the original does between hits.
     std::uint16_t DAT_00355588_hitEffectRequest_ = 0;
+    // DAT_0031D178. FUN_0023f8b8 hands this back in place of an actor record
+    // when no encounter group names the entity's id, with its pending-action
+    // byte poisoned to 0xFF; every unbound enemy shares the one block, exactly
+    // as they do on hardware.
+    orphen::ported::entity::ActorEnvironment::BattleActorView DAT_0031d178_unboundActor_;
     // Frames DAT_003555d0 has been up, and times the embedded-corner push-out
     // has produced a request. Both go in the 'G' snapshot: they separate "the
     // gate never opened" from "it opened and found nothing embedded".
@@ -621,10 +626,18 @@ namespace orphen::port
     void sampleBattleTrace(std::uint32_t heldPad);
     orphen::ported::battle::BattleTrace battleTrace_;
     void printBattleReport() const;
+    void printTargetDisplayReport() const;
     void printEncounterReport() const;
     // uGpffffadf8, the character stat table. DAT_00343688's seven party
     // records come out of it; see FUN_002294d0_load_party_records.
     orphen::ported::resource::CharacterStats characterStats_;
+    // uGpffffadf4, SCR.BIN 0xBD. FUN_00228e28 loads it beside 0xBF; the only
+    // reader ported so far is FUN_002334E8's object type ranges.
+    orphen::ported::resource::CharacterStats DAT_00354d64_objectStats_;
+    // DAT_0058B970: the per-type elemental damage rows FUN_002F0608 fills as it
+    // retypes a tagged placement. Lives here because it is keyed by type id,
+    // not by entity -- two objects of one type share a row.
+    orphen::ported::entity::ElementDamageTable DAT_0058b970_elementDamage_;
     // uGpffffadfc, SCR.BIN resource 0xBE: the attack parameter table.
     orphen::ported::resource::HitParameterTable DAT_00354d6c_hitParameters_;
     // DAT_003151c8, the slot list the last hit test filled.

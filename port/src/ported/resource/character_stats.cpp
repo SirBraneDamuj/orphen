@@ -7,8 +7,6 @@ namespace orphen::ported::resource
 {
   namespace
   {
-    // FUN_00223268(1, 0xBF, ...): archive index 1 is SCR.BIN.
-    constexpr std::uint32_t kScrCharacterStatsResource = 0xBF;
     // FUN_00228e28:149 relocates dword 8 alone -- `*(uGpffffadf8 + 0x20) +=
     // uGpffffadf8` -- which is FUN_00229688's `param_1 + 0x20`.
     constexpr std::size_t kGroupTableDword = 8;
@@ -38,7 +36,7 @@ namespace orphen::ported::resource
     }
   } // namespace
 
-  bool CharacterStats::load(const std::filesystem::path &discRoot)
+  bool CharacterStats::load(const std::filesystem::path &discRoot, std::uint32_t scrResource)
   {
     blob_.clear();
     groupTableOffset_ = 0;
@@ -48,7 +46,8 @@ namespace orphen::ported::resource
     {
       return false;
     }
-    blob_ = scr.decode(kScrCharacterStatsResource);
+    // FUN_00223268(1, id, ...): archive index 1 is SCR.BIN.
+    blob_ = scr.decode(scrResource);
     if (blob_.size() < 0x40)
     {
       blob_.clear();
@@ -115,6 +114,83 @@ namespace orphen::ported::resource
         static_cast<float>(static_cast<std::int32_t>(u32At(blob_, at + 0x14))) * kMilliScale;
     std::memcpy(record.tail18.data(), blob_.data() + at + 0x18, record.tail18.size());
     return record;
+  }
+
+  std::optional<StatRecord> CharacterStats::FUN_0025ba98_record(int DAT_00355208_mapPropBank,
+                                                                std::int16_t typeId) const
+  {
+    // The original works in shorts throughout, so a type below 0x272 lands on a
+    // negative index -- which FUN_00229688 reads without complaint. Reproduced
+    // rather than rejected, exactly as FUN_00229688_record already does.
+    std::size_t group = 0;
+    std::int32_t index = 0;
+    if (typeId < 0x474)
+    {
+      if (typeId > 0x372)
+      {
+        group = 15;
+        index = static_cast<std::int16_t>(typeId - 0x373);
+      }
+      else
+      {
+        if (DAT_00355208_mapPropBank < 0)
+        {
+          return std::nullopt;
+        }
+        group = static_cast<std::size_t>(DAT_00355208_mapPropBank);
+        index = static_cast<std::int16_t>(typeId - 0x272);
+      }
+    }
+    else
+    {
+      group = 16;
+      index = static_cast<std::int16_t>(typeId - 0x474);
+    }
+    return FUN_00229688_record(group, index);
+  }
+
+  std::uint32_t CharacterStats::groupCount(std::size_t group) const
+  {
+    if (blob_.empty() || groupTableOffset_ == 0)
+    {
+      return 0;
+    }
+    return u32At(blob_, groupTableOffset_ + group * 8 + 4);
+  }
+
+  std::string CharacterStats::FUN_00229688_name(std::size_t group, std::int32_t index) const
+  {
+    if (blob_.empty() || groupTableOffset_ == 0 || index < 0)
+    {
+      return {};
+    }
+    const std::uint32_t triple = u32At(blob_, groupTableOffset_ + group * 8);
+    if (triple == 0 || triple + 12 > blob_.size())
+    {
+      return {};
+    }
+    const std::uint32_t names = u32At(blob_, triple + 4);
+    if (names == 0)
+    {
+      return {};
+    }
+    const std::uint32_t entry = u32At(blob_, names + static_cast<std::uint32_t>(index) * 4);
+    if (entry == 0 || entry + 2 > blob_.size())
+    {
+      return {};
+    }
+    std::uint16_t stringOffset = 0;
+    std::memcpy(&stringOffset, blob_.data() + entry, sizeof(stringOffset));
+    if (stringOffset == 0 || stringOffset >= blob_.size())
+    {
+      return {};
+    }
+    std::string text;
+    for (std::size_t at = stringOffset; at < blob_.size() && blob_[at] != 0; ++at)
+    {
+      text.push_back(static_cast<char>(blob_[at]));
+    }
+    return text;
   }
 
   std::optional<StatRecord> CharacterStats::FUN_0025bae8_record(std::size_t group,

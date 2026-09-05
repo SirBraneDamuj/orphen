@@ -10,6 +10,7 @@
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
+#include "ported/entity/original_element_object.h"
 #include "ported/resource/character_stats.h"
 #include "ported/script/script_trace.h"
 
@@ -436,6 +437,16 @@ namespace orphen::ported::script
     // points -- which is the only thing that gives an enemy a body.
     const orphen::ported::resource::CharacterStats *uGpffffadf8_stats = nullptr;
 
+    // uGpffffadf4 -- SCR.BIN 0xBD, the *object* table. FUN_0025E7C0 reaches it
+    // through FUN_0025BA98 for every placement it spawns, and FUN_002F0608
+    // reads the row's kind byte off it.
+    const orphen::ported::resource::CharacterStats *uGpffffadf4_objectStats = nullptr;
+    // iGpffffb298 (DAT_00355208), which picks the group for a type below 0x373.
+    int DAT_00355208_mapPropBank = -1;
+    // DAT_0058B970, the per-type damage rows FUN_002F0608 fills. Null in a
+    // harness with no element objects.
+    orphen::ported::entity::ElementDamageTable *DAT_0058b970_elementDamage = nullptr;
+
     // FUN_0023f8b8, reached from the enemy's own state 0. See
     // ported/battle/battle_encounter.h: this is what binds a spawned enemy into
     // the battle actor table, and therefore what makes it targetable.
@@ -800,6 +811,10 @@ namespace orphen::ported::script
     void FUN_0025e628_process_resource_ids(); // 0x4D
     void FUN_0025e730_push_lookup_entry();    // 0x4E
     void FUN_0025e7c0_process_placements();  // 0x4F
+    // FUN_0025E7C0's tail: the FUN_0025BA98 row stamped onto the entity.
+    void FUN_0025e7c0_apply_object_record(
+        orphen::ported::entity::OriginalEntity &entity,
+        const orphen::ported::resource::StatRecord &record);
     void FUN_002618c0_set_global_rgb();      // 0x96
     void FUN_00261910_set_vector_with_rgb(); // 0x97
     void FUN_00261b80_arm_fade_track();      // 0x9A

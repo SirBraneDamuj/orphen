@@ -22,6 +22,9 @@ namespace orphen::ported::script
   {
     // fGpffff8c2c and fGpffff8c30 in the retail executable: the placement
     // record's signed angle byte becomes angle * (pi/4) + (pi/2).
+    // DAT_00352B98. The same 0.08 FUN_00229980 divides the row's +0x14 by on
+    // its way to descriptor +0x02, and the unit FUN_0020F510 scales +0x133 by.
+    constexpr float kDAT_00352b98_depthBiasUnit = 0.07999999821186066f;
     constexpr float kPlacementAngleStep = 0.785398006439209f;
     constexpr float kPlacementAngleBias = 1.570796012878418f;
 
@@ -339,9 +342,11 @@ namespace orphen::ported::script
     if (environment_.terrainHeight)
     {
       // The record's own z is where this thing was authored to stand, so it is
-      // the band to look in. **FUN_0025e7c0 does not sample terrain at all** --
+      // the band to look in. **FUN_0025e7c0 does not sample terrain here** --
       // it writes the record's z into +0x28 and +0x4C and stops -- so this only
-      // exists to tell the report whether the placement landed on anything.
+      // exists to tell the report whether the placement landed on anything. Its
+      // tail does sample, but only for a row whose +0x00 carries bit 0x8000;
+      // see FUN_0025e7c0_apply_object_record.
       //
       // It used to write the sample into +0x4C as well, contradicting the line
       // above. s01_e012's hanging lanterns are what showed it: 25 of them at
@@ -363,6 +368,83 @@ namespace orphen::ported::script
     spawnRecord.x = entity.positionX20;
     spawnRecord.y = entity.positionZ24;
     spawnRecord.z = entity.positionY28;
+  }
+
+  // FUN_0025E7C0:81-119, the tail every placement it spawns runs through. The
+  // row is FUN_0025BA98's -- SCR.BIN 0xBD, the same blob FUN_00229980 already
+  // synthesised this entity's descriptor from -- so the body measurements below
+  // are a second write of numbers the entity already has. The rest is new: hit
+  // points, attack, defence and five flag bits that live nowhere else.
+  //
+  // Only `FUN_002F0608` skips it, by returning 1.
+  void SceneCommandInterpreter::FUN_0025e7c0_apply_object_record(
+      orphen::ported::entity::OriginalEntity &entity,
+      const orphen::ported::resource::StatRecord &record)
+  {
+    // :83-90. Body and depth bias. FUN_00229980's synthesis reads +0x0C, +0x10
+    // and +0x14 out of this same row, so these agree by construction.
+    entity.radius54 = record.radius0c;
+    // BISECT
+    entity.height58 = record.height10;
+    entity.hitVolumeHeight120 = record.height10;
+    entity.depthBias133 =
+        static_cast<std::int8_t>(static_cast<int>(record.float14 / kDAT_00352b98_depthBiasUnit));
+
+    // :91-99. The four stat bytes, each sign-extended into a halfword the way
+    // the original's `(short)cStack_xx` does. +0x06 lands in **both** the live
+    // hit points and the maximum, so a prop's HP bar is full the moment it
+    // spawns.
+    const auto byte06 = static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte06));
+    entity.staggerTimer12a = static_cast<std::uint16_t>(byte06);
+    entity.maxHitPoints128 = static_cast<std::uint16_t>(byte06);
+    entity.attackPower12c =
+        static_cast<std::uint16_t>(static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte07)));
+    entity.defence12e =
+        static_cast<std::uint16_t>(static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte08)));
+    entity.objectByte132 = record.byte09;
+    if (record.byte09 != 0)
+    {
+      entity.descriptorFlags02 = static_cast<std::uint16_t>(entity.descriptorFlags02 | 0x100u);
+    }
+
+    // :100-118. Four bits of the row's own +0x00. 0x4000 and 0x8000 are the two
+    // FUN_00229980 already reads; 0x2000 and 0x1000 are read only here.
+    const auto flags = static_cast<std::uint16_t>(record.halfword00);
+    if ((flags & 0x2000u) != 0)
+    {
+      entity.descriptorFlags02 = static_cast<std::uint16_t>(entity.descriptorFlags02 | 0x10u);
+    }
+    if ((flags & 0x4000u) == 0)
+    {
+      entity.previousPoseColumnAe = entity.animationA0;
+    }
+    else
+    {
+      entity.flags06 = 0;
+    }
+    if ((flags & 0x8000u) != 0)
+    {
+      entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7u);
+      // FUN_00227798(+0x20, +0x24, +0x28): the body-less point query, staged
+      // with the same z for feet and head. **This is the one placement that
+      // does sample terrain** -- every other prop keeps the record's authored
+      // z, which is what the comment in placeFromRecord is about. A miss leaves
+      // +0x4C alone; the original's return in that case is not modelled, and no
+      // scene in the port reaches this branch yet.
+      if (environment_.terrainHeight)
+      {
+        const auto height = environment_.terrainHeight(entity.positionX20, entity.positionZ24,
+                                                       entity.positionY28, entity.positionY28);
+        if (height.has_value())
+        {
+          entity.groundHeight4c = *height;
+        }
+      }
+    }
+    if ((flags & 0x1000u) != 0)
+    {
+      entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 1u);
+    }
   }
 
   // 0x4F (FUN_0025e7c0): walk the map's object placement table and instantiate
@@ -422,6 +504,70 @@ namespace orphen::ported::script
       }
       currentEntity_ = slot;
       placeFromRecord(slot, recordIndex, record, spawnRecord);
+
+      // :62-79. **A placement whose +0x0F byte is negative is a tagged object.**
+      // The byte negated is the entity's +0x95, which is the battle actor-record
+      // id it answers to, and the entity is spawned hidden (+0x08 bit 0) with
+      // +0x02 bit 0x4000 and +0x04 bit 0 raised.
+      //
+      // s01_e012's seven `group 0 id 34` markers carry 0xFF..0xF9, so they take
+      // +0x95 = 1..7 and stay invisible: they are the party's standing marks,
+      // not props. The EE dump agrees exactly -- its slots 20 and 22 read
+      // +0x02 = 0x4080, +0x04 = 0x00D9, +0x08 = 0x0011 and +0x95 = 3 and 5,
+      // against +0x02 = 0x0080, +0x04 = 0x00D8, +0x95 = 0 on every untagged
+      // prop beside them.
+      auto &entity = environment_.entityPool->slot(slot);
+      const auto tag = static_cast<std::int8_t>(record.param);
+      if (tag < 0)
+      {
+        entity.byte95 = static_cast<std::uint8_t>(-tag);
+        entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 1u);
+        entity.descriptorFlags02 = static_cast<std::uint16_t>(entity.descriptorFlags02 | 0x4000u);
+
+        // :70-77. In a section-14 scene the tag is live: one hit point, bind
+        // into the actor table under that id, and unhide. This is the whole
+        // reason s14_e012's Darkness Element can be locked onto -- placement
+        // #104 is 0xB0, so it answers to record id 0x50, the one entry in the
+        // encounter table that no enemy claims.
+        if (environment_.DAT_003555d3_groupEScene)
+        {
+          entity.staggerTimer12a = 1;
+          if (environment_.FUN_0023f8b8_bind_battle_actor)
+          {
+            environment_.FUN_0023f8b8_bind_battle_actor(slot);
+          }
+          entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 & 0xFFFEu);
+
+          // FUN_002F0608 retypes it into the 0x6C..0x74 element band and
+          // returns 1, which is what skips the tail below. See
+          // original_element_object.h.
+          if (environment_.uGpffffadf4_objectStats != nullptr &&
+              environment_.DAT_0058b970_elementDamage != nullptr)
+          {
+            const auto row = environment_.uGpffffadf4_objectStats->FUN_0025ba98_record(
+                environment_.DAT_00355208_mapPropBank, entity.typeId00);
+            if (row.has_value() &&
+                orphen::ported::entity::FUN_002f0608_element_object(
+                    entity, *row, *environment_.DAT_0058b970_elementDamage))
+            {
+              spawnRecord.typeId = entity.typeId00;
+              continue;
+            }
+          }
+        }
+      }
+
+      // :81-119. The shared tail. FUN_002F0608 is the only way past it.
+      if (environment_.uGpffffadf4_objectStats != nullptr)
+      {
+        const auto row = environment_.uGpffffadf4_objectStats->FUN_0025ba98_record(
+            environment_.DAT_00355208_mapPropBank, entity.typeId00);
+        if (row.has_value())
+        {
+          FUN_0025e7c0_apply_object_record(entity, *row);
+        }
+      }
     }
   }
 
@@ -2145,9 +2291,23 @@ namespace orphen::ported::script
       orphen::ported::entity::OriginalEntity &entity,
       const orphen::ported::resource::StatRecord &record)
   {
+    // All seven writes. The hit volume at +0x11C/+0x120 is a second copy of the
+    // body measurements, and +0x128/+0x12C/+0x12E are the max, the attack and
+    // the defence -- every one of them sign-extended from a byte.
+    // All seven writes. The hit volume at +0x11C/+0x120 is a second copy of the
+    // body measurements, and +0x128/+0x12C/+0x12E are the max, the attack and
+    // the defence -- every one of them sign-extended from a byte.
     entity.radius54 = record.radius0c;
+    entity.hitVolumeRadius11c = record.radius0c;
     entity.height58 = record.height10;
-    entity.staggerTimer12a = static_cast<std::uint16_t>(static_cast<std::int8_t>(record.byte06));
+    entity.hitVolumeHeight120 = record.height10;
+    const auto hitPoints = static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte06));
+    entity.staggerTimer12a = static_cast<std::uint16_t>(hitPoints);
+    entity.maxHitPoints128 = static_cast<std::uint16_t>(hitPoints);
+    entity.attackPower12c = static_cast<std::uint16_t>(
+        static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte07)));
+    entity.defence12e = static_cast<std::uint16_t>(
+        static_cast<std::int16_t>(static_cast<std::int8_t>(record.byte08)));
   }
 
   // 0xAC (FUN_002631f0): bind an entity into a party slot, or clear one.
@@ -3281,8 +3441,12 @@ namespace orphen::ported::script
         // `type - 0x7C`, and inlines FUN_0023a518 over the result. That, not
         // the group lookup above, is where an enemy's radius, height and hit
         // points come from: group 2 holds only ids 0x62..0x79 and knows nothing
-        // about a 0x8A. The port has no enemy state machines, so it runs the
-        // same load here, for the same reason the bind below happens here.
+        // about a 0x8A.
+        //
+        // Types 0x80 and 0x8A now do this themselves, in
+        // ported/entity/original_battle_enemy.cpp. Every other enemy type still
+        // has no state machine, so the load stays here for them; running it
+        // twice writes the same eight fields twice.
         if (group == 2 && environment_.DAT_003555d3_groupEScene &&
             environment_.uGpffffadf8_stats != nullptr)
         {
@@ -3318,11 +3482,12 @@ namespace orphen::ported::script
           }
 
           // The original defers this to the enemy's own state 0 -- FUN_0028ae10
-          // for type 0x8A, FUN_0027f978 for type 0x80, thirty of them in all,
-          // each calling FUN_0023f8b8 immediately after the stat stamp above.
-          // The port has none of those state machines yet, so the bind happens
-          // at the spawn instead: same frame, same observable result, and the
-          // record stops being a name with nothing behind it.
+          // for type 0x8A, FUN_0027f978 for type 0x80, one per enemy type, each
+          // calling FUN_0023f8b8 immediately after the stat stamp above. Those
+          // two now do; the rest have no state machine, so the bind stays here
+          // for them: same frame, same observable result, and the record stops
+          // being a name with nothing behind it. A ported state 0 binds again
+          // and takes the record's offset for its own +0x198.
           if (environment_.FUN_0023f8b8_bind_battle_actor)
           {
             environment_.FUN_0023f8b8_bind_battle_actor(slot);

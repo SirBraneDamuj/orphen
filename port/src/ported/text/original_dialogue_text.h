@@ -157,4 +157,33 @@ namespace orphen::ported::text
   // FUN_002391d0 plus FUN_00237fc0's animation step.
   DialogueSprite promptSprite(int originX, int originY, int penX, int animationTicks);
 
+  // FUN_00238e68: the width one string occupies, in the same entry units its x
+  // is measured in. A character with the top bit set counts a flat 0x20 rather
+  // than measuring -- the original tests `-1 < cVar1` on a *signed* char.
+  int FUN_00238e68_measure(std::string_view text, const DialogueFont &font, int cellWidth);
+
+  // FUN_00238608: a whole caption in one call, the menu counterpart of
+  // FUN_00238a08. It differs from the dialogue path in three ways worth keeping
+  // straight:
+  //
+  //  * the cell size is a parameter, not the fixed 20x22; the horizontal scale
+  //    is `(cellWidth * 100) / 22` percent and the vertical is the same for
+  //    cellHeight, applied to the 22-texel cell.
+  //  * the glyph is drawn at its **measured** width scaled by that percentage,
+  //    and the pen advances by exactly what was drawn -- there is no separate
+  //    90% advance.
+  //  * `x` and `y` are the caller's entry coordinates as usual, but nothing is
+  //    added to them: FUN_00238a08's +8 origin bias is the window's, not the
+  //    text's.
+  //
+  // Characters at or above 0xFC are the button-icon escapes FUN_00231da0
+  // resolves; none of the battle captions use one, and they are skipped here.
+  std::vector<DialogueSprite> FUN_00238608_layout(int x,
+                                                  int y,
+                                                  std::string_view text,
+                                                  std::uint32_t color,
+                                                  int cellWidth,
+                                                  int cellHeight,
+                                                  const DialogueFont &font);
+
 } // namespace orphen::ported::text
