@@ -3255,9 +3255,20 @@ namespace orphen::harness
         {
           continue;
         }
-        if (slotTextureIds_[slot] != boundTexture)
+        // A slot at or above 0x18 is a PSMT4 page and the record names the CSA
+        // window; the bank view is a separate GL texture of the same size. The
+        // HUD path has done this since the pentagon; the sprite path was still
+        // reading those sheets as 8-bit pages.
+        const unsigned int wanted = quad.clutBank >= 0
+                                        ? clutBankTexture(quad.textureSlot, quad.clutBank)
+                                        : slotTextureIds_[slot];
+        if (wanted == 0)
         {
-          boundTexture = slotTextureIds_[slot];
+          continue;
+        }
+        if (wanted != boundTexture)
+        {
+          boundTexture = wanted;
           glBindTexture(GL_TEXTURE_2D, boundTexture);
         }
       }

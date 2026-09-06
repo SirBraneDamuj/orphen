@@ -100,7 +100,12 @@ namespace orphen::ported::render
     // computed, so a strip can order its own layers against each other. It does
     // not move the sprite on screen.
     std::int8_t depthBias = 0;
-    std::uint8_t byte09 = 0; // +0x09, the mip bias when the texture slot is > 0x17
+    // +0x09. Its **high nibble is the CLUT bank**, for a texture slot at or
+    // above 0x18 -- FUN_0020f510:0x0020FBA4-0x0020FBB8 tests the slot against
+    // 0x18 and writes `(byte09 >> 4) + 1` into the packet's bank field, the
+    // same `bank + 1` encoding FUN_0022EB00 uses for the pentagon, with zero
+    // meaning "8-bit page". Below 0x18 the byte is not read at all.
+    std::uint8_t byte09 = 0;
     float scale = 1.0f;      // +0x0C
   };
 
@@ -134,6 +139,14 @@ namespace orphen::ported::render
     float cornerZ[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float cornerU[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float cornerV[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // -1 for an ordinary 8-bit page; 0..15 selects a 16-entry CLUT window and
+    // reads the sheet's low nibbles instead, the same way HudQuad's does. A
+    // slot at or above 0x18 is a PSMT4 page on the GS, so this is not optional
+    // decoration: one sheet holds the same sprite in sixteen palettes, and the
+    // bank is the only thing that makes the enemy's health bar red where the
+    // player's is blue.
+    int clutBank = -1;
 
     // Texels, not normalised -- the caller divides by the bound texture's size
     // the way the dialogue sprites do.

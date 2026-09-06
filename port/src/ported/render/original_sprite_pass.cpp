@@ -1,6 +1,7 @@
 #include "ported/render/original_sprite_pass.h"
 
 #include "ported/render/original_view_projection.h"
+#include "ported/resource/bmpa_texture_decoder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -403,6 +404,13 @@ namespace orphen::ported::render
       quad.colour[3] =
           quad.blendMode == 0 ? 1.0f : static_cast<float>(record.alpha2 >> 1) / 128.0f;
       quad.textureSlot = inputs.textureSlot;
+      // 0x0020FB98-0x0020FBC0: only a slot at or above 0x18 carries a bank, and
+      // it is the record's own high nibble, so two records in one strip can
+      // draw the same texels in two palettes.
+      quad.clutBank =
+          inputs.textureSlot >= orphen::ported::resource::kFirstFourBitTextureSlot
+              ? static_cast<int>(record.byte09 >> 4)
+              : -1;
 
       // FUN_0020f510:0x00210170. The display list is 4096 depth buckets plus one
       // above them; gsZ rises as the sprite comes nearer, so ascending bucket is

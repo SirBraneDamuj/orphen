@@ -2773,10 +2773,10 @@ as geometry -- three banks of five, `base - segments + 21` while arming,
 `+0xA0` rather than through `FUN_00225BC8`, so a bar mid-drain does not restart
 its clip.
 
-##### It also found two things wrong in the sprite pass
+##### It also found three things wrong in the sprite pass
 
-The bar is the first entity either scene fields that is screen-space *and* asks
-to be drawn in front, and it exposed both halves of that.
+The bar is the first entity either scene fields that is screen-space, asks to be
+drawn in front, and lives on a 4-bit sheet, and it exposed all three.
 
 `FUN_0020F510:0x0020F55C` reads `+0x08` **once** and latches bit `0x1000` and
 bit `0x40` into its workspace in the same three instructions, before it branches
@@ -2796,6 +2796,23 @@ parked just inside the near plane instead, which costs nothing: `perX` and
 any positive value reproduces the same corners. Note *just* inside -- a vertex
 exactly on the near plane rounds to the wrong side of it in float and is
 dropped.
+
+The third is the colour. **A sprite record's `+0x09` is a CLUT bank**, and the
+sprite pass was ignoring it. `FUN_0020F510:0x0020FB98-0x0020FBC0` tests the
+texture slot against `0x18` and, at or above it, writes `(record[+0x09] >> 4) + 1`
+into the packet's bank field -- the same `bank + 1` encoding `FUN_0022EB00` uses
+for the pentagon, zero meaning "8-bit page". Slot 0x2B holds the gauge sprite in
+sixteen palettes, and the bank is the whole difference between the player's bar
+and the enemy's; reading the sheet 8-bit gave every enemy a blue bar. Two
+records in one strip can name different banks, which is how one sheet serves
+both.
+
+That was not the bar's problem alone. The port had the bank on the HUD path
+since the pentagon but never on the sprite path, so *every* sprite on a slot at
+or above 0x18 was drawn from the wrong palette. The visible second case is Hand
+of Pyro's impact: its four-pointed star reads as a blue-white flare rather than
+the washed-out smear the 8-bit page gave. Neither field scene has such a sprite
+on screen at frame 900, so both guard captures are unchanged.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 

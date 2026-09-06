@@ -40,6 +40,11 @@
 // loop until +0x1A4 reaches +0x1A8, forty-eight frames of holding, fifteen of
 // sliding back off, and +0x08 bit 0 to stop drawing.
 //
+// The colour is not in the model either. Slot 0x2B is a PSMT4 page and each
+// sprite record's `+0x09` high nibble picks the 16-entry CLUT window, so the
+// same pips are red on the enemy's bar and blue on the player's. See
+// SpriteRecord::byte09.
+//
 // The pip count is spelled as the animation, not as geometry. Three banks of
 // five sit 0x14 apart per bar: `base - segments + 21` is the one FUN_002d5630
 // stamps as it arms, `base - segments + 6` the draining frame, and
