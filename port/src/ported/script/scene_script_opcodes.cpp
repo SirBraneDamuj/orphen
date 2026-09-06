@@ -4039,6 +4039,44 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0x7F / 0x80 (FUN_00260880): the read side of the pair above -- the group
+    // index as an expression, then the same inline channel byte, returning the
+    // channel scaled back up by fGpffff8ca0 / fGpffff8ca4 (both 100000.0) and
+    // truncated by FUN_0030bd20. 0x7F reads the rotation block at +0x3C, 0x80
+    // the translation block at +0x48. s14_e001 polls one of these every frame
+    // to drive the camera off the crab's own swing.
+    case 0x7F:
+    case 0x80:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t group = FUN_0025c258_evaluate();
+      const std::uint8_t channel = readU8();
+      if (halted_ || environment_.map == nullptr || channel > 2)
+      {
+        return 0;
+      }
+      const auto &groups = environment_.map->DAT_003556e0_collisionGroups;
+      if (group >= groups.size())
+      {
+        // The original calls FUN_0026bfc0 and stops the process here. The port
+        // answers zero: a group index past the end means the scene and the map
+        // disagree, which is worth seeing on screen rather than as an exit.
+        return 0;
+      }
+      const orphen::ported::psm2::Vec3 &block =
+          (opcode == 0x7F) ? groups[group].rotation : groups[group].translation;
+      const float component = (channel == 0) ? block.x : (channel == 1) ? block.y : block.z;
+      return static_cast<std::uint32_t>(
+          static_cast<std::int32_t>(component * kScriptCoordinateScale));
+    }
+
+    // 0x8F (LAB_002610f8): two instructions, `jr ra; lw v0, -0x49b4(gp)` --
+    // uGpffffb64c, which is DAT_003555BC, the per-frame tick count. A script
+    // reads it to scale its own motion the way every ported stepper does.
+    case 0x8F:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return environment_.frameTicks;
+
     case 0x74:
     case 0x75:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -4096,6 +4134,39 @@ namespace orphen::ported::script
     case 0x46:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025dff0_set_manual_camera();
+
+    // 0x47 (FUN_0025e0e8) and 0x48 (FUN_0025e170): one xyz triplet each,
+    // divided by DAT_00352b78 / DAT_00352b7c -- both 100000.0, the same
+    // kScriptCoordinateScale 0x46 uses. 0x47 is the eye, 0x48 the look-at.
+    case 0x47:
+    case 0x48:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const bool isEye = (opcode == 0x47);
+      float component[3]{};
+      for (float &value : component)
+      {
+        value = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                kScriptCoordinateScale;
+      }
+      if (halted_)
+      {
+        return 0;
+      }
+      const orphen::ported::psm2::Vec3 point{component[0], component[1], component[2]};
+      if (isEye)
+      {
+        if (environment_.FUN_00217d40_set_eye)
+        {
+          environment_.FUN_00217d40_set_eye(point);
+        }
+      }
+      else if (environment_.FUN_00217d10_set_look_at)
+      {
+        environment_.FUN_00217d10_set_look_at(point);
+      }
+      return 0;
+    }
 
     case 0x3C:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -4643,9 +4714,16 @@ namespace orphen::ported::script
       // it once a frame for the whole battle.
       case 0x68:
       case 0x78:
+      // 0x6F -> FUN_00244248, **the action request**, aimed at the entity the
+      // selector picked rather than at the party as a whole. This is how a
+      // cutscene drives a boss: s14_e001's preamble asks the crab for actions
+      // 11, 12, 13 and 14 in turn and waits between them for the crab's own
+      // states to write the script's work words back.
+      case 0x6F:
         if (environment_.FUN_00242a18_battle_method)
         {
           return environment_.FUN_00242a18_battle_method(static_cast<std::int32_t>(method),
+                                                         currentEntity_,
                                                          static_cast<std::int32_t>(arg3),
                                                          static_cast<std::int32_t>(arg4));
         }
@@ -4731,6 +4809,28 @@ namespace orphen::ported::script
       if (!halted_ && environment_.FUN_00213640_set_bandana)
       {
         environment_.FUN_00213640_set_bandana(static_cast<std::int32_t>(mode));
+      }
+      return 0;
+    }
+
+    // 0x116 / 0x117 / 0x118 (FUN_002649a8): a UV animation track index and the
+    // value for its +0x07 running flag, through FUN_002257c0. The three differ
+    // only in which animation block they aim at: 0x116 the selected entity's
+    // +0x164, 0x117 uGpffffb788 (DAT_003556F8, the map's), 0x118 DAT_00345a2c.
+    // 0x116 evaluates the entity selector first, the other two do not.
+    // s14_e001 uses 0x117 to stop the map's animated water.
+    case 0x117:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t track = FUN_0025c258_evaluate();
+      const std::uint32_t value = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_002257c0_set_map_uv_track)
+      {
+        environment_.FUN_002257c0_set_map_uv_track(track, static_cast<std::uint8_t>(value));
       }
       return 0;
     }

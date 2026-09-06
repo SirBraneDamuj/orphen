@@ -2931,6 +2931,105 @@ sitting in 102 — before this he entered 102 at frame 760 and was still in it
 `s01_e012` are byte-identical over 3000 frames with `--actor-report` and
 `--scr-report`, and both frame-900 captures are unchanged.
 
+#### s14_e001 is one actor away from a battle
+
+`s14_e001` is the giant crab: the encounter `s01_e012` hands off to. It opens
+with a long animatic -- the crab wades in, throws Dortin and Volcan into the
+water, takes two swipes at Orphen while he dodges, and the camera spins around
+the pair before the fight starts. The port loaded the scene and then sat there.
+
+Six things were in the way, and five of them were the script.
+
+##### The structural opcode table was read one slot early
+
+`analyzed/structural_ops/structural_ops_dispatch_table.md` lists 0x04 as
+"(inline handler)" with no address and then reads the rest of
+`PTR_LAB_0031e1f8` one row early. It is a flat eleven-entry table indexed by the
+raw opcode (`FUN_0025bc68:31`); 0x04 has a real entry that is simply never
+reached, because block end is handled before the lookup. So the true shape is
+
+```
+0x00 0x04 0x05  no-op
+0x01            conditional jump
+0x02            switch
+0x03 0x07 0x09  relative jump
+0x06 0x08       skip the rel32
+0x0A            FUN_002681c0("Debug Code:%d", iGpffffb0cc), then ++it
+```
+
+and the port had 0x06/0x08 and 0x07/0x09 exactly the wrong way round. A 0x06
+read as a no-op leaves its four-byte operand standing in the statement stream,
+and the next byte decodes as nonsense -- which is how the scene died on
+"unimplemented opcode 0xf" at 0x15c8, four bytes into the else arm of the
+if/else that ends its start entry. The doc is corrected too.
+
+##### Five opcodes
+
+| opcode | original | what it is |
+|---|---|---|
+| `0x117` | `FUN_002649a8` -> `FUN_002257c0` | writes the +0x07 running flag of one of the **map's** UV animation tracks (`uGpffffb788` = `DAT_003556F8`). The crab scene stops the water with it |
+| `0x47` | `FUN_0025e0e8` -> `FUN_00217d40` | move the script camera's eye, one xyz triplet over 100000.0 |
+| `0x48` | `FUN_0025e170` -> `FUN_00217d10` | the same for its look-at. The whole animatic is driven by these two |
+| `0x7F` / `0x80` | `FUN_00260880` | the **read** side of 0x7D/0x7E: a collision group's rotation (+0x3C) or translation (+0x48) channel, scaled back up by 100000.0 |
+| `0x8F` | `LAB_002610f8` | two instructions, `jr ra; lw v0, -0x49b4(gp)` -- `DAT_003555BC`, the frame tick count |
+
+##### And method 0x6F, which is how a cutscene drives a boss
+
+`0xBD`'s method table has three battle-entry methods the port already had (1, 2,
+3) and `0x6F`, which is `FUN_00244248` -- **the same action request the battle
+VM's `aiact` opcode makes**, aimed at the entity the selector picked instead of
+at the party. That is how the animatic tells the crab what to do. It needs the
+selected entity, so `ScriptEnvironment::FUN_00242a18_battle_method` now carries
+one and the port shares a single `battleVmEnvironment()` between the per-frame
+battle step and the script.
+
+##### What is left is the crab itself
+
+With those in, the scene script runs clean -- zero unimplemented opcodes over
+12000 frames, on every entry -- and the animatic gets as far as its own logic
+allows. It is a duet, and only one voice is singing:
+
+```
+slot script at 0x1fce   switch on work[0], nineteen beats ten apart
+  beat   0   0x6D, take the player's controls
+  beat  20   0xBD(work[2], 0x6F, 11)   crab: action 11
+  beat  80   0x47 x100                 the camera walk
+  beat 100   0xBD(work[2], 0x6F, 12)   crab: action 12
+  beat 110   wait for work[1]          <-- parked here
+  beat 140   0xBD(work[2], 0x6F, 13)   crab: action 13
+  beat 150   wait for work[1] again, then kill UV tracks 4 and 7
+  beat 170   wait for placements 3..8 to be gone
+  beat 180   work[0] = 1000, and the per-frame entry's ladder takes over:
+             0xBD method 3 at 0x16f1, method 2 at 0x1701 -- build, then start
+```
+
+`work[1]` is never written by the script. It is written by
+**`FUN_0027cef8`**, which is the crab's, and reached from `FUN_0027c3e8`
+(action 13's handler: swipe three times, then animation 1 and `work[1] = 1`) and
+from state 13. `work[0]` itself is written by `FUN_0027b380` (state 11) as well,
+and `FUN_00279298` gates its own body on `work[0] < 3000`. The animatic cannot
+advance without the actor.
+
+Type `0x7F` is `FUN_00279298` with a sixteen-entry state table at
+`PTR_FUN_00325930` -- the table runs on past its end into type 0x80's states, so
+only 0..15 are the crab's. The action check is `FUN_00279600`, and
+`FUN_002796c8` maps the orders: 12 -> state 13, 13 -> `FUN_0027c3e8`, 14 ->
+`FUN_00277d30` + `FUN_0027c7b8`, and 11 just publishes itself as the current
+action. Reachable from those roots are 50 functions in the `0x27xxxx` band,
+about 7900 lines of decompiled C; everything else they call is engine code the
+port already has.
+
+##### Verified
+
+Forcing the two crab-dependent waits -- `work[1]` non-zero and the placement
+scan empty -- and changing nothing else, `s14_e001` builds the party and starts
+the battle on frame 661, binds Orphen's shipped loadout (Hand of Pyro,
+Bite of Lightning, Sword of the Fallen Devil, shield) and puts him in state
+0x78. So the battle half is already there; the animatic in front of it is what
+is missing. `s14_e012` still builds on frame 2, starts on 247 and binds 5 of 5
+enemies. `s01_e024` and `s01_e012` are byte-identical over 3000 frames with
+`--actor-report` and `--scr-report`.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips

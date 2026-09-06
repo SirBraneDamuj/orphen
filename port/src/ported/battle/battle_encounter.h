@@ -352,6 +352,18 @@ namespace orphen::ported::battle
 
     std::size_t windowSize() const { return memory_.size(); }
 
+    // FUN_00244248. `entityId` is the entity's +0x95: below 11 it is a party
+    // slot and the request goes through the environment, otherwise it is an
+    // actor id and FUN_00247d80 finds the record here. 1 = accepted, -1 = the
+    // actor is busy and the caller should retry, 0 = no such block.
+    //
+    // Public because opcode 0xBD method 0x6F reaches it from the scene script:
+    // a cutscene orders a boss around with the same call the battle VM uses.
+    std::int32_t FUN_00244248_request_action(const VmEnvironment &environment,
+                                             std::int32_t entityId,
+                                             std::uint8_t action,
+                                             bool force);
+
   private:
     // A copy of the decoded scene script. The battle data is relocated inside
     // it and the VM writes into the records, so it cannot be a view of
@@ -388,14 +400,6 @@ namespace orphen::ported::battle
     // implement; `result` names it and the caller parks the script.
     bool stepVmBlock(VmBlock &block, const VmEnvironment &environment, VmStepResult &result);
 
-    // FUN_00244248. `entityId` is the entity's +0x95: below 11 it is a party
-    // slot and the request goes through the environment, otherwise it is an
-    // actor id and FUN_00247d80 finds the record here. 1 = accepted, -1 = the
-    // actor is busy and the caller should retry, 0 = no such block.
-    std::int32_t FUN_00244248_request_action(const VmEnvironment &environment,
-                                             std::int32_t entityId,
-                                             std::uint8_t action,
-                                             bool force);
 
     // FUN_00247d80: the index of the record carrying this id, or -1.
     std::int32_t FUN_00247d80_index_for_id(std::uint8_t id) const;

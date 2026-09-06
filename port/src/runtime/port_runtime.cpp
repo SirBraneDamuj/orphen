@@ -1123,6 +1123,75 @@ namespace orphen::port
     }
   }
 
+  // The battle VM's view of the world. FUN_0023fd30 builds this on the stack
+  // every frame; the port shares one builder because opcode 0xBD method 0x6F
+  // needs the same FUN_00244248 path from outside the battle step.
+  orphen::ported::battle::BattleEncounter::VmEnvironment PortRuntime::battleVmEnvironment(
+      std::uint32_t frameTicks)
+  {
+    auto &work = sceneScript_.state().DAT_00355060_work;
+    orphen::ported::battle::BattleEncounter::VmEnvironment vm;
+    vm.pool = &entityPool_;
+    vm.scriptVars = work;
+    vm.scriptVarCount = orphen::ported::script::SceneScriptState::kWorkWordCount;
+    vm.frameTicks = static_cast<std::int32_t>(frameTicks);
+    vm.DAT_00354ecc_suspended = battleParty_.DAT_00354ecc();
+    vm.sGpffffaf4c_memberCount = battleParty_.DAT_00354ebc_memberCount();
+    vm.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+    // (&DAT_0031D7B8)[member * 0xF] -- the control block's +0x08.
+    vm.DAT_0031d7b8_memberEntity = [this](std::int32_t member) -> std::int32_t {
+      if (member < 0 ||
+          member >= static_cast<std::int32_t>(orphen::ported::battle::kControlBlockCount))
+      {
+        return -1;
+      }
+      return battleParty_.entitySlotAt(
+          orphen::ported::battle::BattleTables::controlBlock(
+              static_cast<std::uint32_t>(member)) +
+          orphen::ported::battle::control::kEntity08);
+    };
+    // FUN_00244248's party half. The block is `DAT_0031D780 + slot *
+    // 0x3C`, which is controlBlock(slot - 1) + 0x0C, so the pending and
+    // current action bytes land on +0x0E and +0x0F exactly as they do on
+    // an actor record -- the same 0x0C bias, spelled a second way.
+    vm.FUN_00244248_party = [this](std::uint8_t partySlot, std::uint8_t action,
+                                   bool force) -> std::int32_t {
+      if (partySlot == 0 ||
+          partySlot > static_cast<std::uint8_t>(orphen::ported::battle::kControlBlockCount))
+      {
+        return 0;
+      }
+      auto &tables = battleParty_.tables();
+      const std::uint32_t block = orphen::ported::battle::BattleTables::controlBlock(
+          static_cast<std::uint32_t>(partySlot - 1));
+      if (!force)
+      {
+        const std::uint32_t flags =
+            tables.read<std::uint32_t>(block + orphen::ported::battle::control::kFlags38);
+        const std::int8_t pending = tables.read<std::int8_t>(
+            block + orphen::ported::battle::control::kPendingAction0e);
+        if ((flags & 1u) != 0 && pending != 0x0A && pending != 0x06)
+        {
+          if (pending == 0x0B)
+          {
+            tables.write<std::uint8_t>(
+                block + orphen::ported::battle::control::kPendingAction0e, action);
+            return 1;
+          }
+          if (tables.read<std::int8_t>(
+                  block + orphen::ported::battle::control::kCurrentAction0f) != 0x06)
+          {
+            return -1;
+          }
+        }
+      }
+      tables.write<std::uint8_t>(block + orphen::ported::battle::control::kPendingAction0e,
+                                 action);
+      return 1;
+    };
+    return vm;
+  }
+
   orphen::ported::script::ScriptEnvironment PortRuntime::scriptEnvironment(std::uint32_t frameTicks)
   {
     orphen::ported::script::ScriptEnvironment environment;
@@ -1149,11 +1218,28 @@ namespace orphen::port
 
     // Opcode 0xBD methods 1 / 2 / 3 / 0x78, FUN_00242a18's battle half.
     environment.FUN_00242a18_battle_method =
-        [this](std::int32_t method, std::int32_t arg3, std::int32_t arg4) -> std::uint32_t
+        [this, frameTicks](std::int32_t method, std::size_t entitySlot, std::int32_t arg3,
+                           std::int32_t arg4) -> std::uint32_t
     {
       const auto battle = battleEnvironment();
       switch (method)
       {
+      case 0x6F:
+      {
+        // FUN_00244248 takes the entity, not a slot number: its first act is to
+        // read +0x95, which is the party slot below 11 and an actor id above.
+        // s14_e001 stamps 50 on the crab with object register 0x11 before it
+        // ever asks for an action.
+        if (entitySlot >= orphen::ported::entity::kEntitySlotCount)
+        {
+          return 0;
+        }
+        const std::int32_t entityId =
+            static_cast<std::int32_t>(entityPool_.slot(entitySlot).byte95);
+        return static_cast<std::uint32_t>(battleEncounter_.FUN_00244248_request_action(
+            battleVmEnvironment(frameTicks), entityId, static_cast<std::uint8_t>(arg3),
+            arg4 != 0));
+      }
       case 1: return battleParty_.FUN_00242de0_end_battle();
       case 2:
         battleTrace_.recordBattleStarted(frameCount_ + 1);
@@ -1312,6 +1398,12 @@ namespace orphen::port
     {
       fieldCamera_.FUN_00217d70_set_manual_camera(eye, lookAt);
     };
+
+    environment.FUN_00217d40_set_eye = [this](const orphen::ported::psm2::Vec3 &eye)
+    { fieldCamera_.FUN_00217d40_set_eye(eye); };
+
+    environment.FUN_00217d10_set_look_at = [this](const orphen::ported::psm2::Vec3 &lookAt)
+    { fieldCamera_.FUN_00217d10_set_look_at(lookAt); };
 
     // FUN_00261fd8's loop, opcode 0xA7. iGpffffb718 is the record count and
     // iGpffffb740 the base, so this is every 0x78 record in the loaded map.
@@ -1543,6 +1635,25 @@ namespace orphen::port
         // "off" sets it. FUN_00209140 skips the primitive outright once it is.
         flags = visible ? (flags & ~orphen::ported::render::visibility::kHiddenBit)
                         : (flags | orphen::ported::render::visibility::kHiddenBit);
+      }
+    };
+
+    // FUN_002257c0 through opcode 0x117: the map's own UV animation block.
+    // The original's index is one-based -- FUN_002257c0 writes
+    // `base + index * 10 + 1`, and the records start four bytes past the base
+    // pointer, so index 1 lands on record 0's +0x07 -- and index 0 returns
+    // without writing anything.
+    environment.FUN_002257c0_set_map_uv_track = [this](std::uint32_t track, std::uint8_t value)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr || track == 0)
+      {
+        return;
+      }
+      const std::size_t index = static_cast<std::size_t>(track) - 1u;
+      if (index < map->DAT_003556f4_uvAnimation.size())
+      {
+        map->DAT_003556f4_uvAnimation[index].flags = value;
       }
     };
 
@@ -6045,66 +6156,7 @@ namespace orphen::port
         // that one frame is worth.
         if (countdownSpent)
         {
-          auto &work = sceneScript_.state().DAT_00355060_work;
-          orphen::ported::battle::BattleEncounter::VmEnvironment vm;
-          vm.pool = &entityPool_;
-          vm.scriptVars = work;
-          vm.scriptVarCount = orphen::ported::script::SceneScriptState::kWorkWordCount;
-          vm.frameTicks = static_cast<std::int32_t>(frameTicks);
-          vm.DAT_00354ecc_suspended = battleParty_.DAT_00354ecc();
-          vm.sGpffffaf4c_memberCount = battleParty_.DAT_00354ebc_memberCount();
-          vm.FUN_00216868_random = [this] { return FUN_00216868_random(); };
-          // (&DAT_0031D7B8)[member * 0xF] -- the control block's +0x08.
-          vm.DAT_0031d7b8_memberEntity = [this](std::int32_t member) -> std::int32_t {
-            if (member < 0 ||
-                member >= static_cast<std::int32_t>(orphen::ported::battle::kControlBlockCount))
-            {
-              return -1;
-            }
-            return battleParty_.entitySlotAt(
-                orphen::ported::battle::BattleTables::controlBlock(
-                    static_cast<std::uint32_t>(member)) +
-                orphen::ported::battle::control::kEntity08);
-          };
-          // FUN_00244248's party half. The block is `DAT_0031D780 + slot *
-          // 0x3C`, which is controlBlock(slot - 1) + 0x0C, so the pending and
-          // current action bytes land on +0x0E and +0x0F exactly as they do on
-          // an actor record -- the same 0x0C bias, spelled a second way.
-          vm.FUN_00244248_party = [this](std::uint8_t partySlot, std::uint8_t action,
-                                         bool force) -> std::int32_t {
-            if (partySlot == 0 ||
-                partySlot > static_cast<std::uint8_t>(orphen::ported::battle::kControlBlockCount))
-            {
-              return 0;
-            }
-            auto &tables = battleParty_.tables();
-            const std::uint32_t block = orphen::ported::battle::BattleTables::controlBlock(
-                static_cast<std::uint32_t>(partySlot - 1));
-            if (!force)
-            {
-              const std::uint32_t flags =
-                  tables.read<std::uint32_t>(block + orphen::ported::battle::control::kFlags38);
-              const std::int8_t pending = tables.read<std::int8_t>(
-                  block + orphen::ported::battle::control::kPendingAction0e);
-              if ((flags & 1u) != 0 && pending != 0x0A && pending != 0x06)
-              {
-                if (pending == 0x0B)
-                {
-                  tables.write<std::uint8_t>(
-                      block + orphen::ported::battle::control::kPendingAction0e, action);
-                  return 1;
-                }
-                if (tables.read<std::int8_t>(
-                        block + orphen::ported::battle::control::kCurrentAction0f) != 0x06)
-                {
-                  return -1;
-                }
-              }
-            }
-            tables.write<std::uint8_t>(block + orphen::ported::battle::control::kPendingAction0e,
-                                       action);
-            return 1;
-          };
+          const auto vm = battleVmEnvironment(static_cast<std::uint32_t>(frameTicks));
 
           const auto step = battleEncounter_.FUN_0023fd30_step_master_script(vm);
           if (step.halted && !battleMasterHaltReported_)

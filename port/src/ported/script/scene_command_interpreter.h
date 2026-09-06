@@ -425,7 +425,8 @@ namespace orphen::ported::script
     //
     // s14_e012 calls all four. The battle module lives outside ported/script/,
     // so like every other cross-module effect it arrives as a callback.
-    std::function<std::uint32_t(std::int32_t method, std::int32_t arg3, std::int32_t arg4)>
+    std::function<std::uint32_t(std::int32_t method, std::size_t entitySlot, std::int32_t arg3,
+                                std::int32_t arg4)>
         FUN_00242a18_battle_method;
 
     orphen::ported::entity::EntityPool *entityPool = nullptr;
@@ -540,6 +541,14 @@ namespace orphen::ported::script
     std::function<void(const orphen::ported::psm2::Vec3 &eye,
                        const orphen::ported::psm2::Vec3 &lookAt)>
         FUN_00217d70_set_manual_camera;
+
+    // FUN_00217d40 / FUN_00217d10, opcodes 0x47 and 0x48: move an already
+    // installed script camera's eye or its look-at, one triplet each. Both are
+    // no-ops unless cGpffffb6e1 is already 0x23, so a scene has to have run
+    // 0x46 (or a camera path) first; s14_e001's per-frame entry drives its
+    // whole crab preamble with these two.
+    std::function<void(const orphen::ported::psm2::Vec3 &eye)> FUN_00217d40_set_eye;
+    std::function<void(const orphen::ported::psm2::Vec3 &lookAt)> FUN_00217d10_set_look_at;
 
     // FUN_00218158: sample the installed camera path at elapsed/duration and
     // publish the eye, look-at, roll and zoom. Opcode 0x44 steps it.
@@ -676,6 +685,15 @@ namespace orphen::ported::script
     // this is a callback rather than a direct write.
     std::function<void(std::uint32_t group, std::uint8_t channel, float value, bool rotation)>
         FUN_00260738_move_collision_group;
+
+    // Opcodes 0x116 / 0x117 / 0x118 (FUN_002649a8 -> FUN_002257c0): a track
+    // index and a value written into the UV animation record's +0x07 byte --
+    // the "running" flag FUN_00225940 gates every track on, seeded to 1 by
+    // FUN_002256f0. 0x117 aims at uGpffffb788, which is DAT_003556F8, the map's
+    // own animation block (FUN_0022b5a8:369 builds it). Index 0 is a no-op in
+    // the original because FUN_002257c0 returns early on a zero index, so the
+    // records are effectively one-based.
+    std::function<void(std::uint32_t track, std::uint8_t value)> FUN_002257c0_set_map_uv_track;
 
     // FUN_00237b38: start a dialogue stream at a blob offset, or terminate the
     // current one when the offset is zero. Both the scheduler and opcode 0x33

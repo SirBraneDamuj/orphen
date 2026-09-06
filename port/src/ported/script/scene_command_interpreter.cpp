@@ -419,15 +419,35 @@ namespace orphen::ported::script
     return count ? operands[count - 1] : 0u;
   }
 
-  // PTR_LAB_0031e1f8. See analyzed/structural_ops/structural_ops_dispatch_table.md;
-  // several entries are aliases of one another in the original table.
+  // PTR_LAB_0031e1f8, read straight out of the ELF at 0x0031e1f8 -- eleven
+  // pointers indexed by the opcode with no bias, per FUN_0025bc68:31.
+  //
+  //   0x00 0x25bdc8  jr ra                     no-op
+  //   0x01 0x25bdd0  FUN_0025bdd0              conditional jump
+  //   0x02 0x25be10  FUN_0025be10              switch dispatch
+  //   0x03 0x25bea0  j FUN_0025c220            relative jump
+  //   0x04 0x25bdc8  (never reached; 0x04 is the inline block end)
+  //   0x05 0x25bdc8  jr ra                     no-op
+  //   0x06 0x25bea8  cursor += 4               skip the rel32
+  //   0x07 0x25beb8  j FUN_0025c220            relative jump
+  //   0x08 0x25bec0  cursor += 4               skip the rel32
+  //   0x09 0x25bed0  j FUN_0025c220            relative jump
+  //   0x0A 0x25bed8  FUN_002681c0("Debug Code:%d") on iGpffffb0cc, then ++it
+  //
+  // analyzed/structural_ops/structural_ops_dispatch_table.md lists 0x04 as
+  // "(inline handler)" and then reads the rest of the table one slot early, so
+  // everything from 0x06 up is wrong there and was wrong here: 0x06 and 0x08
+  // are the *skips* and 0x07 and 0x09 the *jumps*, not the other way round.
+  // s14_e001's start entry ends with an if/else whose else arm is a 0x06, and
+  // treating it as a no-op left the rel32 in the statement stream -- the
+  // "unimplemented opcode 0xf" that halted the scene.
   void SceneCommandInterpreter::dispatchLow(std::uint8_t opcode)
   {
     switch (opcode)
     {
     case 0x00:
+    case 0x04:
     case 0x05:
-    case 0x06:
       break; // LAB_0025bdc8, no-op
 
     case 0x01:
@@ -439,13 +459,13 @@ namespace orphen::ported::script
       break;
 
     case 0x03:
-    case 0x08:
-    case 0x0A:
+    case 0x07:
+    case 0x09:
       FUN_0025c220_relativeJump();
       break;
 
-    case 0x07:
-    case 0x09:
+    case 0x06:
+    case 0x08:
       streamOffset_ += 4;
       if (streamOffset_ > blob_.size())
       {
@@ -453,6 +473,12 @@ namespace orphen::ported::script
         overran_ = true;
         haltOffset_ = streamOffset_;
       }
+      break;
+
+    case 0x0A:
+      // The debug counter's print. iGpffffb0cc is not read anywhere else that
+      // matters, and the port has no debug console, so only the increment is
+      // observable -- and nothing observes it.
       break;
 
     default:

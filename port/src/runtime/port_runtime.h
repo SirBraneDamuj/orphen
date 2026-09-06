@@ -564,6 +564,10 @@ namespace orphen::port
     orphen::ported::script::ScriptEnvironment scriptEnvironment(
         std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     orphen::ported::entity::ActorEnvironment actorEnvironment(std::uint32_t frameTicks);
+    // The battle VM's view of the world, shared by FUN_0023fd30's per-frame step
+    // and by opcode 0xBD method 0x6F, which reaches FUN_00244248 from outside it.
+    orphen::ported::battle::BattleEncounter::VmEnvironment battleVmEnvironment(
+        std::uint32_t frameTicks);
     // Built alongside actorEnvironment and pointed at by it. Separate because
     // FUN_002148a8 is also the projectile's test, and both call sites want the
     // same one.
