@@ -2814,6 +2814,123 @@ of Pyro's impact: its four-pointed star reads as a blue-white flare rather than
 the washed-out smear the 8-bit page gave. Neither field scene has such a sprite
 on screen at frame 900, so both guard captures are unchanged.
 
+#### Four of the six enemy attacks were firing an empty gun
+
+The killer bee has two attacks and the Maneater has two, and only one of the
+four did anything: the bee's dive, because its damage is its own body sweeping
+through `FUN_00215AC8`, and that was already ported. Every other attack ends in
+a call that leaves the enemy — a projectile, a seed, a cloud of spores, a direct
+charge to the victim — and none of those five calls existed in the port. The
+animations played, the cues fired, and nothing came out.
+
+| where | call | what it should make |
+|---|---|---|
+| 0x80 state 2, the dive | `FUN_00280698` every frame | the body box, through `FUN_00215AC8` |
+| 0x80 state 2, hit frame | `FUN_002EBDE0(e, 6)` | six type `0x10F` dust puffs in an arc |
+| 0x80 state 3, hit frame | `FUN_002EBAD8` | **the shot**, a type `0x10E` off bone 11 |
+| 0x8A state 2, cursor 10 | `FUN_002EC920` | **the seed**, a type `0x112` lobbed at the target |
+| 0x8A state 4, throw frame | `FUN_002ECC68` | eight type `0x113` spore orbs |
+| 0x8A state 4, clip end | `FUN_00216128` | the spit's damage, charged directly |
+
+The state 3 one is worth naming properly: **the flyer's second attack is not a
+second ram.** Its arc deliberately stops two units *short* of the target, and
+the last frame of animation 7 launches a projectile from bone 11 aimed down at
+the target's midriff — speed 60 units per 32000 ticks, and a drop rate computed
+so it arrives rather than a gravity constant. Read as a ram it looks like a
+lunge that misses on purpose; it is a lunge that shoots.
+
+##### Type 0x112 has no handler, and that is deliberate
+
+The seed's slot in `PTR_LAB_0031CAB0` is `FUN_00239E78`, the no-op. It does not
+tick itself — the Maneater that spat it calls `FUN_002EC750` on it from its own
+wrapper every frame and reads the return: `1` means it has landed and the clip
+has come round, which is the cue to grow a clone, and `-1` means it has finished
+sinking and freed itself. That is also why the Maneater has to tear the link
+down by hand when the battle ends, and why `FUN_0028B568`'s tidy-up has two
+shapes.
+
+`FUN_0028B740` is the growing. It allocates a second entity of the parent's own
+type at the seed's position, gives it one hit point, links the two together and
+drops it into **state 3** — a state neither the AI script nor the action table
+can ask for. `FUN_0028B0E8` is that state and it is the clone's whole life: walk
+in turning toward the target, lunge, and on the lunge's last frame decide. Within
+one unit, within 0.3 in height, the target on the ground and not already held by
+something, and it grabs — raising bit 2 of the *victim's* `+0x96`, which is the
+only place in either enemy that writes another entity's flags. Then 0x0C80 ticks
+of chewing, one direct charge of attack record 0, and it dies. Miss, and it dies
+immediately.
+
+##### `+0x1AC` was the wrong way round
+
+`FUN_0028AE10`, type 0x8A's state 0, ends with `+0x1AC = 1`. The port had read
+`FUN_0028B568`'s branch as "a placed Maneater has 0 there", which made a corpse
+take the clone's tidy-up path instead of its own. It matters now that clones
+exist: 1 means "I own the seed at `+0x1A8`, and my record is not released until
+both it and the clone are gone"; 2, which `FUN_0028B740` stamps, means "I am a
+clone, and all I have to do is clear my parent's `+0x1A4`".
+
+##### The player froze in state 102 the moment any of it landed
+
+With the attacks firing, `FUN_00216140` started charging the player's `+0xBE`
+and `FUN_0024A360` did what it always did — action 0x83, state 102 — and state
+102's handler was a null entry in the class-1 table. Nothing else drains a party
+member's `+0xBE`, and `FUN_00216140` refuses a victim that still has damage
+pending, so the first hit put Orphen in a stagger he never came out of and made
+him immune to everything after it. Exactly the shape of the killer-bee freeze,
+on the other side of the fight.
+
+`FUN_0024A540` is that state, and its restart frame is where a party member's
+damage actually happens: drain `+0xBE` out of `+0x12A`; pick the flinch (0x1C)
+or the knock-down (0x20) from the reaction byte and whether the character is on
+the ground; raise `+0x38` bit 0x800 on the control block, and 0x400 as well when
+the hit crossed a fifth of the maximum; at zero hit points lie down and teleport
+to the position the control block last recorded; otherwise roll for a status.
+The frames after it are the getting up — 0x20 down, 0x22 the push-up after
+fifteen frames on the floor, 0x23 the stand, then state 108 with action 0x87 to
+walk back to the recorded spot.
+
+##### The two enemies inflict statuses, and something has to take them off again
+
+The attack records, read out of SCR.BIN 0xBE at run time, are not all plain
+physical hits:
+
+```
+type 0x80  record 0 flags=0001 +100%    the dive
+           record 2 flags=1000 +10%     the shot
+type 0x8A  record 0 flags=0001 +70%     the clone's bite
+           record 2 flags=0200 +10%     the spit
+```
+
+`FUN_0024A190` reads that halfword back off `+0xC2` and turns the seven status
+bits in `0x1632` into a status id — `0x0200` is 9, the poison, and `0x1000` is
+12, the confusion the command input already reads to scramble which spell slot a
+press picks. A member already carrying any status is immune to a second, and the
+reaction byte is the odds in tenths that it is shrugged off.
+
+`FUN_002D8B38` raises it: every party member owns a type `0x118` aura built with
+its other effects and parked hidden, and this un-hides it over the character's
+head, tells it which icon to draw, and sets the bit in `DAT_0031DA6C`.
+**`FUN_002D8CE0` is the only thing that clears that bit again**, so porting the
+arming without the aura's behaviour would have left the skull sitting over
+Orphen for the rest of the fight. Its six status bodies are one body with a
+different light colour: track the head, run `+0x62` down at two ticks a frame,
+then shrink a tenth a frame until the icon is under four tenths of its size and
+hide. Statuses 4 and 9 add a hit point per animation loop off the victim and arm
+the **lower** health bar with it — the first live caller the port has for the
+player's own gauge — and they stop at five points, so a status never kills.
+
+##### Verified
+
+`s14_e012`, 8000 frames, no input. All four effect types spawn (`0x10E` once
+per lunge, `0x10F` in rings of six, `0x112` per bite, `0x113` in volleys of
+eight), type 0x8A reaches states 3 and 5 for the first time, and the report has
+no unimplemented state handlers on either side. Orphen goes from 50 hit points
+to 7, staggers five times and recovers from each into state 108 rather than
+sitting in 102 — before this he entered 102 at frame 760 and was still in it
+7241 frames later. The status cycle arms once and clears once. `s01_e024` and
+`s01_e012` are byte-identical over 3000 frames with `--actor-report` and
+`--scr-report`, and both frame-900 captures are unchanged.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips

@@ -117,6 +117,9 @@ namespace orphen::ported::battle
     inline constexpr std::uint32_t kSwingTimer3e = 0x3E;  // DAT_00355cb0 + 0x16
     inline constexpr std::uint32_t kHitCounter40 = 0x40;  // DAT_00355cb0 + 0x18
     inline constexpr std::uint32_t kReturnTimer42 = 0x42; // DAT_00355cb0 + 0x1A
+    // DAT_00355cb0 + 0x16: the ticks FUN_0024a540 lies on the floor before it
+    // starts getting up. DAT_00355cb0 is the party record plus 0x28.
+    inline constexpr std::uint32_t kDownTimer3e = 0x3E;
     inline constexpr std::uint32_t kAimMarker45 = 0x45;   // DAT_00355cb0 + 0x1D, signed byte
   } // namespace record
 

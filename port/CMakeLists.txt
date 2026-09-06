@@ -139,7 +139,9 @@ target_sources(orphen_port
     src/ported/entity/entity_collision.cpp
     src/ported/entity/follower_navmesh.cpp
     src/ported/entity/original_battle_enemy.cpp
+    src/ported/entity/original_enemy_attack.cpp
     src/ported/entity/original_health_bar.cpp
+    src/ported/entity/original_status_aura.cpp
     src/ported/entity/party_follower.cpp
     src/ported/entity/entity_path_follow.cpp
     src/ported/entity/player_bandana.cpp

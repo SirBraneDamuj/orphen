@@ -513,6 +513,42 @@ namespace orphen::ported::entity
     std::int32_t healthBarTarget1a8 = 0;      // +0x1A8: the pip count the hit leaves
     std::uint16_t healthBarAnimationBase1ac = 0; // +0x1AC: 0 for the lower bar, 0x14 upper
 
+    // The four effect entities the two battle enemies throw. See
+    // original_enemy_attack.h; each is a distinct reading of the same bytes,
+    // written by exactly one spawner and read by exactly one behaviour.
+    //
+    //   0x10E  the flyer's shot         FUN_002ebad8 -> FUN_002eb990
+    //   0x10F  the swoop's dust ring    FUN_002ebd20 -> FUN_002ebc30
+    //   0x112  the Maneater's seed      FUN_002ec920 -> FUN_002ec750
+    //   0x113  its poison spores        FUN_002ecc68 -> FUN_002ecb08
+    //
+    // The shot reads its attack record out of hitParameters198 above, which is
+    // the same +0x198 the sword blade uses -- one field, one meaning, so it is
+    // not repeated here.
+    float shotDrop19c = 0.0f;   // +0x19C: type 0x10E, how fast the shot sinks
+    float shotSpeed1a0 = 0.0f;  // +0x1A0: type 0x10E, units per 32000 ticks
+
+    std::uint16_t puffLife198 = 0; // +0x198: type 0x10F, the lifetime its scale ramps against
+
+    // Type 0x112. The same three-point Bezier the enemies fly, sixteen bytes
+    // earlier in the struct.
+    std::array<float, 3> seedArcX198{};
+    std::array<float, 3> seedArcZ1a4{};
+    std::array<float, 3> seedArcY1b0{};
+    float seedProgress1bc = 0.0f; // +0x1BC
+
+    float sporeSpeed198 = 0.0f;   // +0x198: type 0x113, units per 32000 ticks
+    float sporeRise19c = 0.0f;    // +0x19C: and how fast it climbs
+    std::int16_t sporeLife1a4 = 0; // +0x1A4: the lifetime its scale ramps against
+
+    // The type 0x118 status aura, one per party member at DAT_0031DA7C.
+    // FUN_002d8b38 arms it when a hit lands a status: it floats over the
+    // victim, plays the icon for whichever status it was handed, and runs its
+    // own +0x62 out. FUN_002d8ce0, the behaviour that draws it, is not ported.
+    std::uint16_t auraVictim198 = 0; // +0x198: the pool slot it hangs over
+    std::int16_t auraStatus19a = 0;  // +0x19A: which status, 0..12
+    float auraHeight19c = 0.0f;      // +0x19C: the offset it floats at
+
     // The type 0x15B fireball, FUN_002dae60 -- what Hand of Pyro actually
     // launches. Another overlapping reading of the same bytes, seeded in one
     // place (FUN_002dab70) and read in one place, so nothing else can collide

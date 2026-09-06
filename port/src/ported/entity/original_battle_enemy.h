@@ -60,10 +60,11 @@
 // script's own `gate` opcode then waits for the current action byte to be 6
 // again before it asks for the next one, which is why enemies take turns.
 //
-// **The damage an enemy deals is not here.** FUN_002ebde0, FUN_002ebad8,
-// FUN_002ec920, FUN_002ecc68 and FUN_00280698 are the five calls that would
-// spawn the hit volume; each attack plays through to its damage frame, counts
-// itself in ActorTrace::recordEnemyAttackHit, and lands on nobody.
+// **The damage an enemy deals is in original_enemy_attack.h.** The five calls
+// that leave the enemy -- FUN_00280698, FUN_002ebde0, FUN_002ebad8,
+// FUN_002ec920 and FUN_002ecc68 -- live there, along with the four effect
+// types they spawn and the clone the Maneater's seed grows. What is here is
+// only where each attack fires from.
 //
 // ------------------------------------------------------------- taking damage
 //
@@ -83,12 +84,23 @@
 //   6  FUN_0028b698, the reel: hold the bit, key the cue, and on the frame the
 //      clip ends release the bit and go straight back to state 1
 //   5  FUN_0028b568, the death: latch, count 0x3C0 ticks of corpse, then fade
-//      and free. It deliberately does *not* release the busy bit for a plain
-//      Maneater -- only one grown by FUN_0028b740's spit does -- but the record
-//      unbinds when the entity is freed, so the fight moves on either way
+//      and free. Its tidy-up has two shapes, chosen by +0x1AC -- 1 on a
+//      Maneater the scene placed (FUN_0028ae10 stamps it), 2 on a clone
+//      FUN_0028b740 grew. The placed one owns the seed at +0x1A8 and only
+//      releases its record once both that and the clone are gone; the clone
+//      owns nothing and simply clears its parent's link
 //
 // Without state 8 an enemy hit mid-attack sat in it forever, holding both the
 // busy bit and its script's gate: the freeze that pulled this block in.
+
+// ------------------------------------------------------------- state 3 is odd
+//
+// Type 0x8A's state 3, FUN_0028b0e8, is the only state neither the AI script
+// nor the action table can ask for. FUN_0028b740 puts a clone straight into it
+// the moment the seed lands, and the clone spends its whole one-hit-point life
+// there: walk in, lunge, grab if it is close enough, chew for 0x0C80 ticks and
+// die. It has no actor record, so it runs outside the `haveRecord` gate the way
+// the two damage states do.
 //
 // ------------------------------------------------------------ the record bias
 //

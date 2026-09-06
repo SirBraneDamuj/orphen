@@ -1,5 +1,7 @@
 #include "ported/entity/original_battle_enemy.h"
 
+#include "ported/entity/original_enemy_attack.h"
+
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/model/psc3_skeleton.h"
 
@@ -55,14 +57,13 @@ namespace orphen::ported::entity
     inline constexpr std::uint16_t kFUN_0028b698_enemy8aHitCue = 0x1CA;
     inline constexpr std::uint16_t kFUN_0028b568_enemy8aDeathCue = 0x1CB;
 
-    // FUN_0023a678: a tick countdown, floored at zero rather than allowed
-    // negative. Shared by both types' state 1.
-    std::int16_t FUN_0023a678_countdown(std::int16_t timer, std::uint32_t frameTicks)
-    {
-      const std::int16_t remaining =
-          static_cast<std::int16_t>(timer - static_cast<std::int16_t>(frameTicks));
-      return remaining < 1 ? static_cast<std::int16_t>(0) : remaining;
-    }
+    // FUN_0028b0e8, the clone's own three constants: how fast it turns toward
+    // what it is chasing (no 0.03125 on this one -- it is already per tick),
+    // and the height band the grab has to land inside.
+    inline constexpr float kDAT_00353530_enemy8aCloneTurnRate = 0.00436332216f;
+    inline constexpr float kDAT_00353534_cloneGrabHeight = 0.300000012f;
+    inline constexpr float kDAT_00353538_cloneGrabDepth = -0.300000012f;
+    inline constexpr std::uint16_t kFUN_0028b0e8_cloneCue = 0x1C6;
 
     // FUN_0023a958: the entity an enemy is aimed at -- the actor record's
     // +0x2C, as a pool slot. A negative one falls back to DAT_0058beb0, pool
@@ -119,7 +120,8 @@ namespace orphen::ported::entity
     // re-establishes for itself on the next line.
     void enemy_state0(OriginalEntity &entity,
                       std::size_t slot,
-                      const ActorEnvironment &environment)
+                      const ActorEnvironment &environment,
+                      bool isEnemy8a)
     {
       entity.scale14c = 1.0f;
       entity.scaleZ150 = 1.0f;
@@ -144,12 +146,29 @@ namespace orphen::ported::entity
 
       FUN_00225bf0_set_state_and_animation(entity, 1, 0);
 
+      // The three FUN_00216078 calls: this type's attack records 0, 1 and 2,
+      // copied into the type's own global bank. Record 0 is what the flyer's
+      // swoop and the clone's grab charge with, record 2 what the flyer's shot
+      // and the Maneater's spit carry.
+      FUN_00216078_fill_attack_records(
+          static_cast<std::int16_t>(entity.typeId00),
+          isEnemy8a ? DAT_0058b140_enemy8aAttacks() : DAT_005739b0_enemy80Attacks(), environment);
+
       // FUN_0023f8b8, from the caller the original really uses. The port also
       // calls it at the spawn, for the enemy types whose state 0 is not ported
       // yet; the second call is idempotent.
       if (environment.FUN_0023f8b8_bind_battle_actor)
       {
         entity.battleActorRecord198 = environment.FUN_0023f8b8_bind_battle_actor(slot);
+      }
+
+      // FUN_0028ae10's last line, and the 0x8A's only difference from the
+      // flyer's state 0. +0x1AC is what FUN_0028b568 branches on when the
+      // Maneater dies: 1 means "placed, and it owns a seed link"; a clone grown
+      // by FUN_0028b740 carries 2 instead and tears down its *parent's* link.
+      if (isEnemy8a)
+      {
+        entity.enemySpawnFlag1ac = 1;
       }
     }
 
@@ -367,14 +386,6 @@ namespace orphen::ported::entity
       return FUN_0023a6d0_travel_ticks(reach, entity, target.positionX20, target.positionZ24);
     }
 
-    // FUN_0023a990: one axis of a quadratic Bezier, t in 0..1.
-    float FUN_0023a990_bezier(float t, const std::array<float, 3> &points)
-    {
-      const float inverse = 1.0f - t;
-      return inverse * inverse * points[0] + (inverse + inverse) * t * points[1] +
-             t * t * points[2];
-    }
-
     // FUN_0027f5c8: **type 0x80's action table.** The wrapper has already
     // latched the busy bit; this is what an order actually means.
     //
@@ -577,6 +588,7 @@ namespace orphen::ported::entity
     //   anim 2  drop 30 units per 32000 ticks until the timer runs out, then
     //           state 6, which walks it home.
     void FUN_0027fb30_enemy80_leap(OriginalEntity &entity,
+                                   std::size_t slot,
                                    const ActorEnvironment &environment,
                                    ActorEnvironment::BattleActorView &view,
                                    ActorTrace &trace)
@@ -627,11 +639,11 @@ namespace orphen::ported::entity
         const float t = total != 0.0f ? entity.enemyArcProgress1cc / total : 1.0f;
         if (t < 1.0f && (entity.collisionFlags0c & 0x4066u) == 0)
         {
-          // FUN_00280698 sweeps a box the size of the enemy through
-          // FUN_00215ac8 against the attack record at 0x005739B0 every frame
-          // of the arc. It belongs to the same damage front as the four calls
-          // below and is left out with them, so a leap passes through the
-          // player rather than hitting.
+          // FUN_00280698: a box the size of the enemy, swept through
+          // FUN_00215ac8 against the type's attack record 0, every frame of
+          // the arc. This is the swoop's whole damage -- there is no separate
+          // hit volume entity, the flyer's own body is it.
+          FUN_00280698_swoop_hit_test(entity, slot, environment);
           entity.desiredDeltaX30 +=
               FUN_0023a990_bezier(t, entity.enemyArcX1a8) - entity.positionX20;
           entity.desiredDeltaZ34 +=
@@ -641,7 +653,9 @@ namespace orphen::ported::entity
           entity.enemyArcProgress1cc += static_cast<float>(environment.frameTicks);
           if ((entity.flags06 & 4u) != 0)
           {
-            // FUN_002ebde0(entity, 6): the leap's hit volume. Not ported.
+            // FUN_002ebde0(entity, 6): six puffs of dust, and nothing else --
+            // the ring is decoration for the sweep above, not a second hit.
+            FUN_002ebde0_spawn_swoop_ring(entity, slot, 6, environment);
             trace.recordEnemyAttackHit();
           }
           return;
@@ -676,6 +690,7 @@ namespace orphen::ported::entity
     // is a flat 1.5 above the target; and the hit is FUN_002ebad8 on the
     // animation's own frame, followed by cue 0x1E4, rather than a swept volume.
     void FUN_0027fdf8_enemy80_lunge(OriginalEntity &entity,
+                                    std::size_t slot,
                                     const ActorEnvironment &environment,
                                     ActorEnvironment::BattleActorView &view,
                                     ActorTrace &trace)
@@ -740,7 +755,13 @@ namespace orphen::ported::entity
       {
         if ((entity.flags06 & 1u) != 0)
         {
-          // FUN_002ebad8(entity, target, 0x5739B8): the lunge's hit. Not ported.
+          // FUN_002ebad8(entity, target, 0x5739B8): **the shot.** The lunge is
+          // not a ram at all -- the arc stops short of the target and the
+          // animation's last frame launches a type 0x10E projectile from bone
+          // 11, carrying the type's attack record 2. Without this the flyer
+          // flew the arc, played the cue and fired nothing.
+          FUN_002ebad8_spawn_shot(entity, slot, target,
+                                  DAT_005739b0_enemy80Attacks().record[2], environment);
           trace.recordEnemyAttackHit();
           if (environment.FUN_00267d38_playSound)
           {
@@ -811,6 +832,7 @@ namespace orphen::ported::entity
     // cursor 10, and drops to animation 1 when the clip comes round. Animation
     // 1 with nothing in flight is what clears the busy bit.
     void FUN_0028afc0_enemy8a_bite(OriginalEntity &entity,
+                                   std::size_t slot,
                                    const ActorEnvironment &environment,
                                    ActorEnvironment::BattleActorView &view,
                                    ActorTrace &trace)
@@ -830,9 +852,16 @@ namespace orphen::ported::entity
         }
         if (entity.timelineCursorA8 == 10 && (entity.flags06 & 4u) != 0)
         {
-          // FUN_002ec920(entity, target, 13) hangs the bite volume off +0x1A8.
-          // Not ported, so the link stays clear and the next order is taken
-          // straight away rather than waiting on a volume that never existed.
+          // FUN_002ec920(entity, target, 13): **the seed.** State 2 is not a
+          // bite that reaches anybody -- it lobs a type 0x112 off bone 13 at a
+          // point just in front of the target, and hangs it off +0x1A8. The
+          // wrapper walks that link every frame; when it lands, FUN_0028b740
+          // grows a second Maneater out of it.
+          entity.enemyAttackLink1a8 = FUN_002ec920_spawn_seed(
+              entity, slot,
+              FUN_0023a958_target(*environment.entityPool,
+                                  static_cast<std::int16_t>(entity.enemyTargetSlot1a0)),
+              13, environment);
           trace.recordEnemyAttackHit();
           if (environment.FUN_00267d38_playSound)
           {
@@ -857,6 +886,7 @@ namespace orphen::ported::entity
     // last frame clears the busy bit and hands the projectile to
     // FUN_00216128's pool at DAT_0058B148.
     void FUN_0028b420_enemy8a_spit(OriginalEntity &entity,
+                                   std::size_t slot,
                                    const ActorEnvironment &environment,
                                    ActorEnvironment::BattleActorView &view,
                                    ActorTrace &trace)
@@ -889,7 +919,11 @@ namespace orphen::ported::entity
             static_cast<std::int16_t>(entity.timelineCursorA8) < 10 &&
             (entity.flags06 & 4u) != 0)
         {
-          // FUN_002ecc68(entity, target): the spit. Not ported.
+          // FUN_002ecc68(entity): **the spores.** Eight type 0x113 orbs off
+          // bone 13, spread evenly and drifting outward as they swell. They
+          // carry no hit test of their own -- the damage is the direct charge
+          // below.
+          FUN_002ecc68_spawn_spores(entity, slot, environment);
           trace.recordEnemyAttackHit();
           if (environment.FUN_00267d38_playSound)
           {
@@ -899,10 +933,133 @@ namespace orphen::ported::entity
         if ((entity.flags06 & 1u) != 0)
         {
           view.flags38 &= ~1u;
-          // FUN_00216128(0x58B148, entity, target): hand the throw off. Not
-          // ported; the busy bit is still released so the script goes on.
+          // FUN_00216128(0x58B148, entity, target): the spit's damage, charged
+          // straight to the target with no test at all. The orbs above are the
+          // picture of it; this is the hit.
+          const std::size_t targetSlot = static_cast<std::size_t>(
+              entity.enemyTargetSlot1a0 < 0 ? 0 : entity.enemyTargetSlot1a0);
+          if (targetSlot < environment.entityPool->slotCount())
+          {
+            FUN_00216128_direct_hit(entity, slot, environment.entityPool->slot(targetSlot),
+                                    DAT_0058b140_enemy8aAttacks().record[2], environment);
+          }
         }
       }
+    }
+
+    // FUN_0028b0e8, type 0x8A state 3: **the clone's bite.** Nothing placed by
+    // the scene ever enters this state -- it belongs to the Maneater that grew
+    // out of a seed, and FUN_0028b740 drops it straight in. A clone has one hit
+    // point, no actor record and no AI script; the state is its whole life.
+    //
+    //   FUN_0023eff8 == 0   the fight is over, so there is nobody to bite.
+    //   anim 10 / 11        walk in, turning toward the target every frame.
+    //   anim 12             the lunge. Its last frame decides: within one unit,
+    //                       within 0.3 in height, the target on the ground, not
+    //                       already held by something and not somebody's child
+    //                       -- then the grab. Anything else and it misses.
+    //   anim 13             the hold, 0x0C80 ticks, and FUN_00216128 charges
+    //                       attack record 0 when it ends.
+    //   anything else       run the timer out and die.
+    //
+    // Either way it ends in state 5. The grab is the only place in either enemy
+    // that writes the *victim's* +0x96 bit 2, which is what pins the player in
+    // place while the clone chews.
+    void FUN_0028b0e8_enemy8a_clone(OriginalEntity &entity,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+      const auto random = [&environment]() -> std::uint32_t
+      { return environment.random ? environment.random() : 0u; };
+      const auto die = [&]()
+      {
+        FUN_00225bf0_set_state_and_animation(
+            entity, 5, static_cast<std::uint16_t>((random() & 1u) != 0 ? 8 : 9));
+      };
+
+      if (environment.FUN_0023eff8_enemy_count && environment.FUN_0023eff8_enemy_count() == 0)
+      {
+        FUN_00225bf0_set_state_and_animation(entity, 5, 8);
+        return;
+      }
+
+      const std::size_t targetSlot = static_cast<std::size_t>(
+          entity.enemyTargetSlot1a0 < 0 ? 0 : entity.enemyTargetSlot1a0);
+      OriginalEntity &target = pool.slot(targetSlot);
+
+      const float bearing = FUN_0023a4b8_bearing(entity, target);
+      const float delta = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, bearing,
+          static_cast<float>(environment.frameTicks) * kDAT_00353530_enemy8aCloneTurnRate);
+      if (delta == 0.0f)
+      {
+        entity.facingRadians5c = bearing;
+      }
+      else
+      {
+        entity.facingRadians5c += delta;
+      }
+
+      const std::uint16_t animation = entity.animationA0;
+      if (static_cast<std::uint16_t>(animation - 10) < 2)
+      {
+        if (entity.timelineCursorA8 == 0 && (entity.flags06 & 4u) != 0 &&
+            environment.FUN_00267d38_playSound)
+        {
+          environment.FUN_00267d38_playSound(kFUN_0028b0e8_cloneCue, entity);
+        }
+        if ((entity.flags06 & 1u) != 0)
+        {
+          FUN_00225bc8_set_animation(entity, 12);
+        }
+        return;
+      }
+
+      if (animation == 12)
+      {
+        if ((entity.flags06 & 4u) != 0 && environment.FUN_00267d38_playSound)
+        {
+          environment.FUN_00267d38_playSound(kFUN_0028b0e8_cloneCue, entity);
+        }
+        if ((entity.flags06 & 1u) == 0)
+        {
+          return;
+        }
+        const float dx = entity.positionX20 - target.positionX20;
+        const float dz = entity.positionZ24 - target.positionZ24;
+        const float dy = entity.positionY28 - target.positionY28;
+        const bool missed = std::sqrt(dx * dx + dz * dz + dy * dy) > 1.0f ||
+                            dy > kDAT_00353534_cloneGrabHeight ||
+                            dy < kDAT_00353538_cloneGrabDepth ||
+                            (target.collisionFlags0c & 1u) == 0 || target.parentSlot192 != -1 ||
+                            (target.battleFlags96 & 4u) != 0;
+        if (missed)
+        {
+          FUN_00225bc8_set_animation(entity, 2);
+          return;
+        }
+        target.battleFlags96 = static_cast<std::uint8_t>(target.battleFlags96 | 4u);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x10u);
+        FUN_00225bc8_set_animation(entity, 13);
+        entity.fadeRamp62 = 0x0C80;
+        return;
+      }
+
+      entity.fadeRamp62 = static_cast<std::uint16_t>(FUN_0023a678_countdown(
+          static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks));
+      if (entity.fadeRamp62 != 0)
+      {
+        return;
+      }
+      if (animation == 13)
+      {
+        FUN_00216128_direct_hit(entity, slot, target, DAT_0058b140_enemy8aAttacks().record[0],
+                                environment);
+        target.battleFlags96 = static_cast<std::uint8_t>(target.battleFlags96 & 0xFBu);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFEFu);
+      }
+      die();
     }
 
     // ------------------------------------------------- taking a hit and dying
@@ -1107,24 +1264,41 @@ namespace orphen::ported::entity
       }
 
       entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x0801u);
+      EntityPool &pool = *environment.entityPool;
+
+      // The two shapes of the tidy-up, and which one runs is +0x1AC. A Maneater
+      // the scene placed ran FUN_0028ae10, which stamped 1 there, and owns the
+      // seed at +0x1A8. A clone grown by FUN_0028b740 carries 2 instead, never
+      // ran state 0, and owns nothing -- what it has at +0x1A4 is a link *back*
+      // to its parent, and all it has to do is clear the parent's own +0x1A4 so
+      // the Maneater can take a bite order again.
       if ((entity.enemySpawnFlag1ac & 1u) == 0)
       {
-        if (entity.enemyAttackLink1a4 >= 0 && environment.entityPool != nullptr &&
-            static_cast<std::size_t>(entity.enemyAttackLink1a4) <
-                environment.entityPool->slotCount())
+        if (entity.enemyAttackLink1a4 >= 0 &&
+            static_cast<std::size_t>(entity.enemyAttackLink1a4) < pool.slotCount())
         {
-          environment.entityPool->slot(static_cast<std::size_t>(entity.enemyAttackLink1a4))
-              .enemyAttackLink1a4 = -1;
+          pool.slot(static_cast<std::size_t>(entity.enemyAttackLink1a4)).enemyAttackLink1a4 = -1;
         }
         return;
       }
+
+      // With no clone and no seed left the record is finally released -- and
+      // only here, which is why a Maneater that dies mid-spit holds its actor
+      // busy until the seed is gone.
       if (entity.enemyAttackLink1a4 < 0 && entity.enemyAttackLink1a8 < 0 && haveRecord)
       {
         view.flags38 &= ~1u;
       }
-      // The 0x112 branch -- reaching into the linked entity and raising its own
-      // +0x04 bits 0x801 -- is FUN_00216128's projectile, which the port does
-      // not spawn, so the link is always empty here.
+      if (entity.enemyAttackLink1a8 >= 0 &&
+          static_cast<std::size_t>(entity.enemyAttackLink1a8) < pool.slotCount())
+      {
+        OriginalEntity &seed = pool.slot(static_cast<std::size_t>(entity.enemyAttackLink1a8));
+        if (seed.typeId00 == kManeaterSeedTypeId)
+        {
+          // The seed fades and frees itself the same way the corpse does.
+          seed.halfword04 = static_cast<std::uint16_t>(seed.halfword04 | 0x0801u);
+        }
+      }
       entity.enemyAttackLink1a8 = -1;
     }
 
@@ -1200,7 +1374,7 @@ namespace orphen::ported::entity
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
-      enemy_state0(entity, slot, environment);
+      enemy_state0(entity, slot, environment, false);
     }
     else if (haveRecord)
     {
@@ -1210,10 +1384,10 @@ namespace orphen::ported::entity
         FUN_0027fa88_enemy80_turn(entity, environment, view);
         break;
       case 2:
-        FUN_0027fb30_enemy80_leap(entity, environment, view, trace);
+        FUN_0027fb30_enemy80_leap(entity, slot, environment, view, trace);
         break;
       case 3:
-        FUN_0027fdf8_enemy80_lunge(entity, environment, view, trace);
+        FUN_0027fdf8_enemy80_lunge(entity, slot, environment, view, trace);
         break;
       case 5:
         FUN_00280288_enemy80_recover_flight(entity, environment, view);
@@ -1269,15 +1443,28 @@ namespace orphen::ported::entity
       return;
     }
 
-    // uGpffffb052 bit 3, the "battle is over" broadcast: drop whatever the
-    // enemy was carrying and go to state 5. The +0x1A8 half of it -- the spit
-    // projectile this type links to itself, torn down through FUN_002ec750 and
-    // FUN_0028b740 -- cannot be reached in the port, because only that unported
-    // attack writes the link.
-    if ((environment.sGpffffb052_battleFlags & 8u) != 0 && entity.state60 != 5)
+    EntityPool &pool = *environment.entityPool;
+
+    // uGpffffb052 bit 3, the "battle is over" broadcast: drop the seed still in
+    // the air -- freeing it outright when it really is one, since a type 0x112
+    // has no behaviour of its own to notice -- and go to state 5.
+    if ((environment.sGpffffb052_battleFlags & 8u) != 0)
     {
-      entity.fadeRamp62 = 0;
-      FUN_00225bf0_set_state_and_animation(entity, 5, 8);
+      if (entity.enemyAttackLink1a8 >= 0 &&
+          static_cast<std::size_t>(entity.enemyAttackLink1a8) < pool.slotCount())
+      {
+        if (pool.slot(static_cast<std::size_t>(entity.enemyAttackLink1a8)).typeId00 ==
+            kManeaterSeedTypeId)
+        {
+          pool.releaseSlot(static_cast<std::size_t>(entity.enemyAttackLink1a8));
+        }
+        entity.enemyAttackLink1a8 = -1;
+      }
+      if (entity.state60 != 5)
+      {
+        entity.fadeRamp62 = 0;
+        FUN_00225bf0_set_state_and_animation(entity, 5, 8);
+      }
     }
 
     // The step. +0x06 bit 0 is "the animation came round", so this keys once a
@@ -1285,6 +1472,25 @@ namespace orphen::ported::entity
     if (entity.animationA0 == 1 && (entity.flags06 & 1u) != 0 && environment.FUN_00267d38_playSound)
     {
       environment.FUN_00267d38_playSound(kFUN_0028a958_stepCue, entity);
+    }
+
+    // The seed's whole clock. Type 0x112 has no actor handler, so the Maneater
+    // that spat it walks its arc from here: 1 the frame it lands, which is when
+    // the clone grows, -1 when it has finished sinking and freed itself.
+    if (entity.enemyAttackLink1a8 >= 0 &&
+        static_cast<std::size_t>(entity.enemyAttackLink1a8) < pool.slotCount())
+    {
+      const std::size_t seedSlot = static_cast<std::size_t>(entity.enemyAttackLink1a8);
+      const std::int32_t seedState =
+          FUN_002ec750_seed_flight(pool.slot(seedSlot), seedSlot, environment);
+      if (seedState < 0)
+      {
+        entity.enemyAttackLink1a8 = -1;
+      }
+      else if (seedState == 1)
+      {
+        FUN_0028b740_grow_clone(entity, slot, environment);
+      }
     }
 
     ActorEnvironment::BattleActorView view;
@@ -1333,12 +1539,13 @@ namespace orphen::ported::entity
     const std::uint32_t handler = environment.dispatchTable->stateHandler(
         kPTR_FUN_00325B40_enemy8aStates, kEnemy8aStateCount, entity.state60);
     const bool implemented =
-        entity.state60 == 0 || entity.state60 == 1 || entity.state60 == 5 ||
-        entity.state60 == 6 || (haveRecord && (entity.state60 == 2 || entity.state60 == 4));
+        entity.state60 == 0 || entity.state60 == 1 || entity.state60 == 3 ||
+        entity.state60 == 5 || entity.state60 == 6 ||
+        (haveRecord && (entity.state60 == 2 || entity.state60 == 4));
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
-      enemy_state0(entity, slot, environment);
+      enemy_state0(entity, slot, environment, true);
     }
     // Unlike the flyer's, both of the Maneater's damage states test +0x198 for
     // null themselves, so they run whether or not the entity has a record.
@@ -1350,6 +1557,12 @@ namespace orphen::ported::entity
     {
       FUN_0028b698_enemy8a_hit(entity, environment, view, haveRecord);
     }
+    // So does state 3: a clone is never bound to an actor record at all, and
+    // FUN_0028b0e8 never reads +0x198.
+    else if (entity.state60 == 3)
+    {
+      FUN_0028b0e8_enemy8a_clone(entity, slot, environment);
+    }
     else if (haveRecord)
     {
       switch (entity.state60)
@@ -1358,10 +1571,10 @@ namespace orphen::ported::entity
         FUN_0028af28_enemy8a_turn(entity, environment, view);
         break;
       case 2:
-        FUN_0028afc0_enemy8a_bite(entity, environment, view, trace);
+        FUN_0028afc0_enemy8a_bite(entity, slot, environment, view, trace);
         break;
       case 4:
-        FUN_0028b420_enemy8a_spit(entity, environment, view, trace);
+        FUN_0028b420_enemy8a_spit(entity, slot, environment, view, trace);
         break;
       default:
         break;

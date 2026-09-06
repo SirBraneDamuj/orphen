@@ -26,6 +26,18 @@ namespace orphen::ported::battle
     // 0x96 is the pre-start hold the opener parks an idle member in.
     constexpr std::uint8_t kActionOpenerHold96 = 0x96;
 
+    // FUN_0024a540 and FUN_0024a190, the damage state's own constants.
+    constexpr std::uint16_t kFUN_0024a540_hurtCue = 0x52;
+    // DAT_0035277c: the upward nudge a corpse gets if it was standing still.
+    constexpr float kDAT_0035277c_deathRise = 0.014499999582767487f;
+    // The seven bits of +0xC2 that are a status rather than an element. 0x40 is
+    // *not* among them, which is why FUN_0024a190's case for it is dead code --
+    // reproduced anyway, because the switch really is written that way.
+    constexpr std::uint16_t kFUN_0024a190_statusMask = 0x1632;
+    constexpr std::uint16_t kFUN_0024a190_statusTicks = 0x04B0;
+    // fGpffffa864: how far above the victim's head the aura floats.
+    constexpr float kFGpffffa864_auraLift = 0.30000001192092896f;
+
     // The bones the face-the-target block drives. 10 and 9 are the two arms --
     // FUN_0020DD78's role nibble puts them there -- and 0x20 is the spine.
     constexpr std::size_t kBoneArm10 = 10;
@@ -1582,13 +1594,307 @@ namespace orphen::ported::battle
       return charge;
     }
 
+    // FUN_002d8b38: **arm a status.** Every party member owns a type 0x118 aura
+    // entity, built with the rest of its effects at DAT_0031DA7C and parked
+    // hidden; this un-hides it over the victim, tells it which status to draw
+    // and how long for, and raises that status's bit in the member's
+    // DAT_0031DA6C word -- which is the bit the command input already reads
+    // (0x1000, confusion, is what makes a spell come out of the wrong slot).
+    //
+    // `height` is an offset added on top of the victim's own head. Status 5
+    // additionally cancels the member's action through FUN_00249388, which this
+    // slice does not reach because nothing that inflicts 5 is ported.
+    void FUN_002d8b38_arm_status(const StateContext &context,
+                                 float height,
+                                 std::uint16_t ticks,
+                                 std::int16_t status)
+    {
+      BattleParty &party = *context.party;
+      const std::int32_t auraSlot =
+          party.entitySlotAt(kDAT_0031da7c_auraEntity + context.member * 4);
+      if (auraSlot == kNoEntity)
+      {
+        return;
+      }
+      auto &aura = context.environment->pool->slot(static_cast<std::size_t>(auraSlot));
+
+      // FUN_00266098: hand the light slot back. Nothing in the battle module
+      // allocates one for a type 0x118, so this only ever clears the sentinel;
+      // the light table is not reachable from here for the same reason.
+      aura.lightSlot195 = -1;
+
+      const OriginalEntity &victim = *context.entity;
+      aura.auraVictim198 = static_cast<std::uint16_t>(context.entitySlot & 0xFFu);
+      // Coming back from hidden is what resets the scale; an aura already up
+      // keeps whatever size it had grown to.
+      if ((aura.halfword08 & 1u) != 0)
+      {
+        aura.scaleZ150 = 1.0f;
+        aura.scale14c = 1.0f;
+      }
+      aura.positionX20 = victim.positionX20;
+      aura.fadeRamp62 = ticks;
+      aura.positionZ24 = victim.positionZ24;
+      aura.staggerTimer12a = victim.staggerTimer12a;
+      aura.flags06 = static_cast<std::uint16_t>(aura.flags06 & 0xFFEFu);
+      aura.halfword08 = static_cast<std::uint16_t>(aura.halfword08 & 0xFFFEu);
+      aura.auraHeight19c = height + kFGpffffa864_auraLift;
+      const float top = victim.height58 + victim.positionY28 + height;
+      aura.auraStatus19a = status;
+      aura.groundHeight4c = top;
+      aura.positionY28 = top;
+      aura.previousGroundHeight50 = top;
+
+      const std::uint32_t at = kDAT_0031da6c_memberFlags + context.member * 4u;
+      party.tables().write<std::uint32_t>(
+          at, party.tables().read<std::uint32_t>(at) |
+                  (1u << (static_cast<std::uint32_t>(status) & 0x1Fu)));
+    }
+
+    // FUN_0024a190: **what a hit leaves behind.** The element halfword the hit
+    // stamped on +0xC2 is not only damage -- seven of its bits are statuses, and
+    // this is where they land. A member that already carries any status is
+    // immune to a second one; otherwise the reaction byte at +0xBC is the odds,
+    // as tenths, that the status is shrugged off.
+    //
+    // The two the two enemies in s14_e012 actually carry: the Maneater's spit
+    // is 0x0200 -> status 9, and the flyer's shot is 0x1000 -> status 12, which
+    // is the confusion bit FUN_002462c8 reads.
+    std::uint32_t FUN_0024a190_apply_status(const StateContext &context)
+    {
+      auto &entity = *context.entity;
+      // DAT_003555C7, the debug "no status effects" switch. Zero in a shipped
+      // build and never written outside the debug menu.
+      BattleParty &party = *context.party;
+      if (party.tables().read<std::uint32_t>(kDAT_0031da6c_memberFlags + context.member * 4u) != 0)
+      {
+        entity.hitFlagsC2 = 0;
+        return 1;
+      }
+      if ((entity.hitFlagsC2 & kFUN_0024a190_statusMask) == 0)
+      {
+        entity.hitFlagsC2 = 0;
+        return 1;
+      }
+
+      // +0xBC is a resistance in tenths, capped at ten -- a reaction byte of 0
+      // means two in ten, which is the default the hit records carry.
+      std::uint32_t odds = 2;
+      if (entity.hitReactionBc != 0)
+      {
+        odds = entity.hitReactionBc < 10 ? static_cast<std::uint32_t>(entity.hitReactionBc) : 10u;
+      }
+      const std::uint32_t rolled =
+          (context.environment->FUN_00216868_random ? context.environment->FUN_00216868_random()
+                                                    : 0u) &
+          0xFFFFu;
+      if (odds < rolled % 10u)
+      {
+        entity.hitReactionBc = 0;
+        entity.hitFlagsC2 = 0;
+        return 0;
+      }
+
+      // One bit, one status, and nothing else in the halfword is looked at.
+      std::int16_t status = -1;
+      switch (entity.hitFlagsC2)
+      {
+      case 0x0002: status = 1; break;
+      case 0x0010: status = 4; break;
+      case 0x0020: status = 5; break;
+      case 0x0040: status = 6; break;
+      case 0x0200: status = 9; break;
+      case 0x0400: status = 10; break;
+      case 0x1000: status = 12; break;
+      default: break;
+      }
+      if (status >= 0)
+      {
+        FUN_002d8b38_arm_status(context, 0.0f, kFUN_0024a190_statusTicks, status);
+      }
+      entity.hitFlagsC2 = 0;
+      return 1;
+    }
+
+    // FUN_0024a540 (state 102): **taking a hit, and dying of it.** Every other
+    // class-1 state is something the player asked for; this is the one the game
+    // puts them in. FUN_0024a360 routes here the moment +0xBE is non-zero, with
+    // the restart bit set, and the first frame does all the work:
+    //
+    //   drain +0xBE out of +0x12A, and pick the reel from the reaction byte --
+    //   0x12, or being off the ground, gives the knock-down (0x20) rather than
+    //   the flinch (0x1C);
+    //   raise the control block's +0x38 bit 0x800, and 0x400 as well when the
+    //   hit crossed a fifth of the character's maximum -- that is the "this one
+    //   hurt" flag the readout reads;
+    //   at zero hit points, lie down and teleport to where the control block
+    //   last recorded the character standing; otherwise roll for a status.
+    //
+    // The frames after it are the getting up: 0x20 down, 0x22 the push-up after
+    // fifteen frames on the floor, 0x23 the stand, and finally state 108 with
+    // action 0x87 -- the walk back to the recorded spot. **Without this the port
+    // sat in state 102 forever the first time anything hit the player**, because
+    // nothing else drains +0xBE and FUN_00216140 refuses a victim that still has
+    // damage pending.
+    std::uint16_t stateDamage102(const StateContext &context, std::uint16_t charge)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      BattleTables &tables = party.tables();
+      const std::uint32_t control = context.control;
+      const std::uint32_t recordDownTimer =
+          BattleTables::partyRecord(context.member) + record::kDownTimer3e;
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        // FUN_00206ce0: cut the line the character was speaking. Mixer-level,
+        // the same reason FUN_0023bbd8 below is a comment -- the port reaches
+        // the engine only through FUN_00267d38.
+        if (FUN_00249348_is_voiced_player(party, entity) &&
+            context.environment->FUN_00206a90_voice_busy &&
+            context.environment->FUN_00206a90_voice_busy())
+        {
+          // FUN_00206ce0()
+        }
+        if (entity.byte95 == 1)
+        {
+          // FUN_0023bbd8(0, 9): the lead's hurt cue, on the priority channel.
+        }
+
+        if (static_cast<std::int16_t>(entity.pendingDamageBe) >= 0)
+        {
+          if (entity.animationA0 != 0x1C && context.environment->FUN_00267d38_play_at_entity)
+          {
+            context.environment->FUN_00267d38_play_at_entity(kFUN_0024a540_hurtCue,
+                                                             context.entitySlot);
+          }
+          // Reaction 0x12, or already off the ground, knocks the character
+          // down; anything else is the flinch it can stand through.
+          const bool knockedDown =
+              entity.hitReactionBc == 0x12 || (entity.collisionFlags0c & 1u) == 0;
+          FUN_00248e98_set_animation_if_changed(entity,
+                                                knockedDown ? static_cast<std::uint16_t>(0x20)
+                                                            : static_cast<std::uint16_t>(0x1C));
+
+          const auto maximum = static_cast<std::int16_t>(entity.maxHitPoints128);
+          const auto before = static_cast<std::int16_t>(entity.staggerTimer12a);
+          const auto after = static_cast<std::int16_t>(
+              static_cast<std::int32_t>(entity.staggerTimer12a) -
+              static_cast<std::int32_t>(entity.pendingDamageBe));
+          entity.staggerTimer12a = static_cast<std::uint16_t>(after);
+
+          // A fifth of the maximum is one bar segment; crossing one raises
+          // 0x400 on top of the 0x800 every hit raises.
+          const std::int32_t band = maximum / 5;
+          if (band != 0 && (after / band) < (before / band))
+          {
+            tables.write<std::uint32_t>(
+                control + control::kFlags38,
+                tables.read<std::uint32_t>(control + control::kFlags38) | 0x400u);
+          }
+          tables.write<std::uint32_t>(control + control::kFlags38,
+                                      tables.read<std::uint32_t>(control + control::kFlags38) |
+                                          0x800u);
+          entity.freezeTimerBd = 0;
+
+          if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1)
+          {
+            FUN_00248e98_set_animation_if_changed(entity, 0x20);
+            entity.fadeLevel134 = 0x28;
+            entity.positionX20 =
+                static_cast<float>(tables.read<std::int16_t>(control + control::kPosX14)) / 10.0f;
+            entity.positionZ24 =
+                static_cast<float>(tables.read<std::int16_t>(control + control::kPosY16)) / 10.0f;
+            entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7u);
+            entity.positionY28 =
+                static_cast<float>(tables.read<std::int16_t>(control + control::kPosZ18)) / 10.0f;
+            if (entity.verticalVelocity44 == 0.0f)
+            {
+              entity.verticalVelocity44 = kDAT_0035277c_deathRise;
+            }
+          }
+          else
+          {
+            FUN_0024a190_apply_status(context);
+          }
+
+          entity.hitReactionBc = 0;
+          entity.hitSourceC0 = 0;
+          entity.hitFlagsC2 = 0;
+          entity.pendingDamageBe = 0;
+        }
+      }
+
+      if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1)
+      {
+        if ((entity.flags06 & 1u) != 0)
+        {
+          FUN_00248e98_set_animation_if_changed(entity, 0x21);
+          return 1;
+        }
+        return charge;
+      }
+
+      if ((entity.collisionFlags0c & 1u) == 0)
+      {
+        // Still in the air: hold the knock-down pose and swallow the clip
+        // events, so landing is what starts the recovery.
+        FUN_00248e98_set_animation_if_changed(entity, 0x20);
+        entity.flags06 = 0;
+        return 1;
+      }
+
+      if (entity.animationA0 == 0x20)
+      {
+        FUN_00248e98_set_animation_if_changed(entity, 0x22);
+        tables.write<std::uint16_t>(
+            recordDownTimer, static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x0F)));
+        return 1;
+      }
+
+      if (entity.animationA0 == 0x22)
+      {
+        const std::uint16_t timer = tables.read<std::uint16_t>(recordDownTimer);
+        if (timer == 0)
+        {
+          if ((entity.flags06 & 1u) != 0)
+          {
+            FUN_00248e98_set_animation_if_changed(entity, 0x23);
+            return 0;
+          }
+        }
+        else
+        {
+          tables.write<std::uint16_t>(
+              recordDownTimer,
+              FUN_00248e58_step_timer(timer, context.environment->frameTicks));
+        }
+        return 0;
+      }
+
+      if ((entity.flags06 & 1u) != 0)
+      {
+        // The stand is over: state 108 walks back to the recorded spot, and
+        // action 0x87 is what FUN_0024a360 turns straight back into idle.
+        entity.state60 = 0x406C;
+        entity.animationA0 = 2;
+        tables.write<std::uint8_t>(control + control::kCurrentAction0f, kActionRecover87);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFEEu);
+        tables.write<std::uint32_t>(control + control::kFlags38,
+                                    tables.read<std::uint32_t>(control + control::kFlags38) &
+                                        0xFFFFF3FFu);
+      }
+      return 0;
+    }
+
     // The class-1 table at 0x0031DD60, states 100..123. A null entry is a state
     // whose handler this slice does not port; --battle-report names any that a
     // run actually reached.
     constexpr std::array<StateHandler, 24> kClass1States = {
         nullptr,               // 100 -- the original's own null entry
         stateNothing,          // 101 LAB_0024a538
-        nullptr,               // 102 FUN_0024a540, the damage/death handler
+        stateDamage102,        // 102 FUN_0024a540, the damage/death handler
         stateNothing,          // 103 LAB_0024a868
         stateNothing,          // 104 LAB_0024a868
         stateFireAttack105,    // 105 FUN_0024ac88

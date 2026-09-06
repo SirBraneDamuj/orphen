@@ -58,10 +58,10 @@ namespace orphen::ported::entity
     void recordSuspended() { ++suspendedCount_; }
     void recordFading() { ++fadingCount_; }
 
-    // An enemy attack state reached the frame its damage call fires on.
-    // FUN_002ebde0, FUN_002ebad8, FUN_002ec920 and FUN_002ecc68 -- the four
-    // that spawn the hit volume -- are not ported, so the attack plays through
-    // and lands on nobody. Counted rather than left silent.
+    // An enemy attack state reached the frame its damage call fires on --
+    // FUN_002ebde0, FUN_002ebad8, FUN_002ec920 or FUN_002ecc68. Counted because
+    // "the animation played" and "something left the enemy" are separate
+    // questions, and for a long time the answer to the second was no.
     void recordEnemyAttackHit() { ++enemyAttackHitCount_; }
     std::uint32_t enemyAttackHitCount() const { return enemyAttackHitCount_; }
 

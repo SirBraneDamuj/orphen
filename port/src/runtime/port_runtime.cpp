@@ -604,6 +604,17 @@ namespace orphen::port
     environment.DAT_0031d3c8_battleTableWord = [this](std::uint32_t address) {
       return battleParty_.tables().read<std::uint32_t>(address);
     };
+    environment.DAT_0031d3c8_setBattleTableWord = [this](std::uint32_t address,
+                                                        std::uint32_t value) {
+      battleParty_.tables().write<std::uint32_t>(address, value);
+    };
+    environment.FUN_002d5630_damage_bar = [this](bool upperBank, std::int32_t hitPoints,
+                                                 std::int32_t maxHitPoints, std::int32_t damage)
+    {
+      orphen::ported::entity::FUN_002d5630_arm_health_bar(entityPool_, upperBank, hitPoints,
+                                                          maxHitPoints, damage,
+                                                          DAT_003555d3_groupEScene_);
+    };
 
     // The enemy side. `record` is the entity's +0x198 as the port spells it:
     // the actor record's offset in the encounter blob, or -1 for the scratch
@@ -683,6 +694,8 @@ namespace orphen::port
       }
       return static_cast<std::int32_t>(bound);
     };
+    environment.FUN_0023eff8_enemy_count = [this]() -> std::int32_t
+    { return battleEncounter_.FUN_0023eff8_enemy_count(entityPool_); };
     // FUN_002f1380: place, size and un-hide the one shared hit effect. The
     // entity it moves is the battle module's DAT_0031DAD0; the word it raises
     // is the runtime's DAT_00355588. FUN_002deae8 calls it every frame Bite of
@@ -5613,10 +5626,9 @@ namespace orphen::port
 
       if (actorTrace_.enemyAttackHitCount() != 0)
       {
-        std::cout << "enemy attacks that reached their damage frame: "
+        std::cout << "enemy attacks that fired: "
                   << actorTrace_.enemyAttackHitCount()
-                  << " (FUN_002ebde0 / FUN_002ebad8 / FUN_002ec920 / FUN_002ecc68 unported,"
-                     " so they land on nobody)\n";
+                  << " (FUN_002ebde0 / FUN_002ebad8 / FUN_002ec920 / FUN_002ecc68)\n";
       }
 
       std::cout << "skipped: hidden=" << actorTrace_.hiddenCount()

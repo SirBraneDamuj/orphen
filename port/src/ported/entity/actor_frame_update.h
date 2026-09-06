@@ -14,6 +14,7 @@
 #include "ported/model/psc3_skeleton.h"
 #include "ported/render/original_light_table.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -209,6 +210,20 @@ namespace orphen::ported::entity
     // HitParameters. This is that read. Returns 0 when there is no battle.
     std::function<std::uint32_t(std::uint32_t address)> DAT_0031d3c8_battleTableWord;
 
+    // The same word, written back. The status aura is the only thing out here
+    // that changes one: DAT_0031DA6C's status bit is raised by FUN_002d8b38 and
+    // cleared by FUN_002d8ce0 when the icon has faded off.
+    std::function<void(std::uint32_t address, std::uint32_t value)>
+        DAT_0031d3c8_setBattleTableWord;
+
+    // FUN_002d5630, the segmented health bar (original_health_bar.h). The hit
+    // test has its own copy of this; the aura needs it because a poison tick
+    // takes a hit point without going through a hit at all, and it arms the
+    // *lower* bar rather than the enemy's.
+    std::function<void(bool upperBank, std::int32_t hitPoints, std::int32_t maxHitPoints,
+                       std::int32_t damage)>
+        FUN_002d5630_damage_bar;
+
     // The other half of the battle module: the *actor* record an enemy is bound
     // to. DAT_0031d7b0_battleMember above is the party side; this is
     // DAT_00354EB4, the encounter's own table, and it is what every enemy
@@ -252,6 +267,11 @@ namespace orphen::ported::entity
     // FUN_0023f8b8, from the caller the original actually uses: the enemy's own
     // state 0. Returns the record offset, or kDAT_0031d178_scratchRecord.
     std::function<std::int32_t(std::size_t slot)> FUN_0023f8b8_bind_battle_actor;
+
+    // FUN_0023eff8: how many actor records still hold a live enemy. The
+    // Maneater's clone opens with it -- with the fight over there is nobody to
+    // bite, so it goes straight to its death state.
+    std::function<std::int32_t()> FUN_0023eff8_enemy_count;
 
     // uGpffffadf8, SCR.BIN 0xBF. An enemy's state 0 opens with
     // FUN_0025bae8(0, type, r) -- group 0 at `type - 0x7C` -- and inlines
@@ -483,6 +503,14 @@ namespace orphen::ported::entity
   // FUN_0023a320: one capped step of `from` toward `to`, zero once inside the
   // dead zone. Every turning behaviour goes through it.
   float FUN_0023a320_approach_angle(float from, float to, float maxStep);
+
+  // FUN_0023a678: a tick countdown, floored at zero rather than allowed
+  // negative. Every enemy state that holds a pose for a while uses it.
+  std::int16_t FUN_0023a678_countdown(std::int16_t timer, std::uint32_t frameTicks);
+
+  // FUN_0023a990: one axis of a quadratic Bezier, t in 0..1. Both enemy types
+  // fly their arcs on three of these, and so does the Maneater's seed.
+  float FUN_0023a990_bezier(float t, const std::array<float, 3> &points);
 
   // Integrates +0x30/+0x34/+0x38 into position for a non-player actor. See the
   // definition: this is deliberately not the full FUN_002262c0.

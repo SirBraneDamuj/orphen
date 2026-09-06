@@ -1,6 +1,8 @@
 #include "ported/entity/actor_frame_update.h"
 
 #include "ported/entity/original_battle_enemy.h"
+#include "ported/entity/original_enemy_attack.h"
+#include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_health_bar.h"
 
 #include "ported/entity/entity_collision.h"
@@ -442,6 +444,20 @@ namespace orphen::ported::entity
       return std::max(difference, -maxStep);
     }
     return 0.0f;
+  }
+
+  std::int16_t FUN_0023a678_countdown(std::int16_t timer, std::uint32_t frameTicks)
+  {
+    const std::int16_t remaining =
+        static_cast<std::int16_t>(timer - static_cast<std::int16_t>(frameTicks));
+    return remaining < 1 ? static_cast<std::int16_t>(0) : remaining;
+  }
+
+  float FUN_0023a990_bezier(float t, const std::array<float, 3> &points)
+  {
+    const float inverse = 1.0f - t;
+    return inverse * inverse * points[0] + (inverse + inverse) * t * points[1] +
+           t * t * points[2];
   }
 
   // FUN_002cd3a0: type 0x62's state 3, the one it spends its life in. A hover
@@ -3913,6 +3929,10 @@ namespace orphen::ported::entity
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
+    case 0x002EB990u: // FUN_002eb990, type 0x10E, the flyer's shot
+    case 0x002EBC30u: // FUN_002ebc30, type 0x10F, the swoop's dust
+    case 0x002ECB08u: // FUN_002ecb08, type 0x113, the Maneater's spores
+    case 0x002D8CE0u: // FUN_002d8ce0, type 0x118, the status aura
       return true;
     default:
       return false;
@@ -3957,6 +3977,14 @@ namespace orphen::ported::entity
       return "FUN_002d73e8 (target cursor)";
     case 0x002D5748u:
       return "LAB_002d5748 (health bar)";
+    case 0x002EB990u:
+      return "FUN_002eb990 (enemy shot)";
+    case 0x002EBC30u:
+      return "FUN_002ebc30 (swoop dust)";
+    case 0x002ECB08u:
+      return "FUN_002ecb08 (poison spore)";
+    case 0x002D8CE0u:
+      return "FUN_002d8ce0 (status aura)";
     case 0x002D9C88u:
       return "FUN_002d9c88 (cast marker)";
     case 0x002DEAE8u:
@@ -4108,6 +4136,18 @@ namespace orphen::ported::entity
         break;
       case 0x002D5748u:
         FUN_002d5748_health_bar(entity, environment.frameTicks);
+        break;
+      case 0x002EB990u:
+        FUN_002eb990_enemy_shot(entity, slot, environment);
+        break;
+      case 0x002EBC30u:
+        FUN_002ebc30_swoop_puff(entity, slot, environment);
+        break;
+      case 0x002ECB08u:
+        FUN_002ecb08_spore(entity, slot, environment);
+        break;
+      case 0x002D8CE0u:
+        FUN_002d8ce0_status_aura(entity, slot, environment);
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);
