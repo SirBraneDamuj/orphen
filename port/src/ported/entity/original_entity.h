@@ -360,6 +360,12 @@ namespace orphen::ported::entity
     // original takes between attacks too.
     std::int32_t enemyAttackLink1a4 = -1;
     std::int32_t enemyAttackLink1a8 = -1;
+    // +0x1AC on type 0x8A, where type 0x80 keeps the second control point of
+    // its X arc -- the same word, two owners, kept apart here for the same
+    // reason the pair above is. FUN_0028b740 stamps 2 on a Maneater that grew
+    // where a spit landed, and its state 5 reads bit 0 back to decide whether
+    // the corpse releases its record. Nothing in the port writes it yet.
+    std::uint8_t enemySpawnFlag1ac = 0;
     // +0x1A8..+0x1C8 on type 0x80: three quadratic Bezier control points, one
     // array per axis, that FUN_0023a990 walks to carry a leaping enemy from
     // where it stood to a point two units past its target. +0x1CC accumulates

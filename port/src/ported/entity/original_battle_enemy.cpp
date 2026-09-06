@@ -45,6 +45,15 @@ namespace orphen::ported::entity
     inline constexpr std::uint16_t kFUN_0027fdf8_lungeCue = 0x1E4;
     inline constexpr std::uint16_t kFUN_0028afc0_biteCue = 0x1C5;
     inline constexpr std::uint16_t kFUN_0028b420_spitCue = 0x1C9;
+    // The damage reaction's own rates and cues. DAT_00353250 is the rate the
+    // knocked-back 0x80 turns toward its spawn point at, DAT_00353254 the same
+    // 0.001 nudge the death branch in the wrapper uses.
+    inline constexpr float kDAT_00353250_enemy80RecoverTurnRate = 0.17453289031982422f;
+    inline constexpr float kDAT_00353254_enemy80DeathNudge = 0.0010000000474974513f;
+    inline constexpr std::uint16_t kFUN_00280628_enemy80HitCue = 0x1E5;
+    inline constexpr std::uint16_t kFUN_00280560_enemy80DeathCue = 0x1E6;
+    inline constexpr std::uint16_t kFUN_0028b698_enemy8aHitCue = 0x1CA;
+    inline constexpr std::uint16_t kFUN_0028b568_enemy8aDeathCue = 0x1CB;
 
     // FUN_0023a678: a tick countdown, floored at zero rather than allowed
     // negative. Shared by both types' state 1.
@@ -338,13 +347,24 @@ namespace orphen::ported::entity
     // bits, times 32 -- that every other battle timer uses.
     std::int16_t FUN_0023a6d0_travel_ticks(float reach,
                                            const OriginalEntity &entity,
-                                           const OriginalEntity &target)
+                                           float targetX,
+                                           float targetZ)
     {
-      const float dx = target.positionX20 - entity.positionX20;
-      const float dz = target.positionZ24 - entity.positionZ24;
+      const float dx = targetX - entity.positionX20;
+      const float dz = targetZ - entity.positionZ24;
       const float distance = std::sqrt(dx * dx + dz * dz);
       const std::int32_t ticks = static_cast<std::int32_t>(distance / (reach / 1000.0f));
       return static_cast<std::int16_t>((ticks << 21) >> 16);
+    }
+
+    // The original takes a bare float pair, so the call sites that hand it a
+    // record's spawn triple and the ones that hand it an entity are the same
+    // function; this overload is the entity spelling.
+    std::int16_t FUN_0023a6d0_travel_ticks(float reach,
+                                           const OriginalEntity &entity,
+                                           const OriginalEntity &target)
+    {
+      return FUN_0023a6d0_travel_ticks(reach, entity, target.positionX20, target.positionZ24);
     }
 
     // FUN_0023a990: one axis of a quadratic Bezier, t in 0..1.
@@ -885,6 +905,229 @@ namespace orphen::ported::entity
       }
     }
 
+    // ------------------------------------------------- taking a hit and dying
+    //
+    // FUN_00280728, reached from type 0x80's state 8 and from its action 8:
+    // **the knock-back flight home.** It publishes current action 8 -- so the
+    // AI script's gate keeps waiting -- and lays a quadratic Bezier from where
+    // the hit left it back to the record's spawn point, flat in Y apart from
+    // the two control points sitting at the current height. The reach is a flat
+    // 50 plus the record's +0x1A, and the travel time is costed the same way
+    // every other arc is.
+    void FUN_00280728_enemy80_recover(OriginalEntity &entity,
+                                      ActorEnvironment::BattleActorView &view)
+    {
+      view.currentAction0f = 8;
+      entity.enemyReach1a0 = 50.0f;
+
+      const float homeX = static_cast<float>(view.spawnX14) / 10.0f;
+      const float homeZ = static_cast<float>(view.spawnZ16) / 10.0f;
+      const float homeY = static_cast<float>(view.spawnY18) / 10.0f;
+
+      entity.battleDesiredFacing19c =
+          std::atan2(homeZ - entity.positionZ24, homeX - entity.positionX20);
+
+      entity.enemyArcX1a8 = {{entity.positionX20, homeX, homeX}};
+      entity.enemyArcZ1b4 = {{entity.positionZ24, homeZ, homeZ}};
+      entity.enemyArcY1c0 = {{entity.positionY28, entity.positionY28, homeY}};
+      entity.enemyArcProgress1cc = 0.0f;
+      entity.fadeRamp62 = static_cast<std::uint16_t>(FUN_0023a6d0_travel_ticks(
+          entity.enemyReach1a0 + static_cast<float>(view.attackRange1a), entity, homeX, homeZ));
+      FUN_00225bf0_set_state_and_animation(entity, 5, 2);
+    }
+
+    // FUN_00280628, type 0x80 state 8: **the stagger.** The wrapper drops the
+    // enemy in here the frame a hit lands that it survives. It holds the busy
+    // bit -- so no order is taken while it reels -- keys the hit cue on
+    // timeline cursor 4, and hands over to the flight home when the clip ends.
+    void FUN_00280628_enemy80_hit(OriginalEntity &entity,
+                                  const ActorEnvironment &environment,
+                                  ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      if (entity.timelineCursorA8 == 4 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_00280628_enemy80HitCue, entity);
+      }
+      if ((entity.flags06 & 1u) != 0)
+      {
+        FUN_00280728_enemy80_recover(entity, view);
+      }
+    }
+
+    // FUN_00280288, type 0x80 state 5: **the flight home.** The same shape as
+    // the leap -- turn first, and only once the facing has arrived walk the
+    // arc -- but the arc ends at the spawn point rather than at the target, and
+    // the busy bit is released on the frame the walk runs out. Releasing it is
+    // what lets the idle default stamp the current action back to 6 and free
+    // the AI script's gate; without this state a staggered enemy holds that
+    // gate for the rest of the fight.
+    void FUN_00280288_enemy80_recover_flight(OriginalEntity &entity,
+                                             const ActorEnvironment &environment,
+                                             ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      const float delta = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kDAT_00353250_enemy80RecoverTurnRate *
+              0.03125f);
+      if (delta != 0.0f)
+      {
+        entity.facingRadians5c += delta;
+        return;
+      }
+
+      const float t = entity.enemyArcProgress1cc /
+                      static_cast<float>(static_cast<std::int16_t>(entity.fadeRamp62));
+      if (t < 1.0f)
+      {
+        entity.desiredDeltaX30 += FUN_0023a990_bezier(t, entity.enemyArcX1a8) - entity.positionX20;
+        entity.desiredDeltaZ34 += FUN_0023a990_bezier(t, entity.enemyArcZ1b4) - entity.positionZ24;
+        entity.desiredDeltaY38 += FUN_0023a990_bezier(t, entity.enemyArcY1c0) - entity.positionY28;
+      }
+      else
+      {
+        view.flags38 &= ~1u;
+        entity.positionX20 = static_cast<float>(view.spawnX14) / 10.0f;
+        entity.positionZ24 = static_cast<float>(view.spawnZ16) / 10.0f;
+        entity.positionY28 = static_cast<float>(view.spawnY18) / 10.0f;
+      }
+      entity.enemyArcProgress1cc += static_cast<float>(environment.frameTicks);
+    }
+
+    // FUN_00280560, type 0x80 state 7: **the death.** Two shapes, chosen by
+    // which clip the wrapper's kill branch rolled. Cursor 6 is the one that
+    // keys the death cue and gives the corpse the 0.001 nudge; every other clip
+    // just latches +0x06 bit 0x10 on the frame it ends and raises +0x04 bit 0
+    // -- the fade-and-free bit -- together with bit 0x800. Nothing in the
+    // executable reads 0x800 back; it is set here and reproduced as written.
+    void FUN_00280560_enemy80_death(OriginalEntity &entity,
+                                    const ActorEnvironment &environment,
+                                    ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      const std::uint16_t flags = entity.flags06;
+      if (entity.timelineCursorA8 == 6)
+      {
+        if ((flags & 4u) != 0)
+        {
+          if ((flags & 0x10u) == 0 && environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(kFUN_00280560_enemy80DeathCue, entity);
+          }
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+          entity.desiredDeltaX30 = kDAT_00353254_enemy80DeathNudge;
+        }
+        if ((entity.collisionFlags0c & 1u) != 0 && (entity.flags06 & 0x10u) != 0)
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+        }
+        return;
+      }
+      if ((flags & 1u) != 0 && (flags & 0x10u) == 0)
+      {
+        entity.flags06 = static_cast<std::uint16_t>(flags | 0x10u);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x0801u);
+      }
+    }
+
+    // FUN_0028b698, type 0x8A state 6: **the stagger**, and a much shorter one
+    // than the flyer's, because a Maneater has nowhere to be knocked back to.
+    // Hold the busy bit, key the hit cue on cursor 2, and on the frame the clip
+    // ends release the bit and go straight back to the idle turn.
+    void FUN_0028b698_enemy8a_hit(OriginalEntity &entity,
+                                  const ActorEnvironment &environment,
+                                  ActorEnvironment::BattleActorView &view,
+                                  bool haveRecord)
+    {
+      if (haveRecord)
+      {
+        view.flags38 |= 1u;
+      }
+      if (entity.timelineCursorA8 == 2 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028b698_enemy8aHitCue, entity);
+      }
+      if ((entity.flags06 & 1u) == 0)
+      {
+        return;
+      }
+      if (haveRecord)
+      {
+        view.flags38 &= ~1u;
+      }
+      FUN_00225bf0_set_state_and_animation(entity, 1, 0);
+    }
+
+    // FUN_0028b568, type 0x8A state 5: **the death.** The clip ending latches
+    // +0x06 bit 0x10 and arms a 0x3C0-tick corpse timer; when that runs out the
+    // entity raises the fade-and-free bit and tidies its two attack links.
+    //
+    // The `+0x1AC` test is why the tidy-up has two shapes. FUN_0028b740 -- the
+    // spit landing and growing a *second* Maneater -- stamps 2 there on the
+    // child and points the child's +0x1A4 back at its parent. A plain 0x8A has
+    // never been through that, so its +0x1AC is zero, its +0x1A4 is empty, and
+    // the busy bit is deliberately *not* released: the corpse holds its record
+    // until the entity is freed. FUN_0028b740 is not ported, so the port only
+    // ever takes that first shape -- the byte is modelled anyway so the branch
+    // is honest rather than assumed away.
+    void FUN_0028b568_enemy8a_death(OriginalEntity &entity,
+                                    const ActorEnvironment &environment,
+                                    ActorEnvironment::BattleActorView &view,
+                                    bool haveRecord)
+    {
+      if (haveRecord)
+      {
+        view.flags38 |= 1u;
+      }
+      if (entity.timelineCursorA8 == 2 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028b568_enemy8aDeathCue, entity);
+      }
+
+      const std::uint16_t flags = entity.flags06;
+      if ((flags & 1u) != 0 && (flags & 0x10u) == 0)
+      {
+        entity.flags06 = static_cast<std::uint16_t>(flags | 0x10u);
+        entity.fadeRamp62 = 0x3C0;
+      }
+      if ((entity.flags06 & 0x10u) == 0)
+      {
+        return;
+      }
+
+      entity.fadeRamp62 = static_cast<std::uint16_t>(FUN_0023a678_countdown(
+          static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks));
+      if (entity.fadeRamp62 != 0)
+      {
+        return;
+      }
+
+      entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x0801u);
+      if ((entity.enemySpawnFlag1ac & 1u) == 0)
+      {
+        if (entity.enemyAttackLink1a4 >= 0 && environment.entityPool != nullptr &&
+            static_cast<std::size_t>(entity.enemyAttackLink1a4) <
+                environment.entityPool->slotCount())
+        {
+          environment.entityPool->slot(static_cast<std::size_t>(entity.enemyAttackLink1a4))
+              .enemyAttackLink1a4 = -1;
+        }
+        return;
+      }
+      if (entity.enemyAttackLink1a4 < 0 && entity.enemyAttackLink1a8 < 0 && haveRecord)
+      {
+        view.flags38 &= ~1u;
+      }
+      // The 0x112 branch -- reaching into the linked entity and raising its own
+      // +0x04 bits 0x801 -- is FUN_00216128's projectile, which the port does
+      // not spawn, so the link is always empty here.
+      entity.enemyAttackLink1a8 = -1;
+    }
+
   } // namespace
 
   void FUN_0027f288_enemy80(OriginalEntity &entity,
@@ -952,7 +1195,8 @@ namespace orphen::ported::entity
         kPTR_FUN_00325970_enemy80States, kEnemy80StateCount, entity.state60);
     const bool implemented = entity.state60 == 0 || entity.state60 == 1 ||
                              (haveRecord && (entity.state60 == 2 || entity.state60 == 3 ||
-                                             entity.state60 == 6));
+                                             entity.state60 == 5 || entity.state60 == 6 ||
+                                             entity.state60 == 7 || entity.state60 == 8));
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
@@ -971,8 +1215,17 @@ namespace orphen::ported::entity
       case 3:
         FUN_0027fdf8_enemy80_lunge(entity, environment, view, trace);
         break;
+      case 5:
+        FUN_00280288_enemy80_recover_flight(entity, environment, view);
+        break;
       case 6:
         FUN_00280428_enemy80_return(entity, environment, view);
+        break;
+      case 7:
+        FUN_00280560_enemy80_death(entity, environment, view);
+        break;
+      case 8:
+        FUN_00280628_enemy80_hit(entity, environment, view);
         break;
       default:
         break;
@@ -1080,12 +1333,22 @@ namespace orphen::ported::entity
     const std::uint32_t handler = environment.dispatchTable->stateHandler(
         kPTR_FUN_00325B40_enemy8aStates, kEnemy8aStateCount, entity.state60);
     const bool implemented =
-        entity.state60 == 0 || entity.state60 == 1 ||
-        (haveRecord && (entity.state60 == 2 || entity.state60 == 4));
+        entity.state60 == 0 || entity.state60 == 1 || entity.state60 == 5 ||
+        entity.state60 == 6 || (haveRecord && (entity.state60 == 2 || entity.state60 == 4));
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
       enemy_state0(entity, slot, environment);
+    }
+    // Unlike the flyer's, both of the Maneater's damage states test +0x198 for
+    // null themselves, so they run whether or not the entity has a record.
+    else if (entity.state60 == 5)
+    {
+      FUN_0028b568_enemy8a_death(entity, environment, view, haveRecord);
+    }
+    else if (entity.state60 == 6)
+    {
+      FUN_0028b698_enemy8a_hit(entity, environment, view, haveRecord);
     }
     else if (haveRecord)
     {

@@ -2701,11 +2701,33 @@ loop: 0x80 when state 6 has landed it back home, 0x8A when the attack animation
 comes round with nothing left in flight. Only then does the idle default stamp
 the current action back to 6 and let the script's gate through.
 
-**The damage half is not ported.** `FUN_002EBDE0`, `FUN_002EBAD8`,
+**The damage an enemy deals is not ported.** `FUN_002EBDE0`, `FUN_002EBAD8`,
 `FUN_002EC920`, `FUN_002ECC68` and `FUN_00280698` are the five calls that spawn
 the hit volume. Every attack plays through to its damage frame and counts itself
 -- `--actor-report` prints "enemy attacks that reached their damage frame" --
 and lands on nobody.
+
+##### Damage the other way is what the reel and the death states are for
+
+An enemy hit by a spell takes the damage as `+0xBE`, and each wrapper drains it
+against `+0x12A` before it dispatches: survived goes to a stagger state, killed
+to a death state. The two types number them differently -- 0x80 uses 8 and 7,
+0x8A uses 6 and 5 -- and 0x80 makes far more of it, because it has a spawn point
+to be knocked back to. `FUN_00280628` reels, `FUN_00280728` publishes current
+action **8** and lays a Bezier home, `FUN_00280288` flies it and releases the
+busy bit as it lands, and only then does the idle default stamp the action back
+to 6. The Maneater's `FUN_0028B698` just holds the bit for the length of the
+clip and drops back to state 1.
+
+The two deaths both end at `+0x04` bit 0, the fade-and-free bit, on a `0x801`
+write whose 0x800 half nothing in the executable reads back. `FUN_0028B568`
+notably does *not* release the busy bit for a plain Maneater -- only one grown
+by `FUN_0028B740`'s spit takes that branch -- but the record unbinds when the
+entity is freed, so the fight moves on regardless: a 5-enemy `s14_e012` run
+whittled down to `live enemies: 1 of 1 bound` with the survivor still spitting.
+
+Without the stagger states an enemy hit mid-attack sat in an unimplemented state
+forever, holding both the busy bit and its own script's gate.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 

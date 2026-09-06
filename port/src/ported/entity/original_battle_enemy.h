@@ -60,10 +60,35 @@
 // script's own `gate` opcode then waits for the current action byte to be 6
 // again before it asks for the next one, which is why enemies take turns.
 //
-// **The damage half is not here.** FUN_002ebde0, FUN_002ebad8, FUN_002ec920,
-// FUN_002ecc68 and FUN_00280698 are the five calls that would spawn the hit
-// volume; each attack plays through to its damage frame, counts itself in
-// ActorTrace::recordEnemyAttackHit, and lands on nobody.
+// **The damage an enemy deals is not here.** FUN_002ebde0, FUN_002ebad8,
+// FUN_002ec920, FUN_002ecc68 and FUN_00280698 are the five calls that would
+// spawn the hit volume; each attack plays through to its damage frame, counts
+// itself in ActorTrace::recordEnemyAttackHit, and lands on nobody.
+//
+// ------------------------------------------------------------- taking damage
+//
+// Damage *to* an enemy arrives as +0xBE, and each wrapper drains it against
+// +0x12A before it dispatches: survived goes to the stagger, killed to the
+// death. The two types spell those states differently -- 0x80 uses 8 and 7,
+// 0x8A uses 6 and 5 -- and 0x80 makes much more of it, because it has a spawn
+// point to be knocked back to:
+//
+//   8  FUN_00280628, the reel. Holds the busy bit and hands over to
+//   -> FUN_00280728, which publishes current action 8 and lays a Bezier home
+//   -> 5  FUN_00280288, the flight, which releases the busy bit as it lands
+//   7  FUN_00280560, the death: the cue and the 0.001 nudge on the clip that
+//      carries them, then +0x04 bit 0 -- fade and free -- on the one that does
+//      not
+//
+//   6  FUN_0028b698, the reel: hold the bit, key the cue, and on the frame the
+//      clip ends release the bit and go straight back to state 1
+//   5  FUN_0028b568, the death: latch, count 0x3C0 ticks of corpse, then fade
+//      and free. It deliberately does *not* release the busy bit for a plain
+//      Maneater -- only one grown by FUN_0028b740's spit does -- but the record
+//      unbinds when the entity is freed, so the fight moves on either way
+//
+// Without state 8 an enemy hit mid-attack sat in it forever, holding both the
+// busy bit and its script's gate: the freeze that pulled this block in.
 //
 // ------------------------------------------------------------ the record bias
 //
