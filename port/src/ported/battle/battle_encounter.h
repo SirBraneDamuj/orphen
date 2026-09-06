@@ -128,6 +128,9 @@ namespace orphen::ported::battle
     // type, and still carries the record's own id in +0x95 -- which is what
     // makes +0x95 the join between the two halves of the battle module.
     void FUN_0023fc08_bind(const orphen::ported::entity::EntityPool &pool);
+    // FUN_0023fc08's counting half, which is all of it that FUN_0023fb50 needs
+    // at load time -- every record is unbound then, so the pool half is inert.
+    void FUN_0023fc08_count();
 
     // FUN_0023eba0. Returns 0 when there is no such record. `allowUnbound`
     // is the original's second parameter: with it clear, a record whose entity

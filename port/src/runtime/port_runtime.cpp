@@ -616,6 +616,52 @@ namespace orphen::port
                                                           DAT_003555d3_groupEScene_);
     };
 
+    // The scene script's work array, for the crab. FUN_0027cef8 writes word 1
+    // and the wrapper reads word 0; both are the same DAT_00355060 the script's
+    // own 0x36 and 0x37 opcodes reach.
+    environment.DAT_00355060_scriptWork = [this](std::size_t index) -> std::uint32_t
+    {
+      const auto &work = sceneScript_.state().DAT_00355060_work;
+      return index < orphen::ported::script::SceneScriptState::kWorkWordCount ? work[index] : 0u;
+    };
+    environment.DAT_00355060_setScriptWork = [this](std::size_t index, std::uint32_t value)
+    {
+      auto &work = sceneScript_.state().DAT_00355060_work;
+      if (index < orphen::ported::script::SceneScriptState::kWorkWordCount)
+      {
+        work[index] = value;
+      }
+    };
+
+    environment.FUN_00248f18_find_by_tag = [this](std::int16_t tag) -> std::int32_t
+    {
+      return orphen::ported::battle::BattleEncounter::FUN_00248f18_find_by_tag(entityPool_, tag);
+    };
+
+    environment.FUN_0022dbc8_show_map_primitives = [this](std::uint32_t groupMask, bool visible)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      const std::size_t count =
+          std::min(map->DAT_003556ac_dRecords80.size(), map->DAT_003556b0_dRecords78.size());
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        if ((map->DAT_003556b0_dRecords78[index].terrainFlags & groupMask) == 0)
+        {
+          continue;
+        }
+        auto &flags = map->DAT_003556ac_dRecords80[index].primitiveFlags;
+        flags = visible ? (flags & ~orphen::ported::render::visibility::kHiddenBit)
+                        : (flags | orphen::ported::render::visibility::kHiddenBit);
+      }
+    };
+
+    environment.FUN_0022dcf0_shake_camera = [this](float magnitude, std::int16_t durationTicks)
+    { DAT_00355664_cameraShake_.FUN_0022dcf0_request(magnitude, durationTicks); };
+
     // The enemy side. `record` is the entity's +0x198 as the port spells it:
     // the actor record's offset in the encounter blob, or -1 for the scratch
     // FUN_0023f8b8 hands back when no group names the entity's id.

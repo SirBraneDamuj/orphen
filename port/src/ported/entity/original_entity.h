@@ -379,6 +379,61 @@ namespace orphen::ported::entity
     // wrapped from 60 back to -40. Type 0x80 only.
     float enemyWobblePhase1d0 = 0.0f;
 
+    // Type 0x7F's block, the giant crab. See ported/entity/original_crab_boss.h.
+    // Held apart from the 0x80/0x8A words above for the same reason every other
+    // per-type overlay is: the original reuses the storage and an entity is
+    // never two of these things at once.
+    //
+    // +0x1A0 is a *speed* here -- 50.0 while it walks, 20.0 while it carries --
+    // where type 0x80 keeps a reach and 0x8A a target.
+    float crabSpeed1a0 = 0.0f;
+    // +0x1A8: the entity it is aimed at, as a pool slot. State 3 parks pool
+    // slot 0 there outright.
+    std::int32_t crabTarget1a8 = -1;
+    // +0x1AC..+0x1B4 and +0x1B8: the three victims the crab is holding, as pool
+    // slots, and the cursor into them. FUN_0027ed58 walks all three every frame
+    // and drops one the moment its clip says so.
+    std::array<std::int32_t, 3> crabHeld1ac{{-1, -1, -1}};
+    std::uint8_t crabHeldCursor1b8 = 0;
+    // +0x1BA: the splash cue's own countdown, reloaded to 0x140 each time it
+    // fires. FUN_0027ce48 only runs it while the crab is below -2.0 in Y, which
+    // is what makes the splashes stop when it climbs out of the water.
+    std::uint16_t crabSplashTimer1ba = 0;
+    // +0x1BC: how many of state 5's three stamps have gone.
+    std::uint8_t crabStampCount1bc = 0;
+    // +0x1BD: 0, 1 or 2 -- how far through its two damage thresholds the crab
+    // is. FUN_0027ccd0 raises it and blows off a leg each time.
+    std::uint8_t crabDamageStage1bd = 0;
+    // +0x1C0: the pool slot of the entity tagged 12, half of the pair state 13
+    // throws. That entity's own +0x198 names the other half.
+    std::int32_t crabPartner1c0 = -1;
+    // +0x1C4 / +0x1C5: FUN_0027c7b8's cursor into the move rotation, and which
+    // rotation to read -- 0 is the seven-move opening table at DAT_00325910,
+    // 1 the five-move DAT_00325920, anything else the three-move DAT_003552A0.
+    // The damage reaction toggles bit 0 of +0x1C5 every time a threshold falls.
+    std::uint8_t crabIdleCursor1c4 = 0;
+    std::int8_t crabPhase1c5 = 0;
+    // +0x1C6: FUN_0023a9d0's answer for the hit that just landed -- which
+    // flinch to play.
+    std::int16_t crabHitReaction1c6 = 0;
+    // +0x1C8: damage accumulated toward the next threshold, which is 0.3 of
+    // maximum hit points.
+    std::int16_t crabDamageAccum1c8 = 0;
+    // +0x1CA: invulnerability after a hit, 0x1900 ticks, and while it runs
+    // +0x138 is held at 0x14C8 so the body flashes.
+    std::uint16_t crabFlinchTimer1ca = 0;
+    // +0x1CC: state 13's carry timer.
+    std::uint16_t crabTimer1cc = 0;
+    std::uint8_t crabByte1ce = 0;
+    // +0x1CF: state 8 walks *backwards* to its station when it is already past
+    // it, and this is the flag that puts a half turn between the facing and the
+    // heading it moves along.
+    std::uint8_t crabBackwards1cf = 0;
+    // +0x1D0: state 13's sub-phase, 0..4. Also read by the wrapper's camera
+    // helper, which is why the throw can drive the camera without the state
+    // owning it.
+    std::uint8_t crabSubPhase1d0 = 0;
+
     // Type 0x28's block. FUN_002d2f40 builds a three-entity rig the first time
     // it runs -- FUN_00265e28(0x27), (0x26) and (0x19) -- parks the three pool
     // slots at +0x198 / +0x19C / +0x1A0 and latches +0x94 so it never runs

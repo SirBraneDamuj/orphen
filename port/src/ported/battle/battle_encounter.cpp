@@ -155,6 +155,34 @@ namespace orphen::ported::battle
       write<std::int8_t>(at + 0x07, 0);
       at += kActorRecordStride;
     }
+
+    // :32. **FUN_0023fb50 ends on FUN_0023fc08**, and FUN_0023f318 calls
+    // FUN_0023fb50 as it loads -- so the actor count is established the moment
+    // the scene's encounter data is read, long before any battle starts. The
+    // port used to recount only inside the running battle, which left
+    // DAT_00354EBA at zero through a whole preamble; FUN_00247d80 then answered
+    // -1 for every id and FUN_00244248 dropped every order. That is what made
+    // s14_e001's animatic unable to give the crab an action.
+    //
+    // The pool-reading half of FUN_0023fc08 is inert here: every record was just
+    // given kNoEntity above, so the loop only counts.
+    FUN_0023fc08_count();
+  }
+
+  void BattleEncounter::FUN_0023fc08_count()
+  {
+    actorCount_ = 0;
+    if (!available() || read<std::uint8_t>(actorArray_ + actor::kId00) == 0)
+    {
+      return;
+    }
+    std::uint32_t at = actorArray_;
+    do
+    {
+      actorCount_ = static_cast<std::int8_t>(actorCount_ + 1);
+      at += kActorRecordStride;
+    } while (at + kActorRecordStride <= memory_.size() &&
+             read<std::uint8_t>(at + actor::kId00) != 0);
   }
 
   void BattleEncounter::FUN_0023fc08_bind(const orphen::ported::entity::EntityPool &pool)

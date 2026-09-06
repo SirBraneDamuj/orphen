@@ -224,6 +224,27 @@ namespace orphen::ported::entity
                        std::int32_t damage)>
         FUN_002d5630_damage_bar;
 
+    // The scene script's work array, DAT_00355060 -- which is a *pointer* to it,
+    // not the array. The crab is the only actor that touches it: FUN_0027cef8
+    // writes word 1 to tell s14_e001's animatic a beat is done, FUN_0027b380
+    // writes word 0 outright, and FUN_00279298 gates its own body on word 0
+    // being below 3000.
+    std::function<std::uint32_t(std::size_t index)> DAT_00355060_scriptWork;
+    std::function<void(std::size_t index, std::uint32_t value)> DAT_00355060_setScriptWork;
+
+    // FUN_00248f18: the pool slot whose +0x95 carries this id, or -1. State 0
+    // uses it to find the pair it throws, and the swipe uses it to find whoever
+    // it is about to knock over.
+    std::function<std::int32_t(std::int16_t tag)> FUN_00248f18_find_by_tag;
+
+    // FUN_0022dbc8, the same call opcode 0xA4 makes: hide or show every map
+    // primitive whose terrain word intersects the mask. The crab opens and
+    // closes two groups as it climbs in and out of the water.
+    std::function<void(std::uint32_t groupMask, bool visible)> FUN_0022dbc8_show_map_primitives;
+
+    // FUN_0022dcf0, the camera shake -- magnitude and a duration in ticks.
+    std::function<void(float magnitude, std::int16_t durationTicks)> FUN_0022dcf0_shake_camera;
+
     // The other half of the battle module: the *actor* record an enemy is bound
     // to. DAT_0031d7b0_battleMember above is the party side; this is
     // DAT_00354EB4, the encounter's own table, and it is what every enemy

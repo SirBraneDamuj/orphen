@@ -2983,9 +2983,10 @@ selected entity, so `ScriptEnvironment::FUN_00242a18_battle_method` now carries
 one and the port shares a single `battleVmEnvironment()` between the per-frame
 battle step and the script.
 
-##### What is left is the crab itself
+##### What was left was the crab itself
 
-With those in, the scene script runs clean -- zero unimplemented opcodes over
+(Ported in the next commit; see the section after this one.) With those in, the
+scene script runs clean -- zero unimplemented opcodes over
 12000 frames, on every entry -- and the animatic gets as far as its own logic
 allows. It is a duet, and only one voice is singing:
 
@@ -3029,6 +3030,78 @@ Bite of Lightning, Sword of the Fallen Devil, shield) and puts him in state
 is missing. `s14_e012` still builds on frame 2, starts on 247 and binds 5 of 5
 enemies. `s01_e024` and `s01_e012` are byte-identical over 3000 frames with
 `--actor-report` and `--scr-report`.
+
+#### The crab, and the two things that were stopping it
+
+With the script opcodes in, `s14_e001` still parked at its own beat 110 waiting
+on script work word 1, which only the crab writes. Porting the crab found two
+bugs that had nothing to do with the crab.
+
+##### The actor count was established too late
+
+`FUN_0023fb50` ends on `FUN_0023fc08`, and `FUN_0023f318` calls `FUN_0023fb50`
+as it loads the scene's encounter data. So `DAT_00354EBA`, the actor count, is
+set the moment the scene loads -- long before any battle starts. The port only
+recounted inside the running battle, so through the whole animatic the count sat
+at zero, `FUN_00247D80` answered -1 for every id, and `FUN_00244248` dropped
+every order the cutscene tried to give the crab.
+
+The pool-reading half of `FUN_0023fc08` is inert at load -- every record has just
+been given "no entity" -- so the fix is the counting half, called from
+`FUN_0023fb50` where the original calls it.
+
+##### Orphen's dodge is what lets the crab swing twice
+
+`FUN_0027c458`, the swipe, latches `DAT_0035526B` the moment the claw connects,
+and its own "ask for another swipe" arm is gated on that byte being clear.
+Nothing in the crab clears it. `FUN_0027d230` does -- and `FUN_0027d230` is not
+the crab at all, it is **Orphen**: the wrapper runs it every frame the crab's
+mode byte is non-zero, and it is the tumble the player does when a claw lands.
+The claw sets 1, the tumble carries the player along a Bezier to one of three
+scripted landing spots over 0x640 ticks, and on arrival it sets 9, which hands
+the control block back and clears the byte to 0. Only then can the crab swing
+again.
+
+So the "Orphen jumps around dodging" half of the animatic is not an animation
+the script plays. It is a state machine on one byte, shared between the boss and
+the player, and the boss cannot finish its own three swipes without it.
+
+##### What is ported
+
+Type 0x7F is `FUN_00279298` and a sixteen-entry table at `PTR_FUN_00325930`.
+The table has no terminator and the next type's starts right after it, so
+reading past 15 gets type 0x80's states -- the port stops at 16.
+
+```
+ 0  init: stats, the three attack records into DAT_00573788, the actor bind,
+    and the pair it throws (FUN_00248f18 on tags 12 and 49)
+ 1  idle                          2  idle hold, then pick the next move
+ 3  charge and slam               5  close and stamp three times
+ 8  walk back to (0, -5)         12  the hit reaction and the phase change
+13  **the throw**                14  **the swipe**
+```
+
+plus the action check `FUN_00279600`, the action map `FUN_002796c8`, the move
+rotation `FUN_0027c7b8` and its three tables, the leg thresholds
+`FUN_0027ccd0`, the body sweep `FUN_0027c8a0`, the splash `FUN_0027ce48`, the
+script cue `FUN_0027cef8`, and `FUN_0027d230`.
+
+States 4, 6, 7, 9, 10, 11 and 15 are the late-fight moves and the death; the
+crab only reaches them once it has taken enough damage to shed a leg, and
+`--actor-report` names any it does reach. `FUN_00277d30`, the boss camera
+director, is deliberately absent: 1132 lines of camera poses behind a priority
+gate that change nothing but the view. Its call sites are comments in the states
+so the order is recoverable.
+
+##### Verified
+
+`s14_e001`, 12000 frames, no input. The crab inits, is bound 1 of 1, takes the
+animatic's actions 11, 12, 13 and 14 in order, runs the throw for 872 ticks and
+the swipe for 290, and **the party is built and the battle starts on frame
+1863**. After that it cycles its opening rotation -- 2, 3, 8, 5 -- with no
+unimplemented state handlers on either side. `s14_e012` still builds on frame 2,
+starts on 247 and binds 5 of 5. `s01_e024` and `s01_e012` are byte-identical
+over 3000 frames with `--actor-report` and `--scr-report`.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 
