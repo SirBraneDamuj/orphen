@@ -68,11 +68,17 @@ namespace orphen::ported::entity
     std::function<void(const OriginalEntity &victim, std::int16_t sourceSide)>
         FUN_002206a8_spawn_hit_sparks;
 
-    // FUN_002d5630: the on-screen HP bar. Only fires for a victim whose +0x02
-    // carries 0x4B and whose +0x96 does not carry 0x20, and the widget itself
-    // needs both hit points and a maximum above zero -- which no enemy in
-    // s01_e024 has, so it never draws there.
-    std::function<void(bool bossBar, std::uint16_t hitPoints, std::uint16_t maxHitPoints)>
+    // FUN_002d5630: the on-screen HP bar (original_health_bar.h). Only fires
+    // for a victim whose +0x02 carries 0x4B and whose +0x96 does not carry
+    // 0x20, and the widget itself wants a battle-section scene, a maximum above
+    // zero and damage above zero -- so it never draws in a field scene like
+    // s01_e024. `upperBank` is the victim's `(+0x02 & 0x48) != 0`, which every
+    // enemy descriptor satisfies and no party one does. The hit points are the
+    // victim's *pre-hit* total, because the type wrapper drains +0x12A a frame
+    // later; the bar bands both that and the total minus `damage` into five
+    // pips and walks between them.
+    std::function<void(bool upperBank, std::int32_t hitPoints, std::int32_t maxHitPoints,
+                       std::int32_t damage)>
         FUN_002d5630_damage_bar;
 
     // DAT_003555bc / iGpffffb64c.

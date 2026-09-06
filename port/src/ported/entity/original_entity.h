@@ -502,6 +502,17 @@ namespace orphen::ported::entity
     // reinterpreting a float.
     std::int32_t cursorProjectedDepth28 = 0;
 
+    // The type 0x68 health bar, FUN_002d5748 -- the segmented gauge that slides
+    // on when something takes a hit. Two live at once, pool slots 2 and 3, both
+    // built by FUN_0022a418 and both screen-space (+0x08 bit 0x1000), so they
+    // share the cursor's reading of +0x28 above rather than a world z.
+    std::uint16_t healthBarPhase198 = 0;      // +0x198: 0..0x4F, the whole animation
+    float healthBarY19c = 0.0f;               // +0x19C: the screen row it slides along
+    float healthBarStep1a0 = 0.0f;            // +0x1A0: how far it slides per frame
+    std::int32_t healthBarSegments1a4 = 0;    // +0x1A4: pips still lit, drains toward
+    std::int32_t healthBarTarget1a8 = 0;      // +0x1A8: the pip count the hit leaves
+    std::uint16_t healthBarAnimationBase1ac = 0; // +0x1AC: 0 for the lower bar, 0x14 upper
+
     // The type 0x15B fireball, FUN_002dae60 -- what Hand of Pyro actually
     // launches. Another overlapping reading of the same bytes, seeded in one
     // place (FUN_002dab70) and read in one place, so nothing else can collide

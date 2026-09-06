@@ -1,5 +1,7 @@
 #include "ported/render/original_sprite_pass.h"
 
+#include "ported/render/original_view_projection.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -11,6 +13,10 @@ namespace orphen::ported::render
     // FUN_0020f510:0x0020f5f0. The literal 280.0 the projected scale is built
     // from, before the >> 8 / >> 9 that turn it into GS units.
     constexpr float kSpriteProjectionScale = 280.0f;
+
+    // Where the port parks a sprite that keys to a depth in front of the
+    // geometry near plane. See the clamp in FUN_0020f510_build_quads.
+    constexpr float kNearPlaneRepresentative = constants::kGeometryNearClip * 1.001f;
 
     // FUN_0030bd20 is float -> int truncation toward zero.
     int FUN_0030bd20_trunc(float value)
@@ -167,7 +173,20 @@ namespace orphen::ported::render
       const float depth =
           inputs.viewZ + inputs.entityDepthBias + static_cast<float>(record.depthBias) / 100.0f;
       int gsZ = 0;
-      if (inputs.screenSpace1000)
+      if (inputs.forceFront)
+      {
+        // 0x0020f9a0: +0x08 bit 0x40 pins the GS z at 0xFFFF and buckets the
+        // packet at 0x1005, past the 1..0xFFF the sorted ones use.
+        //
+        // This is tested **before** the screen-space branch, not after it:
+        // FUN_0020f510:0x0020F55C reads +0x08 once and latches both bit 0x1000
+        // and bit 0x40 into its workspace before it splits. An entity carrying
+        // both -- the type 0x68 health bar is the only one either scene fields
+        // -- is drawn over the world, and reading the pair the other way round
+        // left the bar at the depth its +0x28 keyed to and clipped it away.
+        gsZ = 0xFFFF;
+      }
+      else if (inputs.screenSpace1000)
       {
         // 0x0020f6a0: the branch reads +0x28 back as an integer, and only
         // rescales it when the entity carries a +0x133 bias.
@@ -187,12 +206,6 @@ namespace orphen::ported::render
         {
           gsZ = 0;
         }
-      }
-      else if (inputs.forceFront)
-      {
-        // 0x0020f9a0: +0x08 bit 0x40 pins the GS z at 0xFFFF and buckets the
-        // packet at 0x1005, past the 1..0xFFF the sorted ones use.
-        gsZ = 0xFFFF;
       }
       else
       {
@@ -265,6 +278,30 @@ namespace orphen::ported::render
       else if (inputs.forceFront || vertexDepth < kDAT_0035209c_spriteNearClip)
       {
         vertexDepth = inputs.viewZ;
+      }
+      // ---- the second host adaptation --------------------------------------
+      //
+      // The original never clips a sprite: it hands the GS four screen numbers
+      // and a z. The port re-projects, so a quad in front of the *geometry*
+      // near plane -- 0.4, where the sprite pass's own floor is 0.3 -- is
+      // thrown away by GL before it can be drawn. Every depth the key can
+      // produce down to 0x0035209c lands in that gap, and the health bar's
+      // +0x28 of 65534.0 is exactly the word the key gives at 0.3, so it sat
+      // there and drew nothing.
+      //
+      // Lifting it costs no pixels: perX and perY divide by this depth and the
+      // projection multiplies it straight back, so any positive value
+      // reproduces the same corners. It only changes what the quad depth-tests
+      // against, and a sprite keyed to the front of the sprite range is meant
+      // to be in front of the world.
+      //
+      // The margin is not decoration. A vertex sitting *exactly* on the near
+      // plane rounds to the wrong side of it once the projection is built in
+      // floats, and GL drops the quad -- which is what the health bar did at a
+      // flat 0.4, silently, with five well-formed quads in the display list.
+      if (vertexDepth < kNearPlaneRepresentative)
+      {
+        vertexDepth = kNearPlaneRepresentative;
       }
       const float perX =
           inputs.projectionScaleX != 0.0f ? vertexDepth / inputs.projectionScaleX : 0.0f;

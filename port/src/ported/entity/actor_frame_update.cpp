@@ -1,6 +1,7 @@
 #include "ported/entity/actor_frame_update.h"
 
 #include "ported/entity/original_battle_enemy.h"
+#include "ported/entity/original_health_bar.h"
 
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/party_follower.h"
@@ -3911,6 +3912,7 @@ namespace orphen::ported::entity
     case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
+    case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
       return true;
     default:
       return false;
@@ -3953,6 +3955,8 @@ namespace orphen::ported::entity
       return "FUN_002dae60 (fireball)";
     case 0x002D73E8u:
       return "FUN_002d73e8 (target cursor)";
+    case 0x002D5748u:
+      return "LAB_002d5748 (health bar)";
     case 0x002D9C88u:
       return "FUN_002d9c88 (cast marker)";
     case 0x002DEAE8u:
@@ -4101,6 +4105,9 @@ namespace orphen::ported::entity
         break;
       case 0x002D73E8u:
         FUN_002d73e8_target_cursor(entity, slot, slotEnvironment);
+        break;
+      case 0x002D5748u:
+        FUN_002d5748_health_bar(entity, environment.frameTicks);
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);

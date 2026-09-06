@@ -237,10 +237,14 @@ namespace orphen::ported::entity
       // The HP bar, and then the sparks. Both are outside the block branch --
       // a blocked hit shows neither.
       if (static_cast<std::int16_t>(victim.pendingDamageBe) > 0 &&
-          (victim.descriptorFlags02 & 0x004Bu) != 0 && environment.FUN_002d5630_damage_bar)
+          (victim.descriptorFlags02 & 0x004Bu) != 0 && (victim.battleFlags96 & 0x20u) == 0 &&
+          environment.FUN_002d5630_damage_bar)
       {
-        environment.FUN_002d5630_damage_bar((victim.descriptorFlags02 & 0x0048u) != 0,
-                                            victim.staggerTimer12a, victim.maxHitPoints128);
+        environment.FUN_002d5630_damage_bar(
+            (victim.descriptorFlags02 & 0x0048u) != 0,
+            static_cast<std::int16_t>(victim.staggerTimer12a),
+            static_cast<std::int16_t>(victim.maxHitPoints128),
+            static_cast<std::int16_t>(victim.pendingDamageBe));
       }
       if (environment.FUN_002206a8_spawn_hit_sparks)
       {

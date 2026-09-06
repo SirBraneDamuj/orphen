@@ -5,6 +5,7 @@
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/entity/entity_collision.h"
+#include "ported/entity/original_health_bar.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/model/psc3_model.h"
 #include "ported/psm2/psm2_collision_groups.h"
@@ -474,6 +475,16 @@ namespace orphen::port
     {
       DAT_00355b74_hitSparks_.FUN_002206a8_spawn(victim, sourceSide,
                                                  [this] { return FUN_00216868_random(); });
+    };
+
+    // FUN_002d5630, the segmented health bar. The two type 0x68 entities it
+    // drives are pool slots 2 and 3, built by loadSceneForCurrentMap.
+    environment.FUN_002d5630_damage_bar = [this](bool upperBank, std::int32_t hitPoints,
+                                                 std::int32_t maxHitPoints, std::int32_t damage)
+    {
+      orphen::ported::entity::FUN_002d5630_arm_health_bar(entityPool_, upperBank, hitPoints,
+                                                          maxHitPoints, damage,
+                                                          DAT_003555d3_groupEScene_);
     };
 
     environment.FUN_0020cdc0_entity_matrix =
@@ -3196,6 +3207,10 @@ namespace orphen::port
                                : orphen::ported::render::kDAT_0035209c_spriteNearClip;
             inputs.screenSpaceGsZ = entity.cursorProjectedDepth28;
             inputs.screenSpaceDepthBias = entity.depthBias133;
+            // FUN_0020f510:0x0020F55C latches +0x08 bit 0x40 in the same load
+            // that picks the bit-0x1000 branch, so "draw over the world" is not
+            // a world-space-only test. The type 0x68 health bar carries both.
+            inputs.forceFront = (entity.halfword08 & 0x0040u) != 0;
             // FUN_0020f510:0x0020fdb0. Bit 0x400 turns the quad about the
             // sprite origin by the angles at +0x168 -- for the target cursor,
             // pi/4 while selected and a slow drift otherwise.
@@ -6386,6 +6401,11 @@ namespace orphen::port
     // FUN_002d3290. Clearing the pool also drops DAT_00355e0c, so nothing from
     // the previous map keeps stepping.
     DAT_00355620_particles_.FUN_002d3290_reset([this] { return FUN_00216868_random(); });
+    // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two
+    // type 0x68 health bars, pool slots 2 and 3. Built on every scene load, not
+    // only a battle one -- FUN_002d5630 is what refuses to raise one outside a
+    // section-14 scene.
+    orphen::ported::entity::FUN_0022a418_build_health_bars(entityPool_, descriptorTable_);
     // FUN_002205d0 runs once at boot rather than per scene, but every entry it
     // leaves behind is dead and every group empty, so re-running it here is the
     // same state and it stops a burst surviving a map change.

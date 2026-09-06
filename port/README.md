@@ -2729,6 +2729,74 @@ whittled down to `live enemies: 1 of 1 bound` with the survivor still spitting.
 Without the stagger states an enemy hit mid-attack sat in an unimplemented state
 forever, holding both the busy bit and its own script's gate.
 
+#### The health bar is an entity, and there are exactly two of them
+
+Hitting something raises a five-segment gauge, and it is not a HUD widget drawn
+by the UI pass -- it is a **type 0x68 entity in pool slot 3**, with a twin in
+slot 2. `FUN_0022A418:378-383` builds both on every scene load, right after the
+particle reset, in place at `0x0058C260` and `0x0058C438`. Those two addresses
+are `DAT_0058BEB0 + 2 * 0x1D8` and `+ 3 * 0x1D8`, so they are pool slots, not
+loose structs -- which is also the cleanest confirmation of the 0x1D8 entity
+stride.
+
+`FUN_00216140` raises one for any victim whose descriptor `+0x02` carries `0x4B`
+and whose `+0x96` does not carry `0x20`, and the bank comes from the same word:
+
+| `+0x02 & 0x48` | slot | screen row | animation base |
+|---|---|---|---|
+| clear | 2 | slides **up** from 456 to 416 | 0 |
+| set | 3 | slides **down** from -8 to 32 | 0x14 |
+
+Every enemy descriptor in the game is `0x0008`, so an enemy always takes the
+upper bar. The party types 3..7 are `0x4004`, which matches neither the `0x4B`
+gate nor the `0x48` bank test -- a party member's hit raises nothing, because
+the player's readout is `FUN_00230E50`'s panel instead. The lower bar belongs to
+the `0x01`/`0x02` descriptor band and to the two class 1 states, `FUN_0024BD30`
+and `FUN_0024CBA0`, that arm it by hand; neither is ported, so nothing raises
+the lower bar yet.
+
+**The five pips are a band, taken twice.** `FUN_002D5630` is handed the victim's
+hit points *before* the wrapper drains them, its maximum, and the damage still
+sitting in `+0xBE`, and rounds both the before and the after up into fifths:
+
+```c
++0x1A4 = (clamp(hp, 0, max) * 5 + max - 1) / max                 // where it starts
++0x1A8 = (clamp(hp - min(dmg, max), 0, max) * 5 + max - 1) / max // where it stops
+```
+
+`+0x198` then walks the whole animation: fifteen frames of sliding on, one frame
+that drops the first pip, one more pip per animation loop until `+0x1A4` reaches
+`+0x1A8`, forty-eight frames of holding, fifteen of sliding back off, and
+`+0x08` bit 0 to stop drawing. The pip count is spelled as the *animation*, not
+as geometry -- three banks of five, `base - segments + 21` while arming,
+`+ 6` draining and `+ 11` settled -- and all three are written straight to
+`+0xA0` rather than through `FUN_00225BC8`, so a bar mid-drain does not restart
+its clip.
+
+##### It also found two things wrong in the sprite pass
+
+The bar is the first entity either scene fields that is screen-space *and* asks
+to be drawn in front, and it exposed both halves of that.
+
+`FUN_0020F510:0x0020F55C` reads `+0x08` **once** and latches bit `0x1000` and
+bit `0x40` into its workspace in the same three instructions, before it branches
+on the first of them. The port tested `0x40` only on the world-space side, so
+the bar -- which carries both -- never reached the "draw over everything"
+bucket.
+
+And its `+0x28` is `DAT_00354704`, `65534.0`. That is not an arbitrary large
+number: `19706.0859 / 0.3 - 152.9538` is `65534` exactly, so it is the depth
+word the sprite key produces at `DAT_0035209C`, the front of the sprite range.
+The original hands the GS that z and never clips; the port re-projects, and its
+geometry near plane is `0.4` -- so the whole gap between the sprite floor and
+the geometry near plane is thrown away by GL. The bar sat in it with five
+well-formed quads in the display list and no pixels. A screen-space quad is now
+parked just inside the near plane instead, which costs nothing: `perX` and
+`perY` divide by that depth and the projection multiplies it straight back, so
+any positive value reproduces the same corners. Note *just* inside -- a vertex
+exactly on the near plane rounds to the wrong side of it in float and is
+dropped.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips
