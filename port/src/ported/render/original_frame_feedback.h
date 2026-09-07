@@ -64,6 +64,14 @@ namespace orphen::ported::render
                                               std::int16_t scaleY,
                                               std::int16_t rotationTenthDegrees);
 
+    // FUN_00277d30 writes DAT_00343880 on its own, without the rest of the
+    // 0xC9 transform: the boss camera turns the smear on for a shot and leaves
+    // the offsets and scales exactly where the last 0xC9 put them.
+    void set_DAT_00343880_rotation(std::int16_t rotationTenthDegrees)
+    {
+      DAT_00343880_rotation_ = rotationTenthDegrees;
+    }
+
     // FUN_002000c0:214's test.
     bool FUN_002000c0_armed() const
     {

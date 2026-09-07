@@ -12,6 +12,7 @@
 #include "ported/resource/character_stats.h"
 #include "ported/resource/hit_parameter_table.h"
 #include "ported/model/psc3_skeleton.h"
+#include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_light_table.h"
 
 #include <array>
@@ -379,6 +380,12 @@ namespace orphen::ported::entity
     // no camera, which just skips the flourish.
     orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
 
+    // DAT_00343878..80 and DAT_00355661, FUN_00201a38's screen smear. The boss
+    // camera director turns it on for its own shots (uGpffffb6f1 = 0x50 and
+    // DAT_00343880 = 0x14), and the crab's throw resets the whole transform at
+    // the end of the hurl. Null in harnesses with no renderer.
+    orphen::ported::render::FrameFeedback *DAT_00343878_frameFeedback = nullptr;
+
     // FUN_00267d38(cue, entity). Behaviours reach the sound engine through
     // small wrappers -- FUN_002d59e0 is the chest's -- so this is the shape
     // they all have: a cue number and the entity to place it at.
@@ -538,6 +545,11 @@ namespace orphen::ported::entity
   void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment);
 
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress);
+
+  // FUN_00265ec0: release a pool slot the way the original does -- give the
+  // dynamic light back, cascade to anything attached, then blank it. Exposed
+  // because the crab's swipe frees the three entities its throw stood up.
+  void FUN_00265ec0_destroy_entity(std::size_t slot, const ActorEnvironment &environment);
 
   // FUN_002d2f40, type 0x28: allocate the close-up rig (types 0x26, 0x27, 0x19)
   // and hang it together by bone role. Exposed because opcode 0x13F calls it

@@ -785,6 +785,9 @@ namespace orphen::port
     { return sceneScript_.state().FUN_00266368_eventFlag(flagId); };
     environment.descriptors = &descriptorTable_;
     environment.camera = &fieldCamera_;
+    // FUN_00201a38's smear. The boss camera director writes DAT_00355661 and
+    // DAT_00343880 directly, the way FUN_00277d30 does.
+    environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
     environment.DAT_003555e8_stickMagnitude = DAT_003555e8_stickMagnitude_;
     environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;

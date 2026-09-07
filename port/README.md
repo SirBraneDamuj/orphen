@@ -3089,9 +3089,8 @@ script cue `FUN_0027cef8`, and `FUN_0027d230`.
 States 4, 6, 7, 9, 10, 11 and 15 are the late-fight moves and the death; the
 crab only reaches them once it has taken enough damage to shed a leg, and
 `--actor-report` names any it does reach. `FUN_00277d30`, the boss camera
-director, is deliberately absent: 1132 lines of camera poses behind a priority
-gate that change nothing but the view. Its call sites are comments in the states
-so the order is recoverable.
+director, is ported -- see *The boss camera, and the shot that takes the close-up
+rig away* below.
 
 ##### Verified
 
@@ -3102,6 +3101,109 @@ the swipe for 290, and **the party is built and the battle starts on frame
 unimplemented state handlers on either side. `s14_e012` still builds on frame 2,
 starts on 247 and binds 5 of 5. `s01_e024` and `s01_e012` are byte-identical
 over 3000 frames with `--actor-report` and `--scr-report`.
+
+#### The boss camera, and the shot that takes the close-up rig away
+
+`FUN_00277d30` is the boss camera director, and leaving it out cost more than
+the view. It is one function with fifteen numbered shots, a sub-shot number, a
+priority and a subject entity; a call whose priority is below the shot already
+running is dropped, and a negative shot number releases the whole thing. Ten of
+the shots are poses computed off the player, the boss, the boss's partner or a
+bone; three are splines out of `0x0034E4C0`; two do nothing but claim the
+priority slot.
+
+The first time it is called after a release it takes the camera for itself --
+`FUN_00217e18(1)` drops whatever was installed and `FUN_00217D70(0,0,0, 0,0,0)`
+puts a fresh manual camera at the origin, which the shot then moves the same
+frame. Releasing does **not** put the field camera back; it only clears the
+latch, so the pose stands until something else asks.
+
+##### The spline stride is twelve, and the copies prove it
+
+`FUN_00217FE8(eye, rollZoomPairs, count, lookAt, lookCount)` walks its point
+arrays at a stride the decompilation does not state. The three callers here
+settle it: each copies a run of `.data` onto its stack in eight- and four-byte
+pieces and then hands the copies over, and only a stride of **twelve** leaves
+every point fully written. At a stride of sixteen, shot 9's second eye point and
+shot 10's second look-at point would both read uninitialised stack.
+
+So the three tables are plain runs of `Vec3`:
+
+```
+shot  9  0x0034E4C0  1 look-at, 2 eye, 2 (roll, zoom) pairs, over 0x1680 ticks
+shot 10  0x0034E4F8  2 look-at, 3 eye, 3 pairs, over 0x12C0 ticks
+shot 14  0x0034E550  2 look-at -- the first sampled live off DAT_0058BE90 --
+                     3 eye, 3 pairs, over 0x12C0 ticks
+```
+
+##### Shot 3 is what rolls `DAT_0035528C` over
+
+The crab reads `DAT_0035528C` to decide which side each of its shots comes from,
+and nothing in the crab writes it except its own init. Shot 3 -- the slow orbit
+around the player, a twentieth of a degree a tick -- is the writer: when the
+angle passes the sub-shot's limit it writes the *next* sub-shot number into that
+byte, so the side flips between moves. Miss the director and the side is
+whatever the last `FUN_0027C7B8` roll left it, which is only ever 1 or 2.
+
+Two more details worth keeping. Shot 3's look-at angle is a literal zero, not a
+bearing -- the register handed to cos and sin is the one the function cleared on
+entry -- so the shot always looks three units along +X of the player. And shot
+6's sub-shot 2 swings off the *player's* facing where sub-shot 1 swings off the
+boss's; they read `+0x5C` from different entities.
+
+##### `uGpffffb6f1` and `DAT_00343880` are the screen smear
+
+Both are already modelled: `uGpffffb6f1` is `DAT_00355661`, the smear's target
+alpha, and `DAT_00343880` is the rotation the `0xC9` transform carries. The
+director raises them for shots 6, 8 and 11, the crab's slam raises the alpha for
+the impact, and the crab's wrapper clears the whole `0xC9` block plus the camera
+roll every fight frame before `FUN_00279180` gets a say -- so a shot that wants
+the smear has to re-raise it every frame, which is exactly what it does.
+
+##### The close-up rig is a cinematic prop, and only the swipe puts it away
+
+`s14_e001` places a type `0x28` close-up mount at load, hides it, and tags it
+`0x2E`; opcode `0x13F` builds its rig and the script tags the published bust and
+hair slots `0x2F` and `0x30`. Those three tags are exactly what the crab's throw
+looks up:
+
+```
+FUN_0027BBE0  DAT_00325900 = tag 0x2E   the mount -- stood at (1.2, -3.2, 0),
+                                        unhidden, and framed by shots 12 and 13
+              DAT_00325904 = tag 0x2F   +0x08 |= 0x80
+              DAT_00325908 = tag 0x30   +0x08 |= 0x80, animation 1
+              pool slot 0   +0x08 |= 1, +0x04 |= 1   -- the player, hidden
+```
+
+and `FUN_0027C458`, the swipe, is the only thing that gives them back:
+`FUN_00265EC0` on all three, both player bits cleared, all three pointers
+zeroed. The port had the tag lookups but not the pointers, so the release had
+nothing to release: the mount stood in the middle of the arena for the rest of
+the scene and the player never came back out of hiding. That is the "Orphen
+floats in the middle of the battle" the animatic ended on.
+
+##### Verified
+
+`s14_e001`, 2500 frames, no input. The camera now moves through the animatic --
+shot 9's fixed look-at `(1.810, -7.426, 0.770)` at frame 700, shot 10 mid-spline
+at zoom 3.08 at frame 900, the close-up on the mount at `(1.200, -3.188, 0.437)`
+at frame 1100 -- and the rig, its three children included, stops ticking at frame
+1190 instead of running to the end. The party is still built and the battle still
+starts on frame 1863, `s14_e012` still builds on frame 2 and binds 5 of 5, and
+`s01_e024` and `s01_e012` are byte-identical over 3000 frames with
+`--actor-report` and `--scr-report`.
+
+##### The `[embed]` lines in this scene are the diagnostic working
+
+`s14_e001` prints 42 of them, all for the crab, all in the first fifty frames.
+They are not a defect. The scene drives a collision group with opcode `0x7D`
+**every frame** -- 261 times over 2500 frames -- so `DAT_003555D0` is genuinely
+live on almost every frame here, where a field scene raises it for the two frames
+`FUN_00208450`'s dirty-byte handshake needs and then drops it. Meanwhile the
+crab's scripted wade-in re-places it with opcode `0x55` every frame, and the
+authored curve runs one to ten hundredths of a unit under a seabed that is
+rising faster than it is. The message says the ejection is armed on the same
+frame the placement needs it, which is the case it was written to confirm.
 
 #### The spell voice is a multi-clip VOICE.BIN bank
 

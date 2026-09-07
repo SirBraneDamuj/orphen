@@ -1,5 +1,7 @@
 #include "ported/entity/original_crab_boss.h"
 
+#include "ported/entity/original_boss_camera.h"
+
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/battle/battle_tables.h"
 #include "ported/entity/original_hit_test.h"
@@ -131,15 +133,10 @@ namespace orphen::ported::entity
     inline constexpr std::array<std::uint8_t, 8> kDAT_00355248_swipeTargets{
         {0x0E, 0x11, 0x0F, 0x10, 0x0D, 0x12, 0x00, 0x00}};
 
-    // The three globals the swipe ladder counts on. DAT_0035528C is which of
-    // FUN_00277d30's two camera sides to use, rolled fresh each time a rotation
-    // runs out; DAT_0035526A counts the swipes; DAT_0035526B latches once the
-    // last one has landed.
-    std::uint8_t &DAT_0035528c_cameraSide()
-    {
-      static std::uint8_t value = 1;
-      return value;
-    }
+    // The two globals the swipe ladder counts on. DAT_0035526A counts the
+    // swipes; DAT_0035526B latches once the last one has landed. The third,
+    // DAT_0035528C -- which of FUN_00277d30's camera sides to use -- lives with
+    // the camera director, which is the only other thing that writes it.
     std::uint8_t &DAT_0035526a_swipeCount()
     {
       static std::uint8_t value = 0;
@@ -385,25 +382,31 @@ namespace orphen::ported::entity
 
     // ------------------------------------------------------ the per-frame work
 
-    // FUN_00279180: the boss camera, chosen by the crab's damage stage, plus the
-    // two map primitive groups that open when the first leg comes off.
+    // FUN_00279180: pick this frame's camera shot, and open or close the two map
+    // primitive groups that go with the crab's damage stage.
     //
-    // FUN_00277d30 itself -- 1132 lines of camera poses on a priority gate -- is
-    // not ported yet, so what is here is the part with a lasting effect: the
-    // geometry it opens and the entity tagged 0x13 it hides with it.
+    // A hidden crab (+0x08 bit 0) gets shot 3, the slow orbit, and nothing else.
+    // Otherwise the damage stage picks: stage 0 is shot 1 with the arena open,
+    // stage 1 is shot 2 with it closed again, and any other stage is shot 2 on
+    // its own. The side each shot comes from is DAT_0035528C, which shot 3 is
+    // what rolls over.
     void FUN_00279180_stage_camera(OriginalEntity &entity, const ActorEnvironment &environment)
     {
+      const auto side = static_cast<std::int16_t>(DAT_0035528c_cameraSide());
       if (((entity.halfword08 ^ 1u) & 1u) == 0)
       {
+        FUN_00277d30_boss_camera(3, side, 0, &entity, environment);
         return;
       }
       const std::int8_t phase = entity.crabPhase1c5;
       if (phase != 0 && phase != 1)
       {
+        FUN_00277d30_boss_camera(2, side, 0, &entity, environment);
         return;
       }
 
       const bool opening = (phase == 0);
+      FUN_00277d30_boss_camera(opening ? 1 : 2, side, 0, &entity, environment);
       if (environment.FUN_0022dbc8_show_map_primitives)
       {
         environment.FUN_0022dbc8_show_map_primitives(0x20u, opening);
@@ -528,9 +531,10 @@ namespace orphen::ported::entity
         FUN_0027c3e8_swipe_ladder(entity, environment);
         return;
       case 0x0E:
-        // The fight proper. FUN_00277d30(-1, 0, 0) releases the boss camera and
-        // FUN_0027c7b8 picks the crab's first move.
+        // The fight proper: release whatever shot the animatic left running and
+        // let FUN_0027c7b8 pick the crab's first move.
         entity.spawnParam94 = static_cast<std::uint8_t>(action);
+        FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
         FUN_0027c7b8_pick_next_move(entity, environment);
         return;
       case 6:
@@ -649,6 +653,17 @@ namespace orphen::ported::entity
       entity.crabDamageAccum1c8 = 0;
       entity.crabByte1ce = 0;
       entity.crabSubPhase1d0 = 0;
+
+      // The five bytes at 0x0035526A..0x0035528C. They are globals, so a second
+      // run of the scene inherits whatever the first left; the original clears
+      // them here and so does this.
+      DAT_0035526a_swipeCount() = 0;
+      DAT_0035526b_swipeDone() = 0;
+      DAT_0035526c_dodgePhase() = 0;
+      DAT_0035526d_runSpot() = 0;
+      DAT_0035528c_cameraSide() = 1;
+      DAT_00325900_cinematicSlots() = {{-1, -1, -1}};
+      FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
 
       // FUN_00248f18(0x0C) and (0x31): the pair state 13 picks up. The first
       // lands at +0x1C0 and the second inside *its* +0x198, which is how state
@@ -775,6 +790,11 @@ namespace orphen::ported::entity
         return;
       }
 
+      // uGpffffb6f1: the smear's target alpha, up for the slam.
+      if (environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0x50);
+      }
       if (environment.hitTest != nullptr && DAT_00573788_crabAttacks().filled)
       {
         FUN_002148a8_swept_hit_test(entity, slot, DAT_00573788_crabAttacks().record[0],
@@ -1011,9 +1031,9 @@ namespace orphen::ported::entity
 
       if (DAT_0035526b_swipeDone() == 9)
       {
-        // FUN_00277d30(-1, 0, 0): release the boss camera. The party control
-        // block's current action goes back to 6 and the player's own state
-        // machine takes over again.
+        // Release the boss camera. The party control block's current action goes
+        // back to 6 and the player's own state machine takes over again.
+        FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
         if (entity.spawnParam94 == 0x0E && environment.DAT_0031d3c8_setBattleTableWord)
         {
           // (&DAT_0031D7BE)[(DAT_00354EBE - 1) * 0x3C] = 6 -- the control block's
@@ -1095,7 +1115,13 @@ namespace orphen::ported::entity
         {
           FUN_00225bc8_set_animation(player, 0x0D);
         }
-        // FUN_00277d30(6, 2 or 1 or 3, 1): the camera follows the tumble.
+        // The camera follows the tumble. The sub-shot is picked off the swipe
+        // counter: the first swipe frames it from one side, the second from the
+        // other, and anything past that takes the fixed pose.
+        const std::int16_t dodgeShot = DAT_0035526a_swipeCount() == 1   ? 2
+                                       : DAT_0035526a_swipeCount() == 2 ? 1
+                                                                        : 3;
+        FUN_00277d30_boss_camera(6, dodgeShot, 1, &entity, environment);
         player.positionX20 = FUN_0023a990_bezier(t, DAT_005737c0_arcX());
         player.positionZ24 = FUN_0023a990_bezier(t, DAT_005737cc_arcZ());
         player.positionY28 = FUN_0023a990_bezier(t, DAT_005737d8_arcY());
@@ -1183,9 +1209,9 @@ namespace orphen::ported::entity
     // script's cue, so nothing in s14_e001 gets past its own beat 110 until this
     // has run all the way through.
     //
-    // FUN_00277d30, the boss camera director, is not ported: 1132 lines of
-    // camera poses behind a priority gate, and it changes nothing but the view.
-    // Its call sites are kept as comments so the order is recoverable.
+    // The four watching beats also stand up the close-up rig in the player's
+    // place -- DAT_00325900/04/08, found by actor tag -- and shots 12 and 13
+    // frame it. FUN_0027C458 is the only thing that takes it away again.
     void FUN_0027bbe0_state13_throw(OriginalEntity &entity,
                                     std::size_t slot,
                                     const ActorEnvironment &environment)
@@ -1278,7 +1304,8 @@ namespace orphen::ported::entity
       switch (entity.animationA0)
       {
       case 2:
-        // FUN_00277d30(7, 1, 1): the approach.
+        // The approach.
+        FUN_00277d30_boss_camera(7, 1, 1, &entity, environment);
         if (countdown(entity.fadeRamp62, environment.frameTicks))
         {
           const float turned = entity.facingRadians5c - kFGpffff9214_quarterTurn;
@@ -1322,7 +1349,8 @@ namespace orphen::ported::entity
         break;
 
       case 0:
-        // FUN_00277d30(7, 2, 1): the first turn with the victim in hand.
+        // The first turn with the victim in hand.
+        FUN_00277d30_boss_camera(7, 2, 1, &entity, environment);
         if (countdown(entity.fadeRamp62, environment.frameTicks))
         {
           entity.crabSpeed1a0 = kFUN_0027bbe0_carrySpeed;
@@ -1334,8 +1362,9 @@ namespace orphen::ported::entity
         break;
 
       case 0x18:
-        // FUN_00277d30(7, 2, 1) again: the carry, walked sideways -- the heading
-        // it moves along is a quarter turn off the one it faces.
+        // The carry, walked sideways -- the heading it moves along is a quarter
+        // turn off the one it faces.
+        FUN_00277d30_boss_camera(7, 2, 1, &entity, environment);
         if (countdown(entity.fadeRamp62, environment.frameTicks))
         {
           const float turned = entity.facingRadians5c - kFGpffff9228_quarterTurn;
@@ -1345,13 +1374,15 @@ namespace orphen::ported::entity
           entity.positionX20 = kUGpffff922c_hurlX;
           entity.positionZ24 = kUGpffff9230_hurlY;
           entity.positionY28 = kUGpffff9234_hurlZ;
-          // FUN_00277d30(9, 1, 1): the hurl's own camera.
+          // The hurl's own camera.
+          FUN_00277d30_boss_camera(9, 1, 1, &entity, environment);
           return;
         }
         advance(entity.facingRadians5c - kFGpffff9238_quarterTurn);
         break;
 
       case 0x0F:
+        FUN_00277d30_boss_camera(9, 1, 1, &entity, environment);
         // The hurl. Clip frame 6 with the contact bit lets the victim go: it
         // stops riding the bone, takes the bone's world point as its own
         // position, and drops into its own state 1.
@@ -1389,6 +1420,7 @@ namespace orphen::ported::entity
         switch (entity.crabSubPhase1d0)
         {
         case 0:
+          FUN_00277d30_boss_camera(9, 1, 1, &entity, environment);
           if (countdown(entity.fadeRamp62, environment.frameTicks))
           {
             // The three watchers, found by actor tag. The original parks pool
@@ -1430,15 +1462,24 @@ namespace orphen::ported::entity
                 c.halfword08 = static_cast<std::uint16_t>(c.halfword08 | 0x80u);
                 FUN_00225bc8_set_animation(c, 1);
               }
+              // DAT_00325900/04/08. Shots 12 and 13 frame the first of the
+              // three, and state 14 is what gives all of them back -- without
+              // that the mount stands in the arena for the rest of the fight
+              // and the player never comes back out of hiding.
+              DAT_00325900_cinematicSlots() = {{watcherA, watcherB, watcherC}};
             }
             entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, pool.slot(0));
             entity.fadeRamp62 = kFUN_0027bbe0_watchHold;
             entity.crabSubPhase1d0 = 1;
-            // FUN_00277d30(-1, 0, 0) then (10, 1, 1): release, then the watch.
+            // Release, then the watch -- the shot that frames the close-up rig
+            // this beat just stood up in the player's place.
+            FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
+            FUN_00277d30_boss_camera(10, 1, 1, &entity, environment);
           }
           break;
 
         case 1:
+          FUN_00277d30_boss_camera(10, 1, 1, &entity, environment);
           if (countdown(entity.fadeRamp62, environment.frameTicks))
           {
             entity.crabSubPhase1d0 = 2;
@@ -1451,8 +1492,10 @@ namespace orphen::ported::entity
           break;
 
         case 2:
+          FUN_00277d30_boss_camera(10, 1, 1, &entity, environment);
           if (countdown(entity.fadeRamp62, environment.frameTicks))
           {
+            FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
             entity.crabSubPhase1d0 = 3;
             entity.fadeRamp62 = kFUN_0027bbe0_beatHold;
             if (environment.FUN_00248f18_find_by_tag)
@@ -1468,6 +1511,8 @@ namespace orphen::ported::entity
           break;
 
         case 3:
+          // The close-up itself.
+          FUN_00277d30_boss_camera(12, 1, 1, &entity, environment);
           if (countdown(entity.fadeRamp62, environment.frameTicks))
           {
             entity.fadeRamp62 = kFUN_0027bbe0_beatHold;
@@ -1488,6 +1533,15 @@ namespace orphen::ported::entity
         }
         break;
       }
+
+      // LAB_0027C38C. Once the throw is past its first watching beat every
+      // frame sets the smear to 0x6E with an identity transform, which is what
+      // gives the whole close-up sequence its soft trail.
+      if (entity.crabSubPhase1d0 > 1 && environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->FUN_00264470_set_alpha_and_transform(0x6E, 0, 0,
+                                                                                     10, 10, 0);
+      }
     }
 
 
@@ -1507,8 +1561,24 @@ namespace orphen::ported::entity
 
       if (entity.animationA0 == 5)
       {
-        // The original also frees the three cinematic entities DAT_00325900..08
-        // if state 13 left them behind. Nothing in the port allocates them yet.
+        // The three cinematic entities the throw stood up, released here. This
+        // is the *only* thing that takes the close-up rig back off the screen
+        // and the only thing that unhides the player, so a swipe that never
+        // runs leaves both wrong for the rest of the scene.
+        if (DAT_00325900_cinematicSlots()[0] >= 0)
+        {
+          for (const std::int32_t cinematic : DAT_00325900_cinematicSlots())
+          {
+            if (cinematic >= 0 && static_cast<std::size_t>(cinematic) < pool.slotCount())
+            {
+              FUN_00265ec0_destroy_entity(static_cast<std::size_t>(cinematic), environment);
+            }
+          }
+          OriginalEntity &lead = pool.slot(0);
+          lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 & 0xFFFEu);
+          lead.halfword04 = static_cast<std::uint16_t>(lead.halfword04 & 0xFFFEu);
+          DAT_00325900_cinematicSlots() = {{-1, -1, -1}};
+        }
         const OriginalEntity &player = pool.slot(0);
         const float bearing = FUN_0023a4b8_bearing(entity, player);
         entity.battleDesiredFacing19c = bearing;
@@ -1651,6 +1721,17 @@ namespace orphen::ported::entity
           environment.DAT_00355060_scriptWork ? environment.DAT_00355060_scriptWork(0) : 0;
       if (beat < kFUN_00279298_beatCeiling)
       {
+        // The whole 0xC9 block plus the camera roll, cleared every frame before
+        // FUN_00279180 gets a say. Any shot that wants the smear re-raises it.
+        if (environment.DAT_00343878_frameFeedback != nullptr)
+        {
+          environment.DAT_00343878_frameFeedback->FUN_00264470_set_alpha_and_transform(0, 0, 0, 0,
+                                                                                       0, 0);
+        }
+        if (environment.camera != nullptr)
+        {
+          environment.camera->setRoll(0.0f);
+        }
         FUN_00279180_stage_camera(entity, environment);
         FUN_0027c8a0_body_sweep(entity, slot, environment);
         if (entity.crabFlinchTimer1ca == 0)

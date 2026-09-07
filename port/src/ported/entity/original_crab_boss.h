@@ -81,9 +81,9 @@
 // 6, 7, 9, 10, 11 and 15 are the late-fight moves and the death; the crab only
 // reaches them after it has shed a leg, and --actor-report names any it does.
 //
-// FUN_00277d30, the boss camera director, is deliberately absent: 1132 lines of
-// camera poses behind a priority gate, changing nothing but the view. Its call
-// sites are kept as comments in the states so the order is recoverable.
+// FUN_00277d30, the boss camera director, is in original_boss_camera.h. Every
+// call site here goes through it, and DAT_0035528C -- the side each shot comes
+// from -- lives with it, because shot 3 is the only thing that rolls it over.
 
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity.h"
