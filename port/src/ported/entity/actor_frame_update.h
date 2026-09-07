@@ -7,6 +7,7 @@
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/follower_navmesh.h"
 #include "ported/entity/original_entity.h"
+#include "ported/entity/original_dust_pool.h"
 #include "ported/entity/original_hit_test.h"
 #include "ported/entity/player_bandana.h"
 #include "ported/resource/character_stats.h"
@@ -385,6 +386,10 @@ namespace orphen::ported::entity
     // DAT_00343880 = 0x14), and the crab's throw resets the whole transform at
     // the end of the hurl. Null in harnesses with no renderer.
     orphen::ported::render::FrameFeedback *DAT_00343878_frameFeedback = nullptr;
+
+    // The dust pool at DAT_00355A9C -- the fourth particle system, and the one
+    // every impact in the game kicks up. Null in harnesses with no renderer.
+    DustPool *DAT_00355a9c_dust = nullptr;
 
     // FUN_00267d38(cue, entity). Behaviours reach the sound engine through
     // small wrappers -- FUN_002d59e0 is the chest's -- so this is the shape

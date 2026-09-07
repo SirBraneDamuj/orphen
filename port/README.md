@@ -3205,6 +3205,206 @@ authored curve runs one to ten hundredths of a unit under a seabed that is
 rising faster than it is. The message says the ejection is armed on the same
 frame the placement needs it, which is the case it was written to confirm.
 
+#### The thrown pair, the water, and where the crab's noise comes from
+
+Three things the animatic was missing, all of them hanging off the crab's
+wrapper rather than off any state.
+
+##### `FUN_0027CFE0` is the only thing that takes the thrown pair away
+
+The wrapper runs it every frame its mode byte is 12, which is the whole of the
+throw. The subject is the entity at `+0x1C0`, and it does nothing until the hurl
+lets go -- the gate is `+0x192` below 1 and the victim's own state non-zero, and
+state 13 clears that state on entry. Then four steps counted in the *victim's*
+`+0x94`:
+
+```
+0  build the arc: from where it is to five units along the crab's facing plus
+   fifteen degrees. The control point is the far end on both horizontal axes,
+   so it leaves fast and coasts in; only the height has a real apex, two units
+   up, landing at zero. Raise +0x04 bit 3.
+1  turn the victim to the crab's facing plus fifteen degrees.
+2  walk the arc over 0xC80 ticks. On the last tick drop +0x04 bit 3, which
+   hands it back to the physics.
+3  wait for +0x0C to answer "landed", then two rings of splashes, cue 0x7C,
+   and FUN_00265EC0 -- the victim is destroyed and +0x1C0 cleared.
+```
+
+Step 3 is the whole of it. Without it the thrown character floats in the water
+for the rest of the scene and the water never makes a sound.
+
+##### Type 0x10D is the water, and it is thirty lines
+
+`PTR_LAB_0031CAB0`'s entry for 0x10D is `FUN_002EB180`: shrink both scales
+toward the end of the timer, die on zero, and drift outward along the heading
+while `+0x60` is non-zero. `FUN_002EB278` spawns one, and it writes
+`DAT_00354A3C` -- **-0.7, the water surface** -- into the height itself, taking
+only x and y from the caller. That is why neither spawner has to know how deep
+the thing making the splash is.
+
+Two spawners, and between them they are most of the water in the scene:
+
+```
+FUN_002EB398(radius, scaleA, scaleB, at, count, life)   a ring, mode 0, static
+FUN_002EB500(at, count)                                 a 90-degree fan behind
+                                                        the facing, mode 1,
+                                                        drifting outward
+```
+
+`FUN_0027CE48` calls the second every 0x140 ticks while the crab is in the water
+and playing one of its six moving clips -- the spray it kicks up wading in --
+and `FUN_0027CFE0` calls the first twice when the pair lands. Sixty of them now
+spawn across a 2500-frame run of `s14_e001`, where before there were none.
+
+##### `FUN_0027EF40` is the crab's entire sound layer
+
+The wrapper runs it outside the mode gate and outside the beat ceiling, so it is
+the one piece of the crab that is audible from the frame the scene loads. Every
+cue is a clip keyframe -- the animation says which move, the timeline cursor
+says which frame of it, and a contact bit says the frame is the one the claw or
+the foot actually lands on. Bit 8 is the claw, bit 4 the legs:
+
+```
+animation 8    the slam      cursor 0 / 6 / 8   0x114 / 0x115 / 0x116
+animation 9    the stamp     cursor 0           0x117
+animation 2    the walk      cursor 0           0x118 above -2, else 0x119
+animation 3    the charge    cursor 4           0x118 above -4, else 0x119
+animation 0x19 backing up    cursor 4           0x118 above -4, else 0x119
+```
+
+A 2500-frame run went from **8 sound events to 41**: seven 0x114, six each of
+0x115, 0x116 and 0x117, nine 0x119, and the splash. 0x118 never fires in this
+arena because the crab is never above the shallow line.
+
+##### Still out
+
+`FUN_0027F1A8`, which animations 0, 1 and 3 also reach, puts two puffs on the
+crab's bones 2 and 3 through `FUN_0021F6E8` -- the same spawner the status aura
+wants, and the port still has no equivalent. `FUN_0027ED58` (the three debris
+pools, and cue 0xC0 when the crab drops what it is holding), `FUN_0027E118` (the
+falling debris, type 0x10B) and `FUN_0027DC38` are the wrapper's other three
+mode-14 helpers and are not ported. `FUN_0027CF20`'s impact dust needs
+`FUN_0021A4F8`'s pool, which is a third particle system with its own step and
+draw. `FUN_002EAC48`, state 5's bubble rings, is unported. So is the pad rumble,
+`FUN_0023BBD8`.
+
+#### The crab's effects: a bubble, a fourth particle system, and three debris pools
+
+##### Type 0x10C is the stamp's bubbles
+
+`PTR_LAB_0031CAB0`'s entry for 0x10C is `FUN_002EA7F0`, a two-stage rise. Stage
+one runs the spawn timer down while the bubble travels along `+0x5C` and climbs
+at `+0x1A0`; stage two adds five to the climb and scales the *horizontal* speed
+by however much of its own timer is left, so it stalls as it surfaces. Either
+stage ends on a `+0x0C` mask: `0x4006` -- a wall, a ceiling or the map --
+destroys it outright, `0x60` -- another entity -- pops it.
+
+Only the popping matters, and only once. `DAT_0035529C` latches the moment a
+bubble lands `FUN_002EF510`, so a column of twenty cannot land twenty hits. And
+only **state 0** can hit at all: state 1 is the same machine with the attack
+dropped, which is what a mode-1 bubble is for.
+
+`FUN_002EAC48` spawns them, and the crab's stamp (`FUN_0027A440`, animation 9)
+asks for ten, fifteen or twenty depending on how many legs it has left -- and at
+two legs gone it doubles the spread as well -- off bone 6, then three more of
+mode 4 in a half-unit ring at 0, 120 and 240 degrees. Nineteen of them now spawn
+across a 2500-frame run.
+
+##### The fourth particle system
+
+`DAT_00355A9C` is a thousand entries of `0x28` with no behaviour pointer at all:
+`FUN_0021A820` is the only thing that ever steps one. It shares nothing with
+`DAT_00355620` (1536 entries, one installed behaviour) or `DAT_00355B74` (a
+thousand sparks in ten groups, drawn as world-space streaks).
+
+A puff does two things: it rises by 0.003 a tick, and if its heading is
+**exactly** non-zero it slides along it by 0.01 a tick. That float test is not a
+flag, so the first puff of every ring genuinely does not slide. The rest is the
+fade -- `(remaining << 7) / total`, 0x80 down to 0 -- and `+0x21` picks between
+a rectangle that hangs below the anchor and one centred on it.
+
+One detail worth keeping: a puff is skipped while its projected `q` is **above**
+`fGpffff839C` (0.7). That is a *near* cutoff, not a far one -- the opposite way
+round from every other sprite in the frame.
+
+Three spawners sit on top of it. `FUN_0021A4F8` is the ring and does no rolling
+at all -- it only stores the two jitter ranges. `FUN_00219AF0` is what the
+impact helpers call: two nested rings, rolling both jitters per outer step and
+folding the first into the position, so `(5, 20)` puts a hundred ragged puffs
+down. `FUN_0021A170` hands its own first roll in as both the x jitter *and* the
+radius, which is how a single puff scatters instead of landing on the point.
+
+`FUN_0027CF20` -- the claw landing -- fires two of those hundreds at once, and
+that is now on screen for every swipe in the animatic: 134 puffs alive at frame
+1260, 169 at 1350.
+
+The puff's own packet is where the first version of this went wrong, and both
+mistakes were in fields the arithmetic never touches. `FUN_0021A820` writes
+`0x10004580` into the packet's `+0x0C`, and `FUN_00207de8`'s `& 0x1C000` ladder
+tests bit `0x4000` first: **mode 1, an alpha blend.** The two neighbouring pools
+write `0x10008080` and `0x10008580`, whose `0x8000` picks mode 2, and taking the
+dust for additive as well turned a claw landing into a white screen. Then
+`FUN_00207de8`:130-141 folds the vertex colour on the way into the GS, and for a
+**textured** packet -- which this is, halfword `0x0221` -- it halves *all four*
+channels, not just the alpha: `0xF0F0F0` arrives as `0x787878` and a fresh
+puff's `0x80` alpha as `0x40`. Both are visible in a capture; neither shows up
+in a count.
+
+Worth flagging for the two pools that were ported before it: neither
+`FUN_002D3058`'s particles nor `FUN_002190F8`'s hit sparks apply that same fold
+in this port, and both submit textured packets (`0x0A2B` and `0x0022`), so both
+reach the GS at twice the alpha the hardware would use. No scene the harness can
+capture has either pool alive, so the correction is unverified and has not been
+made.
+
+##### The three debris pools
+
+`FUN_00279940` clears thirty entries at `DAT_005737E8`, fifty at `DAT_00573860`
+and thirty at `DAT_00573928`, and the crab's wrapper walks them through
+`FUN_0027ED58`. **Everything in all three is retyped to 400**, whose handler is
+`FUN_00239E78`, the no-op -- that is the point: the crab steps them, so the
+actor loop must not.
+
+```
+DAT_005737E8  FUN_0027E118 drops one piece of wreckage every 16000 ticks at
+              x = 7, five to nine units up the arena; FUN_0027E5D8 slides it,
+              and a hit turns it into cue 0xC0, a burst of chunks and two
+              splash rings
+DAT_00573860  the arena's own destructibles, bound at crab init by four
+              FUN_002797D0 calls -- tags 20..23 the lamps (which take a light
+              slot), 30..34 the crates, 35..39 the barrels, 41..42 the two that
+              keep their own type -- and stepped by FUN_0027E770
+DAT_00573928  the chunks a broken prop throws, from FUN_0027E370; FUN_0027EBE0
+              slides each one and trails a dust puff a frame behind it
+```
+
+Sixteen type-400 entities now live in `s14_e001`: fourteen props bound at init
+and two pieces of wreckage, all of them reported `implemented` where the same
+slots used to read `UNIMPLEMENTED` map-streamed props.
+
+`FUN_0027E118`'s one quirk is worth writing down rather than reproducing:
+`FUN_0025BA98(0x10B, ...)` indexes the object stat groups at `type - 0x272`,
+which is **negative** for 0x10B, so the original copies a byte from before the
+group into `+0x12C`. There is no faithful value to port; the field keeps its
+default and the read is noted where it would have been.
+
+##### Still out, and why
+
+`FUN_0021F6E8` is a **fifth** particle system and it is two pools, not one: a
+hundred emitters of `0x3C` that spawn into a thousand particles of `0x24`, and
+only the second of those draws. `FUN_0021FB68` has no packet in it at all. So it
+is the whole subsystem -- seven functions, two pools, two draw paths -- or
+nothing, and it is the only thing blocking `FUN_0027F1A8` (the crab's bone dust
+on animations 0, 1 and 3) and `FUN_002EF688`'s kinds 2 and 3 (the crate and
+barrel bursts). Both call sites are in place with the gap named.
+
+`FUN_0027DC38` is the fight's own bookkeeping -- the live-enemy count, the
+target list, the music step-downs, and the write of 3000 into script work word 0
+that ends the battle. It belongs with the battle module rather than the crab.
+
+`FUN_0023BBD8` is the pad rumble. The port has no motor anywhere, and three
+other places already say so.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips

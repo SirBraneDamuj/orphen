@@ -788,6 +788,7 @@ namespace orphen::port
     // FUN_00201a38's smear. The boss camera director writes DAT_00355661 and
     // DAT_00343880 directly, the way FUN_00277d30 does.
     environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
+    environment.DAT_00355a9c_dust = &DAT_00355a9c_dust_;
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
     environment.DAT_003555e8_stickMagnitude = DAT_003555e8_stickMagnitude_;
     environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;
@@ -3532,6 +3533,55 @@ namespace orphen::port
       }
     }
 
+    // FUN_0021A760's draw half. Same split as the pool above: stepped in the
+    // simulation, collected here in pool order. The near cutoff is the
+    // original's own -- fGpffff839C, on the projected q rather than on z -- and
+    // it rejects a puff that is *too close*, which is the opposite way round
+    // from every other sprite in the frame.
+    if (DAT_00355a9c_dust_.aliveCount() > 0)
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+
+      for (const auto &puff : DAT_00355a9c_dust_.puffs())
+      {
+        if (!puff.alive() || puff.total1e == 0)
+        {
+          continue;
+        }
+        const orphen::ported::psm2::Vec3 world{puff.x00, puff.y04, puff.z08};
+        const auto viewSpace = viewProjection.toViewSpace(world);
+        if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+        {
+          continue;
+        }
+        if (1.0f / viewSpace.z > orphen::ported::entity::kFGpffff839c_dustNearCutoff)
+        {
+          continue;
+        }
+
+        orphen::ported::entity::DustQuadInputs inputs;
+        inputs.gsOriginX =
+            static_cast<int>(viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        inputs.gsOriginY =
+            static_cast<int>(viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        inputs.viewZ = viewSpace.z;
+        inputs.projectionScaleX = projectionScaleX;
+        inputs.projectionScaleY = projectionScaleY;
+        inputs.screenCentreX = screenCentreX;
+        inputs.screenCentreY = screenCentreY;
+        inputs.size = puff.size18;
+        inputs.shape = puff.shape21;
+        inputs.colour = puff.colour24;
+        // `(remaining << 7) / total`, an integer divide in the original.
+        inputs.alpha = (static_cast<int>(puff.remaining1c) << 7) / static_cast<int>(puff.total1e);
+
+        quads.push_back(orphen::ported::entity::FUN_0021a820_build_dust_quad(inputs));
+      }
+    }
+
     // FUN_00220910, the hit sparks, in the slot FUN_002192c0 gives it: the
     // *draw* phase, after both entity passes. That is why they step here and
     // the DAT_00355620 pool steps beside the actor loop -- the original runs
@@ -5816,6 +5866,7 @@ namespace orphen::port
     }
     // DAT_00355620. Zero alive with a behaviour installed means every particle
     // a burst seeded has since faded out, which is the normal resting state.
+    std::cout << "dust puffs: alive=" << DAT_00355a9c_dust_.aliveCount() << "\n";
     std::cout << "particles: alive=" << DAT_00355620_particles_.aliveCount()
               << " behaviour="
               << (DAT_00355620_particles_.DAT_00355e0c_behaviour() ==
@@ -6165,6 +6216,9 @@ namespace orphen::port
       // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
       // its first step on the next one rather than on the frame it was seeded.
       DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+      // FUN_0021A760 runs in the same half of the frame: it is walked from
+      // the simulation and its quads are collected at publish time.
+      DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
 
       // FUN_002239c8:129 -> FUN_0023fd30 -> FUN_002462c8. The command input
       // runs *after* the actor loop, not before it, so a press is read against
@@ -6514,6 +6568,7 @@ namespace orphen::port
     // FUN_002d3290. Clearing the pool also drops DAT_00355e0c, so nothing from
     // the previous map keeps stepping.
     DAT_00355620_particles_.FUN_002d3290_reset([this] { return FUN_00216868_random(); });
+    DAT_00355a9c_dust_.FUN_0021a698_reset();
     // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two
     // type 0x68 health bars, pool slots 2 and 3. Built on every scene load, not
     // only a battle one -- FUN_002d5630 is what refuses to raise one outside a

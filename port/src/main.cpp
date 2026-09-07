@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -791,7 +792,15 @@ int main(int argc, char **argv)
 
     if (config.loadOnly)
     {
-      orphen::port::PortRuntime runtime;
+      // PortRuntime is ~460 KB, and main declares three of them. MSVC packs
+      // the two report-only ones together but keeps the windowed one separate,
+      // which put main's frame at 944,640 bytes against the 1 MB default stack
+      // reserve. What is left over is enough for a headless run and not enough
+      // for SDL's window and GL context creation, so the windowed path died in
+      // the driver with STACK_OVERFLOW before a single line of output flushed.
+      // Keep all three off the stack.
+      const auto runtimeOwner = std::make_unique<orphen::port::PortRuntime>();
+      orphen::port::PortRuntime &runtime = *runtimeOwner;
       runtime.initialize(config);
       runtime.printExitReports();
       return 0;
@@ -799,7 +808,9 @@ int main(int argc, char **argv)
 
     if (config.headlessFrameCount != 0)
     {
-      orphen::port::PortRuntime runtime;
+      // Heap, not stack -- see the note on the --load-only path above.
+      const auto runtimeOwner = std::make_unique<orphen::port::PortRuntime>();
+      orphen::port::PortRuntime &runtime = *runtimeOwner;
       runtime.initialize(config);
 
       // --sound-dump. One frame of mixer output per simulation step, which is
@@ -902,7 +913,10 @@ int main(int argc, char **argv)
     // that aspect anyway, so this just avoids shipping default bars.
     orphen::port::SdlGlWindow window(
         {"Orphen Native Port Harness", config.windowWidth, config.windowHeight, config.vsync});
-    orphen::port::PortRuntime runtime;
+    // Heap, not stack -- see the note on the --load-only path above. This is
+    // the one that overflowed: SDL and the GL driver need real headroom.
+    const auto runtimeOwner = std::make_unique<orphen::port::PortRuntime>();
+    orphen::port::PortRuntime &runtime = *runtimeOwner;
 
     runtime.initialize(config);
 

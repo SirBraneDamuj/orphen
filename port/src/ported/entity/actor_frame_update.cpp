@@ -2,6 +2,8 @@
 
 #include "ported/entity/original_battle_enemy.h"
 #include "ported/entity/original_crab_boss.h"
+#include "ported/entity/original_bubble_effect.h"
+#include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
 #include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_health_bar.h"
@@ -3928,6 +3930,8 @@ namespace orphen::ported::entity
     case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
     case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
     case 0x00279298u: // FUN_00279298, type 0x7F, the giant crab
+    case 0x002EB180u: // FUN_002eb180, type 0x10D, the water splash
+    case 0x002EA7F0u: // FUN_002ea7f0, type 0x10C, the stamp's bubbles
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
@@ -3999,6 +4003,10 @@ namespace orphen::ported::entity
       return "FUN_002db230 (fireball burst)";
     case 0x00279298u:
       return "FUN_00279298 (crab boss 0x7f)";
+    case 0x002EB180u:
+      return "FUN_002eb180 (water splash 0x10d)";
+    case 0x002EA7F0u:
+      return "FUN_002ea7f0 (stamp bubble 0x10c)";
     case 0x0027F288u:
       return "FUN_0027f288 (battle enemy 0x80)";
     case 0x0028A958u:
@@ -4170,6 +4178,12 @@ namespace orphen::ported::entity
         break;
       case 0x00279298u:
         FUN_00279298_crab_boss(entity, slot, slotEnvironment, trace);
+        break;
+      case 0x002EB180u:
+        FUN_002eb180_water_splash(entity, slot, slotEnvironment);
+        break;
+      case 0x002EA7F0u:
+        FUN_002ea7f0_bubble(entity, slot, slotEnvironment);
         break;
       case 0x0027F288u:
         FUN_0027f288_enemy80(entity, slot, slotEnvironment, trace);

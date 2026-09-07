@@ -3,6 +3,13 @@
 #include <array>
 #include <cstdint>
 
+// Type 0x10C carries a pointer to one of these; forward-declared rather than
+// included so the entity header keeps its two standard-library dependencies.
+namespace orphen::ported::resource
+{
+  struct HitParameters;
+}
+
 namespace orphen::ported::entity
 {
 
@@ -443,6 +450,36 @@ namespace orphen::ported::entity
     std::int32_t rigHair198 = -1;  // +0x198: the type 0x27 (hair) on the bust's role-1 bone
     std::int32_t rigBust19c = -1;  // +0x19C: the type 0x26 bust on this entity's role-1 bone
     std::int32_t rigCloth1a0 = -1; // +0x1A0: the type 0x19 cloth on the bust's role-2 bone
+
+    // Type 0x10D's block, the water splash. FUN_002EB278 seeds all three and
+    // FUN_002EB180 does nothing but read them: +0x198 is the life the timer at
+    // +0x62 started on, and the two scales are what +0x150 and +0x14C are
+    // multiplied down from as it runs out.
+    std::int16_t splashLife198 = 0;   // +0x198
+    float splashScaleA19c = 0.0f;     // +0x19C
+    float splashScaleB1a0 = 0.0f;     // +0x1A0
+
+    // Type 0x10C's block, the bubble the crab's stamp throws up. FUN_002EAC48
+    // seeds it and FUN_002EA7F0 spends it; held apart from the readings above
+    // for the same reason those are held apart from each other.
+    std::uint8_t bubblePhase198 = 0;  // +0x198, 0 while the first timer runs
+    float bubbleSpeed19c = 0.0f;      // +0x19C
+    float bubbleRise1a0 = 0.0f;       // +0x1A0
+    std::int16_t bubbleLife1a4 = 0;   // +0x1A4, the second timer's full length
+    // +0x1A8: the attack record the pop applies. A pointer in the original too
+    // -- the crab hands it 0x0057378C, its own second record.
+    const orphen::ported::resource::HitParameters *bubbleAttack1a8 = nullptr;
+
+    // Type 400's block -- the crab's debris, in all three of its pools. The
+    // type is the no-op handler, so nothing but FUN_0027E5D8, FUN_0027EBE0 and
+    // FUN_0027E770 ever reads these.
+    std::int16_t debrisSpeed198 = 0;    // +0x198, units per 32000 ticks
+    std::uint8_t debrisFlagged19a = 0;  // +0x19A
+    std::uint8_t debrisFlagged19b = 0;  // +0x19B
+    std::int32_t debrisTimer19c = 0;    // +0x19C, a full word here, not a short
+    // +0x1D4. Which of FUN_0027E770's three shapes this is, or 8 for a piece of
+    // wreckage. FUN_002797D0 stamps it and nothing else writes it.
+    std::uint16_t debrisKind1d4 = 0;
 
     // Type 0x44's block, the homing magic projectile. FUN_002d2e00 seeds it and
     // FUN_002d2470 spends it. Held apart from the readings above for the same

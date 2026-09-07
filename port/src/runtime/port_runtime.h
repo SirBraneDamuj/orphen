@@ -429,6 +429,7 @@ namespace orphen::port
     // steps it after the actor loop, and publishSpriteQuads draws whatever is
     // alive into the same display list the billboards use.
     orphen::ported::entity::ParticlePool DAT_00355620_particles_;
+    orphen::ported::entity::DustPool DAT_00355a9c_dust_;
 
     // DAT_00355B74, the hit sparks -- a thousand entries in ten fixed groups.
     // FUN_002205d0 carves it out at boot, FUN_00216140 fires bursts into it,
