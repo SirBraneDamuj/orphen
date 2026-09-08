@@ -7,8 +7,13 @@
 
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/battle/battle_tables.h"
+#include "ported/entity/original_enemy_attack.h"
 #include "ported/entity/original_hit_test.h"
+#include "ported/camera/original_camera_path.h"
+#include "ported/camera/original_field_camera.h"
+#include "ported/render/original_light_table.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -68,10 +73,14 @@ namespace orphen::ported::entity
     inline constexpr std::uint32_t kFUN_00279298_beatCeiling = 3000;
 
     // State 13's own constants, all gp-relative words in 0x00353180..0x003531B0.
-    // fGpffff9214 / 9224 / 9228 / 9238 are all 1.5708 -- the ninety degrees the
-    // crab turns through at each step of the carry -- and are kept apart because
-    // they are four separate words.
-    inline constexpr float kFGpffff9214_quarterTurn = 1.57079637050629f;
+    // Three of the four turns are 1.5708, the ninety degrees the crab turns
+    // through at each step of the carry, and they are kept apart because they
+    // are separate words. The first one is *not*: fGpffff9214 is 0.174533, ten
+    // degrees, a nudge the crab makes as it settles over the pair. Reading it as
+    // a fourth quarter turn swings everything after it eighty degrees, and since
+    // the hurl's heading is the facing this state accumulated, that is enough to
+    // throw the pair clean out of shot 9's fixed frame.
+    inline constexpr float kFGpffff9214_settleTurn = 0.174532890319824f;
     inline constexpr float kFGpffff9224_quarterTurn = 1.57079637050629f;
     inline constexpr float kFGpffff9228_quarterTurn = 1.57079637050629f;
     inline constexpr float kFGpffff9238_quarterTurn = 1.57079637050629f;
@@ -130,6 +139,111 @@ namespace orphen::ported::entity
     inline constexpr std::array<std::int16_t, 5> kDAT_00325920_middleMoves{{7, 4, 7, 4, 7}};
     inline constexpr std::array<std::int16_t, 3> kDAT_003552a0_lateMoves{{9, 10, 11}};
     inline constexpr std::uint16_t kFUN_0027c7b8_neutralAnimation = 5;
+
+    // ------------------------------------------- what the rest of the rotation
+    //                                             actually costs
+    //
+    // The five states the port used to leave out are all built the same way as
+    // state 8 -- pick a spot, cost the walk, turn, walk, hand back -- and the
+    // original gives each of them its own copy of the same half turn and the
+    // same two-degree turn rate rather than sharing one. They are kept apart
+    // here for the same reason: they are separate words.
+
+    // FUN_0027a7e8, state 6: back off to (0, -4), facing the way it came.
+    inline constexpr float kDAT_003258a8_backOffX = 0.0f;
+    inline constexpr float kDAT_003258ac_backOffZ = -4.0f;
+    inline constexpr float kDAT_00353134_backOffHalfTurn = 3.14159202575684f;
+    inline constexpr float kDAT_00353138_backOffTurnRate = 0.174532890319824f;
+
+    // FUN_0027a958, state 7: back away to one of three corners in turn. This is
+    // half of the rotation the crab walks once it has lost a leg, so a port
+    // without it stops the fight dead the first time the player does real
+    // damage.
+    inline constexpr std::array<std::array<float, 2>, 3> kDAT_003258c8_retreats{
+        {{{0.0f, -9.0f}}, {{3.5f, -8.0f}}, {{-3.5f, -8.0f}}}};
+    inline constexpr float kFGpffff91cc_retreatHalfTurn = 3.14159202575684f;
+    inline constexpr float kFGpffff91d0_retreatTurnRate = 0.174532890319824f;
+
+    // FUN_0027acc8, state 9: the deep-water mark the finale starts from.
+    inline constexpr float kDAT_003258c0_finaleStationX = 0.0f;
+    inline constexpr float kDAT_003258c4_finaleStationZ = -6.0f;
+    inline constexpr float kFGpffff91e0_finaleHalfTurn = 3.14159202575684f;
+    inline constexpr float kFGpffff91e4_finaleTurnRate = 0.174532890319824f;
+    inline constexpr float kFGpffff91e8_finaleBackTurn = 3.14159202575684f;
+
+    // FUN_0027ae98, state 10: the run at the shore, thirty units a second
+    // rather than fifty, with the camera cutting six times on the way in.
+    inline constexpr float kDAT_003258b8_chargeX = 0.0f;
+    inline constexpr float kDAT_003258bc_chargeZ = 7.0f;
+    inline constexpr float kFUN_0027ae98_chargeSpeed = 30.0f;
+    inline constexpr float kFGpffff91ec_chargeTurnRate = 0.174532890319824f;
+    inline constexpr float kFUN_0027ae98_deepLine = -3.0f;
+    inline constexpr float kFUN_0027ae98_impactLine = 2.0f;
+    inline constexpr std::uint32_t kFUN_0027ae98_impactMask = 0x62u;
+    inline constexpr float kFGpffff91f0_shotThreeLine = -0.800000011920929f;
+    inline constexpr float kFGpffff91f4_shotFourLine = 0.800000011920929f;
+    inline constexpr float kFUN_0027ae98_shotSixLine = 4.5f;
+    inline constexpr float kFGpffff91f8_gateLine = 1.20000004768372f;
+    inline constexpr float kFUN_0027ae98_closeRange = 1.0f;
+    inline constexpr float kFUN_0027ae98_bankFadeTicks = 22400.0f;
+    inline constexpr float kFUN_0027ae98_bankFloor = 3.0f;
+    inline constexpr std::uint16_t kFUN_0027ae98_impactCue = 0xC1;
+    inline constexpr float kFUN_0027ae98_impactShake = 0.5f;
+    inline constexpr std::int16_t kFUN_0027ae98_impactShakeTicks = 500;
+    inline constexpr std::int32_t kFUN_0027ae98_bubbleCount = 10;
+
+    // FUN_0027b380, state 11: the finale. Four beats on +0x1A4, timed on +0x62.
+    inline constexpr float kDAT_0035316c_finaleTurnRate = 0.174532890319824f;
+    inline constexpr float kDAT_00353170_finaleDustDrop = 0.300000011920929f;
+    inline constexpr float kDAT_00353174_finaleDustSize = 0.800000011920929f;
+    inline constexpr float kDAT_00353178_finaleDustLift = 0.100000001490116f;
+    inline constexpr float kDAT_0035317c_finaleShake = 0.200000002980232f;
+    inline constexpr std::int32_t kFUN_0027b380_finaleBubbles = 20;
+    inline constexpr float kFUN_0027b380_swarmSpread = 15.0f;
+    inline constexpr std::uint16_t kFUN_0027b380_beatZero = 0x0640;
+    inline constexpr std::uint16_t kFUN_0027b380_beatOne = 0x0C80;
+    inline constexpr std::uint16_t kFUN_0027b380_beatThree = 0x2580;
+    inline constexpr float kFUN_0027b380_shakeRamp = 3200.0f;
+    inline constexpr float kFUN_0027b380_shotSwap = 5760.0f;
+    inline constexpr std::uint32_t kFUN_0027b380_endBeat = 2000;
+
+    // FUN_0027c950, the swarm the corpse lets go: a hundred type 0x7E, each one
+    // to two units out on a heading within thirty degrees of the crab's bearing
+    // to the player.
+    inline constexpr std::int32_t kFUN_0027c950_swarmSize = 100;
+    inline constexpr float kFGpffff924c_swarmArc = 6.28318405151367f;
+
+    // FUN_0027cb68 / FUN_0027cc58, state 4's rock. It is dropped two units off
+    // to one side, and once the claw has it, held at (0, -0.5) on the bone with
+    // a quarter turn of roll.
+    inline constexpr float kFGpffff9250_dropLeft = 1.57079601287842f;
+    inline constexpr float kFGpffff9254_dropRight = 1.57079601287842f;
+    inline constexpr float kFUN_0027cb68_dropReach = 2.0f;
+    inline constexpr float kFUN_0027cb68_dropHeight = 5.0f;
+    inline constexpr float kUGpffff9258_holdZ = -0.200000002980232f;
+    inline constexpr float kUGpffff925c_holdRoll = -1.57079601287842f;
+
+    // FUN_00279f50, state 4 itself.
+    inline constexpr float kFUN_00279f50_grabSpeed = 75.0f;
+    inline constexpr float kFGpffff91b0_grabTurnRate = 0.174532890319824f;
+    inline constexpr float kFGpffff91b4_grabSwing = 0.261799335479736f;
+    inline constexpr float kFGpffff91b8_liftTurnRate = 0.174532890319824f;
+    inline constexpr std::uint8_t kFUN_00279f50_leftBone = 0x0C;
+    inline constexpr std::uint8_t kFUN_00279f50_rightBone = 0x12;
+
+    // FUN_002ea640 / FUN_002ea238, the rock as an entity of its own.
+    inline constexpr std::int32_t kRockTypeId = 0x10B;
+    inline constexpr float kFUN_002ea640_aimReach = 3.0f;
+    inline constexpr float kFUN_002ea640_aimSpeed = 20.0f;
+    inline constexpr float kDAT_00354a28_rockRest = -0.899999976158142f;
+    inline constexpr float kFUN_002ea238_fallSpeed = 100.0f;
+    inline constexpr float kFUN_002ea238_slideSpeed = 20.0f;
+    inline constexpr std::uint16_t kFUN_002ea238_settleTicks = 0x1900;
+    inline constexpr std::uint16_t kFUN_002ea238_sinkTicks = 0x0C80;
+    inline constexpr float kFUN_002ea238_throwSpeed = 150.0f;
+    inline constexpr float kFUN_002ea238_throwLift = 0.5f;
+    inline constexpr std::uint32_t kFUN_002ea238_blockMask = 6u;
+    inline constexpr std::uint32_t kFUN_002ea238_entityMask = 0x60u;
 
     // DAT_00355248: the pairs of actor tags the swipe knocks over, two per
     // threshold. FUN_0027c458 reads (stage - 1) * 2 and + 1.
@@ -290,14 +404,13 @@ namespace orphen::ported::entity
       return static_cast<std::int16_t>(index < 0x10 ? index : 0);
     }
 
-    // FUN_00215e48: clear the eight words at +0xCC and drop +0x06 bit 0x40.
-    // The port models that block as the contact scratch the ground query fills,
-    // so the equivalent is to clear the flag; there is nothing else there to
-    // zero that anything reads back.
-    void FUN_00215e48_clear_contacts(OriginalEntity &entity)
-    {
-      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFBFu);
-    }
+    // FUN_00215e48 clears the nine words from +0xCC to +0xEC and drops +0x06
+    // bit 0x40. Those words are **the already-hit set** -- the same block
+    // `FUN_002148A8` and `FUN_00215AC8` mark a victim in -- so this is "forget
+    // everything this swing has already touched", and `original_hit_test.cpp`
+    // has it. This file used to carry a copy that only dropped the flag, which
+    // meant the crab's slam remembered its victim between swings and could
+    // land on the player exactly once.
 
     // A tick countdown on a 16-bit field, the way every one of these is spelled:
     // subtract, store, and test the *signed* result.
@@ -1749,7 +1862,7 @@ namespace orphen::ported::entity
         // long the crab needs to cover the gap between them.
         entity.fadeRamp62 = static_cast<std::uint16_t>(
             FUN_0023a6d0_travel_ticks(entity.crabSpeed1a0, player, aimX, aimZ));
-        FUN_00215e48_clear_contacts(entity);
+        FUN_00215e48_clear_hit_set(entity);
         FUN_00225bc8_set_animation(entity, 2);
       }
 
@@ -1972,6 +2085,1083 @@ namespace orphen::ported::entity
                                 : entity.facingRadians5c;
       entity.desiredDeltaX30 += travel * cos_of(heading);
       entity.desiredDeltaZ34 += travel * sin_of(heading);
+    }
+
+    // ------------------------------------------------ the rest of the rotation
+    //
+    // FUN_0027C7B8 walks one of three tables. The opening one is 2, 3, 8, 5, 2,
+    // 8, 3 and every entry of it was here; the two the crab moves onto once it
+    // has been hurt are 7, 4, 7, 4, 7 and 9, 10, 11, and none of those were. A
+    // state with no handler never calls FUN_0027C7B8 again, so the first time
+    // the player took a leg off the fight stopped: the crab stood in the water
+    // playing its neutral clip and nothing moved it on.
+
+    // FUN_0023a4e8: the plain distance between two entities.
+    float FUN_0023a4e8_distance_between(const OriginalEntity &from, const OriginalEntity &to)
+    {
+      const float dx = to.positionX20 - from.positionX20;
+      const float dz = to.positionZ24 - from.positionZ24;
+      return std::sqrt(dx * dx + dz * dz);
+    }
+
+    // FUN_0023a740: FUN_0023a6d0 with the height in it. The thrown rock costs
+    // its arc in three dimensions; everything the crab walks costs it in two.
+    std::int16_t FUN_0023a740_travel_ticks_3d(float speed,
+                                              const OriginalEntity &entity,
+                                              float x,
+                                              float z,
+                                              float y)
+    {
+      const float dx = x - entity.positionX20;
+      const float dz = z - entity.positionZ24;
+      const float dy = y - entity.positionY28;
+      const std::int32_t raw =
+          static_cast<std::int32_t>(std::sqrt(dx * dx + dz * dz + dy * dy) / (speed / 1000.0f));
+      return static_cast<std::int16_t>((raw << 21) >> 16);
+    }
+
+    // The shared tail of states 6, 7, 8 and 9: turn onto the heading, then walk
+    // it until the costed hold runs out and hand back to the rotation. `back`
+    // is what separates them -- the two retreats move against their facing, so
+    // the crab keeps the player in front of it the whole way out.
+    void crab_walk_to_mark(OriginalEntity &entity,
+                           float turnRate,
+                           bool back,
+                           const ActorEnvironment &environment)
+    {
+      const float step = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) * turnRate *
+              0.03125f);
+      if (step != 0.0f)
+      {
+        entity.facingRadians5c += step;
+        return;
+      }
+      if (countdown(entity.fadeRamp62, environment.frameTicks))
+      {
+        FUN_0027c7b8_pick_next_move(entity, environment);
+        return;
+      }
+      const float travel =
+          (entity.crabSpeed1a0 *
+           static_cast<float>(static_cast<std::int32_t>(environment.frameTicks))) /
+          32000.0f;
+      const float sign = back ? -1.0f : 1.0f;
+      entity.desiredDeltaX30 += sign * travel * cos_of(entity.facingRadians5c);
+      entity.desiredDeltaZ34 += sign * travel * sin_of(entity.facingRadians5c);
+    }
+
+    // FUN_0027a7e8, state 6 -- back off to (0, -4).
+    //
+    // Not in any rotation; the action map is what puts the crab here. It faces
+    // the way it came -- the bearing to the mark plus a half turn -- and then
+    // walks *against* that facing, so it retreats without turning its back.
+    void FUN_0027a7e8_state6_back_off(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      if (entity.animationA0 == 5)
+      {
+        entity.battleDesiredFacing19c =
+            std::atan2(kDAT_003258ac_backOffZ - entity.positionZ24,
+                       kDAT_003258a8_backOffX - entity.positionX20) +
+            kDAT_00353134_backOffHalfTurn;
+        entity.crabSpeed1a0 = kFUN_0027bbe0_walkSpeed;
+        entity.fadeRamp62 = static_cast<std::uint16_t>(FUN_0023a6d0_travel_ticks(
+            kFUN_0027bbe0_walkSpeed, entity, kDAT_003258a8_backOffX, kDAT_003258ac_backOffZ));
+        FUN_00225bc8_set_animation(entity, 2);
+      }
+      crab_walk_to_mark(entity, kDAT_00353138_backOffTurnRate, true, environment);
+    }
+
+    // FUN_0027a958, state 7 -- back away to one of three corners, in order.
+    //
+    // Three of the five entries of the middle rotation, so the crab spends most
+    // of the second phase of the fight in here. The corner it takes is +0x1CE,
+    // which steps 0, 1, 2 and wraps -- and which the hit reaction also clears,
+    // so a fresh threshold restarts the cycle at (0, -9).
+    void FUN_0027a958_state7_retreat(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      if (entity.animationA0 == 5)
+      {
+        const std::size_t corner =
+            static_cast<std::size_t>(entity.crabByte1ce) % kDAT_003258c8_retreats.size();
+        entity.crabSpeed1a0 = kFUN_0027bbe0_walkSpeed;
+        FUN_00225bc8_set_animation(entity, 0x19);
+        const float markX = kDAT_003258c8_retreats[corner][0];
+        const float markZ = kDAT_003258c8_retreats[corner][1];
+        entity.battleDesiredFacing19c =
+            std::atan2(markZ - entity.positionZ24, markX - entity.positionX20) +
+            kFGpffff91cc_retreatHalfTurn;
+        entity.fadeRamp62 = static_cast<std::uint16_t>(
+            FUN_0023a6d0_travel_ticks(kFUN_0027bbe0_walkSpeed, entity, markX, markZ));
+        const std::uint8_t next = static_cast<std::uint8_t>(entity.crabByte1ce + 1);
+        entity.crabByte1ce = (next > 2) ? 0 : next;
+      }
+      crab_walk_to_mark(entity, kFGpffff91d0_retreatTurnRate, true, environment);
+    }
+
+    // FUN_0027acc8, state 9 -- walk to (0, -6), the deep-water mark the finale
+    // starts from. State 8 with a different mark: past the line it turns round
+    // and backs there on animation 0x19 instead.
+    void FUN_0027acc8_state9_station(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      if (entity.animationA0 == 5)
+      {
+        entity.crabBackwards1cf = 0;
+        entity.battleDesiredFacing19c =
+            std::atan2(kDAT_003258c4_finaleStationZ - entity.positionZ24,
+                       kDAT_003258c0_finaleStationX - entity.positionX20);
+        FUN_00225bc8_set_animation(entity, 2);
+        if (entity.positionZ24 >= kDAT_003258c4_finaleStationZ)
+        {
+          entity.crabBackwards1cf = 1;
+          entity.battleDesiredFacing19c += kFGpffff91e0_finaleHalfTurn;
+          FUN_00225bc8_set_animation(entity, 0x19);
+        }
+        entity.crabSpeed1a0 = kFUN_0027bbe0_walkSpeed;
+        entity.fadeRamp62 = static_cast<std::uint16_t>(
+            FUN_0023a6d0_travel_ticks(kFUN_0027bbe0_walkSpeed, entity,
+                                      kDAT_003258c0_finaleStationX,
+                                      kDAT_003258c4_finaleStationZ));
+      }
+
+      const float step = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) *
+              kFGpffff91e4_finaleTurnRate * 0.03125f);
+      if (step != 0.0f)
+      {
+        entity.facingRadians5c += step;
+        return;
+      }
+      if (countdown(entity.fadeRamp62, environment.frameTicks))
+      {
+        FUN_0027c7b8_pick_next_move(entity, environment);
+        return;
+      }
+      const float travel =
+          (entity.crabSpeed1a0 *
+           static_cast<float>(static_cast<std::int32_t>(environment.frameTicks))) /
+          32000.0f;
+      const float heading = entity.crabBackwards1cf != 0
+                                ? entity.facingRadians5c + kFGpffff91e8_finaleBackTurn
+                                : entity.facingRadians5c;
+      entity.desiredDeltaX30 += travel * cos_of(heading);
+      entity.desiredDeltaZ34 += travel * sin_of(heading);
+    }
+
+    // DAT_00345a38: the loaded map bank's own byte, set to 0x80 by FUN_0022CE60
+    // when the map comes in. State 10 ramps it down to 3 over 22400 ticks as the
+    // crab runs at the shore. Nothing in the port's map path reads it yet, so it
+    // is carried rather than dropped -- the ramp is state, and it is the crab's
+    // to keep whether or not anything is looking at it.
+    std::uint8_t &DAT_00345a38_mapBankLevel()
+    {
+      static std::uint8_t value = 0x80;
+      return value;
+    }
+    std::uint8_t &DAT_0035529d_bankFadeFrom()
+    {
+      static std::uint8_t value = 0;
+      return value;
+    }
+    std::uint16_t &DAT_0035529e_bankFadeTicks()
+    {
+      static std::uint16_t value = 0;
+      return value;
+    }
+
+    // FUN_0027ae98, state 10 -- the run at the shore.
+    //
+    // The other half of the late rotation, and the only move in the fight that
+    // takes the crab out of the water. It walks at (0, 7) at thirty rather than
+    // fifty, cutting the camera six times on the way in as its z crosses -3,
+    // -0.8, 0.8, 1.2 and 4.5, and it drives Orphen's dodge directly:
+    // DAT_0035526B goes to 3 the moment the run starts and to 5 once the crab is
+    // within a unit of him.
+    //
+    // Past 1.2 it breaks whatever the entity tagged 19 is -- the same thing the
+    // hit reaction opens the arena by -- and past 2.0, with anything at all in
+    // contact, the run ends in an impact and the rotation moves on.
+    void FUN_0027ae98_state10_charge(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+      OriginalEntity &player = pool.slot(0);
+
+      if (entity.animationA0 == 5)
+      {
+        entity.battleDesiredFacing19c =
+            std::atan2(kDAT_003258bc_chargeZ - entity.positionZ24,
+                       kDAT_003258b8_chargeX - entity.positionX20);
+        entity.crabSpeed1a0 = kFUN_0027ae98_chargeSpeed;
+        FUN_00225bc8_set_animation(entity, 2);
+        DAT_0035526b_swipeDone() = 3;
+        DAT_0035529d_bankFadeFrom() = static_cast<std::uint8_t>(
+            DAT_00345a38_mapBankLevel() - static_cast<std::uint8_t>(kFUN_0027ae98_bankFloor));
+        DAT_0035529e_bankFadeTicks() = 0;
+      }
+
+      if (DAT_00345a38_mapBankLevel() != 0)
+      {
+        const auto stepped = static_cast<std::uint16_t>(DAT_0035529e_bankFadeTicks() +
+                                                        (environment.frameTicks & 0xFFFFu));
+        DAT_0035529e_bankFadeTicks() = stepped;
+        if (kFUN_0027ae98_bankFadeTicks < static_cast<float>(static_cast<std::int16_t>(stepped)))
+        {
+          DAT_00345a38_mapBankLevel() = 0;
+        }
+        const float remaining =
+            (kFUN_0027ae98_bankFadeTicks -
+             static_cast<float>(static_cast<std::int16_t>(DAT_0035529e_bankFadeTicks()))) /
+            kFUN_0027ae98_bankFadeTicks;
+        DAT_00345a38_mapBankLevel() = static_cast<std::uint8_t>(
+            std::lround(static_cast<float>(DAT_0035529d_bankFadeFrom()) * remaining +
+                        kFUN_0027ae98_bankFloor));
+      }
+
+      const float step = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) *
+              kFGpffff91ec_chargeTurnRate * 0.03125f);
+      if (step != 0.0f)
+      {
+        entity.facingRadians5c += step;
+        return;
+      }
+
+      if (entity.positionZ24 <= kFUN_0027ae98_deepLine)
+      {
+        FUN_00277d30_boss_camera(0x0B, 9, 1, &entity, environment);
+      }
+      if (entity.positionZ24 > kFUN_0027ae98_deepLine)
+      {
+        FUN_00277d30_boss_camera(0x0B, 1, 2, &entity, environment);
+      }
+
+      if (entity.positionZ24 >= kFUN_0027ae98_impactLine &&
+          (entity.collisionFlags0c & kFUN_0027ae98_impactMask) != 0)
+      {
+        if (environment.FUN_0022dcf0_shake_camera)
+        {
+          environment.FUN_0022dcf0_shake_camera(kFUN_0027ae98_impactShake,
+                                                kFUN_0027ae98_impactShakeTicks);
+        }
+        // FUN_0023BBD8 is the pad rumble; the port has no motor anywhere.
+        if (environment.FUN_00267d38_playSound)
+        {
+          environment.FUN_00267d38_playSound(kFUN_0027ae98_impactCue, entity);
+        }
+        if (environment.FUN_00248f18_find_by_tag)
+        {
+          const std::int32_t rig = environment.FUN_00248f18_find_by_tag(0x28);
+          if (rig > 0 && static_cast<std::size_t>(rig) < pool.slotCount())
+          {
+            FUN_00225bc8_set_animation(pool.slot(static_cast<std::size_t>(rig)), 1);
+          }
+        }
+        FUN_0027cf20_impact_dust(
+            orphen::ported::psm2::Vec3{entity.positionX20, entity.positionZ24, entity.positionY28},
+            false, environment);
+        // The original does not return here: the rotation is handed its next
+        // move and the rest of this frame still runs. FUN_00206260(0, 500, 0)
+        // fades the channel the impact keyed, which the port's audio path does
+        // for itself.
+        FUN_0027c7b8_pick_next_move(entity, environment);
+      }
+
+      if (FUN_0023a4e8_distance_between(entity, player) < kFUN_0027ae98_closeRange)
+      {
+        if (entity.animationA0 != 3)
+        {
+          FUN_00225bc8_set_animation(entity, 3);
+          entity.crabSpeed1a0 = kFUN_0027bbe0_walkSpeed;
+        }
+        if (entity.timelineCursorA8 == 4 && (entity.flags06 & 4u) != 0)
+        {
+          DAT_0035526d_runSpot() = 0;
+          DAT_0035526b_swipeDone() = 5;
+        }
+      }
+
+      if (entity.positionZ24 >= kFGpffff91f0_shotThreeLine)
+      {
+        FUN_00277d30_boss_camera(0x0B, 3, 3, &entity, environment);
+      }
+      if (entity.positionZ24 >= kFGpffff91f4_shotFourLine)
+      {
+        FUN_00277d30_boss_camera(0x0B, 2, 4, &entity, environment);
+      }
+      if (entity.positionZ24 >= kFUN_0027ae98_shotSixLine)
+      {
+        FUN_00277d30_boss_camera(0x0B, 4, 6, &entity, environment);
+      }
+
+      if (entity.positionZ24 >= kFGpffff91f8_gateLine && environment.FUN_00248f18_find_by_tag)
+      {
+        const std::int32_t gate = environment.FUN_00248f18_find_by_tag(0x13);
+        if (gate > 0 && static_cast<std::size_t>(gate) < pool.slotCount())
+        {
+          OriginalEntity &tagged = pool.slot(static_cast<std::size_t>(gate));
+          if (tagged.animationA0 != 1)
+          {
+            tagged.flags06 = static_cast<std::uint16_t>(tagged.flags06 & 0xFFEFu);
+            FUN_00225bc8_set_animation(tagged, 1);
+            FUN_0027cf20_impact_dust(orphen::ported::psm2::Vec3{entity.positionX20,
+                                                                entity.positionZ24,
+                                                                entity.positionY28},
+                                     false, environment);
+            if (environment.FUN_0022dbc8_show_map_primitives)
+            {
+              environment.FUN_0022dbc8_show_map_primitives(0x08u, false);
+              environment.FUN_0022dbc8_show_map_primitives(0x40u, true);
+            }
+            if (environment.FUN_00267d38_playSound)
+            {
+              environment.FUN_00267d38_playSound(kFUN_0027ae98_impactCue, entity);
+            }
+            if (environment.FUN_0022dcf0_shake_camera)
+            {
+              environment.FUN_0022dcf0_shake_camera(kFUN_0027ae98_impactShake,
+                                                    kFUN_0027ae98_impactShakeTicks);
+            }
+          }
+          else if ((tagged.flags06 & 1u) != 0)
+          {
+            FUN_00265ec0_destroy_entity(static_cast<std::size_t>(gate), environment);
+          }
+        }
+      }
+
+      if ((entity.flags06 & 4u) != 0)
+      {
+        orphen::ported::psm2::Vec3 mouth{entity.positionX20, entity.positionZ24,
+                                         entity.positionY28};
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          mouth = environment.FUN_0020dc88_bone_point(
+              environment.currentSlot, kFUN_0027a440_bubbleBone,
+              orphen::ported::psm2::Vec3{kDAT_0034e5f0_stampOffsetX, kDAT_0034e5f4_stampOffsetY,
+                                         kDAT_0034e5f8_stampOffsetZ});
+        }
+        const orphen::ported::resource::HitParameters *attack =
+            DAT_00573788_crabAttacks().filled ? &DAT_00573788_crabAttacks().record[1] : nullptr;
+        FUN_002eac48_spawn_bubble(entity, 1, mouth,
+                                  static_cast<std::uint32_t>(kFUN_0027ae98_bubbleCount), attack,
+                                  environment);
+      }
+
+      if (entity.animationA0 != 3 || entity.timelineCursorA8 > 7)
+      {
+        const float travel =
+            (entity.crabSpeed1a0 *
+             static_cast<float>(static_cast<std::int32_t>(environment.frameTicks))) /
+            32000.0f;
+        entity.desiredDeltaX30 += travel * cos_of(entity.facingRadians5c);
+        entity.desiredDeltaZ34 += travel * sin_of(entity.facingRadians5c);
+      }
+    }
+
+    // -------------------------------------------------------- state 4's rock
+    //
+    // The other two entries of the middle rotation. The crab drops a boulder
+    // into the water beside itself, walks over to it, picks it up and throws it
+    // at the player, and the boulder is an entity of its own -- type 0x10B,
+    // FUN_002EA238 -- for the whole of that.
+
+    // FUN_002EA640(crab, at): the boulder, as a type 0x10B. It carries the
+    // crab's attack record 2 and its attack power, takes a random one of three
+    // clips, and is aimed at a point three to five units along the crab's
+    // facing. The travel cost FUN_0023A6D0 computes on the way out is thrown
+    // away by the original, so it is not computed here either.
+    std::int32_t FUN_002ea640_spawn_rock(const OriginalEntity &crab,
+                                         const orphen::ported::psm2::Vec3 &at,
+                                         const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+      {
+        return -1;
+      }
+      EntityPool &pool = *environment.entityPool;
+      const std::size_t slot =
+          pool.FUN_00265e28_allocate_and_initialize(kRockTypeId, *environment.descriptors);
+      if (slot >= pool.slotCount())
+      {
+        return -1;
+      }
+      OriginalEntity &rock = pool.slot(slot);
+      rock.groundHeight4c = crab.groundHeight4c;
+      rock.animationA0 = 1;
+      rock.previousGroundHeight50 = crab.previousGroundHeight50;
+      rock.scale14c = 1.0f;
+      rock.scaleZ150 = 1.0f;
+      rock.positionX20 = at.x;
+      rock.positionZ24 = at.y;
+      rock.positionY28 = at.z;
+      rock.rockAttack19c = 2;
+      rock.rockOwner198 = static_cast<std::int32_t>(environment.currentSlot);
+      rock.halfword08 = static_cast<std::uint16_t>(rock.halfword08 | 0x4000u);
+      rock.poseColumnAc =
+          static_cast<std::uint16_t>((environment.random ? environment.random() : 0) % 3u);
+      rock.staggerTimer12a = 1;
+      rock.attackPower12c = crab.attackPower12c;
+      const float reach =
+          static_cast<float>((environment.random ? environment.random() : 0) % 3u) +
+          kFUN_002ea640_aimReach;
+      const float aimX = crab.positionX20 + reach * cos_of(crab.facingRadians5c);
+      const float aimZ = crab.positionZ24 + reach * sin_of(crab.facingRadians5c);
+      rock.facingRadians5c = std::atan2(aimZ - rock.positionZ24, aimX - rock.positionX20);
+      rock.fadeRamp62 = 0;
+      rock.state60 = 0;
+      return static_cast<std::int32_t>(slot);
+    }
+
+    // FUN_0027CB68: drop one in, a quarter turn to one side or the other and
+    // two units out, five above the water. The claw cursor is parked at 0xFF
+    // first, so a failed allocation leaves state 4 with nothing to reach for and
+    // it hands straight back to the rotation.
+    void FUN_0027cb68_drop_rock(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      const std::uint32_t roll = environment.random ? environment.random() : 0;
+      const float angle = ((roll & 1u) == 0) ? (entity.facingRadians5c - kFGpffff9254_dropRight)
+                                             : (entity.facingRadians5c + kFGpffff9250_dropLeft);
+      const orphen::ported::psm2::Vec3 at{
+          entity.positionX20 + kFUN_0027cb68_dropReach * cos_of(angle),
+          entity.positionZ24 + kFUN_0027cb68_dropReach * sin_of(angle), kFUN_0027cb68_dropHeight};
+      entity.crabHeldCursor1b8 = -1;
+      for (std::size_t index = 0; index < entity.crabHeld1ac.size(); ++index)
+      {
+        if (entity.crabHeld1ac[index] >= 0)
+        {
+          continue;
+        }
+        const std::int32_t spawned = FUN_002ea640_spawn_rock(entity, at, environment);
+        if (spawned < 0)
+        {
+          return;
+        }
+        entity.crabHeld1ac[index] = spawned;
+        environment.entityPool->slot(static_cast<std::size_t>(spawned)).positionY28 =
+            kFUN_0027cb68_dropHeight;
+        entity.crabHeldCursor1b8 = static_cast<std::int8_t>(index);
+        return;
+      }
+    }
+
+    // FUN_0027CC58(crab, rock, bone): the rock goes in the claw. It is parented
+    // to one of the crab's two claw bones at (0, -0.5, -0.2) with a quarter turn
+    // of roll, told which party member it will be credited to, and put into its
+    // own state 5 -- carried.
+    void FUN_0027cc58_take_rock(const OriginalEntity &entity,
+                                OriginalEntity &rock,
+                                std::int8_t bone,
+                                const ActorEnvironment &environment)
+    {
+      rock.positionZ24 = -0.5f;
+      rock.positionY28 = kUGpffff9258_holdZ;
+      rock.halfword04 = static_cast<std::uint16_t>(rock.halfword04 | 0x11u);
+      rock.facingRadians5c = kUGpffff925c_holdRoll;
+      rock.positionX20 = 0.0f;
+      rock.parentSlot192 = static_cast<std::int16_t>(
+          environment.FUN_00248f18_find_by_tag
+              ? environment.FUN_00248f18_find_by_tag(static_cast<std::int16_t>(entity.byte95))
+              : -1);
+      rock.attachBone194 = bone;
+      rock.state60 = 5;
+    }
+
+    // FUN_00279f50, state 4 -- the grab.
+    //
+    // Six sub-phases on +0x1B9, and the entity it works on is whichever of the
+    // three claw slots FUN_0027CB68 filled:
+    //
+    //   entry  drop the rock in and set the walk speed to seventy-five
+    //   0      wait for it to reach its own state 2 -- settled on the bottom --
+    //          then aim two units past it and cost the walk
+    //   2      walk, then roll a swing: half the time fifteen degrees left on
+    //          animation 10, half of it fifteen right on 13, unless a leg is
+    //          gone, in which case it is always the left one
+    //   3      the claw closes on the frame the clip's contact bit comes up, and
+    //          the rock is taken on bone 12 or 18 to match the swing
+    //   4      turn on the spot to the throw heading
+    //   5      let go: the rock is destroyed and a fresh one spawned in its
+    //          place in state 6, which is FUN_002EA238's flight
+    void FUN_00279f50_state4_grab(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+      OriginalEntity &player = pool.slot(0);
+
+      if (entity.animationA0 == 5)
+      {
+        entity.crabSpeed1a0 = kFUN_00279f50_grabSpeed;
+        entity.crabTarget1a8 = 0;
+        entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, player);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(FUN_0023a6d0_travel_ticks(
+            entity.crabSpeed1a0, entity, player.positionX20, player.positionZ24));
+        FUN_0027cb68_drop_rock(entity, environment);
+        entity.crabGrabPhase1b9 = 0;
+        FUN_00225bf0_set_state_and_animation(entity, 4, 0);
+      }
+
+      const std::int8_t cursor = entity.crabHeldCursor1b8;
+      if (cursor < 0 || static_cast<std::size_t>(cursor) >= entity.crabHeld1ac.size())
+      {
+        FUN_0027c7b8_pick_next_move(entity, environment);
+        return;
+      }
+      const std::int32_t heldSlot = entity.crabHeld1ac[static_cast<std::size_t>(cursor)];
+      if (heldSlot < 0 || static_cast<std::size_t>(heldSlot) >= pool.slotCount())
+      {
+        entity.crabHeld1ac[static_cast<std::size_t>(cursor)] = -1;
+        FUN_0027c7b8_pick_next_move(entity, environment);
+        return;
+      }
+      OriginalEntity &rock = pool.slot(static_cast<std::size_t>(heldSlot));
+
+      const auto walk = [&entity, &environment]() {
+        const float travel = (entity.crabSpeed1a0 *
+                              static_cast<float>(static_cast<std::int32_t>(
+                                  environment.frameTicks))) /
+                             32000.0f;
+        entity.desiredDeltaX30 += travel * cos_of(entity.facingRadians5c);
+        entity.desiredDeltaZ34 += travel * sin_of(entity.facingRadians5c);
+      };
+
+      switch (entity.crabGrabPhase1b9)
+      {
+      case 0:
+      {
+        if (rock.state60 != 2)
+        {
+          return;
+        }
+        entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, rock);
+        const float aimX = entity.positionX20 + 2.0f * cos_of(entity.battleDesiredFacing19c);
+        const float aimZ = entity.positionZ24 + 2.0f * sin_of(entity.battleDesiredFacing19c);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(
+            FUN_0023a6d0_travel_ticks(entity.crabSpeed1a0, rock, aimX, aimZ));
+        FUN_00225bc8_set_animation(entity, 2);
+        entity.crabGrabPhase1b9 = 2;
+        return;
+      }
+      case 2:
+      {
+        const float step = FUN_0023a320_approach_angle(
+            entity.facingRadians5c, entity.battleDesiredFacing19c,
+            static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) *
+                kFGpffff91b0_grabTurnRate * 0.03125f);
+        if (step != 0.0f)
+        {
+          entity.facingRadians5c += step;
+          return;
+        }
+        if (!countdown(entity.fadeRamp62, environment.frameTicks))
+        {
+          walk();
+          return;
+        }
+        // The swing. With both legs on it is a coin toss which way; with one
+        // gone it is always the left, and with two the rock is simply put back
+        // into its own state 4 and the move is abandoned.
+        if (entity.crabDamageStage1bd == 0)
+        {
+          const std::uint32_t roll = environment.random ? environment.random() : 0;
+          if ((roll & 1u) == 0)
+          {
+            entity.battleDesiredFacing19c =
+                entity.facingRadians5c - kFGpffff91b0_grabTurnRate;
+            entity.facingRadians5c = entity.battleDesiredFacing19c;
+            FUN_00225bc8_set_animation(entity, 13);
+          }
+          else
+          {
+            entity.battleDesiredFacing19c =
+                entity.facingRadians5c + kFGpffff91b0_grabTurnRate;
+            entity.facingRadians5c = entity.battleDesiredFacing19c;
+            FUN_00225bc8_set_animation(entity, 10);
+          }
+        }
+        else if (entity.crabDamageStage1bd == 1)
+        {
+          entity.facingRadians5c -= kFGpffff91b4_grabSwing;
+          FUN_00225bc8_set_animation(entity, 13);
+        }
+        else
+        {
+          rock.state60 = 4;
+          FUN_0027c7b8_pick_next_move(entity, environment);
+          return;
+        }
+        entity.crabGrabPhase1b9 = 3;
+        walk();
+        return;
+      }
+      case 3:
+      {
+        if (entity.timelineCursorA8 == 4 && (entity.flags06 & 4u) != 0)
+        {
+          FUN_0027cc58_take_rock(entity, rock,
+                                 entity.animationA0 == 10
+                                     ? static_cast<std::int8_t>(kFUN_00279f50_leftBone)
+                                     : static_cast<std::int8_t>(kFUN_00279f50_rightBone),
+                                 environment);
+        }
+        if ((entity.flags06 & 1u) == 0)
+        {
+          return;
+        }
+        entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, player);
+        FUN_00225bc8_set_animation(entity, entity.animationA0 == 10 ? 11 : 14);
+        entity.rotationX154 = 0.0f;
+        entity.crabGrabPhase1b9 = 4;
+        return;
+      }
+      case 4:
+      {
+        const float step = FUN_0023a320_approach_angle(
+            entity.facingRadians5c, entity.battleDesiredFacing19c,
+            static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) *
+                kFGpffff91b8_liftTurnRate * 0.03125f);
+        if (step != 0.0f)
+        {
+          entity.facingRadians5c += step;
+          return;
+        }
+        FUN_00225bc8_set_animation(entity, entity.animationA0 == 11 ? 12 : 15);
+        entity.crabGrabPhase1b9 = 5;
+        return;
+      }
+      case 5:
+      {
+        if ((entity.flags06 & 1u) != 0)
+        {
+          FUN_0027c7b8_pick_next_move(entity, environment);
+          return;
+        }
+        if (entity.timelineCursorA8 != 6 || (entity.flags06 & 4u) == 0)
+        {
+          return;
+        }
+        // The carried rock is destroyed and a new one dropped in at the claw,
+        // already in flight. Which bone the release point comes off matches the
+        // clip the throw is on.
+        FUN_00265ec0_destroy_entity(static_cast<std::size_t>(heldSlot), environment);
+        entity.crabHeld1ac[static_cast<std::size_t>(cursor)] = -1;
+        orphen::ported::psm2::Vec3 release{entity.positionX20, entity.positionZ24,
+                                           entity.positionY28};
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          release = environment.FUN_0020dc88_bone_point(
+              environment.currentSlot,
+              entity.animationA0 == 12 ? kFUN_00279f50_leftBone : kFUN_00279f50_rightBone,
+              orphen::ported::psm2::Vec3{kDAT_0034e5f0_stampOffsetX, kDAT_0034e5f4_stampOffsetY,
+                                         kDAT_0034e5f8_stampOffsetZ});
+        }
+        entity.crabHeldCursor1b8 = -1;
+        for (std::size_t index = 0; index < entity.crabHeld1ac.size(); ++index)
+        {
+          if (entity.crabHeld1ac[index] >= 0)
+          {
+            continue;
+          }
+          const std::int32_t thrown = FUN_002ea640_spawn_rock(entity, release, environment);
+          if (thrown < 0)
+          {
+            return;
+          }
+          OriginalEntity &flying = pool.slot(static_cast<std::size_t>(thrown));
+          flying.spawnParam94 = 0;
+          flying.state60 = 6;
+          entity.crabHeld1ac[index] = thrown;
+          entity.crabHeldCursor1b8 = static_cast<std::int8_t>(index);
+          return;
+        }
+        return;
+      }
+      default:
+        return;
+      }
+    }
+
+    // ------------------------------------------------------------- the finale
+
+    // FUN_0023A860(15.0): the far plane and the fog band collapse as the crab
+    // dies. DAT_00355628 is the port's map-visibility cut-off and nothing in the
+    // behaviour layer can reach it, so the value is kept here and named rather
+    // than written through; the two globals beside it are the same word.
+    float &DAT_0032538c_deathFarPlane()
+    {
+      static float value = 32.0f;
+      return value;
+    }
+    void FUN_0023a860_close_far_plane(float distance)
+    {
+      DAT_0032538c_deathFarPlane() = distance;
+    }
+
+    // DAT_00355270: cleared when the finale's blast goes off. Nothing else in
+    // the crab writes or reads it.
+    std::uint8_t &DAT_00355270_deathLatch()
+    {
+      static std::uint8_t value = 0;
+      return value;
+    }
+
+    // iGpffffbe04's first column, and cGpffffb2ff beside it: the pool slots of
+    // the swarm FUN_0027C950 lets out of the corpse, and how many there are.
+    // The original writes them into the battle module's own actor table; the
+    // only thing that ever reads them back is FUN_0027B918, so they are held
+    // here rather than guessed into a table the port shapes differently.
+    std::array<std::int32_t, 100> &DAT_0035526f_swarmSlots()
+    {
+      static std::array<std::int32_t, 100> slots{};
+      return slots;
+    }
+    std::uint8_t &DAT_0035526f_swarmCount()
+    {
+      static std::uint8_t value = 0;
+      return value;
+    }
+
+    // cGpffffb2fe: the light slot the corpse holds, -1 when it has none.
+    std::int8_t &DAT_0035526e_corpseLight()
+    {
+      static std::int8_t value = -1;
+      return value;
+    }
+
+    // FUN_0027C950: a hundred type 0x7E, each one to two units out from the
+    // crab's bone 0 on a heading within thirty degrees of its bearing to the
+    // player, numbered off in +0x95 so the battle module can tell them apart.
+    //
+    // **Type 0x7E's own behaviour, FUN_00276C30, is not ported** -- it is a
+    // second enemy with its own seven-state table at PTR_FUN_00325868 -- so what
+    // comes out of the corpse sits where it is put. --actor-report names it.
+    void FUN_0027c950_release_swarm(const OriginalEntity &entity,
+                                    const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      OriginalEntity &player = pool.slot(0);
+      const float bearing = FUN_0023a4b8_bearing(entity, player);
+      orphen::ported::psm2::Vec3 root{entity.positionX20, entity.positionZ24, entity.positionY28};
+      if (environment.FUN_0020dc88_bone_point)
+      {
+        root = environment.FUN_0020dc88_bone_point(environment.currentSlot, 0,
+                                                   orphen::ported::psm2::Vec3{});
+      }
+      DAT_0035526f_swarmCount() = 0;
+      std::uint8_t member = static_cast<std::uint8_t>(entity.byte95 + 1);
+      for (std::int32_t index = 0; index < kFUN_0027c950_swarmSize; ++index)
+      {
+        const std::size_t slot =
+            pool.FUN_00265e28_allocate_and_initialize(0x7E, *environment.descriptors);
+        if (slot >= pool.slotCount())
+        {
+          continue;
+        }
+        OriginalEntity &small = pool.slot(slot);
+        small.positionX20 = root.x;
+        small.positionZ24 = root.y;
+        small.positionY28 = root.z;
+        const std::uint32_t spread = ((environment.random ? environment.random() : 0) % 0x14u) * 10u;
+        const float reach = static_cast<float>(static_cast<std::int32_t>(spread)) / 100.0f + 1.0f;
+        const std::uint32_t arc = environment.random ? environment.random() : 0;
+        const float heading =
+            bearing + (static_cast<float>((arc & 3u) * 10u) * kFGpffff924c_swarmArc) / 360.0f;
+        small.positionX20 = entity.positionX20 + reach * cos_of(heading);
+        small.positionZ24 = entity.positionZ24 + reach * sin_of(heading);
+        small.byte95 = member;
+        if (DAT_0035526f_swarmCount() < DAT_0035526f_swarmSlots().size())
+        {
+          DAT_0035526f_swarmSlots()[DAT_0035526f_swarmCount()] =
+              static_cast<std::int32_t>(slot);
+        }
+        DAT_0035526f_swarmCount() = static_cast<std::uint8_t>(DAT_0035526f_swarmCount() + 1);
+        member = static_cast<std::uint8_t>(member + 1);
+      }
+    }
+
+    // FUN_0027B918(crab, n): wake n of the swarm at random. Only a live one
+    // sitting in its own state 3 takes the order, and the order is its state 6
+    // on animation 2.
+    void FUN_0027b918_wake_swarm(std::int16_t count, const ActorEnvironment &environment)
+    {
+      if (count <= 0 || environment.entityPool == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      const std::uint32_t span = std::max<std::uint32_t>(
+          static_cast<std::uint32_t>(DAT_0035526f_swarmCount()),
+          static_cast<std::uint32_t>(count));
+      if (span == 0)
+      {
+        return;
+      }
+      for (std::int16_t index = 0; index < count; ++index)
+      {
+        const std::uint32_t pick = (environment.random ? environment.random() : 0) % span;
+        if (pick >= DAT_0035526f_swarmSlots().size())
+        {
+          continue;
+        }
+        const std::int32_t slot = DAT_0035526f_swarmSlots()[pick];
+        if (slot <= 0 || static_cast<std::size_t>(slot) >= pool.slotCount())
+        {
+          return;
+        }
+        OriginalEntity &small = pool.slot(static_cast<std::size_t>(slot));
+        if (small.typeId00 != 0x7E)
+        {
+          return;
+        }
+        if (static_cast<std::int16_t>(small.staggerTimer12a) > 0 && small.state60 == 3)
+        {
+          FUN_00225bf0_set_state_and_animation(small, 6, 2);
+        }
+      }
+    }
+
+    // FUN_0027b380, state 11 -- the crab dies.
+    //
+    // The last entry of the late rotation, and the only state in the game that
+    // writes script work word 0 itself. Four beats on +0x1A4 once the death clip
+    // has run: the corpse settles, the camera pulls its zoom in over 0xC80
+    // ticks, the swarm is let out, and the fade to state 15 is timed on +0x1CC
+    // with the body's own fade level ramped off it.
+    void FUN_0027b380_state11_death(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+
+      if (environment.FUN_00248f18_find_by_tag)
+      {
+        const std::int32_t rig = environment.FUN_00248f18_find_by_tag(0x28);
+        if (rig > 0 && static_cast<std::size_t>(rig) < pool.slotCount())
+        {
+          OriginalEntity &rigEntity = pool.slot(static_cast<std::size_t>(rig));
+          if (rigEntity.animationA0 == 1 && (rigEntity.flags06 & 1u) != 0)
+          {
+            FUN_00265ec0_destroy_entity(static_cast<std::size_t>(rig), environment);
+          }
+        }
+      }
+
+      const float step = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(static_cast<std::int32_t>(environment.frameTicks)) *
+              kDAT_0035316c_finaleTurnRate * 0.03125f);
+      if (step != 0.0f)
+      {
+        entity.facingRadians5c += step;
+        return;
+      }
+
+      if (entity.timelineCursorA8 >= 10)
+      {
+        FUN_00277d30_boss_camera(0x0E, 1, 7, &entity, environment);
+      }
+      if (entity.timelineCursorA8 == 6 && (entity.flags06 & 4u) != 0 &&
+          environment.DAT_00355a9c_dust != nullptr)
+      {
+        environment.DAT_00355a9c_dust->FUN_00219af0_spawn_impact(
+            entity.positionX20, entity.positionZ24,
+            entity.positionY28 - kDAT_00353170_finaleDustDrop, kDAT_00353174_finaleDustSize,
+            kDAT_00353174_finaleDustSize, kDAT_00353178_finaleDustLift, 0.5f, 0x50, 5, 0x14, 0,
+            false, environment.random);
+      }
+      if (entity.timelineCursorA8 == 8 && (entity.flags06 & 4u) != 0)
+      {
+        if (environment.FUN_0022dcf0_shake_camera)
+        {
+          environment.FUN_0022dcf0_shake_camera(kDAT_0035317c_finaleShake, 200);
+        }
+        orphen::ported::psm2::Vec3 mouth{entity.positionX20, entity.positionZ24,
+                                         entity.positionY28};
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          mouth = environment.FUN_0020dc88_bone_point(
+              environment.currentSlot, kFUN_0027a440_bubbleBone,
+              orphen::ported::psm2::Vec3{kDAT_0034e5f0_stampOffsetX, kDAT_0034e5f4_stampOffsetY,
+                                         kDAT_0034e5f8_stampOffsetZ});
+        }
+        const orphen::ported::resource::HitParameters *attack =
+            DAT_00573788_crabAttacks().filled ? &DAT_00573788_crabAttacks().record[1] : nullptr;
+        for (std::int32_t index = 0; index < kFUN_0027b380_finaleBubbles; ++index)
+        {
+          FUN_002eac48_spawn_bubble(entity, 1, mouth, 5, attack, environment);
+        }
+      }
+
+      if ((entity.flags06 & 1u) != 0 && (entity.flags06 & 0x10u) == 0)
+      {
+        FUN_0023a860_close_far_plane(kFUN_0027b380_swarmSpread);
+        entity.fadeRamp62 = kFUN_0027b380_beatZero;
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+        FUN_0027c950_release_swarm(entity, environment);
+        DAT_00355270_deathLatch() = 0;
+        // FUN_00205D90(4, 1000) keys the death sting on its own channel.
+      }
+      if ((entity.flags06 & 0x10u) == 0)
+      {
+        return;
+      }
+
+      switch (entity.crabFinaleBeat1a4)
+      {
+      case 0:
+        if (countdown(entity.fadeRamp62, environment.frameTicks))
+        {
+          entity.fadeRamp62 = kFUN_0027b380_beatOne;
+          entity.crabFinaleBeat1a4 = 1;
+        }
+        break;
+      case 1:
+      {
+        const std::int32_t remaining =
+            static_cast<std::int32_t>(entity.fadeRamp62) -
+            static_cast<std::int32_t>(environment.frameTicks & 0xFFFFu);
+        const auto left = static_cast<std::int16_t>(remaining);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        if (left < 0)
+        {
+          entity.crabFinaleBeat1a4 = 2;
+        }
+        else if (environment.camera != nullptr)
+        {
+          environment.camera->setZoomLog2(orphen::ported::camera::FUN_00218230_zoomLog2(
+              (static_cast<float>(left) / kFUN_0027b380_shakeRamp) * 4.0f + 1.0f));
+        }
+        break;
+      }
+      case 2:
+        if (countdown(entity.fadeRamp62, environment.frameTicks))
+        {
+          entity.crabFinaleBeat1a4 = 3;
+          entity.crabTimer1cc = kFUN_0027b380_beatThree;
+          entity.fadeRamp62 = kFUN_0027b380_beatThree;
+          DAT_0035526b_swipeDone() = 5;
+          DAT_0035526d_runSpot() = 1;
+        }
+        FUN_00277d30_boss_camera(0x0B, 7, 9, &entity, environment);
+        break;
+      case 3:
+      {
+        if (static_cast<float>(static_cast<std::int16_t>(entity.fadeRamp62)) <=
+            kFUN_0027b380_shotSwap)
+        {
+          FUN_00277d30_boss_camera(3, 5, 10, &entity, environment);
+        }
+        else
+        {
+          FUN_00277d30_boss_camera(0x0B, 7, 9, &entity, environment);
+        }
+        const float ratio = static_cast<float>(static_cast<std::int16_t>(entity.fadeRamp62)) /
+                            static_cast<float>(static_cast<std::int16_t>(entity.crabTimer1cc));
+        entity.fadeLevel134 = static_cast<std::uint8_t>(std::lround(ratio * 124.0f) + 3);
+        if ((entity.flags06 & 0x10u) == 0 && (entity.flags06 & 1u) != 0)
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+        }
+        if (countdown(entity.fadeRamp62, environment.frameTicks))
+        {
+          DAT_0035528c_cameraSide() = 1;
+          DAT_0035526b_swipeDone() = 9;
+          if (environment.DAT_00355060_setScriptWork)
+          {
+            environment.DAT_00355060_setScriptWork(0, kFUN_0027b380_endBeat);
+          }
+          entity.state60 = 15;
+          entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+          entity.crabPhase1c5 = 0;
+          entity.fadeRamp62 = 0;
+          entity.crabIdleCursor1c4 = 0;
+        }
+        break;
+      }
+      default:
+        break;
+      }
+    }
+
+    // FUN_0027D860: every party member's battle actor record is released. The
+    // port has no battle party in this scene, so there is nothing bound to let
+    // go of -- FUN_00248040's list walk is empty either way.
+    void FUN_0027d860_release_party() {}
+
+    // FUN_0027BA20: wake one to five of the swarm and wait another 300 to 600
+    // hundred-tick beats before doing it again.
+    void FUN_0027ba20_stir_swarm(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      const std::uint32_t count = (environment.random ? environment.random() : 0) % 5u;
+      FUN_0027b918_wake_swarm(static_cast<std::int16_t>(count), environment);
+      const std::uint32_t hold = (environment.random ? environment.random() : 0) % 300u;
+      entity.fadeRamp62 =
+          static_cast<std::uint16_t>((static_cast<std::int16_t>(hold) + 300) * 0x20);
+    }
+
+    // FUN_0027ba90, state 15 -- the corpse.
+    //
+    // Reached only from state 11. The first frame releases the party's records
+    // and clears the wreck pool, then takes a light slot of its own; after that
+    // it just stirs the swarm on a timer and drives that light from the player's
+    // position, full white at radius one.
+    void FUN_0027ba90_state15_corpse(OriginalEntity &entity, const ActorEnvironment &environment)
+    {
+      EntityPool &pool = *environment.entityPool;
+
+      if (entity.crabPhase1c5 == 0)
+      {
+        FUN_0027d860_release_party();
+        for (auto &entry : DAT_005737e8_wreckPool())
+        {
+          if (entry >= 0)
+          {
+            if (static_cast<std::size_t>(entry) < pool.slotCount())
+            {
+              FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entry), environment);
+            }
+            entry = -1;
+          }
+        }
+        if (environment.DAT_00343888_lights != nullptr)
+        {
+          const std::int32_t light =
+              environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+          if (light >= 0)
+          {
+            auto &lamp = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(light));
+            lamp.radius = 1.0f;
+            lamp.alpha = 1;
+            environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(light), 1.0f);
+            DAT_0035526e_corpseLight() = static_cast<std::int8_t>(light);
+          }
+        }
+        entity.crabPhase1c5 = static_cast<std::int8_t>(entity.crabPhase1c5 + 1);
+      }
+
+      if (countdown(entity.fadeRamp62, environment.frameTicks))
+      {
+        FUN_0027ba20_stir_swarm(entity, environment);
+      }
+      if (static_cast<std::int16_t>(pool.slot(0).staggerTimer12a) < 1)
+      {
+        entity.state60 = 1;
+      }
+      if (DAT_0035526e_corpseLight() >= 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        auto &lamp = environment.DAT_00343888_lights->slot(
+            static_cast<std::uint32_t>(DAT_0035526e_corpseLight()));
+        const OriginalEntity &player = pool.slot(0);
+        lamp.x = player.positionX20;
+        lamp.y = player.positionZ24;
+        lamp.z = player.positionY28;
+        lamp.red = 0xFF;
+        lamp.green = 0xFF;
+        lamp.blue = 100;
+      }
     }
 
     // FUN_0027b7c8, state 12 -- the hit reaction, and the phase change.
@@ -2345,7 +3535,7 @@ namespace orphen::ported::entity
         FUN_00277d30_boss_camera(7, 1, 1, &entity, environment);
         if (countdown(entity.fadeRamp62, environment.frameTicks))
         {
-          const float turned = entity.facingRadians5c - kFGpffff9214_quarterTurn;
+          const float turned = entity.facingRadians5c - kFGpffff9214_settleTurn;
           entity.battleDesiredFacing19c = turned;
           entity.facingRadians5c = turned;
           FUN_00225bc8_set_animation(entity, 0x1A);
@@ -2791,18 +3981,29 @@ namespace orphen::ported::entity
         // six that is still out.
         FUN_0027e118_drop_wreck(entity, environment);
         FUN_0027c8a0_body_sweep(entity, slot, environment);
+        // **This countdown ends on zero, not below it.** The original spells it
+        // `if (iVar9 * 0x10000 < 1)` -- `(short)remaining <= 0` -- where every
+        // other timer in this file is `< 0`, and the shared `countdown` helper
+        // is the `< 0` one. The difference is not academic here: the reload is
+        // 0x1900 and frameTicks is 32, so 6400 / 32 = 200 lands the timer on
+        // *exactly* zero every single time. Tested the strict way it never
+        // fires, the invulnerability bit stays up for good, and the crab is
+        // untouchable from its first hit on.
         if (entity.crabFlinchTimer1ca == 0)
         {
           entity.fadeColor138 = 0;
         }
-        else if (countdown(entity.crabFlinchTimer1ca, environment.frameTicks))
-        {
-          entity.crabFlinchTimer1ca = 0;
-          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFEFu);
-          entity.fadeColor138 = kFUN_00279298_flashColour;
-        }
         else
         {
+          const std::int32_t remaining =
+              static_cast<std::int32_t>(entity.crabFlinchTimer1ca) -
+              static_cast<std::int32_t>(environment.frameTicks & 0xFFFFu);
+          entity.crabFlinchTimer1ca = static_cast<std::uint16_t>(remaining);
+          if (static_cast<std::int16_t>(remaining) <= 0)
+          {
+            entity.crabFlinchTimer1ca = 0;
+            entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFEFu);
+          }
           entity.fadeColor138 = kFUN_00279298_flashColour;
         }
       }
@@ -2880,9 +4081,7 @@ namespace orphen::ported::entity
 
     const std::uint32_t handler = environment.dispatchTable->stateHandler(
         kPTR_FUN_00325930_crabStates, kCrabStateCount, entity.state60);
-    const bool implemented = entity.state60 == 0 || entity.state60 == 1 || entity.state60 == 2 ||
-                             entity.state60 == 3 || entity.state60 == 5 || entity.state60 == 8 ||
-                             entity.state60 == 12 || entity.state60 == 13 || entity.state60 == 14;
+    const bool implemented = entity.state60 >= 0 && entity.state60 <= 15;
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
 
     switch (entity.state60)
@@ -2899,11 +4098,29 @@ namespace orphen::ported::entity
     case 3:
       FUN_00279d60_state3_charge(entity, slot, environment);
       break;
+    case 4:
+      FUN_00279f50_state4_grab(entity, environment);
+      break;
     case 5:
       FUN_0027a440_state5_stamp(entity, environment);
       break;
+    case 6:
+      FUN_0027a7e8_state6_back_off(entity, environment);
+      break;
+    case 7:
+      FUN_0027a958_state7_retreat(entity, environment);
+      break;
     case 8:
       FUN_0027aaf8_state8_reposition(entity, environment);
+      break;
+    case 9:
+      FUN_0027acc8_state9_station(entity, environment);
+      break;
+    case 10:
+      FUN_0027ae98_state10_charge(entity, environment);
+      break;
+    case 11:
+      FUN_0027b380_state11_death(entity, environment);
       break;
     case 12:
       FUN_0027b7c8_state12_hit(entity, environment);
@@ -2914,12 +4131,161 @@ namespace orphen::ported::entity
     case 14:
       FUN_0027c458_state14_swipe(entity, slot, environment);
       break;
+    case 15:
+      FUN_0027ba90_state15_corpse(entity, environment);
+      break;
     default:
       break;
     }
 
     FUN_0027ce48_splash(entity, environment);
     publish();
+  }
+
+  // FUN_002ea238 (0x002ea238), type 0x10B -- the boulder state 4 works with,
+  // and the same entity FUN_0027E118 drops into the water as rubble. Five
+  // states of its own on +0x60:
+  //
+  //   0  falling at a hundred a second until it is under -0.9, then a splash
+  //   1  sliding along its own facing at twenty until its timer runs out
+  //   2  settled -- which is what state 4 waits for -- for 0x1900 ticks
+  //   4  sinking at twenty for 0xC80 ticks, then gone
+  //   6  thrown: a quadratic Bezier from where it left the claw to half a unit
+  //      above the player, walked over the flight time FUN_0023A740 costs. It
+  //      ends the moment it lands a hit, meets the map, or touches an entity.
+  void FUN_002ea238_thrown_rock(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    const float ticks = static_cast<float>(static_cast<std::int32_t>(environment.frameTicks));
+
+    switch (entity.state60)
+    {
+    case 0:
+    {
+      const float dropped = entity.positionY28 - (ticks * kFUN_002ea238_fallSpeed) / 32000.0f;
+      const bool under = dropped < kDAT_00354a28_rockRest;
+      entity.positionY28 = dropped;
+      if (under)
+      {
+        FUN_002eb398_splash_ring(0.0f, 3.0f, 3.0f, entity, 1, 0x32, environment);
+        entity.state60 = static_cast<std::int16_t>(entity.state60 + 1);
+      }
+      return;
+    }
+    case 1:
+      if (countdown(entity.fadeRamp62, environment.frameTicks))
+      {
+        entity.fadeRamp62 = kFUN_002ea238_settleTicks;
+        entity.state60 = 2;
+        return;
+      }
+      {
+        const float travel = (ticks * kFUN_002ea238_slideSpeed) / 32000.0f;
+        entity.desiredDeltaX30 += travel * std::cos(entity.facingRadians5c);
+        entity.desiredDeltaZ34 += travel * std::sin(entity.facingRadians5c);
+      }
+      return;
+    case 2:
+      if (countdown(entity.fadeRamp62, environment.frameTicks))
+      {
+        entity.state60 = 4;
+        entity.fadeRamp62 = kFUN_002ea238_sinkTicks;
+      }
+      return;
+    case 4:
+    {
+      const bool done = countdown(entity.fadeRamp62, environment.frameTicks);
+      const float sunk = entity.positionY28 - (ticks * kFUN_002ea238_slideSpeed) / 32000.0f;
+      entity.groundHeight4c = sunk;
+      entity.positionY28 = sunk;
+      if (done)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+      }
+      return;
+    }
+    case 6:
+      break;
+    default:
+      return;
+    }
+
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    OriginalEntity &player = pool.slot(0);
+
+    if (entity.animationA0 == 2)
+    {
+      if ((entity.flags06 & 1u) != 0)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+      }
+      return;
+    }
+    if (entity.animationA0 != 1)
+    {
+      return;
+    }
+
+    if (entity.spawnParam94 == 0)
+    {
+      entity.facingRadians5c = std::atan2(player.positionZ24 - entity.positionZ24,
+                                          player.positionX20 - entity.positionX20);
+      entity.rockArcX1a0[0] = entity.positionX20;
+      entity.rockArcZ1ac[0] = entity.positionZ24;
+      entity.rockArcY1b8[0] = entity.positionY28;
+      entity.rockArcX1a0[2] = player.positionX20;
+      entity.rockArcZ1ac[2] = player.positionZ24;
+      entity.rockArcY1b8[2] = player.positionY28 + kFUN_002ea238_throwLift;
+      const float dx = entity.positionX20 - player.positionX20;
+      const float dz = entity.positionZ24 - player.positionZ24;
+      const float gap = std::sqrt(dx * dx + dz * dz);
+      entity.rockArcX1a0[1] =
+          entity.positionX20 + gap * kFUN_002ea238_throwLift * std::cos(entity.facingRadians5c);
+      entity.rockArcZ1ac[1] =
+          entity.positionZ24 + gap * kFUN_002ea238_throwLift * std::sin(entity.facingRadians5c);
+      entity.rockArcY1b8[1] = entity.rockArcY1b8[2] + 1.0f;
+      entity.rockFlightTicks1c4 = static_cast<float>(FUN_0023a740_travel_ticks_3d(
+          kFUN_002ea238_throwSpeed, entity, entity.rockArcX1a0[2], entity.rockArcZ1ac[2],
+          entity.rockArcY1b8[2]));
+      entity.fadeRamp62 = 0;
+      entity.spawnParam94 = static_cast<std::uint8_t>(entity.spawnParam94 + 1);
+    }
+
+    std::int8_t landed = 0;
+    if (entity.rockAttack19c >= 0 && DAT_00573788_crabAttacks().filled &&
+        static_cast<std::size_t>(entity.rockAttack19c) < DAT_00573788_crabAttacks().record.size())
+    {
+      landed = FUN_002ef510_effect_hit_test(
+          entity, slot,
+          DAT_00573788_crabAttacks().record[static_cast<std::size_t>(entity.rockAttack19c)],
+          environment);
+    }
+    if (landed == 0)
+    {
+      const auto elapsed = static_cast<std::int16_t>(
+          static_cast<std::int16_t>(entity.fadeRamp62) +
+          static_cast<std::int16_t>(environment.frameTicks & 0xFFFFu));
+      entity.fadeRamp62 = static_cast<std::uint16_t>(elapsed);
+      const float travelled = static_cast<float>(elapsed);
+      if (travelled <= entity.rockFlightTicks1c4 &&
+          (entity.collisionFlags0c & kFUN_002ea238_blockMask) == 0 &&
+          (entity.collisionFlags0c & kFUN_002ea238_entityMask) == 0)
+      {
+        const float t = entity.rockFlightTicks1c4 != 0.0f
+                            ? travelled / entity.rockFlightTicks1c4
+                            : 1.0f;
+        entity.desiredDeltaX30 += FUN_0023a990_bezier(t, entity.rockArcX1a0) - entity.positionX20;
+        entity.desiredDeltaZ34 += FUN_0023a990_bezier(t, entity.rockArcZ1ac) - entity.positionZ24;
+        entity.desiredDeltaY38 += FUN_0023a990_bezier(t, entity.rockArcY1b8) - entity.positionY28;
+        return;
+      }
+    }
+    FUN_00225bc8_set_animation(entity, 2);
   }
 
   void FUN_00216078_fill_crab_records(std::int16_t typeId, const ActorEnvironment &environment)

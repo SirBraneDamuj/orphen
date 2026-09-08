@@ -2,6 +2,7 @@
 
 #include "ported/entity/original_battle_enemy.h"
 #include "ported/entity/original_crab_boss.h"
+#include "ported/entity/original_swarm_crab.h"
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
@@ -107,10 +108,6 @@ namespace orphen::ported::entity
     // FUN_002cde50 / FUN_002cde40: type 0x62's wing beat and its death cry.
     constexpr std::uint16_t kEnemyWingCue = 0x196;
     constexpr std::uint16_t kEnemyDeathCue = 0x197;
-
-    // DAT_00352434: the step an actor will climb in one move, 0.26. A global,
-    // not a per-entity field -- +0x80 is the slope limit, not this.
-    constexpr float kDAT_00352434_stepHeight = 0.26f;
 
     // DAT_00318ad0. Sixteen (x, z) pairs indexed by the embedded-corner mask,
     // read straight out of the executable. Corner order is FUN_00227070's:
@@ -1052,9 +1049,34 @@ namespace orphen::ported::entity
       // answered with, so a follower walking into the shop's counter ratcheted
       // up it a tenth of a unit per frame and ended the scene standing in the
       // air.
+      //
+      // **There is no step-up cap here.** DAT_00352434 (0.26) used to be tested
+      // on this path as well, and it is not what the original does with it:
+      //
+      //   lVar7 = FUN_00227390(destination);
+      //   if (+0x4C - w[6] <= +0x7C) {
+      //     if (+0x7C < w[5] - w[6])  refuse;
+      //     if (lVar7 != 0)           accept;      <-- no height test at all
+      //     if ((+0x0C & 0x10000) == 0) { ...the DAT_00352434 branch... }
+      //   }
+      //
+      // The 0.26 is the *fallback* the original reaches only when the corner
+      // scan found nothing -- "is there a ledge here the scan missed" -- and the
+      // two real height gates are both against +0x7C, the entity's own step
+      // allowance, measured against a second workspace height this
+      // TerrainSurface does not carry yet. A scan that answers is accepted
+      // however tall the step, so capping it at 0.26 gave every actor a
+      // quarter-unit ceiling it does not have.
+      //
+      // What that cost: s14_e001's arena is a pool at -1.0 with a hard half-unit
+      // wall at z = -4.3, and the crab's own moves station it in that pool --
+      // state 8 walks to (0, -5), state 9 to (0, -6). Once it was down there it
+      // could never climb out, so its charge, its stamp and its run at the shore
+      // all played their clips against the wall without moving: the crab walked
+      // on the spot for the whole fight. Both regression scenes are
+      // byte-identical without the cap; nothing else was leaning on it.
       const auto walkable = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
-        return at.has_value() && at->slopeAngle <= entity.slopeLimit80 &&
-               at->height - entity.positionY28 < kDAT_00352434_stepHeight;
+        return at.has_value() && at->slopeAngle <= entity.slopeLimit80;
       };
 
       // **A refused move is retried on a rotated heading, not split per axis.**
@@ -3932,6 +3954,8 @@ namespace orphen::ported::entity
     case 0x00279298u: // FUN_00279298, type 0x7F, the giant crab
     case 0x002EB180u: // FUN_002eb180, type 0x10D, the water splash
     case 0x002EA7F0u: // FUN_002ea7f0, type 0x10C, the stamp's bubbles
+    case 0x002EA238u: // FUN_002ea238, type 0x10B, the crab's boulder
+    case 0x00276C30u: // FUN_00276c30, type 0x7E, the crab's swarm
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
@@ -4007,6 +4031,10 @@ namespace orphen::ported::entity
       return "FUN_002eb180 (water splash 0x10d)";
     case 0x002EA7F0u:
       return "FUN_002ea7f0 (stamp bubble 0x10c)";
+    case 0x002EA238u:
+      return "FUN_002ea238 (crab boulder 0x10b)";
+    case 0x00276C30u:
+      return "FUN_00276c30 (swarm crab 0x7e)";
     case 0x0027F288u:
       return "FUN_0027f288 (battle enemy 0x80)";
     case 0x0028A958u:
@@ -4184,6 +4212,12 @@ namespace orphen::ported::entity
         break;
       case 0x002EA7F0u:
         FUN_002ea7f0_bubble(entity, slot, slotEnvironment);
+        break;
+      case 0x002EA238u:
+        FUN_002ea238_thrown_rock(entity, slot, slotEnvironment);
+        break;
+      case 0x00276C30u:
+        FUN_00276c30_swarm_crab(entity, slot, slotEnvironment, trace);
         break;
       case 0x0027F288u:
         FUN_0027f288_enemy80(entity, slot, slotEnvironment, trace);

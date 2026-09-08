@@ -141,6 +141,7 @@ target_sources(orphen_port
     src/ported/entity/original_battle_enemy.cpp
     src/ported/entity/original_boss_camera.cpp
     src/ported/entity/original_crab_boss.cpp
+    src/ported/entity/original_swarm_crab.cpp
     src/ported/entity/original_bubble_effect.cpp
     src/ported/entity/original_dust_pool.cpp
     src/ported/entity/original_water_splash.cpp

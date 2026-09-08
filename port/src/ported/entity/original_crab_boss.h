@@ -76,10 +76,23 @@
 //
 // ------------------------------------------------------------ what is here
 //
-// States 0, 1, 2, 3, 5, 8, 12, 13 and 14, the action path, the move rotation,
-// the leg thresholds, the body sweep, the splash and the script cue. States 4,
-// 6, 7, 9, 10, 11 and 15 are the late-fight moves and the death; the crab only
-// reaches them after it has shed a leg, and --actor-report names any it does.
+// All sixteen states, the action path, the move rotation, the leg thresholds,
+// the body sweep, the splash and the script cue.
+//
+// States 4, 6, 7, 9, 10, 11 and 15 were the late fight and they were the whole
+// of it: FUN_0027C7B8's opening rotation is 2, 3, 8, 5, 2, 8, 3 and every entry
+// of that was here, but the two tables the crab moves onto once it has been
+// hurt are 7, 4, 7, 4, 7 and 9, 10, 11 and none of those were. A state with no
+// handler never calls FUN_0027C7B8 again, so the fight stopped the first time
+// the player took a leg off -- the crab stood in the water on its neutral clip
+// and nothing moved it on. That is now the boulder throw, the three retreats,
+// the run at the shore and the death.
+//
+// One thing under them is still out: **type 0x7E**, the swarm FUN_0027C950
+// lets out of the corpse. It is a second enemy with its own wrapper
+// (FUN_00276C30) and its own seven-state table at PTR_FUN_00325868. The
+// hundred entities are spawned and placed as the original places them, and
+// --actor-report names the behaviour they do not have.
 //
 // FUN_00277d30, the boss camera director, is in original_boss_camera.h. Every
 // call site here goes through it, and DAT_0035528C -- the side each shot comes
@@ -115,6 +128,15 @@ namespace orphen::ported::entity
 
   // FUN_00216078 x3 into the crab's own bank.
   void FUN_00216078_fill_crab_records(std::int16_t typeId, const ActorEnvironment &environment);
+
+  // FUN_002ea238 (0x002ea238), type 0x10B -- the boulder state 4 drops, carries
+  // and throws. It lives in the crab's file because the crab is the only thing
+  // that makes one; FUN_0027E118's rubble is the same type retyped to 400 and
+  // stepped by the crab's own pool walk instead.
+  inline constexpr std::uint32_t kFUN_002ea238_thrownRock = 0x002EA238;
+  void FUN_002ea238_thrown_rock(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment);
 
   // FUN_00279298 (0x00279298), type 0x7F.
   void FUN_00279298_crab_boss(OriginalEntity &entity,

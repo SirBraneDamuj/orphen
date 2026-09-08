@@ -394,6 +394,9 @@ namespace orphen::ported::entity
     // +0x1A0 is a *speed* here -- 50.0 while it walks, 20.0 while it carries --
     // where type 0x80 keeps a reach and 0x8A a target.
     float crabSpeed1a0 = 0.0f;
+    // +0x1A4: state 11's beat counter, 0..3. The finale times each of its four
+    // beats on +0x62 and steps this when one runs out.
+    std::uint8_t crabFinaleBeat1a4 = 0;
     // +0x1A8: the entity it is aimed at, as a pool slot. State 3 parks pool
     // slot 0 there outright.
     std::int32_t crabTarget1a8 = -1;
@@ -401,7 +404,12 @@ namespace orphen::ported::entity
     // slots, and the cursor into them. FUN_0027ed58 walks all three every frame
     // and drops one the moment its clip says so.
     std::array<std::int32_t, 3> crabHeld1ac{{-1, -1, -1}};
-    std::uint8_t crabHeldCursor1b8 = 0;
+    // Signed: state 4 parks 0xFF in it to mean "nothing in the claw", and its
+    // own `cVar1 < 0` test is what ends the grab.
+    std::int8_t crabHeldCursor1b8 = 0;
+    // +0x1B9: state 4's sub-phase -- 0 wait for the rock to settle, 2 turn to
+    // it, 3 close on it, 4 lift it, 5 throw it.
+    std::uint8_t crabGrabPhase1b9 = 0;
     // +0x1BA: the splash cue's own countdown, reloaded to 0x140 each time it
     // fires. FUN_0027ce48 only runs it while the crab is below -2.0 in Y, which
     // is what makes the splashes stop when it climbs out of the water.
@@ -440,6 +448,44 @@ namespace orphen::ported::entity
     // helper, which is why the throw can drive the camera without the state
     // owning it.
     std::uint8_t crabSubPhase1d0 = 0;
+
+    // ------------------------------------------------------ type 0x10B's block
+    //
+    // The rock state 4 picks up and throws, and the rubble FUN_0027E118 drops
+    // into the water. FUN_002EA238 is its behaviour and +0x60 is a five-way
+    // state of its own: 0 fall, 1 slide, 2 settle, 4 sink, 6 in flight.
+    //
+    // In flight it is the same shape as the 0x80's leap -- three quadratic
+    // Bezier control points and the tick count the walk along them is taken
+    // against -- at its own offsets, with +0x94 as the "arc is built" latch.
+    std::int32_t rockOwner198 = -1;
+    std::int32_t rockAttack19c = -1;
+    std::array<float, 3> rockArcX1a0{};
+    std::array<float, 3> rockArcZ1ac{};
+    std::array<float, 3> rockArcY1b8{};
+    float rockFlightTicks1c4 = 0.0f;
+
+    // ------------------------------------------------------ type 0x7E's block
+    //
+    // The swarm the crab's corpse lets out. See
+    // ported/entity/original_swarm_crab.h.
+    //
+    // +0x3C/+0x40 are a wander mark here, not the velocity pair FUN_00256AB0
+    // publishes for the lead -- a 0x7E is never the player, so the two never
+    // coexist.
+    float swarmMarkX3c = 0.0f;
+    float swarmMarkZ40 = 0.0f;
+    // +0x1A0: its walk speed, rolled 10..29 for each leg of the wander and set
+    // to a flat 20 or 30 for the mark correction and the leap.
+    float swarmSpeed1a0 = 0.0f;
+    // +0x1A4..+0x1C4: the leap's three quadratic Bezier control points, one
+    // array per axis -- the same shape as type 0x80's, four bytes lower.
+    std::array<float, 3> swarmArcX1a4{};
+    std::array<float, 3> swarmArcZ1b0{};
+    std::array<float, 3> swarmArcY1bc{};
+    // +0x1C8: the pool slot the leap is aimed at, as a signed byte. Its own
+    // state 6 zeroes it on the way in, so it is always the player.
+    std::int8_t swarmVictim1c8 = 0;
 
     // Type 0x28's block. FUN_002d2f40 builds a three-entity rig the first time
     // it runs -- FUN_00265e28(0x27), (0x26) and (0x19) -- parks the three pool
