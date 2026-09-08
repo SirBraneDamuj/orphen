@@ -3695,6 +3695,72 @@ from four sweeps to 37893 -- the leaps landing on Orphen, four contacts and 48
 damage. All hundred sit on their own floors at the end. States 4 and 5 need
 something to damage *them*, which nothing headless does.
 
+#### The handback after the fight is three writes, not one
+
+`FUN_0027D230`'s `DAT_0035526B == 9` branch -- the frame the crab's finale gives
+the player back -- is four statements, and the port had transcribed one of them:
+
+```c
+(&DAT_0031D7BE)[(DAT_00354EBE - 1) * 0x3C] = 6;                    // pending action
+FUN_00249388((&DAT_0031D7B8)[(DAT_00354EBE - 1) * 0xF], 0x4000, DAT_003253C2);
+FUN_00245978((&DAT_0031D7B8)[(DAT_00354EBE - 1) * 0xF],
+             &DAT_0031D774 + DAT_00354EBE * 0x3C);
+```
+
+`FUN_00249388` with bit 0x4000 writes the control block's `+0x2C`, the target
+index; `DAT_003253C2` is party record 0's pool slot, and `FUN_00249610`'s target
+block takes its no-target branch on anything below 3. Harmless either way.
+
+**`FUN_00245978` is not harmless.** It re-records where the member is standing
+into control `+0x14/+0x16/+0x18` and `+0x26/+0x28/+0x2A` -- the same call
+`FUN_00243F80` makes when the battle starts. State 120, the battle idle, arms a
+timer and when it runs out measures the character against `+0x14/+0x16`; more
+than three tenths of drift and it goes to state 108, the walk home. The two runs
+this dodge makes put Orphen fifteen units from where the battle recorded him, at
+the far end of the beach behind the arena. So he arrived, state 120 armed its
+timer, state 108 took over, could not walk him back through the map, handed back
+to 120, and the pair bounced for ever:
+
+```
+f=7457 st=120 anim=2    f=7463 st=108 anim=12   f=7512 st=108 anim=13
+f=7562 st=120 anim=16   f=7571 st=120 anim=2    f=7623 st=108 anim=12   ...
+```
+
+on the spot, at (-15.00, 4.00), for the rest of the scene. That is the "jumping
+in place". With the re-record he arrives and stands: the trace ends at f=7457
+and nothing moves again.
+
+##### And the swarm was spawned where its marks belong
+
+`FUN_0027C950`'s inner loop places each crab with `FUN_002662E0` at the corpse's
+bone 0 -- all hundred stacked on the body -- and writes the scattered point into
+`+0x3C/+0x40`, which is the **mark** its state 1 then walks out to:
+
+```c
+FUN_002662E0(bone0.x, bone0.z, bone0.y, spawned);       // position
+...
+*(float *)(spawned + 0x3C) = crab.x + reach * cos(heading);   // mark
+*(float *)(spawned + 0x40) = crab.z + reach * sin(heading);
+```
+
+The port had those two the other way round: the crabs appeared already spread and
+every one of them carried a mark of (0, 0) -- the pool clear's -- so all hundred
+converged on the arena centre in a column before starting their wander. They now
+boil out of the body and fan off it.
+
+What happens after that is the design and not a fault: state 2 sends each of them
+to x in -11..-6 and z about 4, and state 3's mark creeps 0.05 further along -x
+every time its hold expires while the player is more than a unit away. The swarm
+walks down the beach after Orphen and leaps at him from a unit and a half out.
+
+##### Verified
+
+`s14_e001` with Hand of Pyro on a repeating range: the crab dies at frame 6055,
+the hundred spawn on the corpse at (0.00, 5.30), and the lead ends the run at
+(-15.00, 4.00) in **state 120, animation 2** -- standing -- for the remaining
+6500 frames. `--actor-report` reaches every crab state and swarm states 0, 1, 2,
+3 and 6, none unimplemented. `s01_e024` and `s01_e012` byte-identical.
+
 #### The spell voice is a multi-clip VOICE.BIN bank
 
 Casting speaks two lines, and neither is a sound cue. They are VOICE.BIN clips

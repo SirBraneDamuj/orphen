@@ -353,6 +353,67 @@ namespace orphen::ported::entity
       environment.DAT_0031d3c8_setBattleTableWord(
           aligned, (word & ~(0xFFu << shift)) | (static_cast<std::uint32_t>(action) << shift));
     }
+    // The same table, a halfword at a time.
+    void write_control_half(const ActorEnvironment &environment,
+                            std::uint32_t offset,
+                            std::int16_t value)
+    {
+      if (!environment.DAT_0031d3c8_battleTableWord || !environment.DAT_0031d3c8_setBattleTableWord)
+      {
+        return;
+      }
+      const std::uint32_t at = orphen::ported::battle::kDAT_0031d7b0_controlBlocks + offset;
+      const std::uint32_t aligned = at & ~3u;
+      const std::uint32_t shift = (at & 2u) * 8u;
+      const std::uint32_t word = environment.DAT_0031d3c8_battleTableWord(aligned);
+      environment.DAT_0031d3c8_setBattleTableWord(
+          aligned, (word & ~(0xFFFFu << shift)) |
+                       ((static_cast<std::uint32_t>(static_cast<std::uint16_t>(value))) << shift));
+    }
+
+    // FUN_00245978(entity, control): re-record where this member is standing,
+    // in tenths, into both copies the control block keeps.
+    //
+    // **This is what ends the fight cleanly.** State 120's idle arms a timer and,
+    // when it runs out, measures the character against +0x14/+0x16 and sends it
+    // to state 108 -- the walk home -- if it has drifted more than three tenths.
+    // The run this dodge just made moves Orphen fifteen units from where the
+    // battle recorded him, so without the re-record he arrives at the far end of
+    // the beach and then bounces 120 -> 108 -> 120 for ever, on the spot,
+    // because state 108 cannot walk him back through the arena.
+    void FUN_00245978_record_home(const OriginalEntity &player,
+                                  const ActorEnvironment &environment)
+    {
+      const auto tenths = [](float value) {
+        return static_cast<std::int16_t>(static_cast<std::int32_t>(value * 10.0f));
+      };
+      write_control_half(environment, orphen::ported::battle::control::kPosX14,
+                         tenths(player.positionX20));
+      write_control_half(environment, orphen::ported::battle::control::kPosY16,
+                         tenths(player.positionZ24));
+      write_control_half(environment, orphen::ported::battle::control::kPosZ18,
+                         tenths(player.positionY28));
+      write_control_half(environment, orphen::ported::battle::control::kPosX26,
+                         tenths(player.positionX20));
+      write_control_half(environment, orphen::ported::battle::control::kPosY28,
+                         tenths(player.positionZ24));
+      write_control_half(environment, orphen::ported::battle::control::kPosZ2a,
+                         tenths(player.positionY28));
+    }
+
+    // FUN_00249388(entity, mask, value): with bit 0x4000 in the mask, write the
+    // value into the control block's target field. The crab's handback passes
+    // DAT_003253C2, which is party record 0's pool slot -- the lead's own, 0 --
+    // and FUN_00249610's target block takes its no-target branch on anything
+    // below 3, so this is "you are not fighting anything any more".
+    //
+    // Not to be confused with the two helpers below, which are named for the
+    // plain stores beside this call rather than for it.
+    void FUN_00249388_set_target(const ActorEnvironment &environment, std::int16_t target)
+    {
+      write_control_half(environment, orphen::ported::battle::control::kTarget2c, target);
+    }
+
     void FUN_00249388_hold_player(const ActorEnvironment &environment)
     {
       write_control_pending(environment, 0x0B);
@@ -2863,16 +2924,24 @@ namespace orphen::ported::entity
           continue;
         }
         OriginalEntity &small = pool.slot(slot);
+        // FUN_002662E0(x, z, y, entity): the spawn point is the corpse's bone 0,
+        // and +0x4C takes the height with it -- all hundred start stacked on the
+        // body.
         small.positionX20 = root.x;
         small.positionZ24 = root.y;
         small.positionY28 = root.z;
+        small.groundHeight4c = root.z;
+        // What is scattered is the *mark*, not the spawn: one to 2.9 units out
+        // from the corpse on a heading within thirty degrees of its bearing to
+        // the player. State 1 is what walks each of them out to it, so they
+        // spread off the body rather than appearing already spread.
         const std::uint32_t spread = ((environment.random ? environment.random() : 0) % 0x14u) * 10u;
         const float reach = static_cast<float>(static_cast<std::int32_t>(spread)) / 100.0f + 1.0f;
         const std::uint32_t arc = environment.random ? environment.random() : 0;
         const float heading =
             bearing + (static_cast<float>((arc & 3u) * 10u) * kFGpffff924c_swarmArc) / 360.0f;
-        small.positionX20 = entity.positionX20 + reach * cos_of(heading);
-        small.positionZ24 = entity.positionZ24 + reach * sin_of(heading);
+        small.swarmMarkX3c = entity.positionX20 + reach * cos_of(heading);
+        small.swarmMarkZ40 = entity.positionZ24 + reach * sin_of(heading);
         small.byte95 = member;
         if (DAT_0035526f_swarmCount() < DAT_0035526f_swarmSlots().size())
         {
@@ -3263,10 +3332,13 @@ namespace orphen::ported::entity
         FUN_00277d30_boss_camera(-1, 0, 0, &entity, environment);
         if (entity.spawnParam94 == 0x0E && environment.DAT_0031d3c8_setBattleTableWord)
         {
-          // (&DAT_0031D7BE)[(DAT_00354EBE - 1) * 0x3C] = 6 -- the control block's
-          // +0x0F. Routed through the battle table the same way every other
-          // control-block write in the port is.
+          // Three writes, not one. `(&DAT_0031D7BE)[(DAT_00354EBE - 1) * 0x3C] = 6`
+          // is the control block's +0x0F; then FUN_00249388 clears the target and
+          // FUN_00245978 re-records where the player is standing, which is what
+          // stops state 120 sending him straight back out to walk home.
           FUN_00249388_release_player(environment);
+          FUN_00249388_set_target(environment, 0);
+          FUN_00245978_record_home(player, environment);
         }
         player.halfword04 = static_cast<std::uint16_t>(player.halfword04 & 0xFFE7u);
         FUN_00225bc8_set_animation(player, 2);
