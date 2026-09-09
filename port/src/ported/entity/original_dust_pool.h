@@ -122,6 +122,46 @@ namespace orphen::ported::entity
                                    bool lit,
                                    const std::function<std::uint32_t()> &random);
 
+    // FUN_002198A0. **Opcode 0x10B's spawner**, and the same code as
+    // FUN_00219AF0 with two things taken out of the caller's hands: the colour
+    // and the shape are both hard zero, and the turn it steps the outer ring by
+    // is fGpffff8384 rather than fGpffff8388. Both words hold the same
+    // 6.283184.
+    void FUN_002198a0_spawn_script_ring(float x, float y, float z,
+                                        float size,
+                                        float jitterX,
+                                        float jitterY,
+                                        float radius,
+                                        std::int16_t lifeSpread,
+                                        int outerCount,
+                                        int innerCount,
+                                        const std::function<std::uint32_t()> &random);
+
+    // FUN_00219FC8. **Opcode 0x10A's**, and FUN_0021A170 with the same two
+    // forced to zero -- one puff cloud, no outer ring, the first roll used as
+    // both the x jitter and the radius.
+    void FUN_00219fc8_spawn_script_scatter(float x, float y, float z,
+                                           float size,
+                                           float jitterX,
+                                           float jitterY,
+                                           std::int16_t lifeSpread,
+                                           int count,
+                                           const std::function<std::uint32_t()> &random);
+
+    // FUN_00219D60. **Opcode 0x10C's**, FUN_002198A0 with the colour and the
+    // shape handed back to the caller and fGpffff838c for the turn.
+    void FUN_00219d60_spawn_script_ring_coloured(float x, float y, float z,
+                                                 float size,
+                                                 float jitterX,
+                                                 float jitterY,
+                                                 float radius,
+                                                 std::int16_t lifeSpread,
+                                                 int outerCount,
+                                                 int innerCount,
+                                                 std::uint32_t colour,
+                                                 std::uint8_t shape,
+                                                 const std::function<std::uint32_t()> &random);
+
     // FUN_0021A170: one puff, jitter rolled, no ring.
     void FUN_0021a170_spawn_one(float x, float y, float z,
                                 float size,
@@ -137,6 +177,22 @@ namespace orphen::ported::entity
     std::size_t aliveCount() const;
 
   private:
+    // The body FUN_00219AF0, FUN_002198A0 and FUN_00219D60 all share. They
+    // differ only in the gp word they take the turn from and in how much of the
+    // colour and the shape the caller gets to say.
+    void spawnNestedRing(float x, float y, float z,
+                         float size,
+                         float jitterX,
+                         float jitterY,
+                         float radius,
+                         std::int16_t lifeSpread,
+                         int outerCount,
+                         int innerCount,
+                         std::uint32_t colour,
+                         std::uint8_t shape,
+                         float turn,
+                         const std::function<std::uint32_t()> &random);
+
     std::array<DustPuff, kCount> puffs_{};
     // DAT_00355A98. Incremented on spawn, decremented when an entry ages out,
     // and the walk's own guard -- FUN_0021A760 does nothing while it is zero.

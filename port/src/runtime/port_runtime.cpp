@@ -1598,6 +1598,34 @@ namespace orphen::port
                                                   static_cast<int>(value), value);
     };
 
+    // Opcodes 0x10B / 0x10A / 0x10C into the DAT_00355A9C dust pool. Same pool
+    // and the same seeded roll the crab's impacts draw from, so a script burst
+    // and an actor burst stay in one deterministic stream.
+    {
+      auto roll = [this] { return FUN_00216868_random(); };
+      environment.FUN_002198a0_spawn_dust_ring =
+          [this, roll](const orphen::ported::script::ScriptDustBurst &burst)
+      {
+        DAT_00355a9c_dust_.FUN_002198a0_spawn_script_ring(
+            burst.x, burst.y, burst.z, burst.size, burst.jitterX, burst.jitterY, burst.radius,
+            burst.lifeSpread, burst.outerCount, burst.innerCount, roll);
+      };
+      environment.FUN_00219fc8_spawn_dust_scatter =
+          [this, roll](const orphen::ported::script::ScriptDustBurst &burst)
+      {
+        DAT_00355a9c_dust_.FUN_00219fc8_spawn_script_scatter(
+            burst.x, burst.y, burst.z, burst.size, burst.jitterX, burst.jitterY, burst.lifeSpread,
+            burst.innerCount, roll);
+      };
+      environment.FUN_00219d60_spawn_dust_ring_coloured =
+          [this, roll](const orphen::ported::script::ScriptDustBurst &burst)
+      {
+        DAT_00355a9c_dust_.FUN_00219d60_spawn_script_ring_coloured(
+            burst.x, burst.y, burst.z, burst.size, burst.jitterX, burst.jitterY, burst.radius,
+            burst.lifeSpread, burst.outerCount, burst.innerCount, burst.colour, burst.shape, roll);
+      };
+    }
+
     environment.FUN_00205d90_play_music_slot = [this](std::size_t slot, int fader)
     { soundEngine_.FUN_00205d90_play_slot(slot, fader); };
     environment.FUN_002063c8_ramp_music_up = [this](std::size_t slot, int speed, int fader)

@@ -3730,6 +3730,55 @@ each runs 325 frames before freeing its slot, and the crab's silhouette at frame
 5200 has neither pincer where at 3100 it has both. `s01_e024` and `s01_e012`
 byte-identical.
 
+#### The wall came down in silence: three dust opcodes the script layer threw away
+
+s14_e001 opens with the crab coming through the pier wall, and in the port that
+happened with no dust at all. The crab's own impacts were fine -- `FUN_0027CF20`
+is ported and its two hundred-puff rings show up on every swipe -- because the
+burst at the wall is not the crab's. It is the **scene script's**, and the
+handler for it read its operands and dropped them:
+
+```cpp
+case 0x10B:
+  note(OpcodeSupport::OperandsOnly);
+  return consumeOnly(opcode, 10);      // "a graphics submitter"
+```
+
+`FUN_00262780` is opcode 0x10B and it calls `FUN_002198A0`, which is the same
+nested-ring spawner as `FUN_00219AF0` -- the one the crab uses -- with the colour
+and the shape forced to zero and `fGpffff8384` for the turn instead of
+`fGpffff8388`. Its two siblings are the same story: 0x10A (`FUN_00262690` ->
+`FUN_00219FC8`) is `FUN_0021A170` with the same two zeroed, and 0x10C
+(`FUN_00262898` -> `FUN_00219D60`) is 0x10B's burst with the eleventh operand
+handed through as the puff colour. All three were `OperandsOnly`. s14_e001 fires
+six 0x10Bs, the first at blob `0x2253` on frame 65.
+
+The trap in these three is the operand order. Ghidra spells the calls with the
+arguments already shuffled, and the stack slots make it look like seven scaled
+coordinates followed by the raw parameters. They are read in declaration order,
+and the **fifth expression is the life spread** -- a raw halfword -- sitting
+between the size and the two jitters:
+
+| # | 0x10A | 0x10B | 0x10C |
+|---|---|---|---|
+| 1-4 | x, y, z, size | x, y, z, size | x, y, z, size |
+| 5 | life spread (raw) | life spread (raw) | life spread (raw) |
+| 6-7 | jitter x, jitter y | jitter x, jitter y | jitter x, jitter y |
+| 8 | count (raw) | radius | radius |
+| 9 | -- | outer count (raw) | outer count (raw) |
+| 10 | -- | inner count (raw) | inner count (raw) |
+| 11 | -- | -- | colour (raw) |
+
+`DAT_00352C70`, `DAT_00352C74` and `fGpffff8D08` are all 100000, the same scale
+as every other position operand, and it applies to the first four and to the
+jitters and radius only.
+
+One thing fell out of reading the pool again: all four full-turn words the ring
+steppers use -- `fGpffff8384`, `fGpffff8388`, `fGpffff838c` and `DAT_00352300` --
+hold `0x40C90FD8`, which is 6.283184 and not `float(2*pi)` (`0x40C90FDB`). The
+port had the mathematical constant in all four, which walks the outer ring by a
+very slightly different step. Fixed with the opcodes.
+
 #### The crab fights in the water, and two things were keeping it on the pier
 
 A PCSX2 save state taken as the battle opens has the crab at **(0.00, -3.18,
@@ -3856,21 +3905,35 @@ Reproducing that state in the port -- planks cleared from frame 0 -- puts the
 crab at (0.00, -3.50, -1.00) facing 1.5708 at the same beat, which is the same
 spot and the same facing to two decimals.
 
-##### One real difference did fall out: the trig is libm, and the original's is not
+##### Retracted: the trig is not the difference
 
-The save state's crab holds `+0x5C` = `+0x19C` = **0x3FC90FA6**, 1.57079005.
-`std::atan2` returns 0x3FC90FDB for due north, and the constant is nowhere in
-the ELF's data, so `FUN_00305408` computed it. The consequence is visible in the
-same dump: the crab's `x` stays at exactly 0.0 through a northward walk, which
-needs `FUN_00305130(1.57079005)` to be exactly zero -- `std::cos` of that angle
-is 6.3e-6, and the port drifts.
+An earlier pass here claimed the save state proved the original's trig differs
+from libm. It does not. The crab holds `+0x5C` = `+0x19C` = **0x3FC90FA6**, and
+that value is exactly `float(1.57079)` -- and exactly `157079 / 100000`, an
+authored five-decimal angle at the script's own coordinate scale. `float(pi/2)`
+is `0x3FC90FDB`, 53 ULP away, which is a hundred times further than any two
+implementations of `atan2f` can be from each other. The port produces
+`0x3FC90FA6` too, and carries it through the whole opening walk.
 
-The port calls `std::atan2` / `std::cos` / `std::sin` wherever the original calls
-`FUN_00305408` / `FUN_00305130` / `FUN_00305218`. For a single frame the
-difference is invisible; across a nineteen-hundred-frame animatic of
-bearing-then-step it is not. Reproducing the EE routines is a cross-cutting
-change -- every actor's motion goes through them -- so it is recorded here
-rather than attempted alongside the crab.
+`FUN_00305130`, `FUN_00305218` and `FUN_00305408` are, on inspection, plain
+fdlibm: `|x| < 0x3f490fd9` into `__kernel_cosf` / `__kernel_sinf`, otherwise
+`__ieee754_rem_pio2f` and a quadrant switch, and `FUN_00305408` is only the
+`matherr` wrapper around `__ieee754_atan2f` -- the string "atan2f" is right
+there in it. That is the same algorithm family the C runtime already runs, so
+`std::cos` / `std::sin` / `std::atan2` agree with them to about a ULP and
+lifting them out of `src/` would buy nothing.
+
+The one systematic float difference on this hardware is the **EE FPU**: no
+denormals, no infinities or NaNs, flush-to-zero, and non-IEEE rounding on the
+multiply-add. It touches every float operation in the game rather than three
+functions, and porting fdlibm would not move it.
+
+What is still worth a look is smaller and local: the crab enters the animation-8
+spin holding the authored 1.57079 and comes out of it on `std::` pi/2, because
+the spin writes quarter-turns built from the mathematical constant. The same
+class of thing is real elsewhere -- every full-turn word the dust rings step by
+(`fGpffff8384`/`8388`/`838c`, `DAT_00352300`) holds `0x40C90FD8`, 6.283184, and
+the port had `float(2*pi)` = `0x40C90FDB` in all four.
 
 #### A boss fight targets from a different table, and the port had never built it
 

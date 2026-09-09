@@ -9,10 +9,14 @@ namespace orphen::ported::entity
     // fGpffff8394 / 8398: the rise and the slide, both per tick.
     inline constexpr float kFGpffff8394_rise = 0.00300000002607703f;
     inline constexpr float kFGpffff8398_slide = 0.00999999977648258f;
-    // fGpffff8388 and DAT_00352300, both a full turn -- two separate words, one
-    // for each ring stepper.
-    inline constexpr float kFGpffff8388_turn = 6.28318548202515f;
-    inline constexpr float kDAT_00352300_turn = 6.28318548202515f;
+    // The four full-turn words the ring steppers use -- one each, all holding
+    // the same **0x40C90FD8**, which is 6.283184 and not float(2*pi)
+    // (0x40C90FDB). It is an authored six-digit constant, three ULP short, and
+    // writing the mathematical one here walks the ring by a different step.
+    inline constexpr float kFGpffff8384_turn = 6.283184051513672f;
+    inline constexpr float kFGpffff8388_turn = 6.283184051513672f;
+    inline constexpr float kFGpffff838c_turn = 6.283184051513672f;
+    inline constexpr float kDAT_00352300_turn = 6.283184051513672f;
     // The colour a zero entry draws with.
     inline constexpr std::uint32_t kFUN_0021a820_defaultColour = 0xF0F0F0u;
     // The sheet the packet names, and the CLUT bank a zero colour selects.
@@ -171,17 +175,18 @@ namespace orphen::ported::entity
     }
   }
 
-  void DustPool::FUN_00219af0_spawn_impact(float x, float y, float z,
-                                           float size,
-                                           float jitterX,
-                                           float jitterY,
-                                           float radius,
-                                           std::int16_t lifeSpread,
-                                           int outerCount,
-                                           int innerCount,
-                                           std::uint8_t shape,
-                                           bool lit,
-                                           const std::function<std::uint32_t()> &random)
+  void DustPool::spawnNestedRing(float x, float y, float z,
+                                 float size,
+                                 float jitterX,
+                                 float jitterY,
+                                 float radius,
+                                 std::int16_t lifeSpread,
+                                 int outerCount,
+                                 int innerCount,
+                                 std::uint32_t colour,
+                                 std::uint8_t shape,
+                                 float turn,
+                                 const std::function<std::uint32_t()> &random)
   {
     if (outerCount <= 0)
     {
@@ -191,8 +196,7 @@ namespace orphen::ported::entity
     // step and folding the first into the position, and each step hands a whole
     // inner ring of `innerCount` to FUN_0021A4F8 -- so a call with 5 and 20
     // puts a hundred puffs down.
-    const std::uint32_t colour = lit ? 0xFFFFFFu : 0u;
-    const float step = (360.0f / static_cast<float>(outerCount)) * kFGpffff8388_turn / 360.0f;
+    const float step = (360.0f / static_cast<float>(outerCount)) * turn / 360.0f;
     const std::int32_t rangeX = hundredths(jitterX);
     const std::int32_t rangeY = hundredths(jitterY);
     float heading = 0.0f;
@@ -207,6 +211,73 @@ namespace orphen::ported::entity
                               innerCount, colour, shape, random);
       heading += step;
     }
+  }
+
+  void DustPool::FUN_00219af0_spawn_impact(float x, float y, float z,
+                                           float size,
+                                           float jitterX,
+                                           float jitterY,
+                                           float radius,
+                                           std::int16_t lifeSpread,
+                                           int outerCount,
+                                           int innerCount,
+                                           std::uint8_t shape,
+                                           bool lit,
+                                           const std::function<std::uint32_t()> &random)
+  {
+    spawnNestedRing(x, y, z, size, jitterX, jitterY, radius, lifeSpread, outerCount, innerCount,
+                    lit ? 0xFFFFFFu : 0u, shape, kFGpffff8388_turn, random);
+  }
+
+  void DustPool::FUN_002198a0_spawn_script_ring(float x, float y, float z,
+                                                float size,
+                                                float jitterX,
+                                                float jitterY,
+                                                float radius,
+                                                std::int16_t lifeSpread,
+                                                int outerCount,
+                                                int innerCount,
+                                                const std::function<std::uint32_t()> &random)
+  {
+    // The colour and the shape are the original's own immediates, not the
+    // caller's: FUN_002198A0 passes 0 for both.
+    spawnNestedRing(x, y, z, size, jitterX, jitterY, radius, lifeSpread, outerCount, innerCount, 0u,
+                    0, kFGpffff8384_turn, random);
+  }
+
+  void DustPool::FUN_00219d60_spawn_script_ring_coloured(float x, float y, float z,
+                                                         float size,
+                                                         float jitterX,
+                                                         float jitterY,
+                                                         float radius,
+                                                         std::int16_t lifeSpread,
+                                                         int outerCount,
+                                                         int innerCount,
+                                                         std::uint32_t colour,
+                                                         std::uint8_t shape,
+                                                         const std::function<std::uint32_t()> &random)
+  {
+    spawnNestedRing(x, y, z, size, jitterX, jitterY, radius, lifeSpread, outerCount, innerCount,
+                    colour, shape, kFGpffff838c_turn, random);
+  }
+
+  void DustPool::FUN_00219fc8_spawn_script_scatter(float x, float y, float z,
+                                                   float size,
+                                                   float jitterX,
+                                                   float jitterY,
+                                                   std::int16_t lifeSpread,
+                                                   int count,
+                                                   const std::function<std::uint32_t()> &random)
+  {
+    // FUN_0021A170 with the colour and the shape forced to zero -- the first
+    // roll is handed in as both the stored x jitter and the ring radius, which
+    // is what scatters the cloud instead of dropping it on the point.
+    const std::int32_t rangeX = hundredths(jitterX);
+    const std::int32_t rangeY = hundredths(jitterY);
+    const float offsetXY = jitter(rangeX, random);
+    const float offsetZ = jitter(rangeY, random);
+    FUN_0021a4f8_spawn_ring(x, y, z, size, offsetXY, offsetZ, offsetXY, lifeSpread, count, 0u, 0,
+                            random);
   }
 
   void DustPool::FUN_0021a170_spawn_one(float x, float y, float z,

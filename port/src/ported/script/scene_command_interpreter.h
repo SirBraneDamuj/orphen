@@ -396,6 +396,27 @@ namespace orphen::ported::script
     }
   };
 
+  // One burst of the DAT_00355A9C dust pool, as opcodes 0x10A, 0x10B and 0x10C
+  // spell it. All three read their operands in the same interleaved order --
+  // the life spread is the *fifth* expression, ahead of the two jitters -- and
+  // only the position, the size, the jitters and the radius are scaled by
+  // 100000; the counts, the life spread and the colour are raw.
+  struct ScriptDustBurst
+  {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float size = 0.0f;
+    float jitterX = 0.0f;
+    float jitterY = 0.0f;
+    float radius = 0.0f;
+    std::int16_t lifeSpread = 0;
+    int outerCount = 0;
+    int innerCount = 0;
+    std::uint32_t colour = 0;
+    std::uint8_t shape = 0;
+  };
+
   // Everything a handler is allowed to touch. Terrain and lead movement arrive
   // as callbacks so this stays free of harness and runtime dependencies, the
   // same way the player controller takes its terrain sampler.
@@ -510,6 +531,16 @@ namespace orphen::ported::script
     // by DAT_00352c34 and `durationTicks` is the raw halfword. The state lives
     // in the render layer's CameraShake, which FUN_0020bec8 spends.
     std::function<void(float magnitude, std::int16_t durationTicks)> FUN_0022dcf0_shake_camera;
+
+    // FUN_00262780 -> FUN_002198A0 (opcode 0x10B), FUN_00262690 -> FUN_00219FC8
+    // (0x10A) and FUN_00262898 -> FUN_00219D60 (0x10C): the three ways a scene
+    // script puts dust in the air. They are the same pool the crab's impacts
+    // use, so they arrive as callbacks like every other pool the script layer
+    // cannot see. 0x10B is what s14_e001 fires as the crab comes through the
+    // wall.
+    std::function<void(const ScriptDustBurst &)> FUN_002198a0_spawn_dust_ring;
+    std::function<void(const ScriptDustBurst &)> FUN_00219fc8_spawn_dust_scatter;
+    std::function<void(const ScriptDustBurst &)> FUN_00219d60_spawn_dust_ring_coloured;
 
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
@@ -814,6 +845,14 @@ namespace orphen::ported::script
     // FUN_0025c258 / FUN_0025bf70.
     std::uint32_t FUN_0025c258_evaluate();
     bool FUN_0025bf70_decodeLiteral(std::uint32_t &value);
+
+    // One expression, signed, over kScriptCoordinateScale -- the shape almost
+    // every position operand in the file takes by hand.
+    float scaledOperand()
+    {
+      return static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+             kScriptCoordinateScale;
+    }
 
     // The three dispatch tables, kept as three functions so the shape of
     // FUN_0025bc68 survives. Each returns the opcode's value for the expression

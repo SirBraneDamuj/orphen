@@ -4935,20 +4935,97 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0x10B (FUN_00262780): **ten** expressions into FUN_002198a0, a graphics
-    // submitter -- seven coordinates scaled by DAT_00352c74 and three raw
-    // parameters, interleaved in the original's stack frame but read in stream
-    // order. The count is the thing that matters here; getting it wrong
-    // desyncs everything after it.
+    // 0x10B (FUN_00262780): ten expressions into FUN_002198A0, **a burst of the
+    // impact-dust pool** -- not a "graphics submitter", which is what this
+    // handler used to call it while throwing the operands away. s14_e001 fires
+    // six of them, and they are the dust the crab brings down off the wall it
+    // comes through; with the call missing the wall broke in silence.
+    //
+    // The operands are read in stream order but land in the call out of order:
+    // the fifth is the *life spread*, a raw halfword, and the sixth, seventh
+    // and eighth are the two jitters and the ring radius. DAT_00352C74 is
+    // 100000, the same scale every other coordinate opcode uses, and it applies
+    // to the first four and to those three -- the two counts and the life
+    // spread go in raw.
     case 0x10B:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 10);
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptDustBurst burst;
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.size = scaledOperand();
+      burst.lifeSpread = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.jitterX = scaledOperand();
+      burst.jitterY = scaledOperand();
+      burst.radius = scaledOperand();
+      burst.outerCount = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.innerCount = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_002198a0_spawn_dust_ring)
+      {
+        environment_.FUN_002198a0_spawn_dust_ring(burst);
+      }
+      return 0;
+    }
 
-    // 0x10A (FUN_00262690): eight expressions into FUN_00219fc8, the sibling
-    // submitter to 0x10B's. Same reasoning -- the arity is what matters.
+    // 0x10A (FUN_00262690): eight expressions into FUN_00219FC8, which is
+    // FUN_0021A170 with the colour and the shape forced to zero -- one scattered
+    // cloud, no outer ring, so there is no radius operand and no inner count.
     case 0x10A:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 8);
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptDustBurst burst;
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.size = scaledOperand();
+      burst.lifeSpread = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.jitterX = scaledOperand();
+      burst.jitterY = scaledOperand();
+      burst.innerCount = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00219fc8_spawn_dust_scatter)
+      {
+        environment_.FUN_00219fc8_spawn_dust_scatter(burst);
+      }
+      return 0;
+    }
+
+    // 0x10C (FUN_00262898): eleven expressions into FUN_00219D60 -- 0x10B's
+    // burst with the eleventh operand handed through as the puff colour. The
+    // shape stays the original's own zero.
+    case 0x10C:
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptDustBurst burst;
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.size = scaledOperand();
+      burst.lifeSpread = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.jitterX = scaledOperand();
+      burst.jitterY = scaledOperand();
+      burst.radius = scaledOperand();
+      burst.outerCount = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.innerCount = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.colour = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00219d60_spawn_dust_ring_coloured)
+      {
+        environment_.FUN_00219d60_spawn_dust_ring_coloured(burst);
+      }
+      return 0;
+    }
 
     // 0x129 (FUN_00261500): slot, then fader, into FUN_00205d90 -- start a
     // sequence the scene already loaded into that slot. s01_e012 issues one of
