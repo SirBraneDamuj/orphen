@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Reverse engineering of the PS2 game "Orphen: Scion of Sorcery" using Ghidra decompilation. The long-term goal is a cutscene skip patch. Analysis involves converting raw Ghidra output into documented, meaningfully-named C functions.
 
+## Git Safety
+
+Never run `git checkout --`, `git reset --hard`, `git clean`, or `git stash`
+without explicit user approval. The working tree frequently contains
+uncommitted experimental work, and one `git checkout --` has already destroyed
+some of it. If you need a clean tree, copy the files aside or make a branch.
+
+## Build & Run
+
+```bat
+port\build-msvc.bat Release
+port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024 --no-audio
+```
+
+Always pass `--no-audio` unless audio behaviour is what is being tested, and
+never leave an audio-enabled process running in the background. Build `Release`
+for anything involving frame rate — see `## Native Port` below for why, and for
+the two traps when measuring.
+
 ## Repository Layout
 
 - `analyzed/` — Human-authored analyzed functions (the primary working area)
@@ -30,6 +49,16 @@ Reverse engineering of the PS2 game "Orphen: Scion of Sorcery" using Ghidra deco
 5. Reference `globals.json` for DAT_* variable context and `strings.json` for string literals at hex addresses
 6. Do NOT modify files under `src/` — keep it pristine
 
+## Ground Truth Sources
+
+When porting behaviour, derive it from the original PS2 disassembly, a GS dump,
+or a save-state / RAM-dump diff — not from prior analysis notes in this repo.
+The notes have been wrong more than once: chains rendering was recorded
+backwards, and a bandana analysis doc had sin and cos swapped, both of which
+shipped into the port before anyone looked at the binary. `docs/` and
+`analyzed/` are hypotheses with a good hit rate, not ground truth. If a note
+disagrees with the binary, the binary wins — and fix the note in the same pass.
+
 ## Key Rules
 
 - **Focus on `src/` (English version)**, not `src-jp/` or `*-jp.*` files, unless explicitly cross-referencing
@@ -49,12 +78,8 @@ Release. It presents worse than that, because `main()`'s fixed-timestep
 accumulator runs catch-up simulation steps when a frame overruns 16.6 ms, so a
 slow frame makes itself slower; Debug settles at ~4.4 steps/frame and ~12 fps.
 
-```bat
-port\build-msvc.bat Release
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024
-```
-
-Debug is still the right build for debugging. Just never quote a frame time
+(Invocation is in `## Build & Run` above.) Debug is still the right build for
+debugging. Just never quote a frame time
 from it.
 
 Two traps when measuring (details and current numbers in `port/README.md`):
@@ -71,6 +96,21 @@ Two traps when measuring (details and current numbers in `port/README.md`):
 Behaviour must stay deterministic: `--frames N` with `--actor-report` and
 `--scr-report` is the regression guard, and rendering work must not change it.
 
+## Verifying Behaviour Claims
+
+Do not claim a bug is fixed or absent on the strength of a scripted frame
+capture or a short trace run. Most bugs here are state-dependent — bone-override
+slot lifecycle, door opcodes, entity pool contents, scheduler cursor — and a
+capture taken before the state is reached proves nothing. Before saying
+something is verified, either run long enough to reach the state that shows it,
+or ask for a save state or screenshot. "I could not reproduce it from the
+evidence I have" is the honest report; "it is fixed" is not.
+
+Fidelity is the goal, not a working scene: a divergence from the decompiled
+code is a bug to fix, never a limitation to document around. If a change makes
+the port look right by doing something the original does not do, say so instead
+of shipping it.
+
 ## Technical Context
 
 - **PS2 MIPS architecture** with custom hardware optimizations
@@ -80,6 +120,23 @@ Behaviour must stay deterministic: `--frames N` with `--actor-report` and
 - **Key addresses**: debug output `0x003555dc`, scene work flags `0x0031e770`, script memory `0x01C40000–0x01C8FFFF`, work memory `DAT_00355060`
 - **Graphics**: DMA packets and GPU command buffers
 - **Controllers**: dual controller support, 64-entry input history
+
+## Rendering & Data Layout Conventions
+
+Extend this list as new constants are confirmed against the binary.
+
+- **Entity pool stride is `0x1D8`, not `0xEC`** — `FUN_00229c40` allocates a
+  slot with `FUN_00267e78(entity, 0x1d8)`. Verify strides in the disassembly
+  before writing an ad-hoc dump script; a wrong stride here sent a whole
+  thunder-cue investigation off the rails.
+- **GS colour is modulate, `0x80` is x1.0** — `(Ct * Cv) >> 7`, so `0xFF` is
+  x1.99 and the GS can brighten a texel. Do not read `0x80` as 0.5x and double
+  the brightness to compensate. `GL_MODULATE` clamps at x1.0 and cannot reach
+  the top of that range on its own.
+- **Fades, letterboxing, and scissored overlays draw to the game viewport**,
+  not the whole window.
+- **Fixed-point coordinates scale by 4096.0**; the EE's FPU truncates toward
+  zero, which is worth about one unit on overlay positions.
 
 ## Scripts (Python)
 
