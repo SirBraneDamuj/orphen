@@ -3812,11 +3812,65 @@ player's own ground primitive moves from 370 (`lead` 0xA20, a plank the crab has
 already broken) to 459 (0xA04), the same class of primitive as the save state's
 483. `s01_e024` and `s01_e012` byte-identical over 3000 frames.
 
-The remaining gap is the walk-in's endpoint, half a unit short and half a unit
-right of the save state's. `FUN_0027C458` aims 1.5 units along the bearing to the
-player, and the port's player is at (-0.08, -0.25) where the state has him at
-(-0.08, -0.07); that is a different scene-entry position, not a physics
-difference, and it is not chased here.
+##### The endpoint is emergent, and the save state is a retry
+
+The walk-in ends half a unit short and half a unit right of the save state's
+crab. Chasing it settled what the number is made of, and the first guess -- "a
+different scene-entry position" -- was wrong.
+
+`FUN_0027C458` runs **three** times, once per swipe of `FUN_0027C3E8`'s ladder,
+and each pass aims 1.5 units along the bearing to wherever the player is
+standing *that frame*. The player is not wandering: `DAT_00325888` is a
+four-entry table of the spots the crab's swipe throws him to --
+
+```
+(0.000, 0.000)  (-1.552, -3.087)  (0.108, -2.068)  (-0.082, -0.254)
+```
+
+-- and the port's three aims read exactly (1.200, -3.200), (-1.552, -3.087) and
+(0.108, -2.068), ending with the player parked on entry 3. So the endpoint is
+the accumulation of three aimed walks, not an authored spot: the decompressed
+script contains no -3.18 in any width, and the only placement of the crab after
+the opening is the `0x55` at (0, -3.5, 0) that both builds run.
+
+The walks themselves check out. `FUN_0023A6D0`'s second argument is pool slot 0,
+not the crab, so the hold is the *player's* distance to the aim point rather
+than the crab's own step -- and the port's first walk travels 1.703 units where
+that distance is 1.703, which is the odd semantics reproducing exactly.
+
+**The save state is a retry, which is why its crab cannot be matched frame for
+frame.** Four things say so at once, none of which can hold in a first run:
+
+- the three pier planks are already non-solid, at a beat *before* the crab has
+  swiped;
+- `DAT_0035526A`, the swipe counter, is 0 -- only the crab's state 0
+  (`FUN_00279940`) clears it and only `FUN_0027C3E8` raises it;
+- control block 0 is fully populated, target 65, with a stale pending action
+  0x8C, while `sGpffffb052` is 0 and `DAT_00354EBC` is 0 -- a party built and
+  then torn down;
+- the crab sits at x = **exactly** 0.0 having moved north from the (0, -3.5)
+  placement, which only happens if it never turned off the heading that
+  placement left it on.
+
+Reproducing that state in the port -- planks cleared from frame 0 -- puts the
+crab at (0.00, -3.50, -1.00) facing 1.5708 at the same beat, which is the same
+spot and the same facing to two decimals.
+
+##### One real difference did fall out: the trig is libm, and the original's is not
+
+The save state's crab holds `+0x5C` = `+0x19C` = **0x3FC90FA6**, 1.57079005.
+`std::atan2` returns 0x3FC90FDB for due north, and the constant is nowhere in
+the ELF's data, so `FUN_00305408` computed it. The consequence is visible in the
+same dump: the crab's `x` stays at exactly 0.0 through a northward walk, which
+needs `FUN_00305130(1.57079005)` to be exactly zero -- `std::cos` of that angle
+is 6.3e-6, and the port drifts.
+
+The port calls `std::atan2` / `std::cos` / `std::sin` wherever the original calls
+`FUN_00305408` / `FUN_00305130` / `FUN_00305218`. For a single frame the
+difference is invisible; across a nineteen-hundred-frame animatic of
+bearing-then-step it is not. Reproducing the EE routines is a cross-cutting
+change -- every actor's motion goes through them -- so it is recorded here
+rather than attempted alongside the crab.
 
 #### A boss fight targets from a different table, and the port had never built it
 
