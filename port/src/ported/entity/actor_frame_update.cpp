@@ -1038,45 +1038,73 @@ namespace orphen::ported::entity
                                           entity.rejectTerrainMask74);
       };
 
-      // FUN_002262c0:0x00226cb4, the gate in front of the whole upward-step
-      // branch: `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))`, where
-      // workspace +0x08 is the destination surface's stored slope. The lead's
-      // copy of this loop has carried it for a while; this one had not, because
-      // until the party follower there was no ground-*walking* non-player actor
-      // and a flyer never notices.
+      // FUN_002262c0:0x00226884-0x00226cb4, the whole accept/refuse decision
+      // for one destination. It is **FUN_00227390's return value** first, and
+      // only then the 0.26 step:
       //
-      // Without it the step below raises the actor onto whatever the scan
-      // answered with, so a follower walking into the shop's counter ratcheted
-      // up it a tenth of a unit per frame and ended the scene standing in the
-      // air.
+      //   lVar7 = FUN_00227390(dest);
+      //   if (+0x4C - w[6] <= +0x7C) {                     // (A)
+      //     if (+0x7C < w[5] - w[6]) refuse;               // (B)
+      //     if (lVar7 != 0) accept;                        // <-- the real gate
+      //     if ((+0x0C & 0x10000) == 0) {
+      //       +0x0C |= 2;
+      //       if (+0x28 != +0x50) refuse;                  // not settled
+      //       if (w[5] - +0x28 < DAT_00352434) {           // 0.26, strict
+      //         if (w[2] <= +0x80) { ...provisional raise, re-query... }
+      //       }
+      //     }
+      //   } else refuse;
       //
-      // **There is no step-up cap here.** DAT_00352434 (0.26) used to be tested
-      // on this path as well, and it is not what the original does with it:
+      // `lVar7` is not "the scan answered". FUN_00227390 ends with
       //
-      //   lVar7 = FUN_00227390(destination);
-      //   if (+0x4C - w[6] <= +0x7C) {
-      //     if (+0x7C < w[5] - w[6])  refuse;
-      //     if (lVar7 != 0)           accept;      <-- no height test at all
-      //     if ((+0x0C & 0x10000) == 0) { ...the DAT_00352434 branch... }
-      //   }
+      //   uVar1 = 0;
+      //   if (fVar6 <= *(float *)(entity + 0x28)) { uVar1 = 1; ...required mask... }
       //
-      // The 0.26 is the *fallback* the original reaches only when the corner
-      // scan found nothing -- "is there a ledge here the scan missed" -- and the
-      // two real height gates are both against +0x7C, the entity's own step
-      // allowance, measured against a second workspace height this
-      // TerrainSurface does not carry yet. A scan that answers is accepted
-      // however tall the step, so capping it at 0.26 gave every actor a
-      // quarter-unit ceiling it does not have.
+      // -- **1 only when the surface it found is at or below the feet.** So a
+      // move onto anything higher than where the actor is standing never takes
+      // the accept path at all; it falls through to the 0.26 branch, and that
+      // branch is the only way up. This is the same rule the lead already
+      // carries as `canStepToHeight`, and the non-player path had lost it.
       //
-      // What that cost: s14_e001's arena is a pool at -1.0 with a hard half-unit
-      // wall at z = -4.3, and the crab's own moves station it in that pool --
-      // state 8 walks to (0, -5), state 9 to (0, -6). Once it was down there it
-      // could never climb out, so its charge, its stamp and its run at the shore
-      // all played their clips against the wall without moving: the crab walked
-      // on the spot for the whole fight. Both regression scenes are
-      // byte-identical without the cap; nothing else was leaning on it.
+      // Gates (A) and (B) are the entity's own +0x7C, which is **100.0 on every
+      // entity in the s14_e001 dump** -- crab, lead, props alike -- so neither
+      // can fire and neither is modelled here; w[6], the lowest of the four
+      // corners, is the only thing they need and TerrainSurface does not carry
+      // it. (A) and (B) are noted rather than guessed at.
+      //
+      // What the missing gate cost: `s14_e001`'s arena is a pool floor at -1.0
+      // inside a deck at -0.5, and the crab fights **in the pool** -- the save
+      // state taken as the battle starts has it at (0.00, -3.18, -1.00) on
+      // primitive 649, all four corners -1.000. Uncapped, its walk-in stepped
+      // the half unit straight up onto the deck and it spent the fight
+      // bobbing on and off the planking beside the player.
+      //
+      // Not modelled: the provisional raise the original makes inside the 0.26
+      // branch (`+0x28 = w[5] + DAT_00352438`, re-query, accept only if the new
+      // answer is still under 0.26), and DAT_00352434's use as the fallback
+      // ledge probe when the corner scan finds nothing.
+      constexpr float kDAT_00352434_stepHeight = 0.26f;
       const auto walkable = [&entity](const std::optional<ActorEnvironment::TerrainSurface> &at) {
-        return at.has_value() && at->slopeAngle <= entity.slopeLimit80;
+        if (!at.has_value())
+        {
+          return false;
+        }
+        // FUN_00227390's `fVar6 <= entity +0x28`.
+        if (at->height <= entity.positionY28)
+        {
+          return true;
+        }
+        // The step up. `+0x28 != +0x50` is an actor that is not settled on the
+        // ground -- mid-fall, mid-hop -- and it may not step at all.
+        if (entity.positionY28 != entity.previousGroundHeight50)
+        {
+          return false;
+        }
+        if (!(at->height - entity.positionY28 < kDAT_00352434_stepHeight))
+        {
+          return false;
+        }
+        return at->slopeAngle <= entity.slopeLimit80;
       };
 
       // **A refused move is retried on a rotated heading, not split per axis.**

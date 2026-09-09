@@ -249,6 +249,14 @@ namespace orphen::ported::entity
     // closes two groups as it climbs in and out of the water.
     std::function<void(std::uint32_t groupMask, bool visible)> FUN_0022dbc8_show_map_primitives;
 
+    // FUN_0022dc68, the same call opcode 0xA6 makes -- and **not the same
+    // thing as FUN_0022dbc8 above**. That one hides a primitive from the draw
+    // (record80 +0x70 bit 0x20); this one takes it out of the *ground scan*, by
+    // clearing bit 0x800 of record78 +0x00 on every primitive whose terrain
+    // word intersects the mask. Both loops of FUN_00227840 skip a primitive
+    // without that bit.
+    std::function<void(std::uint32_t groupMask, bool solid)> FUN_0022dc68_enable_map_terrain;
+
     // FUN_0022dcf0, the camera shake -- magnitude and a duration in ticks.
     std::function<void(float magnitude, std::int16_t durationTicks)> FUN_0022dcf0_shake_camera;
 

@@ -3730,6 +3730,94 @@ each runs 325 frames before freeing its slot, and the crab's silhouette at frame
 5200 has neither pincer where at 3100 it has both. `s01_e024` and `s01_e012`
 byte-identical.
 
+#### The crab fights in the water, and two things were keeping it on the pier
+
+A PCSX2 save state taken as the battle opens has the crab at **(0.00, -3.18,
+-1.00)** with `+0x4C` = -1.00, all four corner heights -1.000 and `+0x0A` =
+0x4289 -- primitive 649, the pool floor. The port had it at -0.50, up on the
+planks beside the player, stepping on and off them for the rest of the fight.
+Two separate causes, one of them a correction this port had made to itself.
+
+##### `FUN_0022DC68` is not `FUN_0022DBC8`, and the crab calls it
+
+The arena is a pool floor at -1.0 (primitives 649 and 680, `x` -5..5, `y` -5..0)
+with three planked sections laid over it at -0.5, tagged 1, 2 and 4 in record78
+`+0x04`. The crab smashes one per swipe, and the swipe's own tail says so:
+
+```c
+FUN_0022DC68(1 << (DAT_0035526A - 1 & 0x1f), 0, 0x800);
+FUN_00225BC8(crab, 0);
+```
+
+`FUN_0022DC68(selector, enable, bits)` walks the primitive array and sets or
+clears `bits` in **record78 +0x00** for every primitive whose `+0x04` intersects
+the selector. 0x800 is the bit both loops of `FUN_00227840` require before a
+primitive is offered to the overlap test at all, so clearing it takes the
+surface out of the ground scan. The save state shows the result plainly: those
+three primitives read `+0x00` = 0x220 while their draw-side copy at record80
+`+0x70` still holds the file's 0xA20.
+
+The port had the whole mechanism -- opcode 0xA6 has used it since the doors went
+in -- but the crab's call site was a comment saying it would be routed "once the
+actor environment carries it", and the actor environment never did. `ActorEnvironment`
+now carries `FUN_0022dc68_enable_map_terrain`, and it is a `PortRuntime` member
+rather than a second lambda body, because the two callers must not drift.
+
+It is worth being explicit about the pair, because they select on the same word
+and differ only in what they write:
+
+| | selects on | writes | effect |
+|---|---|---|---|
+| `FUN_0022DBC8` | record78 +0x04 | record80 +0x70 bit 0x20 | hide from the draw |
+| `FUN_0022DC68` | record78 +0x04 | record78 +0x00 bit 0x800 | stop being ground |
+
+##### A non-player actor may not step up more than 0.26 either
+
+With the planks gone the crab still climbed them, because the port's actor
+physics had no step limit at all. The predicate was `slopeAngle <= +0x80` and
+nothing else, on a note arguing that `FUN_002262C0` accepts any step the corner
+scan answers. That reading is wrong, and the mistake is in one variable:
+
+```c
+lVar7 = FUN_00227390(dest);
+if (+0x4C - w[6] <= +0x7C) {
+  if (+0x7C < w[5] - w[6]) refuse;
+  if (lVar7 != 0) accept;                 // <-- not "the scan answered"
+  if ((+0x0C & 0x10000) == 0) { ...the DAT_00352434 branch... }
+}
+```
+
+`lVar7` is `FUN_00227390`'s return, and that function ends
+
+```c
+uVar1 = 0;
+if (fVar6 <= *(float *)(entity + 0x28)) { uVar1 = 1; ...required mask... }
+```
+
+-- **1 only when the surface it found is at or below the feet**. Anything higher
+never reaches the accept path; the 0.26 `DAT_00352434` branch is the only way up,
+and it additionally wants `+0x28 == +0x50` (settled on the ground) and the slope
+gate. That is the same rule the lead has carried as `canStepToHeight` all along.
+The two `+0x7C` gates either side of it are inert here: **every entity in the
+s14_e001 dump reads +0x7C = 100.0**, crab, lead and props alike, so neither can
+fire, and the workspace's `w[6]` -- the lowest of the four corners -- is not
+carried yet. They are noted in the code rather than guessed at.
+
+##### Verified
+
+`s14_e001`: the crab's walk-in now ends at (0.51, -3.53, **-1.00**) facing
+1.571, against the save state's (0.00, -3.18, -1.00) facing 1.5708, and it stays
+at -1.00 for the whole fight instead of bobbing between -1.00 and -0.50. The
+player's own ground primitive moves from 370 (`lead` 0xA20, a plank the crab has
+already broken) to 459 (0xA04), the same class of primitive as the save state's
+483. `s01_e024` and `s01_e012` byte-identical over 3000 frames.
+
+The remaining gap is the walk-in's endpoint, half a unit short and half a unit
+right of the save state's. `FUN_0027C458` aims 1.5 units along the bearing to the
+player, and the port's player is at (-0.08, -0.25) where the state has him at
+(-0.08, -0.07); that is a different scene-entry position, not a physics
+difference, and it is not chased here.
+
 #### A boss fight targets from a different table, and the port had never built it
 
 `FUN_002462C8` has two targeting modes and picks between them on one word:

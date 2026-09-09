@@ -4418,9 +4418,22 @@ namespace orphen::ported::entity
           }
         }
       }
-      // FUN_0022dc68(1 << (count - 1), 0, 0x800): the group this swipe knocked
-      // over stops being terrain. Routed through the same callback opcode 0xA6
-      // uses once the actor environment carries it.
+      // FUN_0022dc68(1 << (count - 1), 0, 0x800): **the group this swipe
+      // knocked over stops being terrain.** The pier is three planked sections
+      // tagged 1, 2 and 4 in record78 +0x04, each a flat quad at -0.5 laid over
+      // the pool floor at -1.0, and the crab clears one per swipe. Without this
+      // call the planks stayed in the ground scan, so the crab's own walk-in
+      // found -0.5 under a corner of its footprint half a unit up: it either
+      // climbed onto the deck beside the player or, once the step gate was back,
+      // stopped dead at the plank's edge. The save state taken as the battle
+      // opens has all three cleared -- record78 +0x00 reads 0x220 where the
+      // file's word says 0xA20 -- with the crab standing at (0.00, -3.18,
+      // -1.00) on primitive 649, the pool floor.
+      if (environment.FUN_0022dc68_enable_map_terrain)
+      {
+        environment.FUN_0022dc68_enable_map_terrain(
+            1u << (static_cast<std::uint32_t>(DAT_0035526a_swipeCount()) - 1u & 0x1Fu), false);
+      }
       FUN_00225bc8_set_animation(entity, 0);
     }
   } // namespace

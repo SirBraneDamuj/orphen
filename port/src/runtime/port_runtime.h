@@ -627,6 +627,10 @@ namespace orphen::port
     // reaches two of them, load (1) and pre-update (4).
     std::int16_t DAT_0032536c_sceneModule_ = -1;
     void FUN_0032536c_scene_module(int mode);
+
+  // FUN_0022DC68(selector, enable, 0x800). Shared by opcode 0xA6 and by the
+  // crab's swipe, which is why it is a member rather than a lambda body.
+  void FUN_0022dc68_enable_map_terrain(std::uint32_t groupMask, bool solid);
     bool sceneModuleReported_ = false;
     // The scene's own encounter data: every actor the player can target.
     // Loaded by FUN_0023f318 out of the scene script, not out of the

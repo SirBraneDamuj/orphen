@@ -662,6 +662,9 @@ namespace orphen::port
       }
     };
 
+    environment.FUN_0022dc68_enable_map_terrain = [this](std::uint32_t groupMask, bool solid)
+    { FUN_0022dc68_enable_map_terrain(groupMask, solid); };
+
     environment.FUN_0022dcf0_shake_camera = [this](float magnitude, std::int16_t durationTicks)
     { DAT_00355664_cameraShake_.FUN_0022dcf0_request(magnitude, durationTicks); };
 
@@ -1711,27 +1714,7 @@ namespace orphen::port
     };
 
     environment.FUN_0022dc68_enable_map_terrain = [this](std::uint32_t groupMask, bool solid)
-    {
-      auto *map = mapViewer_.loadedMap();
-      if (map == nullptr)
-      {
-        return;
-      }
-      for (auto &record78 : map->DAT_003556b0_dRecords78)
-      {
-        if ((record78.terrainFlags & groupMask) == 0)
-        {
-          continue;
-        }
-        // 0x800 is kOriginalTerrainSampleBit: both loops of FUN_00227840 skip a
-        // primitive without it, so clearing it takes the surface out of the
-        // ground scan entirely. That is what an opening door does -- and while
-        // it stayed set, walking into the closed door's panel found it as ground
-        // and lifted the actor up it.
-        record78.leadingWord = solid ? (record78.leadingWord | 0x800u)
-                                     : (record78.leadingWord & ~0x800u);
-      }
-    };
+    { FUN_0022dc68_enable_map_terrain(groupMask, solid); };
 
     // FUN_00260738's two writes, opcodes 0x7D and 0x7E, and the same pair
     // FUN_002676d8 reaches through opcode 0xBE. The map has to be mutable
@@ -2382,6 +2365,37 @@ namespace orphen::port
   // targeting from their load hook, and the port had no dispatch at all -- so
   // every battle ran the field encounter's pause-and-pick display, and a boss
   // whose enemies have no actor records of their own could not be aimed at.
+  // FUN_0022DC68(selector, enable, 0x800):
+  //
+  //   for each primitive: if (rec78 +0x04 & selector) rec78 +0x00 |= / &= ~bits;
+  //
+  // **Not the same array as FUN_0022DBC8**, which selects on the same word but
+  // writes record80 +0x70 -- the draw-side copy of the same flags. One hides a
+  // surface, the other stops it being ground; s14_e001 uses both, on different
+  // groups, and reading them as one call makes the pier either invisible or
+  // still solid.
+  //
+  // 0x800 is the bit both loops of FUN_00227840 require before a primitive is
+  // offered to the overlap test at all, so clearing it removes the surface from
+  // the ground scan outright.
+  void PortRuntime::FUN_0022dc68_enable_map_terrain(std::uint32_t groupMask, bool solid)
+  {
+    auto *map = mapViewer_.loadedMap();
+    if (map == nullptr)
+    {
+      return;
+    }
+    for (auto &record78 : map->DAT_003556b0_dRecords78)
+    {
+      if ((record78.terrainFlags & groupMask) == 0)
+      {
+        continue;
+      }
+      record78.leadingWord = solid ? (record78.leadingWord | 0x800u)
+                                   : (record78.leadingWord & ~0x800u);
+    }
+  }
+
   void PortRuntime::FUN_0032536c_scene_module(int mode)
   {
     if (DAT_0032536c_sceneModule_ < 0)
@@ -5631,6 +5645,24 @@ namespace orphen::port
                       << static_cast<int>(material.textureCoordinates[corner * 2 + 1]);
           }
         }
+      }
+
+      // The four corners in world space. The centre/radius pair above is enough
+      // to find a primitive but not to say whether a footprint corner lands on
+      // it, which is the question a ground-scan argument always comes down to.
+      std::cout << " v=";
+      const std::size_t cornerCount = (record80.primitiveFlags & 0x4000) != 0 ? 3u : 4u;
+      for (std::size_t corner = 0; corner < cornerCount; ++corner)
+      {
+        const std::size_t vertex = record78.vertexIndices[corner];
+        if (vertex >= map->DAT_0035569c_sectionCRecords.size())
+        {
+          break;
+        }
+        const auto &vertexPosition = map->DAT_0035569c_sectionCRecords[vertex].position;
+        std::cout << "(" << formatNumber(vertexPosition.x) << ","
+                  << formatNumber(vertexPosition.y) << ","
+                  << formatNumber(vertexPosition.z) << ")";
       }
       std::cout << '\n';
     }
