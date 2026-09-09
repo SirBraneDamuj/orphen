@@ -621,6 +621,13 @@ namespace orphen::port
     // low methods are what set the second of those. See
     // ported/battle/battle_party.h.
     orphen::ported::battle::BattleParty battleParty_;
+    // DAT_0032536C: the scene module FUN_0022A360 picked out of
+    // PTR_LAB_003252B8 for the loaded scene, or -1 for a scene with none. The
+    // hook is called with a mode number at ten points in the frame; the port
+    // reaches two of them, load (1) and pre-update (4).
+    std::int16_t DAT_0032536c_sceneModule_ = -1;
+    void FUN_0032536c_scene_module(int mode);
+    bool sceneModuleReported_ = false;
     // The scene's own encounter data: every actor the player can target.
     // Loaded by FUN_0023f318 out of the scene script, not out of the
     // executable, so it lives beside the script rather than in BattleParty.

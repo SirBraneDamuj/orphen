@@ -6,6 +6,7 @@
 #include "ported/entity/original_water_splash.h"
 
 #include "ported/entity/actor_dispatch_table.h"
+#include "ported/battle/battle_target_markers.h"
 #include "ported/battle/battle_tables.h"
 #include "ported/entity/original_enemy_attack.h"
 #include "ported/entity/original_hit_test.h"
@@ -41,14 +42,30 @@ namespace orphen::ported::entity
     inline constexpr float kDAT_00353118_damageThreshold = 0.300000011920929f;
     // fGpffff9260 / fGpffff9264 at 0x003531D0 / 0x003531D4: and the two health
     // fractions FUN_0027ccd0 blows the legs off at, six tenths and three.
-    inline constexpr float kFGpffff9260_firstLegHealth = 0.600000023841858f;
-    inline constexpr float kFGpffff9264_secondLegHealth = 0.300000011920929f;
+    inline constexpr float kFGpffff9260_firstClawHealth = 0.600000023841858f;
+    inline constexpr float kFGpffff9264_secondClawHealth = 0.300000011920929f;
 
     // The crab's own three cues. 0x11A is the hit, 0xAF and 0xAE the two legs
     // coming off, and 0x114..0x119 the animation cues FUN_0027ef40 keys.
     inline constexpr std::uint16_t kFUN_00279298_hitCue = 0x11A;
-    inline constexpr std::uint16_t kFUN_0027ccd0_firstLegCue = 0xAF;
-    inline constexpr std::uint16_t kFUN_0027ccd0_secondLegCue = 0xAE;
+    // **0xAF and 0xAE are entity types, not sound cues.** FUN_002EB7F0's second
+    // argument goes straight to FUN_00265E28; the port had them down as
+    // FUN_00267D38 cue numbers, so the two claws made a noise and stayed on.
+    // The bone pairs beside them are what FUN_0020D8C0 collapses in their place.
+    inline constexpr std::int32_t kFUN_002eb7f0_firstClaw = 0xAF;
+    inline constexpr std::int32_t kFUN_002eb7f0_secondClaw = 0xAE;
+    inline constexpr std::size_t kFUN_0027ccd0_firstClawBones[2] = {0x0B, 0x0C};
+    inline constexpr std::size_t kFUN_0027ccd0_secondClawBones[2] = {0x11, 0x12};
+    // DAT_00354A50 / A54 / A58 / A5C. The first is pi -- the claw leaves along
+    // the reverse of the direction the blow came from -- the middle two are the
+    // 2*pi that turns `random % 45` into up to forty-five degrees of spread,
+    // one claw each way, and the last is the hop it leaves with.
+    inline constexpr float kDAT_00354a50_awayFromBlow = 3.141592025756836f;
+    inline constexpr float kDAT_00354a54_spread = 6.283184051513672f;
+    inline constexpr float kDAT_00354a5c_hop = 0.04500000178813934f;
+    // +0x62 on the thrown claw: the flight timer, and again the fade timer once
+    // it has landed.
+    inline constexpr std::uint16_t kFUN_002eb7f0_life = 0xC80;
 
     // FUN_0027ce48's splash: 0x140 ticks between them, and it only runs while
     // the crab is below -2.0 in Y -- in the water.
@@ -206,6 +223,8 @@ namespace orphen::ported::entity
     inline constexpr float kFUN_0027b380_shakeRamp = 3200.0f;
     inline constexpr float kFUN_0027b380_shotSwap = 5760.0f;
     inline constexpr std::uint32_t kFUN_0027b380_endBeat = 2000;
+    // FUN_0027DC38 writes work word 0 again when the last swarm crab dies.
+    inline constexpr std::uint32_t kFUN_0027dc38_swarmClearedBeat = 3000;
 
     // FUN_0027c950, the swarm the corpse lets go: a hundred type 0x7E, each one
     // to two units out on a heading within thirty degrees of the crab's bearing
@@ -1218,6 +1237,12 @@ namespace orphen::ported::entity
     //   tags 41..42  animation  0  kind 0x10   the two that keep their own type
     inline constexpr float kFUN_002797d0_lightRadius = 3.0f;
 
+    // fGpffff928c and fGpffff9290. The first lifts the crab's own target cursor
+    // to seven tenths of its height; the second is the swarm count the second
+    // music step-down waits for.
+    inline constexpr float kFGpffff928c_crabCursorHeight = 0.7f;
+    inline constexpr float kFGpffff9290_swarmQuiet = 30.0f;
+
     void FUN_002797d0_bind_props(const std::uint8_t *tags,
                                  std::int16_t animation,
                                  std::uint16_t kind,
@@ -1625,11 +1650,60 @@ namespace orphen::ported::entity
                                 DAT_00573788_crabAttacks().record[0], *environment.hitTest);
     }
 
-    // FUN_0027ccd0: the legs. Two thresholds, six tenths and three tenths of
-    // maximum hit points; each hides two bones, keys a cue at the crab's origin
-    // and raises the damage stage, which is what moves it onto the next move
-    // rotation.
-    void FUN_0027ccd0_shed_leg(OriginalEntity &entity, const ActorEnvironment &environment)
+    // FUN_002EB7F0(crab, type, at): **throw a claw off.** The type is 0xAF or
+    // 0xAE and goes to FUN_00265E28, so this is a real entity, not an effect --
+    // it flies, lands, lies there and fades. It leaves along the reverse of the
+    // direction the blow came from (+0xC4 plus pi) with up to forty-five degrees
+    // of spread, one claw clockwise and the other anticlockwise.
+    void FUN_002eb7f0_throw_claw(const OriginalEntity &entity,
+                                 std::int32_t typeId,
+                                 const orphen::ported::psm2::Vec3 &at,
+                                 const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      const std::size_t slot =
+          pool.FUN_00265e28_allocate_and_initialize(typeId, *environment.descriptors);
+      if (slot >= pool.slotCount())
+      {
+        return;
+      }
+      OriginalEntity &claw = pool.slot(slot);
+      claw.groundHeight4c = entity.groundHeight4c;
+      claw.previousGroundHeight50 = entity.previousGroundHeight50;
+
+      const std::uint32_t roll = environment.random ? environment.random() : 0;
+      const float spread =
+          (static_cast<float>(static_cast<std::int32_t>(roll % 0x2Du)) * kDAT_00354a54_spread) /
+          360.0f;
+      const float away = entity.hitDirectionC4 + kDAT_00354a50_awayFromBlow;
+      claw.facingRadians5c = typeId == kFUN_002eb7f0_secondClaw ? away + spread : away - spread;
+
+      claw.scale14c = 1.0f;
+      claw.scaleZ150 = 1.0f;
+      claw.halfword04 = static_cast<std::uint16_t>(claw.halfword04 | 1u);
+      claw.positionX20 = at.x;
+      claw.positionZ24 = at.y;
+      claw.positionY28 = at.z;
+      claw.animationA0 = 1;
+      claw.fadeRamp62 = kFUN_002eb7f0_life;
+      claw.verticalVelocity44 = kDAT_00354a5c_hop;
+    }
+
+    // FUN_0027ccd0: **the claws come off at two damage thresholds** -- six
+    // tenths and three tenths of maximum hit points. Each one collapses two
+    // bones of the model and throws the matching entity clear; the damage stage
+    // it raises is also what moves the crab onto its next move rotation.
+    //
+    // FUN_0020D8C0 is handed a *zeroed* seven-field pose, which is not an
+    // identity: field 3 is the scale, so the override snaps the bone and
+    // everything under it to a point. That is how the claw stops being drawn.
+    void FUN_0027ccd0_shed_claw(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
     {
       if (entity.crabDamageStage1bd >= 2)
       {
@@ -1637,23 +1711,33 @@ namespace orphen::ported::entity
       }
       const float fraction = static_cast<float>(static_cast<std::int16_t>(entity.staggerTimer12a)) /
                              static_cast<float>(static_cast<std::int16_t>(entity.maxHitPoints128));
-      if (fraction < kFGpffff9260_firstLegHealth && entity.crabDamageStage1bd == 0)
-      {
-        // FUN_0020d8c0(entity, 0x0B/0x0C, ...) hides the two bones of the first
-        // leg. The port's bone override table is per-slot state the draw walk
-        // owns; hiding is not modelled here yet.
-        if (environment.FUN_00267d38_playSound)
+
+      const auto shed = [&](const std::size_t (&bones)[2], std::int32_t typeId) {
+        if (slot < environment.boneOverrides.size())
         {
-          environment.FUN_00267d38_playSound(kFUN_0027ccd0_firstLegCue, entity);
+          // The duration is zero, which the filter reads as a ratio of 1.0 --
+          // the bone snaps rather than easing away.
+          constexpr std::array<float, orphen::ported::model::kPoseFieldCount> kCollapsed{};
+          auto &overrides = environment.boneOverrides[slot];
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(overrides, bones[0], kCollapsed, 0);
+          orphen::ported::model::FUN_0020d8c0_set_bone_override(overrides, bones[1], kCollapsed, 0);
         }
+        orphen::ported::psm2::Vec3 at{entity.positionX20, entity.positionZ24, entity.positionY28};
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          at = environment.FUN_0020dc88_bone_point(slot, 0, orphen::ported::psm2::Vec3{});
+        }
+        FUN_002eb7f0_throw_claw(entity, typeId, at, environment);
+      };
+
+      if (fraction < kFGpffff9260_firstClawHealth && entity.crabDamageStage1bd == 0)
+      {
+        shed(kFUN_0027ccd0_firstClawBones, kFUN_002eb7f0_firstClaw);
         entity.crabDamageStage1bd = 1;
       }
-      if (fraction < kFGpffff9264_secondLegHealth && entity.crabDamageStage1bd == 1)
+      if (fraction < kFGpffff9264_secondClawHealth && entity.crabDamageStage1bd == 1)
       {
-        if (environment.FUN_00267d38_playSound)
-        {
-          environment.FUN_00267d38_playSound(kFUN_0027ccd0_secondLegCue, entity);
-        }
+        shed(kFUN_0027ccd0_secondClawBones, kFUN_002eb7f0_secondClaw);
         entity.crabDamageStage1bd = 2;
       }
     }
@@ -2872,9 +2956,14 @@ namespace orphen::ported::entity
     // The original writes them into the battle module's own actor table; the
     // only thing that ever reads them back is FUN_0027B918, so they are held
     // here rather than guessed into a table the port shapes differently.
-    std::array<std::int32_t, 100> &DAT_0035526f_swarmSlots()
+    struct SwarmRow
     {
-      static std::array<std::int32_t, 100> slots{};
+      std::int16_t slot = -1;   // +0x00, -1 for an empty row
+      float distance = 0.0f;    // +0x04, filled by FUN_0027DA48 before it sorts
+    };
+    std::array<SwarmRow, 100> &DAT_0035526f_swarmSlots()
+    {
+      static std::array<SwarmRow, 100> slots{};
       return slots;
     }
     std::uint8_t &DAT_0035526f_swarmCount()
@@ -2943,10 +3032,13 @@ namespace orphen::ported::entity
         small.swarmMarkX3c = entity.positionX20 + reach * cos_of(heading);
         small.swarmMarkZ40 = entity.positionZ24 + reach * sin_of(heading);
         small.byte95 = member;
-        if (DAT_0035526f_swarmCount() < DAT_0035526f_swarmSlots().size())
+        // Row `index`, not row `count`: the original stores at the loop
+        // counter and only bumps cGpffffb2ff on a successful allocation, so a
+        // pool that ran out leaves a hole rather than shortening the list.
+        if (static_cast<std::size_t>(index) < DAT_0035526f_swarmSlots().size())
         {
-          DAT_0035526f_swarmSlots()[DAT_0035526f_swarmCount()] =
-              static_cast<std::int32_t>(slot);
+          DAT_0035526f_swarmSlots()[static_cast<std::size_t>(index)].slot =
+              static_cast<std::int16_t>(slot);
         }
         DAT_0035526f_swarmCount() = static_cast<std::uint8_t>(DAT_0035526f_swarmCount() + 1);
         member = static_cast<std::uint8_t>(member + 1);
@@ -2977,7 +3069,7 @@ namespace orphen::ported::entity
         {
           continue;
         }
-        const std::int32_t slot = DAT_0035526f_swarmSlots()[pick];
+        const std::int32_t slot = DAT_0035526f_swarmSlots()[pick].slot;
         if (slot <= 0 || static_cast<std::size_t>(slot) >= pool.slotCount())
         {
           return;
@@ -3155,10 +3247,365 @@ namespace orphen::ported::entity
       }
     }
 
-    // FUN_0027D860: every party member's battle actor record is released. The
-    // port has no battle party in this scene, so there is nothing bound to let
-    // go of -- FUN_00248040's list walk is empty either way.
-    void FUN_0027d860_release_party() {}
+    // FUN_0027D860: **every target marker goes.** It walks all twenty rows of
+    // DAT_003253C0 and hands each one's entity to FUN_00248040, which drops the
+    // row and destroys its 0x192 cursor. Called when the swarm is wiped out and
+    // when the corpse first appears.
+    void FUN_0027d860_release_markers(const ActorEnvironment &environment)
+    {
+      if (environment.DAT_003253c0_markers == nullptr || environment.entityPool == nullptr)
+      {
+        return;
+      }
+      auto &markers = *environment.DAT_003253c0_markers;
+      for (std::size_t row = 0; row < orphen::ported::battle::kMarkerCount; ++row)
+      {
+        markers.FUN_00248040_unmark(*environment.entityPool, markers.entry(row).slot02);
+      }
+    }
+
+    // FUN_0027D8D0(entity): give one thing a target cursor.
+    //
+    // Refuses a dead entity and one that already has a row, finds the first
+    // free row, then fills the row's cursor offset by type before handing it to
+    // FUN_00247F28 with kind 2 -- which is the kind that spawns the cursor.
+    void FUN_0027d8d0_mark_target(const ActorEnvironment &environment, std::int32_t entitySlot)
+    {
+      if (environment.DAT_003253c0_markers == nullptr || environment.entityPool == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      if (entitySlot < 0 || static_cast<std::size_t>(entitySlot) >= pool.slotCount())
+      {
+        return;
+      }
+      OriginalEntity &subject = pool.slot(static_cast<std::size_t>(entitySlot));
+      // psVar6[0x95] is +0x12A read through a short pointer: the hit points,
+      // not the party slot.
+      if (static_cast<std::int16_t>(subject.staggerTimer12a) < 1)
+      {
+        return;
+      }
+      auto &markers = *environment.DAT_003253c0_markers;
+      for (std::size_t row = 0; row < orphen::ported::battle::kMarkerCount; ++row)
+      {
+        if (markers.entry(row).slot02 == static_cast<std::int16_t>(entitySlot))
+        {
+          return;
+        }
+      }
+      std::size_t free = 0;
+      while (free < orphen::ported::battle::kMarkerCount && markers.entry(free).kind00 != 0)
+      {
+        ++free;
+      }
+      if (free >= orphen::ported::battle::kMarkerCount)
+      {
+        return;
+      }
+
+      // The cursor's world offset, straight out of the row. Note the lamp arm
+      // writes +0x08 and +0x10 and leaves +0x0C alone; that is what the
+      // original does and the row was zeroed when it was last released.
+      orphen::ported::battle::TargetMarker &row = markers.entry(free);
+      if (subject.typeId00 == kDebrisTypeId)
+      {
+        const std::uint16_t kind = subject.debrisKind1d4;
+        if ((kind & 1u) != 0)
+        {
+          row.offsetX08 = 0.0f;
+          row.offsetZ10 = 0.0f;
+        }
+        else if ((kind & 2u) == 0)
+        {
+          if ((kind & 4u) != 0 || (kind & 8u) != 0)
+          {
+            row.offsetX08 = 0.0f;
+            row.offsetY0c = 0.0f;
+            row.offsetZ10 = 0.0f;
+          }
+        }
+        else
+        {
+          row.offsetX08 = 0.0f;
+          row.offsetY0c = 0.0f;
+          row.offsetZ10 = subject.height58;
+        }
+      }
+      else if (subject.typeId00 == 0x7F)
+      {
+        row.offsetX08 = 0.0f;
+        row.offsetY0c = 0.0f;
+        row.offsetZ10 = subject.height58 * kFGpffff928c_crabCursorHeight;
+      }
+      markers.FUN_00247f28_mark(pool, entitySlot, static_cast<std::int16_t>(free), 2, 0);
+    }
+
+    // FUN_0027DA48: **re-aim the swarm.** Measure every crab still on the list
+    // against the player, drop all their cursors, sort the list by that
+    // distance, and give the nearest one that is not already fading out the
+    // only cursor the swarm gets. So a hundred crabs are one rolling target,
+    // re-picked whenever the list changes or every five hundred frames.
+    void FUN_0027da48_reaim_swarm(const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      auto &list = DAT_0035526f_swarmSlots();
+      const OriginalEntity &player = pool.slot(0);
+
+      std::size_t index = 0;
+      while (index < list.size() && list[index].slot >= 0)
+      {
+        const std::int32_t slot = list[index].slot;
+        if (static_cast<std::size_t>(slot) < pool.slotCount())
+        {
+          list[index].distance =
+              FUN_0023a4e8_distance_between(pool.slot(static_cast<std::size_t>(slot)), player);
+          if (environment.DAT_003253c0_markers != nullptr)
+          {
+            environment.DAT_003253c0_markers->FUN_00248040_unmark(pool, slot);
+          }
+        }
+        ++index;
+      }
+
+      // The original's own selection sort, swaps and all: for each row, scan
+      // forward and swap in anything closer, stopping at the first empty row.
+      for (std::size_t i = 0; i < list.size() && list[i].slot >= 0; ++i)
+      {
+        bool closer = false;
+        std::size_t j = i;
+        while (true)
+        {
+          if (closer)
+          {
+            if (list[j].slot < 0)
+            {
+              break;
+            }
+            std::swap(list[i], list[j]);
+          }
+          ++j;
+          if (j >= list.size())
+          {
+            break;
+          }
+          closer = list[j].distance < list[i].distance;
+        }
+      }
+
+      for (std::size_t i = 0; i < list.size() && list[i].slot >= 0; ++i)
+      {
+        const std::int32_t slot = list[i].slot;
+        if (static_cast<std::size_t>(slot) >= pool.slotCount())
+        {
+          return;
+        }
+        // +0x04 bit 0x800 is the fade-out path: a crab already on its way off
+        // the screen is not worth aiming at.
+        if ((pool.slot(static_cast<std::size_t>(slot)).halfword04 & 0x800u) == 0)
+        {
+          FUN_0027d8d0_mark_target(environment, slot);
+          return;
+        }
+      }
+    }
+
+    // uGpffffb336 (0x003552A6): ticks until the swarm's one cursor is re-picked.
+    // Reloaded to 16000 -- five hundred frames at the scene's 32 ticks -- every
+    // time FUN_0027DA48 runs.
+    std::int16_t &DAT_003552a6_reaimTimer()
+    {
+      static std::int16_t value = 0;
+      return value;
+    }
+
+    // FUN_0027DC38: **the fight's own bookkeeping**, called once a frame from
+    // FUN_00279298 between the camera and the wreckage drop. It is what keeps
+    // anything in this battle targetable at all.
+    //
+    // The crab's +0x08 bit 0 splits it in two. Clear, the crab is alive and the
+    // things worth a cursor are the crab itself and whatever wreckage is still
+    // solid. Set -- which is the corpse -- the swarm owns the fight, and the
+    // body of the function is the swarm's list: prune it, rebuild it out of the
+    // pool when anything has gone, re-aim on a timer, step the music down as it
+    // thins, and tear the whole target table down when the last one dies.
+    //
+    // The three music calls it makes on the way (FUN_00206260, FUN_00205D90,
+    // FUN_00205F40 -- two step-downs at seventy and thirty crabs left, then the
+    // stop) are channel fades, which this port's audio path handles for itself;
+    // the counts they key off are transcribed so the beats land in the right
+    // frames when it does not.
+    void FUN_0027dc38_battle_bookkeeping(OriginalEntity &entity,
+                                         const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr || environment.DAT_003253c0_markers == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      auto &markers = *environment.DAT_003253c0_markers;
+      const bool swarmPhase = (entity.halfword08 & 1u) != 0;
+
+      // :14-33. Walk all twenty rows. A row whose entity has run out of hit
+      // points goes; in the crab phase so does one whose entity has lost +0x0C
+      // bit 0x1000, which is how a broken prop stops being a target. In the
+      // swarm phase the pass instead counts the rows still holding a live 0x7E.
+      std::int32_t liveSwarmRows = 0;
+      for (std::size_t row = 0; row < orphen::ported::battle::kMarkerCount; ++row)
+      {
+        const std::int16_t slot = markers.entry(row).slot02;
+        if (slot == 0 || static_cast<std::size_t>(slot) >= pool.slotCount())
+        {
+          continue;
+        }
+        const OriginalEntity &marked = pool.slot(static_cast<std::size_t>(slot));
+        if (static_cast<std::int16_t>(marked.staggerTimer12a) < 1)
+        {
+          markers.FUN_00248040_unmark(pool, slot);
+        }
+        else if (swarmPhase)
+        {
+          if (marked.typeId00 == 0x7E)
+          {
+            ++liveSwarmRows;
+          }
+        }
+        else if ((marked.collisionFlags0c & 0x1000u) == 0)
+        {
+          markers.FUN_00248040_unmark(pool, slot);
+        }
+      }
+
+      if (!swarmPhase)
+      {
+        // :118-129. The crab and the wreckage still standing in the water.
+        FUN_0027d8d0_mark_target(environment, static_cast<std::int32_t>(environment.currentSlot));
+        for (const std::int32_t wreck : DAT_005737e8_wreckPool())
+        {
+          if (wreck < 0 || static_cast<std::size_t>(wreck) >= pool.slotCount())
+          {
+            continue;
+          }
+          if ((pool.slot(static_cast<std::size_t>(wreck)).collisionFlags0c & 0x1000u) != 0)
+          {
+            FUN_0027d8d0_mark_target(environment, wreck);
+          }
+        }
+        return;
+      }
+
+      // :35-52. Prune the swarm list: anything that is no longer a type 0x7E,
+      // or has started its fade, is struck off -- and striking anything off is
+      // what forces the rebuild and the re-aim below.
+      auto &list = DAT_0035526f_swarmSlots();
+      bool listChanged = false;
+      for (auto &row : list)
+      {
+        if (row.slot < 0)
+        {
+          continue;
+        }
+        const std::size_t slot = static_cast<std::size_t>(row.slot);
+        const bool keep = slot < pool.slotCount() && pool.slot(slot).typeId00 == 0x7E &&
+                          (pool.slot(slot).halfword04 & 0x800u) == 0;
+        if (keep)
+        {
+          continue;
+        }
+        row.slot = -1;
+        listChanged = true;
+      }
+
+      // :53-71. Rebuild it from the pool. Slots 2 upward, every live type 0x7E
+      // that is not fading, packed from row zero -- and cGpffffb2ff, the count
+      // the music and the ending both read, is recounted here rather than
+      // decremented.
+      if (listChanged || liveSwarmRows < 1)
+      {
+        DAT_0035526f_swarmCount() = 0;
+        for (std::size_t slot = 2; slot < pool.slotCount(); ++slot)
+        {
+          if (pool.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            continue;
+          }
+          const OriginalEntity &small = pool.slot(slot);
+          if (small.typeId00 != 0x7E || (small.halfword04 & 0x800u) != 0)
+          {
+            continue;
+          }
+          const std::size_t row = DAT_0035526f_swarmCount();
+          if (row < list.size())
+          {
+            list[row].slot = static_cast<std::int16_t>(slot);
+            list[row].distance = 0.0f;
+          }
+          DAT_0035526f_swarmCount() = static_cast<std::uint8_t>(DAT_0035526f_swarmCount() + 1);
+        }
+      }
+
+      // :72-77. The re-aim. **The timer is tested before it is stepped**, so
+      // the frame it lands on zero is the frame the cursor moves.
+      const std::int16_t before = DAT_003552a6_reaimTimer();
+      DAT_003552a6_reaimTimer() = static_cast<std::int16_t>(
+          before - static_cast<std::int16_t>(environment.frameTicks & 0xFFFFu));
+      if (liveSwarmRows < 1 || DAT_003552a6_reaimTimer() < 1 || listChanged)
+      {
+        FUN_0027da48_reaim_swarm(environment);
+        DAT_003552a6_reaimTimer() = kFUN_0027e118_period;
+      }
+
+      // :78-90. Two music step-downs, at seventy crabs left and at thirty.
+      const float remaining = static_cast<float>(DAT_0035526f_swarmCount());
+      if (remaining <= 70.0f && DAT_00355270_deathLatch() == 0)
+      {
+        DAT_00355270_deathLatch() = static_cast<std::uint8_t>(DAT_00355270_deathLatch() + 1);
+      }
+      if (remaining <= kFGpffff9290_swarmQuiet && DAT_00355270_deathLatch() == 1)
+      {
+        DAT_00355270_deathLatch() = static_cast<std::uint8_t>(DAT_00355270_deathLatch() + 1);
+      }
+
+      // :91-103. The last one dies: stop the music, put 3000 in script work 0 --
+      // which is what the scene is waiting on -- give the corpse's light back
+      // and drop every remaining marker.
+      if (DAT_0035526f_swarmCount() == 0)
+      {
+        if (environment.DAT_00355060_setScriptWork)
+        {
+          environment.DAT_00355060_setScriptWork(0, kFUN_0027dc38_swarmClearedBeat);
+        }
+        if (DAT_0035526e_corpseLight() >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights
+              ->slot(static_cast<std::uint32_t>(DAT_0035526e_corpseLight()))
+              .radius = 0.0f;
+        }
+        FUN_0027d860_release_markers(environment);
+        return;
+      }
+
+      // :104-117. The arena props tagged 0x10 keep their cursors through the
+      // swarm phase -- they are the only things besides the swarm left to aim
+      // at.
+      for (const std::int32_t prop : DAT_00573860_propPool())
+      {
+        if (prop < 0 || static_cast<std::size_t>(prop) >= pool.slotCount())
+        {
+          continue;
+        }
+        const OriginalEntity &standing = pool.slot(static_cast<std::size_t>(prop));
+        if ((standing.collisionFlags0c & 0x1000u) != 0 && (standing.debrisKind1d4 & 0x10u) != 0)
+        {
+          FUN_0027d8d0_mark_target(environment, prop);
+        }
+      }
+    }
 
     // FUN_0027BA20: wake one to five of the swarm and wait another 300 to 600
     // hundred-tick beats before doing it again.
@@ -3183,7 +3630,7 @@ namespace orphen::ported::entity
 
       if (entity.crabPhase1c5 == 0)
       {
-        FUN_0027d860_release_party();
+        FUN_0027d860_release_markers(environment);
         for (auto &entry : DAT_005737e8_wreckPool())
         {
           if (entry >= 0)
@@ -4046,11 +4493,7 @@ namespace orphen::ported::entity
           environment.camera->setRoll(0.0f);
         }
         FUN_00279180_stage_camera(entity, environment);
-        // FUN_0027DC38 sits between these two in the original. It is the
-        // fight's own bookkeeping -- the live-enemy count, the target list, the
-        // music step-downs and the beat that ends the battle -- and belongs
-        // with the battle module rather than here; it is the one helper of the
-        // six that is still out.
+        FUN_0027dc38_battle_bookkeeping(entity, environment);
         FUN_0027e118_drop_wreck(entity, environment);
         FUN_0027c8a0_body_sweep(entity, slot, environment);
         // **This countdown ends on zero, not below it.** The original spells it
@@ -4135,7 +4578,7 @@ namespace orphen::ported::entity
             entity.crabPhase1c5 = static_cast<std::int8_t>(entity.crabPhase1c5 ^ 1);
             entity.crabByte1ce = 0;
           }
-          FUN_0027ccd0_shed_leg(entity, environment);
+          FUN_0027ccd0_shed_claw(entity, slot, environment);
           // The three held victims are dropped here with a burst each. Nothing
           // in the port fills +0x1AC yet, so the loop has nothing to do.
           entity.rotationX154 = 0.0f;
@@ -4225,6 +4668,63 @@ namespace orphen::ported::entity
   //   6  thrown: a quadratic Bezier from where it left the claw to half a unit
   //      above the player, walked over the flight time FUN_0023A740 costs. It
   //      ends the moment it lands a hit, meets the map, or touches an entity.
+  // FUN_002EB680 (0x002eb680), types 0xAE and 0xAF. Two beats, kept apart by
+  // +0xA0 rather than by +0x60:
+  //
+  //   1  in the air. Spend +0x62 and push +0x30/+0x34 along +0x5C at a
+  //      hundred units per 32000 ticks; the moment the timer empties or the
+  //      physics answers ground, wall or step contact, drop to beat 2.
+  //   2  down. The clip's end flag arms a fresh 0xC80 in +0x62 and turns +0x06
+  //      into the bare 0x10 that gates the fade; +0x134 then walks 127 down to
+  //      3 over those hundred frames and the slot is freed one tick past zero.
+  void FUN_002eb680_thrown_claw(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if (entity.animationA0 == 1)
+    {
+      const std::int16_t remaining = FUN_0023a678_countdown(
+          static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+      entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+      // Three separate tests on +0x0C in the original, not one mask: landed,
+      // blocked, and the two step bits. Kept apart because they are.
+      const std::uint32_t contact = entity.collisionFlags0c;
+      if (remaining == 0 || (contact & 1u) != 0 || (contact & 6u) != 0 || (contact & 0xE0u) != 0)
+      {
+        entity.animationA0 = 2;
+        return;
+      }
+      const float step = (static_cast<float>(environment.frameTicks) * 100.0f) / 32000.0f;
+      entity.desiredDeltaX30 += step * cos_of(entity.facingRadians5c);
+      entity.desiredDeltaZ34 += step * sin_of(entity.facingRadians5c);
+      return;
+    }
+    if (entity.animationA0 != 2)
+    {
+      return;
+    }
+    if ((entity.flags06 & 1u) != 0)
+    {
+      // A plain store, not an OR: everything else the clip left in +0x06 goes.
+      entity.flags06 = 0x10;
+      entity.fadeRamp62 = kFUN_002eb7f0_life;
+    }
+    if ((entity.flags06 & 0x10u) == 0)
+    {
+      return;
+    }
+    // The level is taken from the timer *before* it is stepped.
+    const std::int32_t before = static_cast<std::int16_t>(entity.fadeRamp62);
+    entity.fadeLevel134 = static_cast<std::uint8_t>(
+        static_cast<std::int32_t>((static_cast<float>(before) / 3200.0f) * 124.0f) + 3);
+    const std::int32_t stepped = before - static_cast<std::int32_t>(environment.frameTicks & 0xFFFFu);
+    entity.fadeRamp62 = static_cast<std::uint16_t>(stepped);
+    if (static_cast<std::int16_t>(stepped) < 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
   void FUN_002ea238_thrown_rock(OriginalEntity &entity,
                                 std::size_t slot,
                                 const ActorEnvironment &environment)

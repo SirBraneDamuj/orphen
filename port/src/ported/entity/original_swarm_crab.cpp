@@ -1,5 +1,7 @@
 #include "ported/entity/original_swarm_crab.h"
 
+#include "ported/battle/battle_target_markers.h"
+
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_hit_test.h"
@@ -589,12 +591,21 @@ namespace orphen::ported::entity
       return false;
     }
 
-    // FUN_00248040, as much of it as applies here: drop the entity's "I am a
-    // battle participant" bit. The rest of it walks DAT_00354EC0 for a spawn
-    // link to tear down with it, which only the Maneater's seed ever makes.
-    void FUN_00248040_release_record(OriginalEntity &entity)
+    // FUN_00248040: drop the entity's "I am a battle participant" bit and, if
+    // one of the twenty DAT_003253C0 rows is aiming at it, take that row and its
+    // 0x192 cursor down with it. A swarm crab walking off the arena is the
+    // commonest way the player's target disappears, so the second half matters
+    // as much as the first.
+    void FUN_00248040_release_record(OriginalEntity &entity,
+                                     std::size_t slot,
+                                     const ActorEnvironment &environment)
     {
       entity.battleFlags96 = static_cast<std::uint8_t>(entity.battleFlags96 & 0xFEu);
+      if (environment.DAT_003253c0_markers != nullptr && environment.entityPool != nullptr)
+      {
+        environment.DAT_003253c0_markers->FUN_00248040_unmark(*environment.entityPool,
+                                                              static_cast<std::int32_t>(slot));
+      }
     }
 
   } // namespace
@@ -706,7 +717,7 @@ namespace orphen::ported::entity
     if (entity.positionY28 < -kFUN_00276c30_heightLimit ||
         kFUN_00276c30_heightLimit < entity.positionY28)
     {
-      FUN_00248040_release_record(entity);
+      FUN_00248040_release_record(entity, slot, environment);
       publish();
       FUN_00265ec0_destroy_entity(slot, environment);
       return;

@@ -57,6 +57,7 @@ target_sources(orphen_port
         src/ported/battle/battle_command_input.cpp
         src/ported/battle/battle_character_update.cpp
         src/ported/battle/battle_target_display.cpp
+    src/ported/battle/battle_target_markers.cpp
         src/ported/battle/battle_target_display.h
         src/ported/render/original_hud_quads.h
         src/ported/entity/map_prop_descriptor_table.cpp

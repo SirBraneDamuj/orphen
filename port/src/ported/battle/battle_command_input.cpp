@@ -250,14 +250,47 @@ namespace orphen::ported::battle
           }
         }
       }
-      else
+      else if (environment.pool != nullptr)
       {
-        // The 0x3253C0 marker mode, which only the scripted set pieces in the
-        // 0x26Cxxx block install. FUN_00248108 refreshes its markers and
-        // FUN_002481f0 cycles them, and it does *not* freeze the field -- it
-        // clears DAT_00354E96 outright. Not reachable from a normal battle and
-        // not ported; named here rather than left as a silent fallthrough.
+        // :129-147. **The 0x3253C0 marker mode**, which every section-14 scene
+        // installs from its module's mode-1 hook. Three differences from the
+        // block above, and they are the whole feel of a boss fight:
+        //
+        //   - DAT_00354E96 is written to zero rather than armed, so
+        //     FUN_0023C340 never freezes the field. The target changes on the
+        //     frame the direction is read.
+        //   - Targets come from the marker table, not the encounter's actor
+        //     records, so a spawned enemy with no record of its own -- the
+        //     hundred type 0x7E crabs, say -- is still aimable.
+        //   - There is no `0 < target` gate. FUN_002481F0 with direction zero
+        //     both validates the target that is there and finds one when there
+        //     is not, which is how the first cursor is acquired.
         party.setDAT_00354e96_displayTimer(0);
+        party.markers().FUN_00248108_service(*environment.pool);
+        std::int32_t picked =
+            party.markers().FUN_002481f0_cycle(*environment.pool, currentTarget, 0, false);
+
+        std::int16_t direction = 0;
+        if ((directions & 0x3000) != 0)
+        {
+          direction = 1;
+        }
+        else if ((directions & 0xC000) != 0)
+        {
+          direction = -1;
+        }
+        if (direction != 0)
+        {
+          picked =
+              party.markers().FUN_002481f0_cycle(*environment.pool, picked, direction, halfWrap);
+        }
+
+        // An unchanged target is left alone -- FUN_00249388 would negate and
+        // re-arm a bearing that has not moved.
+        if (picked == -1 || picked != currentTarget)
+        {
+          party.FUN_00249388_set_target(memberU, 0x4000, static_cast<std::int16_t>(picked));
+        }
       }
     }
 

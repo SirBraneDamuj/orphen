@@ -364,31 +364,38 @@ namespace orphen::ported::battle
 
     // LAB_0024a538 / LAB_0024a868 / LAB_0024cf18: `jr ra; move v0, zero`. States
     // 101, 103, 104 and 119 do nothing at all.
-    std::uint16_t stateNothing(const StateContext &, std::uint16_t charge) { return charge; }
+    // LAB_0024A538 (101), LAB_0024A868 (103 and 104) and LAB_0024CF18 (119)
+    // are each two instructions, `jr ra; move v0, zero`. **They return zero,
+    // and the return is the charge**: FUN_00249610 writes it straight back
+    // into +0x62 and raises control block +0x38 bit 0 whenever it is not zero,
+    // so handing the old value back would leave the pad locked out.
+    std::uint16_t stateNothing(const StateContext &, std::uint16_t) { return 0; }
 
     // LAB_0024bd08 (state 116) and LAB_0024cef8 (state 118): end the action and
     // fall back to the battle-ready idle. Four instructions each.
     //
     //   DAT_00355cb8[3] = 6;  entity->+0x60 = 120;  [+0x06 &= 0xFFEF for 116]
-    std::uint16_t stateEndAction116(const StateContext &context, std::uint16_t charge)
+    //
+    // Both spell `move v0, zero` before the `jr ra`: the charge is spent.
+    std::uint16_t stateEndAction116(const StateContext &context, std::uint16_t)
     {
       setAction(context, kActionIdle06);
       context.entity->state60 = 120;
       context.entity->flags06 = static_cast<std::uint16_t>(context.entity->flags06 & 0xFFEF);
-      return charge;
+      return 0;
     }
-    std::uint16_t stateEndAction118(const StateContext &context, std::uint16_t charge)
+    std::uint16_t stateEndAction118(const StateContext &context, std::uint16_t)
     {
       setAction(context, kActionIdle06);
       context.entity->state60 = 120;
-      return charge;
+      return 0;
     }
 
     // FUN_0024cf20 (states 120 and 122), and FUN_0024d128 (121) which tail-calls
     // it. The battle-ready idle: hold the stance, and if the character has
     // drifted from where the control block last recorded it, hand over to the
     // walk-back state 108.
-    std::uint16_t stateIdle120(const StateContext &context, std::uint16_t charge)
+    std::uint16_t stateIdle120(const StateContext &context, std::uint16_t)
     {
       auto &entity = *context.entity;
       auto &tables = context.party->tables();
@@ -446,7 +453,7 @@ namespace orphen::ported::battle
         tables.write<std::int16_t>(timerAt, static_cast<std::int16_t>(stepped));
         if (stepped != 0)
         {
-          return charge;
+          return 0;
         }
       }
       tables.write<std::int16_t>(timerAt, FUN_00248e48_arm_timer(0x3C));
@@ -461,11 +468,11 @@ namespace orphen::ported::battle
       constexpr float kReturnDistance = 0.3f;
       if (distance <= kReturnDistance)
       {
-        return charge;
+        return 0;
       }
       entity.state60 = 0x406C;
       setAction(context, kActionRecover87);
-      return charge;
+      return 1;
     }
 
     // FUN_0024a870 (state 108): the walk back to the mark. **Every attack ends
@@ -1155,7 +1162,7 @@ namespace orphen::ported::battle
     // FUN_0024c4e0 (110), both of which end by calling it. The spell *release*:
     // the frame the timeline reaches its throw marker, the effect entity is
     // handed the charge level and cut loose.
-    std::uint16_t stateReleaseSpell109(const StateContext &context, std::uint16_t charge)
+    std::uint16_t stateReleaseSpell109(const StateContext &context, std::uint16_t)
     {
       auto &entity = *context.entity;
       BattleParty &party = *context.party;
@@ -1165,7 +1172,7 @@ namespace orphen::ported::battle
         entity.state60 = 0x4078;
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
         setAction(context, kActionIdle06);
-        return charge;
+        return 0;
       }
       auto &effect = context.environment->pool->slot(static_cast<std::size_t>(shield));
 
@@ -1198,9 +1205,12 @@ namespace orphen::ported::battle
         FUN_002d9b78_drive_cast_ring(*context.environment, context.member, false);
       }
 
+      // The clip has not raised its end flag yet, so the cast is still
+      // running: a non-zero return holds control block +0x38 bit 0 up and
+      // the pad stays locked out until it lands.
       if ((entity.flags06 & 1) == 0)
       {
-        return charge;
+        return 1;
       }
       if (effect.animationA0 != 2)
       {
@@ -1213,7 +1223,7 @@ namespace orphen::ported::battle
       entity.animationA0 = (roll & 1) ? 0x13 : 0x2F;
       entity.state60 = 120;
       setAction(context, kActionIdle06);
-      return charge;
+      return 0;
     }
 
     // FUN_0024c058 (state 111): the kind > 0 hold -- Triangle with Hand of
@@ -1227,7 +1237,7 @@ namespace orphen::ported::battle
         entity.state60 = 0x4078;
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
         setAction(context, kActionIdle06);
-        return charge;
+        return 0;
       }
 
       if ((entity.state60 & 0x4000) != 0)
@@ -1590,8 +1600,9 @@ namespace orphen::ported::battle
       }
       // The damage half of this handler -- the halved hit, the 0x1C7 spark and
       // the stagger threshold -- needs FUN_00216140 to be routing damage at the
-      // player, which nothing in this slice does.
-      return charge;
+      // player, which nothing in this slice does. The original's `if (+0xBE ==
+      // 0) return 0` is the branch that lands here.
+      return 0;
     }
 
     // FUN_002d8b38: **arm a status.** Every party member owns a type 0x118 aura
@@ -1833,7 +1844,8 @@ namespace orphen::ported::battle
           FUN_00248e98_set_animation_if_changed(entity, 0x21);
           return 1;
         }
-        return charge;
+        // Falls out of the original's if-chain to its single tail `return 1`.
+        return 1;
       }
 
       if ((entity.collisionFlags0c & 1u) == 0)
@@ -2180,7 +2192,25 @@ namespace orphen::ported::battle
       if (valid)
       {
         const auto &candidate = environment.pool->slot(static_cast<std::size_t>(target));
-        valid = static_cast<std::int16_t>(candidate.staggerTimer12a) >= 1 && candidate.byte95 >= 9;
+        valid = static_cast<std::int16_t>(candidate.staggerTimer12a) >= 1;
+      }
+      if (valid)
+      {
+        // :153-163. Two ways to ask "is this still worth aiming at", and the
+        // marker table decides which. A field encounter asks the entity: a
+        // +0x95 below 9 is a party member or a prop rather than an enemy. A
+        // boss scene asks the table instead, because the things it puts cursors
+        // on -- the hundred type 0x7E swarm crabs, say -- have neither an actor
+        // record nor a party slot of their own.
+        if (party.DAT_00354ec0_markerTable() == 0)
+        {
+          valid = static_cast<std::int8_t>(
+                      environment.pool->slot(static_cast<std::size_t>(target)).byte95) >= 9;
+        }
+        else
+        {
+          valid = party.markers().FUN_002481f0_cycle(*environment.pool, target, 0, false) == target;
+        }
       }
       if (!valid)
       {

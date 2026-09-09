@@ -125,7 +125,8 @@ namespace orphen::ported::battle
     DAT_00354e94_ = 0;
     DAT_00354e96_ = 0;
     DAT_00354f80_ = 0;
-    DAT_00354ec0_ = 0;
+    markers_.FUN_00267e78_clear();
+    markers_.FUN_00247f18_register(0);
     // See the header: not one of FUN_0023f288's clears, and nothing in src/
     // writes it. 1 is what the save state reads and the only value that makes
     // FUN_002432d8's player pass address member 0's masks.
@@ -706,7 +707,11 @@ namespace orphen::ported::battle
   // 0x31DA6C word bit 0x20 (a state the port never raises) and bit 0x20 from
   // the target being one of the types 0x6E..0x7A with a non-zero +0x60.
   static std::int32_t FUN_002d86b0_spawn_cursor(const BattleParty::Environment &environment,
-                                                std::int32_t targetSlot)
+                                                std::int32_t targetSlot,
+                                                float offsetX = 0.0f,
+                                                float offsetY = 0.0f,
+                                                float offsetZ = 0.0f,
+                                                std::int8_t depthOverride = 0)
   {
     const std::int32_t slot = FUN_002d6c68_spawn(environment, 0x192);
     if (slot < 0)
@@ -716,13 +721,42 @@ namespace orphen::ported::battle
     auto &cursor = environment.pool->slot(static_cast<std::size_t>(slot));
     const auto &target = environment.pool->slot(static_cast<std::size_t>(targetSlot));
     cursor.cursorTarget19a = static_cast<std::int16_t>(targetSlot);
-    cursor.cursorOffsetX1a0 = 0.0f;
-    cursor.cursorOffsetY1a4 = 0.0f;
-    cursor.cursorOffsetZ1a8 = 0.0f;
+    // The original zeroes the triple and then copies the caller's three floats
+    // over it when the pointer is non-null; the marker table is the only caller
+    // that passes one, and it passes the row's own +0x08.
+    cursor.cursorOffsetX1a0 = offsetX;
+    cursor.cursorOffsetY1a4 = offsetY;
+    cursor.cursorOffsetZ1a8 = offsetZ;
     const auto scaled = static_cast<std::int8_t>(static_cast<std::int32_t>(target.radius54 / 160.0f));
     cursor.depthBias133 = static_cast<std::int8_t>(-(scaled + 12));
+    // FUN_00247F28's fourth argument overrides that bias outright. Zero means
+    // "keep what FUN_002D86B0 worked out", which is what every caller passes.
+    if (depthOverride != 0)
+    {
+      cursor.depthBias133 = depthOverride;
+    }
     orphen::ported::entity::FUN_00225bc8_set_animation(cursor, 13);
     return slot;
+  }
+
+  // The two services FUN_00247F28 and FUN_00248040 reach for. Bound once,
+  // because the marker table outlives any single Environment.
+  void BattleParty::bindTargetMarkers(const Environment &environment,
+                                      std::function<void(std::int32_t slot)> FUN_00265ec0_destroy)
+  {
+    Environment captured;
+    captured.pool = environment.pool;
+    captured.descriptors = environment.descriptors;
+    markers_.FUN_002d86b0_spawn_cursor = [captured](std::int32_t targetSlot, float x, float y,
+                                                    float z, std::int8_t depthOverride) {
+      if (captured.pool == nullptr || targetSlot < 0 ||
+          static_cast<std::size_t>(targetSlot) >= captured.pool->slotCount())
+      {
+        return -1;
+      }
+      return FUN_002d86b0_spawn_cursor(captured, targetSlot, x, y, z, depthOverride);
+    };
+    markers_.FUN_00265ec0_destroy = std::move(FUN_00265ec0_destroy);
   }
 
   void BattleParty::FUN_0023fd30_pre_battle(const Environment &environment,
@@ -754,7 +788,7 @@ namespace orphen::ported::battle
     // :358-375. The frame it lands on zero, every record holding an entity gets
     // a cursor and keeps its slot in +0x0D. The `iGpffffaf50 == 0` gate is the
     // 0x3253C0 marker mode, which a normal battle leaves null.
-    if (DAT_00354ec0_ != 0)
+    if (markers_.registered())
     {
       return;
     }

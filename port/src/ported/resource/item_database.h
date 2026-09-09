@@ -93,6 +93,19 @@ namespace orphen::ported::resource
     // through the FUN_00229820 wrapper. Empty when the id is out of range.
     std::optional<ItemRecord> FUN_00229688_record(std::int32_t itemId) const;
 
+    // FUN_0022A238 -> FUN_0022A288 -> FUN_0022A360, which share this same blob:
+    // header word 7 is a table of sixteen per-section scene descriptor lists,
+    // and every descriptor is eight halfwords. +0x00 is the entry number and
+    // **+0x02 is the index into PTR_LAB_003252B8, the scene module** -- the hook
+    // a scene gets called back on at load, once a frame and on entity destroy.
+    // -1 is "this scene has no module", which is what most of them say.
+    //
+    // A group-0xE (section 14) scene indexes its own list by position rather
+    // than by matching the entry number, which is FUN_0022A288's other arm.
+    std::int16_t FUN_0022a360_sceneModule(std::int32_t section,
+                                          std::int32_t entry,
+                                          bool groupE) const;
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t recordTableOffset_ = 0;

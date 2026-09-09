@@ -28,6 +28,7 @@
 #include "ported/battle/battle_encounter.h"
 #include "ported/battle/battle_tables.h"
 #include "ported/battle/battle_target_display.h"
+#include "ported/battle/battle_target_markers.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/resource/elf_data_reader.h"
@@ -295,7 +296,20 @@ namespace orphen::ported::battle
     // FUN_00247f18(0x3253C0, 20) installs it, and every caller of that is in
     // the 0x26Cxxx block -- the scripted set pieces. A normal battle leaves it
     // null, which is the branch FUN_002462c8 takes to cycle the actor table.
-    std::uint32_t DAT_00354ec0_markerTable() const { return DAT_00354ec0_; }
+    std::uint32_t DAT_00354ec0_markerTable() const
+    {
+      return markers_.registered() ? kDAT_003253c0_markerTable : 0u;
+    }
+    // The table itself. FUN_0027DC38 walks it directly -- the crab's own
+    // bookkeeping is what keeps the swarm's rows up to date -- so it is handed
+    // out rather than wrapped.
+    TargetMarkerTable &markers() { return markers_; }
+    const TargetMarkerTable &markers() const { return markers_; }
+    // Binds FUN_002D86B0 and FUN_00265EC0 into the table. The runtime calls it
+    // once with the same Environment every other entry point takes; the pool
+    // and descriptor pointers it captures outlive the battle.
+    void bindTargetMarkers(const Environment &environment,
+                           std::function<void(std::int32_t slot)> FUN_00265ec0_destroy);
     // Counts the frames the target-cycle block and the turn-toward-target block
     // were reachable. Both are enemy-side work this slice defers, so the report
     // says how often a run would have needed them rather than leaving them as
@@ -415,7 +429,7 @@ namespace orphen::ported::battle
     std::int32_t DAT_00355ca8_ = 0;       // ticks left before picking another
     std::vector<orphen::ported::psm2::Vec3> splineEyePoints_{};
     std::vector<orphen::ported::psm2::Vec3> splineLookAtPoints_{};
-    std::uint32_t DAT_00354ec0_ = 0;
+    TargetMarkerTable markers_{};
     std::uint32_t targetCycleFrames_ = 0;
     std::uint32_t targetFacingFrames_ = 0;
     std::array<std::uint32_t, 12> DAT_0031dbf8_counters_{};

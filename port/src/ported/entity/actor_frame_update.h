@@ -22,6 +22,11 @@
 #include <optional>
 #include <span>
 
+namespace orphen::ported::battle
+{
+  class TargetMarkerTable;
+}
+
 namespace orphen::ported::entity
 {
 
@@ -295,6 +300,14 @@ namespace orphen::ported::entity
     // Maneater's clone opens with it -- with the fight over there is nobody to
     // bite, so it goes straight to its death state.
     std::function<std::int32_t()> FUN_0023eff8_enemy_count;
+
+    // DAT_003253C0, the boss-battle target marker table. Handed over whole
+    // rather than through callbacks because FUN_0027DC38 -- the crab fight's
+    // own bookkeeping -- walks its twenty rows directly every frame, adding a
+    // cursor to the nearest swarm crab and dropping the rows whose entity has
+    // died. Null outside a battle, which leaves the fight untargetable exactly
+    // as an unregistered table does in the original.
+    orphen::ported::battle::TargetMarkerTable *DAT_003253c0_markers = nullptr;
 
     // uGpffffadf8, SCR.BIN 0xBF. An enemy's state 0 opens with
     // FUN_0025bae8(0, type, r) -- group 0 at `type - 0x7C` -- and inlines

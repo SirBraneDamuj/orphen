@@ -3955,6 +3955,7 @@ namespace orphen::ported::entity
     case 0x002EB180u: // FUN_002eb180, type 0x10D, the water splash
     case 0x002EA7F0u: // FUN_002ea7f0, type 0x10C, the stamp's bubbles
     case 0x002EA238u: // FUN_002ea238, type 0x10B, the crab's boulder
+    case 0x002EB680u: // FUN_002eb680, types 0xAE and 0xAF, the crab's shed claws
     case 0x00276C30u: // FUN_00276c30, type 0x7E, the crab's swarm
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
@@ -4033,6 +4034,8 @@ namespace orphen::ported::entity
       return "FUN_002ea7f0 (stamp bubble 0x10c)";
     case 0x002EA238u:
       return "FUN_002ea238 (crab boulder 0x10b)";
+    case 0x002EB680u:
+      return "FUN_002eb680 (crab claw 0xae/0xaf)";
     case 0x00276C30u:
       return "FUN_00276c30 (swarm crab 0x7e)";
     case 0x0027F288u:
@@ -4215,6 +4218,9 @@ namespace orphen::ported::entity
         break;
       case 0x002EA238u:
         FUN_002ea238_thrown_rock(entity, slot, slotEnvironment);
+        break;
+      case 0x002EB680u:
+        FUN_002eb680_thrown_claw(entity, slot, slotEnvironment);
         break;
       case 0x00276C30u:
         FUN_00276c30_swarm_crab(entity, slot, slotEnvironment, trace);

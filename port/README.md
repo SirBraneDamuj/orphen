@@ -3695,6 +3695,190 @@ from four sweeps to 37893 -- the leaps landing on Orphen, four contacts and 48
 damage. All hundred sit on their own floors at the end. States 4 and 5 need
 something to damage *them*, which nothing headless does.
 
+#### 0xAF and 0xAE are entity types, not sound cues
+
+`FUN_0027CCD0` is the crab's damage staging: at six tenths and again at three
+tenths of maximum hit points it sheds a claw, and the stage it raises is also
+what moves the fight onto its next move rotation. Four lines each time:
+
+```c
+FUN_0020D8C0(crab, 0x0B, zeroed, 0);        // two bones of the claw
+FUN_0020D8C0(crab, 0x0C, zeroed, 0);
+FUN_0020DC88(crab, 0, zero, &at);           // bone 0 in world space
+FUN_002EB7F0(crab, 0xAF, &at);              // and the claw itself
+```
+
+The port had `0xAF` and `0xAE` down as `FUN_00267D38` sound cues and left the
+bone half with a note saying the override table was not modelled here. Both
+halves were wrong. `FUN_002EB7F0`'s second argument goes straight to
+`FUN_00265E28`: **they are entity type ids**, and the two claws are real
+entities that fly off, land and fade -- `FUN_002EB680` is their behaviour, two
+beats kept apart by `+0xA0`. And the pose handed to `FUN_0020D8C0` is zeroed,
+which is not an identity: field 3 of the seven is the scale, so the override
+collapses the bone and everything under it to a point. That is how the claw
+stops being drawn, and the port has had `FUN_0020d8c0_set_bone_override` since
+the close-up rig went in.
+
+So the crab kept both claws for the whole fight and made a noise it should not
+have made twice.
+
+##### Verified
+
+`s14_e001` with Hand of Pyro on a repeating range: the first claw goes at 60 hit
+points of 120 and the second at 24, one type 0xAF and one type 0xAE spawn and
+each runs 325 frames before freeing its slot, and the crab's silhouette at frame
+5200 has neither pincer where at 3100 it has both. `s01_e024` and `s01_e012`
+byte-identical.
+
+#### A boss fight targets from a different table, and the port had never built it
+
+`FUN_002462C8` has two targeting modes and picks between them on one word:
+
+```c
+if (DAT_00354EC0 == 0) {          // the field encounter
+  ...
+  DAT_00354E96 = 0xF00;           // arm the display: FUN_0023C340 freezes the
+  ...                             // field for 120 frames while you pick
+} else {                          // a boss
+  DAT_00354E96 = 0;               // never arms; nothing freezes
+  FUN_00248108();
+  target = FUN_002481F0(target, direction, halfWrap);
+  FUN_00249388(control, 0x4000, target);
+}
+```
+
+The second arm is what a boss encounter feels like: **the target changes on the
+frame the direction is read**, with no pause and no pentagon, because every
+targetable thing is already wearing its own type 0x192 cursor. Ghidra reports
+one write to `DAT_00354EC0` in the whole executable and it is the zero in
+`FUN_0023F288`, which is why this looked like dead code -- but a raw scan of
+`SLUS_200.11` for gp-relative stores finds a second at `0x00247F18`, a
+two-instruction setter Ghidra had not attached to any caller list:
+
+```
+00247f18  af84af50   sw a0, -0x50b0(gp)      // DAT_00354EC0 = table
+00247f1c  a785af54   sh a1, -0x50ac(gp)      // DAT_00354EC4 = count
+```
+
+Ten of its callers sit in the `0x26Cxxx` block, and they are **scene modules**.
+`FUN_0022A360` reads the loaded scene's descriptor -- SCR.BIN resource 1, header
+word 7, sixteen per-section lists of eight-halfword records -- and takes `+0x02`
+as an index into `PTR_LAB_003252B8`, twenty-eight per-scene hooks called with a
+mode number at ten points in the frame. Ten of those hooks open with
+
+```c
+FUN_00267E78(0x3253C0, 400);      // twenty rows of 0x14, cleared
+FUN_00247F18(0x3253C0, 0x14);
+```
+
+s14_e001 is module **10**, `FUN_0026C0F0`. The port had no module dispatch at
+all, so the crab fight ran the field encounter's paused display over an actor
+table that holds exactly one record -- the crab -- and the moment the crab died
+there was nothing left in the game the player could aim at.
+
+##### The marker table is a registry of live cursors
+
+`DAT_003253C0`, twenty rows of `{s16 kind, s16 slot, s16 cursor, f32 x, f32 y,
+f32 z}`. `FUN_00247F28` stamps a row, raises the entity's `+0x96` bit 0 and --
+for kind 2 -- spawns its 0x192 cursor from `FUN_002D86B0` with the row's own
+offset, leaving the row as kind 3. `FUN_00248040` is the reverse and is called
+from three places that all matter here: the swarm crab's own wrapper when one
+walks off the map, `FUN_0027D860` when the fight ends, and `FUN_0027DA48` before
+it re-aims.
+
+##### `FUN_0027DC38` is the fight's bookkeeping, and it is what fills the table
+
+Called once a frame from `FUN_00279298`, between the camera and the wreckage
+drop. It was the one helper of the crab's six that was still out; without it the
+marker table would have been installed and left empty. The crab's `+0x08` bit 0
+splits it:
+
+- **clear** -- the crab is alive. Mark the crab itself, and any wreckage still
+  carrying `+0x0C` bit 0x1000.
+- **set** -- the corpse. The swarm owns the fight: prune the hundred-row list at
+  `iGpffffbe04`, rebuild it out of the pool when anything has gone, and every
+  sixteen thousand ticks -- or the moment the list changes -- run `FUN_0027DA48`,
+  which measures each crab against the player, sorts the list by that distance
+  and gives **the nearest one** the only cursor the swarm gets. So a hundred
+  crabs are one rolling target. The arena props tagged `+0x1D4` bit 0x10 keep
+  theirs alongside it, and when the last crab dies the music stops, script work
+  word 0 takes 3000 and every row is released.
+
+##### Nine state handlers were returning the charge instead of spending it
+
+Found on the way, and the reason **no spell could be cast for the rest of the
+scene** once the crab was dead. `FUN_00249610` writes each handler's return
+value straight back into entity `+0x62` and then
+
+```c
+if (*(short *)(entity + 0x62) != 0) { control->flags38 |= 1; }
+```
+
+and bit 0 is what `FUN_002462C8` tests before it will accept a button. Every
+class-1 handler returns an explicit 0 or 1 -- states 101, 103, 104, 116, 118 and
+119 are two instructions, `jr ra; move v0, zero` -- and the port was handing the
+incoming value back from nine of them, 120 included.
+
+That is harmless until something else writes `+0x62`. The crab's dodge does:
+`DAT_0058BF12` in `FUN_0027D230` **is** the player's `+0x62`, used as the spline
+timer for the two runs the dodge makes, and it is left sitting at 0x1900 when
+the run ends. State 120 then handed 6400 back every frame, bit 0 never came down
+and the pad was dead from the dodge onward. The three returns in `FUN_0024CF20`
+are 0, 0 and 1.
+
+##### `+0x0C` bit 0x1000 is "I was drawn this frame", and the model path never set it
+
+The marker table went in and still no cursor appeared. `FUN_0027DC38`'s prune
+drops the row of anything that has stopped being drawn:
+
+```c
+else if (((&DAT_0058bebc)[iVar4 * 0x76] & 0x1000) == 0) goto LAB_0027dcd4;  // FUN_00248040
+```
+
+The port cleared that bit and never set it back, so the crab was pruned and
+re-marked on every single frame -- its 0x192 destroyed and respawned before the
+spawn-in clip could finish, which is exactly "no cursor at all". The clear was
+ported (`LAB_0020C73C`, `+0x0C &= 0xFFFFCFFF`); the set was not:
+
+```
+0020cb18   *(uint *)(entity + 0xc) = *(uint *)(entity + 0xc) | 0x3000;
+```
+
+It sits inside `FUN_0020C810`, past every cull -- the near-plane and
+distance-fade exits all leave through `LAB_0020C9AC`, which writes `+0xB0 = 0`
+and `+0x08 |= 0x10` and returns. The sprite pass has its own copy at
+`FUN_0020F510:177` and that one **was** ported, which is why the type 0x68
+health bar behaved and nothing modelled did.
+
+Three things read the bit, and all three were reading a permanent zero:
+
+- `FUN_0025A298` -- a party follower is teleported up the lead's trail when it
+  is off camera **and** was not drawn. The port teleported on the second test
+  alone.
+- `FUN_0020C810:86` -- an attached child takes its parent's transform only if
+  the parent was drawn.
+- `FUN_0027DC38` -- the above.
+
+Not modelled: the culls `FUN_0020C810` takes before line 219, so an entity the
+original would have dropped still latches in the port.
+
+##### Verified
+
+`s14_e001`: the crab wears a cursor from the opening of the fight and it is the
+selected one -- animation 11, the pi/4 bracket -- with the standing wreckage
+carrying unselected ones beside it; `FUN_002057C8(0xC9)` fires on the frame the
+selection lands (cue 201, frame 1906 of a cold run) and again on every change.
+From the corpse on, the target moves between swarm crabs as `FUN_0027DA48`
+re-picks the nearest; Triangle charges and releases after the dodge where it
+used to do nothing. `--battle-report` names the scene module and whether its
+marker table went in. `s01_e024` and `s01_e012` byte-identical over 3000 frames
+with the draw latch in.
+
+Still out: the per-frame hooks of the other twenty-seven modules -- eighteen of
+them belong to field scenes, and `s01_e024` is module 13 -- and the two music
+step-downs `FUN_0027DC38` makes as the swarm thins, which are channel fades this
+port's audio path handles for itself.
+
 #### The handback after the fight is three writes, not one
 
 `FUN_0027D230`'s `DAT_0035526B == 9` branch -- the frame the crab's finale gives

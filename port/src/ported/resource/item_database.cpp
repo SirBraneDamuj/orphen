@@ -13,6 +13,11 @@ namespace orphen::ported::resource
     constexpr std::size_t kGroupTableDword = 8;
     // FUN_0025b9e8 reads its stream table out of dword 5.
     constexpr std::size_t kMessageTableDword = 5;
+    // FUN_0022a238's `*(int *)(iVar1 + 0x1c)`: the per-section scene descriptor
+    // lists, sixteen offsets. Descriptors are eight halfwords each.
+    constexpr std::size_t kSceneTableDword = 7;
+    constexpr std::size_t kSceneDescriptorStride = 16;
+    constexpr std::int32_t kGroupEScene = 14;
 
     std::uint32_t u32At(const std::vector<std::uint8_t> &blob, std::size_t offset)
     {
@@ -170,6 +175,66 @@ namespace orphen::ported::resource
   std::string ItemDatabase::FUN_00229688_description(std::int32_t itemId) const
   {
     return stringAt(descriptionTableOffset_, itemId);
+  }
+
+  std::int16_t ItemDatabase::FUN_0022a360_sceneModule(std::int32_t section,
+                                                      std::int32_t entry,
+                                                      bool groupE) const
+  {
+    const auto s16At = [this](std::size_t offset) -> std::int16_t {
+      if (offset + 2 > blob_.size())
+      {
+        return 0;
+      }
+      std::int16_t value = 0;
+      std::memcpy(&value, blob_.data() + offset, sizeof(value));
+      return value;
+    };
+
+    if (blob_.size() < 0x40)
+    {
+      return -1;
+    }
+    const std::uint32_t table = u32At(blob_, kSceneTableDword * 4);
+    const std::int32_t which = groupE ? kGroupEScene : section;
+    if (which < 0 || which >= 16 || table + static_cast<std::uint32_t>(which) * 4 + 4 > blob_.size())
+    {
+      return -1;
+    }
+    const std::uint32_t list = u32At(blob_, table + static_cast<std::uint32_t>(which) * 4);
+    if (list == 0)
+    {
+      return -1;
+    }
+    if (groupE)
+    {
+      // `psVar1 + DAT_003551f8 * 8` -- by position, and the list's own +0x00 is
+      // ignored. Entry 0 of section 14 is id 99; entry 1 is s14_e001.
+      if (entry < 0)
+      {
+        return -1;
+      }
+      const std::uint32_t at = list + static_cast<std::uint32_t>(entry) * kSceneDescriptorStride;
+      if (at + kSceneDescriptorStride > blob_.size())
+      {
+        return -1;
+      }
+      return s16At(at + 2);
+    }
+    for (std::uint32_t at = list; at + kSceneDescriptorStride <= blob_.size();
+         at += kSceneDescriptorStride)
+    {
+      const std::int16_t id = s16At(at);
+      if (id == 0)
+      {
+        break;
+      }
+      if (id == static_cast<std::int16_t>(entry))
+      {
+        return s16At(at + 2);
+      }
+    }
+    return -1;
   }
 
 } // namespace orphen::ported::resource

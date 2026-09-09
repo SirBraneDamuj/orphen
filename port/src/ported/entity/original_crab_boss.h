@@ -138,6 +138,15 @@ namespace orphen::ported::entity
                                 std::size_t slot,
                                 const ActorEnvironment &environment);
 
+  // FUN_002eb680 (0x002eb680), types 0xAE and 0xAF -- **the two claws, once
+  // they are off**. FUN_002EB7F0 spawns one on each of FUN_0027CCD0's damage
+  // thresholds; this flies it out along +0x5C until its timer runs out or it
+  // hits something, then fades it over a hundred frames and frees the slot.
+  inline constexpr std::uint32_t kFUN_002eb680_thrownClaw = 0x002EB680;
+  void FUN_002eb680_thrown_claw(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment);
+
   // FUN_00279298 (0x00279298), type 0x7F.
   void FUN_00279298_crab_boss(OriginalEntity &entity,
                               std::size_t slot,

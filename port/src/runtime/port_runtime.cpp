@@ -540,6 +540,9 @@ namespace orphen::port
     environment.frameTicks = frameTicks;
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
     environment.DAT_00355588_hitEffectRequest = &DAT_00355588_hitEffectRequest_;
+    // DAT_003253C0. FUN_0027DC38 walks it every frame and FUN_00276C30 drops a
+    // row when a swarm crab leaves the world.
+    environment.DAT_003253c0_markers = &battleParty_.markers();
     // The two reads the battle-driven effect behaviours make into the battle
     // tables. Both answer "no battle" outside one, which every caller treats as
     // "the caster is not acting" -- the guard shield closes, the hand effect
@@ -2349,6 +2352,108 @@ namespace orphen::port
     descriptorTable_.setMapPropTable(&mapPropTable_, bank);
   }
 
+  // `(*DAT_0032536c)(mode)` -- **the scene module**. FUN_0022A360 reads the
+  // loaded scene's descriptor at load and takes its +0x02 as an index into
+  // PTR_LAB_003252B8, a table of twenty-eight per-scene hooks; FUN_0022A418,
+  // FUN_002239C8, FUN_00224640, FUN_00252828 and FUN_00265EC0 then call the
+  // chosen one with a mode number, 0 through 9.
+  //
+  // Every module a **section-14** scene names opens the same way:
+  //
+  //     case 1:  FUN_00267E78(0x3253C0, 400);  FUN_00247F18(0x3253C0, 0x14);
+  //
+  // which is what puts the whole battle section into DAT_00354EC0's marker
+  // targeting -- live cursors on everything, no pause, no pentagon. The port
+  // had no module dispatch at all, so every battle ran the field encounter's
+  // paused display instead, and a boss with no actor records of its own -- the
+  // crab's hundred type 0x7E -- could not be aimed at.
+  //
+  // s14_e001 takes module **10**, FUN_0026C0F0, whose only other mode is 4:
+  // two rewrites of the control block's pending action byte that keep the
+  // player out of the walk-home state for the length of the fight.
+  // `(*DAT_0032536c)(mode)` -- **the scene module**. FUN_0022A360 reads the
+  // loaded scene's descriptor at load and takes its +0x02 as an index into
+  // PTR_LAB_003252B8, a table of twenty-eight per-scene hooks; FUN_0022A418,
+  // FUN_002239C8, FUN_00224640, FUN_00252828 and FUN_00265EC0 then call the
+  // chosen one with a mode number, 0 through 9. The port reaches two of those
+  // ten call sites: the load pair (0 and 1) and the per-frame one (4).
+  //
+  // It matters because ten of the modules install DAT_00354EC0's marker
+  // targeting from their load hook, and the port had no dispatch at all -- so
+  // every battle ran the field encounter's pause-and-pick display, and a boss
+  // whose enemies have no actor records of their own could not be aimed at.
+  void PortRuntime::FUN_0032536c_scene_module(int mode)
+  {
+    if (DAT_0032536c_sceneModule_ < 0)
+    {
+      return;
+    }
+    using namespace orphen::ported::battle;
+
+    // The ten of the twenty-eight modules whose load hook installs the marker
+    // table. All ten spell it the same way --
+    //
+    //     FUN_00267E78(0x3253C0, 400);  FUN_00247F18(0x3253C0, 0x14);
+    //
+    // -- and **module 21 does it on mode 0 where the other nine do it on mode
+    // 1**, which is the only difference between them.
+    //
+    //   4 FUN_0026C468   6 FUN_0026C600  10 FUN_0026C0F0  11 FUN_0026C568
+    //  14 FUN_0026C1A0  15 FUN_0026C870  16 FUN_0026C4E8  19 FUN_0026C7F0
+    //  20 FUN_0026C900  21 FUN_0026CAD0
+    //
+    // Not every section-14 scene is one of them: s14_e001 is module 10, but
+    // rows 3, 4 and 15 of the section's descriptor list take modules 5, 3 and
+    // 3, which do other things entirely and leave the battle in the field
+    // encounter's paused targeting.
+    const bool installsMarkers =
+        DAT_0032536c_sceneModule_ == 4 || DAT_0032536c_sceneModule_ == 6 ||
+        DAT_0032536c_sceneModule_ == 10 || DAT_0032536c_sceneModule_ == 11 ||
+        DAT_0032536c_sceneModule_ == 14 || DAT_0032536c_sceneModule_ == 15 ||
+        DAT_0032536c_sceneModule_ == 16 || DAT_0032536c_sceneModule_ == 19 ||
+        DAT_0032536c_sceneModule_ == 20 || DAT_0032536c_sceneModule_ == 21;
+    const int installMode = DAT_0032536c_sceneModule_ == 21 ? 0 : 1;
+    if (installsMarkers && mode == installMode)
+    {
+      battleParty_.markers().FUN_00267e78_clear();
+      battleParty_.markers().FUN_00247f18_register(static_cast<std::int16_t>(kMarkerCount));
+    }
+
+    // Mode 4, the per-frame hook. Only module 10's is ported, because s14_e001
+    // is the only scene that names one this port can run; the rest are a
+    // handful of lines each against DAT_0031DA0C and DAT_0035521D and are named
+    // rather than guessed at.
+    if (mode == 4 && DAT_0032536c_sceneModule_ == 10)
+    {
+      const std::int32_t member = battleParty_.DAT_00354ebe_playerSlot() - 1;
+      if (member >= 0 && member < static_cast<std::int32_t>(kControlBlockCount))
+      {
+        auto &tables = battleParty_.tables();
+        const std::uint32_t at =
+            BattleTables::controlBlock(static_cast<std::uint32_t>(member)) +
+            control::kPendingAction0e;
+        // 0x85 becomes 0x84 -- this fight has no second half to the kind-0
+        // release -- and 0x87, the walk home, becomes the plain idle.
+        if (tables.read<std::uint8_t>(at) == 0x85)
+        {
+          tables.write<std::uint8_t>(at, 0x84);
+        }
+        if (tables.read<std::uint8_t>(at) == 0x87)
+        {
+          tables.write<std::uint8_t>(at, 6);
+        }
+      }
+    }
+    else if (mode == 4)
+    {
+      // Named in --battle-report rather than on stdout: eighteen of the
+      // twenty-eight modules belong to field scenes -- s01_e024 is module 13 --
+      // and a line per scene load would be noise in every run that never looks
+      // at the battle module.
+      sceneModuleReported_ = true;
+    }
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // FUN_0022a418:49 sets DAT_003555d3 from bit 0x20000 of the scene request,
@@ -2363,12 +2468,49 @@ namespace orphen::port
         loadedScene.has_value() && loadedScene->section == kGroupEScene)
     {
       DAT_003555d3_groupEScene_ = true;
+      // Same divergence, one variable along: FUN_002610A8 writes DAT_003551F8
+      // for a scene arrived at through a request, and a `--scene s14_eNNN` load
+      // never made one. FUN_0022A288 indexes the section-14 descriptor list by
+      // it, so leaving it at zero picks entry 0's module rather than this
+      // scene's.
+      DAT_003551f8_groupEntry_ = static_cast<int>(loadedScene->entry);
     }
 
     // FUN_0023f288, which FUN_0022a418 runs on every scene load: wipe the
     // battle module, then re-seed the loadout the way the same function does.
     battleParty_.FUN_0023f288_reset();
     battleEncounter_.FUN_0023f288_reset();
+    // FUN_0022A360, which runs earlier in FUN_0022A418 than the mode 0 / mode 1
+    // pair below but reads the same descriptor. The group-0xE arm indexes by
+    // entry number; everything else matches the descriptor's own +0x00.
+    if (const auto loadedScene = mapViewer_.loadedDiscScene(); loadedScene.has_value())
+    {
+      DAT_0032536c_sceneModule_ = itemDatabase_.FUN_0022a360_sceneModule(
+          static_cast<std::int32_t>(loadedScene->section),
+          static_cast<std::int32_t>(DAT_003555d3_groupEScene_
+                                        ? static_cast<std::uint32_t>(DAT_003551f8_groupEntry_)
+                                        : loadedScene->entry),
+          DAT_003555d3_groupEScene_);
+    }
+    else
+    {
+      DAT_0032536c_sceneModule_ = -1;
+    }
+    sceneModuleReported_ = false;
+    // FUN_002D86B0 and FUN_00265EC0, bound before the module's mode 1 can ask
+    // for a cursor.
+    battleParty_.bindTargetMarkers(battleEnvironment(), [this](std::int32_t slot) {
+      if (slot < 0 || static_cast<std::size_t>(slot) >= entityPool_.slotCount())
+      {
+        return;
+      }
+      orphen::ported::entity::FUN_00265ec0_destroy_entity(
+          static_cast<std::size_t>(slot), actorEnvironment(orphen::ported::kNominalFrameTicks));
+    });
+    // FUN_0022A418:264-266. Mode 0, the scene's own load hook, then mode 1
+    // after FUN_0025B6D0 -- which is where the marker table is installed.
+    FUN_0032536c_scene_module(0);
+    FUN_0032536c_scene_module(1);
     battleParty_.FUN_0022a418_propagate_loadout();
     battleParty_.FUN_002239c8_fill_empty_loadout_slots(DAT_003551f4_sceneSection_);
 
@@ -3739,6 +3881,30 @@ namespace orphen::port
           view.scaleZ150 = entity.scaleZ150;
           view.rotationX154 = entity.rotationX154;
           view.rotationY158 = entity.rotationY158;
+
+          // FUN_0020C810:0x0020CB18 -- **`+0x0C |= 0x3000`, the "I was drawn
+          // this frame" latch**, and the counterpart of the `& 0xFFFFCFFF`
+          // above. The original raises it once the entity is past every cull
+          // and is going to be submitted; the cull exits (LAB_0020C9AC) leave
+          // it down. Nothing reads bit 0x2000; bit 0x1000 is read in three
+          // places and every one of them was getting a permanent zero:
+          //
+          //   FUN_0025A298   a follower is teleported up the lead's trail only
+          //                  when it is off camera *and* was not drawn
+          //   FUN_0020C810   an attached child takes its parent's transform
+          //                  only if the parent was drawn
+          //   FUN_0027DC38   the crab fight drops the target marker of
+          //                  anything that stopped being drawn
+          //
+          // The last one is why the boss had no cursor: the crab was pruned and
+          // re-marked every frame, so its 0x192 was destroyed and respawned
+          // before it could leave its spawn-in clip.
+          //
+          // The port publishes here what FUN_0020C810 submits; the distance
+          // fade and near-plane exits it takes before line 219 are not modelled
+          // yet, so an entity the original would have culled still latches.
+          entity.collisionFlags0c |= 0x3000u;
+
           attachModel(view, entity, frameTicks);
 
           // FUN_0020c810's last call, after the bone palette is composed. The
@@ -4314,6 +4480,25 @@ namespace orphen::port
               << " (bit 0 = running)"
               << "  DAT_00354ebc=" << battleParty_.DAT_00354ebc_memberCount()
               << " DAT_00354ebe=" << battleParty_.DAT_00354ebe_playerSlot() << "\n";
+    // DAT_0032536C. Ten of the twenty-eight modules in PTR_LAB_003252B8 install
+    // the DAT_003253C0 marker targeting from their load hook; only module 10's
+    // per-frame hook is ported, so say which one this scene took and whether it
+    // was reached.
+    std::cout << "scene module: ";
+    if (DAT_0032536c_sceneModule_ < 0)
+    {
+      std::cout << "none (descriptor +0x02 is -1)\n";
+    }
+    else
+    {
+      std::cout << DAT_0032536c_sceneModule_ << " (PTR_LAB_003252B8), marker targeting "
+                << (battleParty_.DAT_00354ec0_markerTable() != 0 ? "installed" : "off");
+      if (sceneModuleReported_)
+      {
+        std::cout << ", per-frame hook not ported";
+      }
+      std::cout << "\n";
+    }
     if (battleTrace_.partyBuiltFrame() != 0)
     {
       std::cout << "  party built on frame " << battleTrace_.partyBuiltFrame()
@@ -6171,6 +6356,9 @@ namespace orphen::port
       // set bit 0 of sGpffffb052. Nothing about the field path runs while it
       // does, which is why the player stands still in battle: the movement
       // request above is simply never spent.
+      // FUN_002239C8:115. The scene module's per-frame hook runs immediately
+      // before the player update, whichever controller is about to take it.
+      FUN_0032536c_scene_module(4);
       if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
