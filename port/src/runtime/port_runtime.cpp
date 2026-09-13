@@ -46,61 +46,6 @@ namespace orphen::port
       return stream.str();
     }
 
-    // FUN_00256bb8 / FUN_002534d8 animation ids written into entity +0xA0.
-    const char *animationName(std::uint16_t animationId)
-    {
-      switch (animationId)
-      {
-      case orphen::ported::player::kAnimationStand: return "STAND";
-      case orphen::ported::player::kAnimationWalk: return "WALK";
-      case orphen::ported::player::kAnimationRun: return "RUN";
-      case orphen::ported::player::kAnimationJumpRise: return "RISE";
-      case orphen::ported::player::kAnimationJumpFall: return "FALL";
-      case orphen::ported::player::kAnimationLand: return "LAND";
-      case orphen::ported::player::kAnimationIdleFidget: return "FIDGET";
-      default: return "OTHER";
-      }
-    }
-
-    // Entity +0x60.
-    const char *stateName(std::uint16_t state)
-    {
-      switch (state)
-      {
-      case 0: return "IDLE";
-      case 1: return "MOVING";
-      case 2: return "AIR";
-      // The chest cutscene, in the order it runs them.
-      case 0x0C: return "CHEST-FADEOUT";
-      case 0x0D: return "CHEST-PLACE";
-      case 0x0E: return "CHEST-FADEIN";
-      case 0x0F: return "CHEST-OPEN";
-      case 0x10: return "CHEST-ITEM";
-      case 0x11: return "CHEST-ITEMFADE";
-      case 0x12: return "CHEST-WHITEOUT";
-      case 0x13: return "CHEST-RESTORE";
-      case 0x14: return "CHEST-LAND";
-      case 0x15: return "CHEST-WHITEIN";
-      default: return "OTHER";
-      }
-    }
-
-    const char *cameraModeName(orphen::ported::camera::FieldCameraMode mode)
-    {
-      using Mode = orphen::ported::camera::FieldCameraMode;
-      switch (mode)
-      {
-      case Mode::None: return "AUTO";
-      case Mode::RotateNegative: return "R1";
-      case Mode::RotatePositive: return "L1";
-      case Mode::FaceTarget: return "FACE";
-      case Mode::DecayFast: return "DECAY";
-      case Mode::FixedStep: return "FIXED";
-      case Mode::EaseToGoal: return "EASE";
-      default: return "?";
-      }
-    }
-
     const char *actorHandlerSourceName(orphen::ported::entity::ActorHandlerSource source)
     {
       using Source = orphen::ported::entity::ActorHandlerSource;
@@ -7181,7 +7126,6 @@ namespace orphen::port
                                     DAT_00571dc0_screenFade_.overlay().alpha);
     mapViewer_.setLetterboxBarHeight(DAT_00355054_letterbox_.barHeight());
     updateOriginalDebugOverlay();
-    updateHud(input, frameTicks);
 
     memory_.write(kHarnessFrameCounterAddress, frameCount_);
 
@@ -7547,63 +7491,6 @@ namespace orphen::port
     }
 
     mapViewer_.setOriginalDebugGlyphs(DAT_00572c38_debugText_.FUN_00268270_layoutAndDrain());
-  }
-
-  void PortRuntime::updateHud(const InputSnapshot &input, std::uint32_t frameTicks)
-  {
-    const auto &lead = leadPlayer_.viewState();
-    std::vector<std::string> lines;
-
-    lines.push_back("ORPHEN PORT  " + mapViewer_.loadedSourceDescription() +
-                    "  FRAME " + std::to_string(frameCount_) +
-                    "  TICKS " + std::to_string(frameTicks));
-
-    lines.push_back("POS  " + formatNumber(lead.position.x) + ", " + formatNumber(lead.position.y) +
-                    ", " + formatNumber(lead.position.z) +
-                    "   FACING " + formatNumber(lead.facingRadians * kRadiansToDegrees, 1));
-
-    lines.push_back("STATE " + std::string(stateName(lead.state)) +
-                    "  ANIM " + animationName(lead.animationId) +
-                    " (" + std::to_string(lead.animationId) + ")" +
-                    "  FRM " + std::to_string(lead.substateFrame));
-
-    lines.push_back(std::string("GROUND ") + (lead.grounded ? "YES" : "NO") +
-                    "  VZ " + formatNumber(lead.verticalVelocity, 4) +
-                    "  FLAGS " + std::to_string(lead.collisionFlags));
-
-    lines.push_back("STICK " + formatNumber(input.stickMagnitude, 1) +
-                    "  GAIT " + std::string(lead.running ? "RUN" : "WALK") +
-                    "  (RUN ABOVE 100)");
-
-    lines.push_back("CAM  MODE " + std::string(cameraModeName(fieldCamera_.mode())) +
-                    "  YAW " + formatNumber(fieldCamera_.yawRadians() * kRadiansToDegrees, 1) +
-                    "  PITCH " + formatNumber(fieldCamera_.pitchRadians() * kRadiansToDegrees, 1) +
-                    "  DIST " + formatNumber(fieldCamera_.followDistance()));
-
-    if (lead.groundHit.has_value())
-    {
-      lines.push_back("TRI  PRIM " + std::to_string(lead.groundHit->primitiveIndex) +
-                      "  Z " + formatNumber(lead.groundHit->height) +
-                      "  TERRAIN " + std::to_string(lead.groundHit->terrainFlags));
-    }
-
-    if (sceneScript_.loaded())
-    {
-      lines.push_back("SCR  OBJECTS " + std::to_string(entityPool_.scriptSpawnedCount()) +
-                      "  PLACEMENTS " +
-                      std::to_string(mapViewer_.loadedMap() != nullptr
-                                         ? mapViewer_.loadedMap()->DAT_003556e8_objectPlacements.size()
-                                         : 0) +
-                      "  UNIMPL " + std::to_string(scriptTrace_.unimplementedOpcodeCount()));
-      lines.push_back(std::string("ACTORS TICK ") + (runScriptTick_ ? "ON" : "OFF") +
-                      "  SLOTS " + std::to_string(sceneScript_.occupiedObjectScriptSlots()) +
-                      "  LIVE " + std::to_string(actorTrace_.tickedEntityCount()) +
-                      "  NOBEHAVIOR " + std::to_string(actorTrace_.unimplementedEntityCount()));
-    }
-
-    lines.push_back("WASD MOVE  SPACE JUMP  J/L CAMERA  F WIRE  H HUD  R RESET");
-
-    mapViewer_.setHudLines(std::move(lines));
   }
 
   orphen::ported::camera::CameraGroundSampler PortRuntime::cameraGroundSampler()

@@ -14,7 +14,10 @@ namespace orphen::port
     bool quitRequested = false;
     bool resetRequested = false;
     bool toggleWireframeRequested = false;
-    bool toggleHudRequested = false;
+    // 'H': FUN_00268270's overlay, the game's own debug readout. A display
+    // toggle only -- the glyphs are laid out and drained every step regardless,
+    // so the simulation cannot see it.
+    bool toggleDebugTextRequested = false;
     // In-world debug drawing: collision boxes, entity labels, origin axes.
     bool toggleDebugOverlayRequested = false;
     // 'O': DAT_003555dd bit 7, the debug menu's SCR SUBPROC DISP entry.

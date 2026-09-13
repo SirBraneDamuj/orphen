@@ -214,11 +214,9 @@ namespace orphen::harness
       frameFeedbackQuad_ = std::move(quad);
     }
 
-    void setHudLines(std::vector<std::string> lines);
     // FUN_00268270's placed glyphs for this frame, drained from the ported
     // debug text buffer by PortRuntime on the simulation step.
     void setOriginalDebugGlyphs(std::vector<orphen::ported::debug::DebugGlyph> glyphs);
-    void toggleHud() { hudVisible_ = !hudVisible_; }
     // Left click: report every entity triangle under this pixel, drawn or not.
     void probeAt(int pixelX, int pixelY) const;
 
@@ -296,7 +294,6 @@ namespace orphen::harness
     std::vector<GleamProbe> *gleamProbeSink_ = nullptr;
     RenderStats *renderStatsSink_ = nullptr;
     DebugTextRenderer debugText_;
-    std::vector<std::string> hudLines_;
     std::vector<orphen::ported::debug::DebugGlyph> originalDebugGlyphs_;
     std::uint32_t screenFadeRgb_ = 0;
     std::uint8_t screenFadeAlpha_ = 0;
@@ -323,13 +320,16 @@ namespace orphen::harness
     mutable int frameFeedbackTextureHeight_ = 0;
     mutable int frameFeedbackCapturedWidth_ = 0;
     mutable int frameFeedbackCapturedHeight_ = 0;
-    // H: the harness's own screen-space text. Off by default -- it covers the
-    // game's picture, and the game has a debug overlay of its own.
-    bool hudVisible_ = false;
+    // H: FUN_00268270's overlay, the game's own debug readout. Off by default,
+    // because it covers the game's picture: the port holds DAT_003555DA and
+    // DAT_003555DC on -- there is no way into either byte yet -- so the
+    // detailed readout is always selected, where retail only shows it in a
+    // debug build.
+    bool originalDebugTextVisible_ = false;
     // B: the in-world debug drawing -- magenta collision boxes, entity labels,
     // the lead player's box and ground triangle, and the origin axes. Separate
-    // from the HUD, which is screen-space text. Off by default for the same
-    // reason.
+    // from the overlay above, which is screen-space text. Off by default,
+    // because it covers the game's picture.
     bool debugOverlayVisible_ = false;
     bool wireframe_ = false;
     bool mapBlendDisabled_ = false;

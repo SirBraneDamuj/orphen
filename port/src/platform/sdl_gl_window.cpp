@@ -209,7 +209,7 @@ namespace orphen::port
         }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_h)
         {
-          input.toggleHudRequested = true;
+          input.toggleDebugTextRequested = true;
         }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_b)
         {

@@ -139,11 +139,6 @@ namespace orphen::harness
     return glyphStrokesImpl(character, segmentCount);
   }
 
-  void DebugTextRenderer::drawGlyph(char character, float originX, float originY, float scale) const
-  {
-    drawGlyph(character, originX, originY, scale, scale);
-  }
-
   void DebugTextRenderer::drawGlyph(char character,
                                     float originX,
                                     float originY,
@@ -312,96 +307,6 @@ namespace orphen::harness
     glMatrixMode(GL_MODELVIEW);
 
     return lowestY;
-  }
-
-  void DebugTextRenderer::draw(int framebufferWidth,
-                               int framebufferHeight,
-                               const std::vector<std::string> &lines,
-                               float pixelsPerGlyph,
-                               float topOffsetPixels) const
-  {
-    if (lines.empty() || framebufferWidth <= 0 || framebufferHeight <= 0)
-    {
-      return;
-    }
-
-    const float glyphWidth = pixelsPerGlyph * 0.62f;
-    const float advance = pixelsPerGlyph * 0.78f;
-    const float lineHeight = pixelsPerGlyph * 1.6f;
-    const float marginX = 10.0f;
-    const float marginY = 10.0f + topOffsetPixels;
-
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glLoadIdentity();
-    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
-    glLoadIdentity();
-
-    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
-    const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
-    GLint previousPolygonMode[2] = {GL_FILL, GL_FILL};
-    glGetIntegerv(GL_POLYGON_MODE, previousPolygonMode);
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_TEXTURE_2D);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
-    // A dark panel behind the text so it stays readable over bright geometry.
-    float widestLine = 0.0f;
-    for (const auto &line : lines)
-    {
-      widestLine = std::max(widestLine, static_cast<float>(line.size()) * advance);
-    }
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.0f, 0.0f, 0.0f, 0.55f);
-    glBegin(GL_QUADS);
-    const float panelRight = marginX + widestLine + 8.0f;
-    const float panelBottom = marginY + static_cast<float>(lines.size()) * lineHeight + 4.0f;
-    glVertex2f(marginX - 6.0f, marginY - 6.0f);
-    glVertex2f(panelRight, marginY - 6.0f);
-    glVertex2f(panelRight, panelBottom);
-    glVertex2f(marginX - 6.0f, panelBottom);
-    glEnd();
-
-    glColor4f(0.85f, 0.95f, 0.85f, 1.0f);
-    glLineWidth(1.0f);
-    glBegin(GL_LINES);
-    float penY = marginY + pixelsPerGlyph;
-    for (const auto &line : lines)
-    {
-      float penX = marginX;
-      for (const char rawCharacter : line)
-      {
-        const char character = static_cast<char>(
-            std::toupper(static_cast<unsigned char>(rawCharacter)));
-        drawGlyph(character, penX, penY, glyphWidth);
-        penX += advance;
-      }
-      penY += lineHeight;
-    }
-    glEnd();
-
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-    glPolygonMode(GL_FRONT, static_cast<GLenum>(previousPolygonMode[0]));
-    glPolygonMode(GL_BACK, static_cast<GLenum>(previousPolygonMode[1]));
-    if (textureWasEnabled == GL_TRUE)
-    {
-      glEnable(GL_TEXTURE_2D);
-    }
-    if (depthWasEnabled == GL_TRUE)
-    {
-      glEnable(GL_DEPTH_TEST);
-    }
-
-    glMatrixMode(GL_MODELVIEW);
-    glPopMatrix();
-    glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
   }
 
 } // namespace orphen::harness

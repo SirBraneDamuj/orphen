@@ -2,7 +2,6 @@
 
 #include "ported/debug/original_debug_text.h"
 
-#include <string>
 #include <vector>
 
 namespace orphen::harness
@@ -47,18 +46,6 @@ namespace orphen::harness
   class DebugTextRenderer
   {
   public:
-    // Draws left-aligned lines from the top-left of a framebufferWidth x
-    // framebufferHeight orthographic overlay. Assumes an already-current GL
-    // context; saves and restores the matrices and the state it touches.
-    //
-    // topOffsetPixels pushes the block down, so the harness HUD can sit below
-    // the ported debug overlay rather than through it.
-    void draw(int framebufferWidth,
-              int framebufferHeight,
-              const std::vector<std::string> &lines,
-              float pixelsPerGlyph = 11.0f,
-              float topOffsetPixels = 0.0f) const;
-
     // The ported debug overlay (FUN_00268270's output). Glyphs arrive already
     // placed on the original's 640x448 virtual screen, so this only has to map
     // that screen into the framebuffer and stamp one glyph per cell.
@@ -87,7 +74,6 @@ namespace orphen::harness
                               int fontAtlasHeight) const;
 
   private:
-    void drawGlyph(char character, float originX, float originY, float scale) const;
     // originY is the cell's baseline; the glyph box grows upward from it.
     void drawGlyph(char character, float originX, float originY, float scaleX, float scaleY) const;
   };

@@ -624,7 +624,6 @@ namespace orphen::port
     void resetLeadPlayerForLoadedMap();
     void reportLeadPlayerGroundChange();
     orphen::ported::camera::CameraGroundSampler cameraGroundSampler();
-    void updateHud(const InputSnapshot &input, std::uint32_t frameTicks);
     // FUN_002239c8's POSITION_DISP block, then FUN_00268270's layout pass.
     void updateOriginalDebugOverlay();
     // The player-state handler for the chest cutscene, installed on the

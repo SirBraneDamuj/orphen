@@ -7983,7 +7983,7 @@ Harness controls, which the simulation cannot see:
 - Left/right arrows cycle maps when running from `--disc-root`.
 - `R` resets the viewer camera.
 - `F` toggles wireframe.
-- `H` toggles the debug HUD.
+- `H` toggles the game's own debug readout, the `FUN_00268270` overlay.
 - `B` toggles the in-world debug overlay: collision boxes, entity labels, origin axes.
 - `O` toggles SCR SUBPROC DISP. It was `P` until fast forward took that key.
 - `G` dumps a pose/draw-list snapshot of the current frame and photographs it.
@@ -8108,20 +8108,25 @@ it is sized to sit inside the original's cell so the layout does not change.
 
 ## Debug HUD
 
-`H` toggles an on-screen overlay showing position and facing, the entity `+0x60`
-state and `+0xA0` animation id with its substate frame, grounded flag and
-vertical velocity, stick magnitude with the resulting walk/run gait, camera mode
-/ yaw / pitch / distance, and the current ground triangle. There is no automated
-PCSX2 trace comparison, so this overlay plus `--frames` determinism is how
-behavior gets judged.
+`H` toggles the game's own debug readout -- `FUN_00268270`'s overlay, with the
+POSITION_DISP block `FUN_002239c8` feeds it. It is off by default: the port
+holds `DAT_003555DA` and `DAT_003555DC` on (neither byte has a way in yet),
+which is what selects the detailed readout, so it would otherwise sit over the
+picture on every frame where retail only shows it in a debug build. The toggle
+is display-only: the glyphs are laid out and drained on the simulation step
+either way, so `--frames` determinism does not move with it.
 
-It stacks below the ported POSITION_DISP overlay rather than through it.
+The harness used to carry a second overlay of its own on that key -- position,
+facing, state and animation ids, gait, camera mode, ground triangle -- stacked
+underneath the ported one. It is gone. Everything it showed is in the game's own
+readout or in `--actor-report` / `--scr-report`, and it covered the picture
+while doing it.
 
 `src/harness/debug_text.*` is a small stroke font, PC-only diagnostics with no
-relationship to the game's own. It serves both overlays: the harness HUD lays
-out its own lines with it, and `drawOriginalOverlay` stamps the glyphs
+relationship to the game's own. `drawOriginalOverlay` stamps the glyphs
 `FUN_00268270` already placed -- from slot `0x30`'s atlas when it is resident,
-falling back to the stroke font when it is not.
+falling back to the stroke font when it is not. The world-space entity labels
+use the same stroke table.
 
 The origin axis indicator uses red for game +X, blue for game +Y, and green for game +Z. The viewer currently maps game `(x, y, z)` to viewer `(x, z, -y)`.
 

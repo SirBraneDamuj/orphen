@@ -1088,7 +1088,7 @@ int main(int argc, char **argv)
         // held across a multi-step frame used to land on whichever parity the
         // step count happened to have; fast forward runs dozens, so it has to
         // be exactly one.
-        stepped.toggleHudRequested = false;
+        stepped.toggleDebugTextRequested = false;
         stepped.toggleDebugOverlayRequested = false;
         stepped.toggleSubprocDisplayRequested = false;
         stepped.probeRequested = false;
