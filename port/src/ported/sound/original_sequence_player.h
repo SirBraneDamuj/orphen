@@ -121,6 +121,21 @@ namespace orphen::ported::sound
     //   frames = step * scale, halved when speed > 13, then + 10
     void ramp(int targetFader, int speed, bool rampUp);
 
+    // FUN_00205f40. The hard stop the fight's last crab reaches.
+    void FUN_00205f40_stop() { stop(); }
+
+    // == Borrowed banks ==
+    //
+    // FUN_00205548:24-28: when section 1 opens "NV" the resource carries a
+    // sequence and nothing else, and the ASCII digit at +3 names the *channel*
+    // whose VAB to play it on -- stored as -(digit) in both section sizes so
+    // that FUN_00205310:36-45 copies that channel's VAB id over instead of
+    // uploading one. Channel n is music slot n - 3.
+    //
+    // Returns the lending slot, or -1 for a resource that brought its own bank.
+    int borrowedSlot() const { return borrowedSlot_; }
+    void bindBorrowedBank(const SoundBank *lender) { borrowedBank_ = lender; }
+
     bool playing() const { return playing_; }
     // Reporting: how the track has actually run. A piece that stops when it
     // should repeat shows up here as loopsTaken 0 with reachedEndOfTrack set.
@@ -136,7 +151,12 @@ namespace orphen::ported::sound
     bool audible() const;
     std::uint16_t ppqn() const { return ppqn_; }
     std::uint32_t microsecondsPerQuarter() const { return usPerQuarter_; }
-    const SoundBank &bank() const { return bank_; }
+    // The bank the notes actually sound on: this slot's own, or the one it
+    // borrowed. Every caller wants the second when there is one.
+    const SoundBank &bank() const { return borrowedBank_ != nullptr ? *borrowedBank_ : bank_; }
+    // This slot's own bank, whether or not it is playing on someone else's.
+    // Binding lends from here so two slots can never alias each other.
+    const SoundBank &ownBank() const { return bank_; }
 
     // Renders `frames` stereo frames additively at kSpuBaseSampleRate, running
     // the sequence forward as it goes. Called from the mixer thread only.
@@ -152,6 +172,9 @@ namespace orphen::ported::sound
     std::uint32_t readVariableLength();
 
     SoundBank bank_;
+    // -1 unless section 1 carried FUN_00205548's "NV" marker.
+    int borrowedSlot_ = -1;
+    const SoundBank *borrowedBank_ = nullptr;
     std::vector<std::uint8_t> events_;
     bool loaded_ = false;
     bool playing_ = false;

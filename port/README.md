@@ -6276,7 +6276,8 @@ bursts in that WAV start at frames 166 and 391, matching the cue log.
 - **Absolute loudness.** The chain reproduces the game's relative volumes, but
   nothing models the IOP's own master, so the overall level is a guess.
 - **Reverb.** `FUN_00205938:90-113` sets an SPU2 reverb type and depth per music
-  slot. Not ported, so sequences play dry.
+  slot. Not ported, so sequences play dry -- see *The reverb is never sent, and
+  s14_e031 is where you hear it* below for what that costs.
 
 ## Music, and where every note of it was hiding
 
@@ -6357,6 +6358,42 @@ a fader of 1000 means "this slot's authored volume" -- which is the 1000 that
 both `FUN_00206840` and opcode 0x129 pass. `FUN_002063c8` (0x12A, up) and
 `FUN_00206260` (0x12B, down) ramp it, over a frame count worked out from the
 0..127 delta rather than the fader delta.
+
+### The reverb is never sent, and s14_e031 is where you hear it
+
+A music record is eight bytes and the port uses two of them. `+0` is the SND
+resource and `+2` the volume; `+4` is a **reverb type** and `+6` a **reverb
+depth**. `FUN_00205938:90-113` is their only reader:
+
+- `+4 >= 0` sends the type to the IOP as command `0x7314` with `type | 0x100`,
+  then command `6` with 1 to turn the effect on (0 when the type is 0).
+- `+6 & 0xFFFE` goes out as `FUN_00204ca8(10, depth << 8, depth << 8)` -- one
+  effect volume per channel.
+
+Both are cached in `sGpffffbab4` and `sGpffffbab6`, so a slot asking for what is
+already set resends nothing, and a `+4` of `-1` skips the block outright and
+leaves whatever the last scene chose.
+
+The port parses both fields into `MusicRecord` and then hands
+`FUN_00205938_load_slot` the volume alone. There is no wet bus in the mixer, so
+every sequence plays dry. **71 of the 285 music records ask for reverb** -- 21 of
+51 in category 0, 27 of 33 in category 1, 23 of 201 in category 2 -- so this is
+most of the game's music rather than a corner of it.
+
+`s14_e031` is where it stops being subtle. Its track is category 2 index 84 ->
+SND resource 170, `vol 70, reverb type 4, depth 60`: a send of `0x3C00` out of
+`0x7FFF` on both channels, with every tone in the bank at VAB mode 4, which is
+the per-tone "route me through the reverb" flag. The SEQp is seven channels at
+48 ticks per quarter and 480000 us per quarter, so a tick is 10 ms -- and
+**channel 6 is a note-for-note copy of channel 3 delayed by 32 ticks**. 512
+note-ons against 507, no pitch mismatches, the offset exactly 32 on every one,
+the same instrument on both (programs 3 and 6 are a single tone each on VAG 4),
+and only the channel volume different: CC7 120 against 73. It is an authored
+slap delay. Wet, it is the tail of a room. Dry, it is the melody played twice
+320 ms apart, which is what the port sounds like today.
+
+Porting it means the SPU2 reverb network and its preset coefficient bank, plus a
+wet send in `SoundEngine::mix`. Not started.
 
 ### Scene-streamed sound effects live in the music banks
 
@@ -8621,3 +8658,88 @@ Verified: the rig at frame 1400 of arm 853 is four entities (mount 10, hair 11,
 bust 12, cloth 13) plus the field bandana in slot 4, where it was five; the swoop
 draws one tail; all eleven arms still reach the same destination scenes; and the
 `--frames 1200` guard is byte-identical on `s01_e024`, `s14_e001` and `s14_e012`.
+
+## s14_e001: the swarm's skitter is a music slot, not a cue
+
+The swarm's continuous chitter is **not** in the cue table at all, which is why
+looking for it there found nothing. It is a looping SEQ on a music slot, started
+by `FUN_0027B380:76` -- the crab's death -- three lines after the hundred crabs
+are released:
+
+```c
+FUN_0027c950(param_1);   // release the swarm
+DAT_00355270 = 0;
+FUN_00205d90(4,1000);    // and start slot 4, looping, at a full fader
+```
+
+`FUN_0027DC38:85-97` then steps it down as the swarm thins: at 70 left it ramps
+slot 4 out and starts slot 3, at `fGpffff9290` = 30 it ramps 3 out and starts
+slot 2, and when the last one dies `FUN_00205F40(2)` stops it. So the bed thins
+with the swarm instead of cutting.
+
+The port had none of it. `FUN_0027B380`'s call was a comment ("keys the death
+sting on its own channel") and `FUN_0027DC38`'s three were written off as
+"channel fades, which this port's audio path handles for itself". It does not --
+nothing else starts these slots.
+
+**And the slots would not have played anyway.** s14_e001 asks for SND.BIN
+resources 98, 99 and 100 in slots 2, 3 and 4. Only 98 carries samples; 99 and
+100 open section 1 with `NVB5` instead of a `pBAV` header, and `SoundBank::load`
+rejected them, so both slots reported `no sequence`. `FUN_00205548:24-28` is
+what that marker means:
+
+```c
+if (sVar1 == 0x564e) {                       // section 1 starts "NV"
+  iVar4 = -(*(byte *)(sec1 + 3) - 0x30);     // the ASCII digit, negated
+  param_1[3] = iVar4;                        // as both section sizes
+  param_1[1] = iVar4;
+}
+```
+
+and `FUN_00205310:36-45` reads the negative size back as *borrow*: copy channel
+`digit`'s VAB id rather than uploading one. Channel n is music slot n - 3, so
+`NVB5` is channel 5 is slot 2 -- resource 98's bank, shared by all three
+sequences. `SequencePlayer` now carries a `borrowedSlot_`, and `bank()` answers
+with the lender's.
+
+Each of the three is one channel of program 0 between `CC99=20` and `CC6=127`,
+loop-forever, playing overlapping short notes at scattered pitches -- 100 the
+densest and lowest, 99 higher, 98 sparsest. That is the skitter.
+
+Verified: slot 4 starts at frame 3083, the frame the swarm is released, and at
+frame 6000 the report reads `loops taken 2, ... playing`. Mixed output rises
+from ~4800 RMS to ~6650 across the start. The 70- and 30-crab step-downs and the
+final stop are transcribed but **not** exercised here: the headless player
+cannot kill swarm members, so nothing has yet driven the count down.
+
+Separately, cue `0x11C` is the only entry type 0x7E has in the cue table -- one
+`jal 0x00267d38` at `0x00277A34`, on the state-6 leap. It fires 37 times over a
+9464-frame swarm phase, about one per 250 frames, ~0.43 s at volume ~38 of 127.
+It is a per-leap lunge, not the bed, and it starts ~330 frames into the phase
+because a fresh member must walk to its mark, cross to `x -11..-6` and settle
+into state 3 before `FUN_0027B918` will take it.
+
+Reading the cue log is the check for a *cue*, not listening: `FUN_00267D38_play_at`
+logs **every** request, including `out of range` past 14 units and `no such cue`.
+A cue absent from `--sound-report` was never requested -- but a missing sound
+that is a music slot will never appear there at all. Check the report's slot
+table for `no sequence` and its `music slot ... play` lines too.
+
+### `--enemy-hp <slot>=<hp>[:<frame>]`
+
+Writes one pool slot's live hit points (`+0x12A`), the same field the stat
+record fills at spawn. A harness probe for reaching a boss's later phases.
+
+It is not sufficient alone -- the crab only dies through the damage path, so it
+still needs a hit to finish:
+
+```
+--enemy-hp 65=1:2000 --hold-cross 1900-1910 --hold-cross 1930-1940 ...
+```
+
+kills it around frame 2100 and puts the swarm on screen by 3536.
+
+Without it there is no headless route. The player never walks, the crab drifts
+out of sword range, and its HP plateaus at exactly **84 of 120** however long the
+run -- 9,500 frames and 26,500 frames both end there. `--spell-power-scale` does
+not help: it scales power, and the problem is hits not landing.

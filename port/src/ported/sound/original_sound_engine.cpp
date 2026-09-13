@@ -160,7 +160,35 @@ namespace orphen::ported::sound
     }
     const std::lock_guard<std::mutex> guard(mixLock_);
     slotResource_[slot] = sndResource;
-    return musicSlots_[slot].FUN_00205938_load(bankResource, baseVolume);
+    const bool ok = musicSlots_[slot].FUN_00205938_load(bankResource, baseVolume);
+
+    // FUN_00205310:36-45 reads the lender's entry out of the eleven-entry bank
+    // table, which is filled slot by slot as the scene walks its eight
+    // requests -- so who lends to whom is a function of the slot numbers, not
+    // of load order. Re-resolve every slot after each load rather than relying
+    // on the lender happening to come first.
+    for (std::size_t index = 0; index < kMusicSlotCount; ++index)
+    {
+      const int lender = musicSlots_[index].borrowedSlot();
+      const bool usable = lender >= 0 && static_cast<std::size_t>(lender) < kMusicSlotCount &&
+                          static_cast<std::size_t>(lender) != index;
+      musicSlots_[index].bindBorrowedBank(
+          usable ? &musicSlots_[static_cast<std::size_t>(lender)].ownBank() : nullptr);
+    }
+    return ok;
+  }
+
+  void SoundEngine::FUN_00205f40_stop_slot(std::size_t slot)
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return;
+    }
+    {
+      const std::lock_guard<std::mutex> guard(mixLock_);
+      musicSlots_[slot].FUN_00205f40_stop();
+    }
+    musicEventLog_.push_back({frame_, slot, "stop", slotResource_[slot], 0, 0});
   }
 
   void SoundEngine::FUN_00205d90_play_slot(std::size_t slot, int fader)

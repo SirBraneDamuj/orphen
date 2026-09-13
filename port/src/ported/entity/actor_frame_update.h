@@ -474,6 +474,18 @@ namespace orphen::ported::entity
     std::function<void(std::uint16_t cue, int volumeLeft, int volumeRight)>
         FUN_002057c8_keyOn;
 
+    // == The music slots, from a behaviour rather than from the script ==
+    //
+    // FUN_00205d90 / FUN_00205f40 / FUN_00206260, the same three the 0x129,
+    // 0x12B and 0x12A opcodes reach. s14_e001's crab is the reason a behaviour
+    // needs them at all: FUN_0027B380:76 starts slot 4 the frame the swarm is
+    // released and FUN_0027DC38 steps 4 -> 3 -> 2 as the swarm thins, none of
+    // which the scene script knows about.
+    std::function<void(std::size_t slot, int fader)> FUN_00205d90_play_music_slot;
+    std::function<void(std::size_t slot)> FUN_00205f40_stop_music_slot;
+    std::function<void(std::size_t slot, int speed, int targetFader)>
+        FUN_00206260_ramp_down_music_slot;
+
     // DAT_003555b4, the global frame counter. Type 0x62's wing cue fires when
     // it divides by the entity's own period, so the sound is phase-locked to
     // the frame number rather than to anything the entity tracks.

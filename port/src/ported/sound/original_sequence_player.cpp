@@ -16,6 +16,25 @@ namespace orphen::ported::sound
              (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
     }
 
+    // FUN_00205548's section table: one u32 per section at +4, the high half
+    // a paragraph offset and the low half a paragraph count.
+    std::span<const std::uint8_t> sectionAt(std::span<const std::uint8_t> resource,
+                                            std::size_t index)
+    {
+      if (resource.size() < 8 + index * 4)
+      {
+        return {};
+      }
+      const std::uint32_t word = u32At(resource, 4 + index * 4);
+      const std::size_t offset = static_cast<std::size_t>(word >> 16) * 16u;
+      const std::size_t size = static_cast<std::size_t>(word & 0xFFFFu) * 16u;
+      if (offset > resource.size() || size > resource.size() - offset)
+      {
+        return {};
+      }
+      return resource.subspan(offset, size);
+    }
+
     // Sony's loop convention, on CC99 / CC6.
     constexpr std::uint8_t kLoopMarkerController = 99;
     constexpr std::uint8_t kLoopCountController = 6;
@@ -30,18 +49,42 @@ namespace orphen::ported::sound
     reset();
     events_.clear();
     loaded_ = false;
+    borrowedSlot_ = -1;
+    borrowedBank_ = nullptr;
     baseVolume_ = baseVolume;
-
-    if (!bank_.load(bankResource))
-    {
-      return false;
-    }
-    loaded_ = true;
 
     if (bankResource.size() < 16)
     {
       return false;
     }
+
+    // FUN_00205548:24-28, before anything is uploaded. Section 1 opening "NV"
+    // is not a VAB header: the resource is a sequence on its own, and the digit
+    // at +3 names the channel whose VAB to play it on. Channel n is slot n - 3.
+    //
+    // s14_e001 ships three of these in a row -- slot 2 is SND resource 98 with
+    // the samples, slots 3 and 4 are resources 99 and 100, both "NVB5", both
+    // pointing at channel 5, which is slot 2. Read as ordinary banks they fail
+    // SoundBank::load and the slot comes out with no sequence at all, which is
+    // why the whole swarm phase played silent.
+    const std::span<const std::uint8_t> section1 = sectionAt(bankResource, 1);
+    if (section1.size() >= 4 && section1[0] == 'N' && section1[1] == 'V' &&
+        section1[3] >= '0' && section1[3] <= '9')
+    {
+      const int channel = static_cast<int>(section1[3]) - '0';
+      // FUN_00205310 indexes the eleven-entry bank table; 0..2 are the boot
+      // banks, so only a channel of 3 or more can name a music slot.
+      if (channel >= 3)
+      {
+        borrowedSlot_ = channel - 3;
+      }
+    }
+
+    if (borrowedSlot_ < 0 && !bank_.load(bankResource))
+    {
+      return false;
+    }
+    loaded_ = true;
     // FUN_00205548's section 2.
     const std::uint32_t word = u32At(bankResource, 4 + 2 * 4);
     const std::size_t offset = static_cast<std::size_t>(word >> 16) * 16u;
@@ -262,10 +305,10 @@ namespace orphen::ported::sound
     {
       return;
     }
-    const VabProgram *program = bank_.program(channel.program);
+    const VabProgram *program = bank().program(channel.program);
     const float programGain = program != nullptr ? static_cast<float>(program->volume) / 127.0f : 1.0f;
     const float toneGain = static_cast<float>(voice.tone->volume) / 127.0f;
-    const float bankGain = static_cast<float>(bank_.masterVolume()) / 127.0f;
+    const float bankGain = static_cast<float>(bank().masterVolume()) / 127.0f;
     const float channelGain = (static_cast<float>(channel.volume) / 127.0f) *
                               (static_cast<float>(channel.expression) / 127.0f);
 
@@ -300,12 +343,12 @@ namespace orphen::ported::sound
     // A program layers: every tone whose range covers the note sounds, each on
     // its own voice. See SoundBank::tones.
     const VabTone *matching[kMaxTonesPerProgram] = {};
-    const std::size_t layers = bank_.tones(state.program, note, matching, kMaxTonesPerProgram);
+    const std::size_t layers = bank().tones(state.program, note, matching, kMaxTonesPerProgram);
 
     for (std::size_t layer = 0; layer < layers; ++layer)
     {
       const VabTone *tone = matching[layer];
-      const WaveformPcm *pcm = bank_.waveform(tone->waveform);
+      const WaveformPcm *pcm = bank().waveform(tone->waveform);
       if (pcm == nullptr || pcm->empty())
       {
         continue;

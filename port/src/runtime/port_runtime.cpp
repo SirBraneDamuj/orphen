@@ -218,6 +218,10 @@ namespace orphen::port
     setWorkIndex_ = config.setWorkIndex;
     setWorkValue_ = config.setWorkValue;
     setWorkFrame_ = config.setWorkFrame;
+    enemyHpPending_ = config.hasEnemyHp;
+    enemyHpSlot_ = config.enemyHpSlot;
+    enemyHpValue_ = config.enemyHpValue;
+    enemyHpFrame_ = config.enemyHpFrame;
     setEventFlagPending_ = config.hasSetEventFlag;
     setEventFlagId_ = config.setEventFlagId;
     setEventFlagFrame_ = config.setEventFlagFrame;
@@ -965,6 +969,13 @@ namespace orphen::port
     { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
     environment.FUN_002057c8_keyOn = [this](std::uint16_t cue, int volumeLeft, int volumeRight)
     { soundEngine_.FUN_002057c8_key_on(cue, volumeLeft, volumeRight); };
+    environment.FUN_00205d90_play_music_slot = [this](std::size_t slot, int fader)
+    { soundEngine_.FUN_00205d90_play_slot(slot, fader); };
+    environment.FUN_00205f40_stop_music_slot = [this](std::size_t slot)
+    { soundEngine_.FUN_00205f40_stop_slot(slot); };
+    environment.FUN_00206260_ramp_down_music_slot =
+        [this](std::size_t slot, int speed, int targetFader)
+    { soundEngine_.FUN_00206260_ramp_down_slot(slot, speed, targetFader); };
 
     // FUN_00216868. A plain LCG rather than the original's generator, which has
     // not been analysed; what matters here is that it is seeded once and stepped
@@ -6759,6 +6770,21 @@ namespace orphen::port
         sceneScript_.state().DAT_00355060_work[setWorkIndex_] = setWorkValue_;
         std::cout << "[set-work] work[" << setWorkIndex_ << "] = " << setWorkValue_
                   << " at frame " << frameCount_
+                  << " -- a harness probe, not something the game does here.\n";
+      }
+      // --enemy-hp. +0x12A is the live hit-point field FUN_0025BAE8's record
+      // fills at spawn; writing it is how a headless run reaches a boss phase
+      // it cannot fight its way to.
+      if (enemyHpPending_ && frameCount_ >= enemyHpFrame_ &&
+          enemyHpSlot_ < orphen::ported::entity::kEntitySlotCount)
+      {
+        enemyHpPending_ = false;
+        auto &target = entityPool_.slot(enemyHpSlot_);
+        const std::uint16_t before = target.staggerTimer12a;
+        target.staggerTimer12a = static_cast<std::uint16_t>(enemyHpValue_);
+        std::cout << "[enemy-hp] slot " << enemyHpSlot_ << " type 0x" << std::hex
+                  << target.typeId00 << std::dec << " hp " << before << " -> "
+                  << enemyHpValue_ << " at frame " << frameCount_
                   << " -- a harness probe, not something the game does here.\n";
       }
       if (setEventFlagPending_ && frameCount_ >= setEventFlagFrame_ && sceneScript_.loaded())

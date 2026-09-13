@@ -217,6 +217,13 @@ namespace orphen::ported::entity
     inline constexpr float kDAT_0035317c_finaleShake = 0.200000002980232f;
     inline constexpr std::int32_t kFUN_0027b380_finaleBubbles = 20;
     inline constexpr float kFUN_0027b380_swarmSpread = 15.0f;
+    // FUN_0027B380:76, FUN_0027DC38:85-93. The swarm's three-layer bed: slot 4
+    // from the moment they are released, slot 3 at seventy left, slot 2 at
+    // thirty, each started at a full fader and the one before it ramped to
+    // nothing at speed 100.
+    inline constexpr std::size_t kFUN_0027b380_swarmBedSlot = 4;
+    inline constexpr int kFUN_0027b380_swarmBedFader = 1000;
+    inline constexpr int kFUN_0027dc38_swarmBedFadeSpeed = 100;
     inline constexpr std::uint16_t kFUN_0027b380_beatZero = 0x0640;
     inline constexpr std::uint16_t kFUN_0027b380_beatOne = 0x0C80;
     inline constexpr std::uint16_t kFUN_0027b380_beatThree = 0x2580;
@@ -981,6 +988,11 @@ namespace orphen::ported::entity
       wreck.halfword08 = static_cast<std::uint16_t>(wreck.halfword08 | 0x4000u);
       wreck.halfword04 = 8;
       wreck.descriptorFlags02 = 0x3000;
+      // FUN_00229C40 resolved the model off 0x10B into +0x15C at spawn, and the
+      // retype below rewrites only +0x00. Pin it, or the port re-resolves the
+      // model from type 400 -- whose record is empty -- and the wreck is
+      // invisible. The chunk and the prop bind below need the same line.
+      wreck.modelTypeId15c = 0x10B;
       wreck.typeId00 = kDebrisTypeId;
       wreck.battleFlags96 = static_cast<std::uint8_t>(wreck.battleFlags96 | 1u);
 
@@ -1056,6 +1068,7 @@ namespace orphen::ported::entity
         chunk.previousGroundHeight50 = kFUN_0027e370_chunkFall;
         chunk.groundHeight4c = kFUN_0027e370_chunkFall;
         chunk.positionY28 = at.z;
+        chunk.modelTypeId15c = static_cast<std::int16_t>(static_cast<std::int32_t>(kind) + 0x272);
         chunk.typeId00 = kDebrisTypeId;
         chunk.desiredDeltaY38 = kDAT_00353210_chunkGravity;
         chunk.fadeRamp62 = static_cast<std::uint16_t>(
@@ -1280,6 +1293,13 @@ namespace orphen::ported::entity
         }
         if ((kind & 0x10u) == 0)
         {
+          // **The model stays behind.** FUN_00229C40 bound the placement's own
+          // model into +0x15C/+0x160 at spawn and `*puVar1 = 400` here rewrites
+          // only +0x00, so the original keeps drawing the crate. Without this
+          // the port re-resolves the model from the live type id, lands on type
+          // 400's empty record (0 submeshes, 0 verts) and every crate, barrel
+          // and the four bound lamps disappear the frame the crab initialises.
+          prop.modelTypeId15c = prop.typeId00;
           prop.typeId00 = kDebrisTypeId;
         }
         if ((kind & 1u) != 0 && environment.DAT_00343888_lights != nullptr)
@@ -2983,9 +3003,13 @@ namespace orphen::ported::entity
     // crab's bone 0 on a heading within thirty degrees of its bearing to the
     // player, numbered off in +0x95 so the battle module can tell them apart.
     //
-    // **Type 0x7E's own behaviour, FUN_00276C30, is not ported** -- it is a
-    // second enemy with its own seven-state table at PTR_FUN_00325868 -- so what
-    // comes out of the corpse sits where it is put. --actor-report names it.
+    // Type 0x7E's own behaviour is `FUN_00276C30` with its own seven-state table
+    // at PTR_FUN_00325868 -- see original_swarm_crab.{h,cpp}; the dispatch is in
+    // actor_frame_update.cpp. (This comment used to say it was unported. It has
+    // been ported since 2026-09-07.) Each one walks out to a mark, crosses to the
+    // far end of the beach, mills about in state 3, and is only then eligible for
+    // FUN_0027B918 to wake into the state 6 leap -- which is the one and only
+    // thing that plays cue 0x11C. Nothing is eligible on the first stir.
     void FUN_0027c950_release_swarm(const OriginalEntity &entity,
                                     const ActorEnvironment &environment)
     {
@@ -3163,7 +3187,18 @@ namespace orphen::ported::entity
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
         FUN_0027c950_release_swarm(entity, environment);
         DAT_00355270_deathLatch() = 0;
-        // FUN_00205D90(4, 1000) keys the death sting on its own channel.
+        // FUN_0027B380:76. **The swarm's bed**, started the same frame the
+        // hundred crabs are released and looping for as long as they are
+        // alive. Slot 4 is SND.BIN resource 100, one of the two sequences this
+        // scene loads that carry no samples of their own -- see
+        // SequencePlayer's borrowed-bank note. FUN_0027DC38 steps it down to
+        // slot 3 and then slot 2 as the swarm thins, and stops slot 2 when the
+        // last one dies.
+        if (environment.FUN_00205d90_play_music_slot)
+        {
+          environment.FUN_00205d90_play_music_slot(kFUN_0027b380_swarmBedSlot,
+                                                   kFUN_0027b380_swarmBedFader);
+        }
       }
       if ((entity.flags06 & 0x10u) == 0)
       {
@@ -3561,13 +3596,32 @@ namespace orphen::ported::entity
       }
 
       // :78-90. Two music step-downs, at seventy crabs left and at thirty.
+      // Each fades the layer that is running out from under the next one, so
+      // the bed thins with the swarm rather than cutting.
       const float remaining = static_cast<float>(DAT_0035526f_swarmCount());
       if (remaining <= 70.0f && DAT_00355270_deathLatch() == 0)
       {
+        if (environment.FUN_00206260_ramp_down_music_slot)
+        {
+          environment.FUN_00206260_ramp_down_music_slot(kFUN_0027b380_swarmBedSlot,
+                                                        kFUN_0027dc38_swarmBedFadeSpeed, 0);
+        }
+        if (environment.FUN_00205d90_play_music_slot)
+        {
+          environment.FUN_00205d90_play_music_slot(3, kFUN_0027b380_swarmBedFader);
+        }
         DAT_00355270_deathLatch() = static_cast<std::uint8_t>(DAT_00355270_deathLatch() + 1);
       }
       if (remaining <= kFGpffff9290_swarmQuiet && DAT_00355270_deathLatch() == 1)
       {
+        if (environment.FUN_00206260_ramp_down_music_slot)
+        {
+          environment.FUN_00206260_ramp_down_music_slot(3, kFUN_0027dc38_swarmBedFadeSpeed, 0);
+        }
+        if (environment.FUN_00205d90_play_music_slot)
+        {
+          environment.FUN_00205d90_play_music_slot(2, kFUN_0027b380_swarmBedFader);
+        }
         DAT_00355270_deathLatch() = static_cast<std::uint8_t>(DAT_00355270_deathLatch() + 1);
       }
 
@@ -3576,6 +3630,10 @@ namespace orphen::ported::entity
       // and drop every remaining marker.
       if (DAT_0035526f_swarmCount() == 0)
       {
+        if (environment.FUN_00205f40_stop_music_slot)
+        {
+          environment.FUN_00205f40_stop_music_slot(2);
+        }
         if (environment.DAT_00355060_setScriptWork)
         {
           environment.DAT_00355060_setScriptWork(0, kFUN_0027dc38_swarmClearedBeat);

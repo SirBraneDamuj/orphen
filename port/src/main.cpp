@@ -447,6 +447,31 @@ namespace
         config.hasSetWork = true;
         continue;
       }
+      if (argument == "--enemy-hp")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--enemy-hp needs <slot>=<hp>[:<frame>]");
+        }
+        const std::string value{argv[++argumentIndex]};
+        const std::size_t equals = value.find('=');
+        if (equals == std::string::npos)
+        {
+          throw std::runtime_error("--enemy-hp needs <slot>=<hp>[:<frame>]");
+        }
+        const std::size_t colon = value.find(':', equals);
+        config.enemyHpSlot = static_cast<std::uint32_t>(std::stoul(value.substr(0, equals)));
+        config.enemyHpValue = static_cast<std::uint32_t>(
+            std::stoul(value.substr(equals + 1, colon == std::string::npos
+                                                    ? std::string::npos
+                                                    : colon - equals - 1)));
+        config.enemyHpFrame =
+            colon == std::string::npos
+                ? 1u
+                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
+        config.hasEnemyHp = true;
+        continue;
+      }
       if (argument == "--set-event-flag")
       {
         if (argumentIndex + 1 >= argc)

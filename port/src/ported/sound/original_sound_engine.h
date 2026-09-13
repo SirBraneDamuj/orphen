@@ -201,6 +201,8 @@ namespace orphen::ported::sound
     // FUN_00205d90 (opcode 0x129), FUN_002063c8 (0x12A) and FUN_00206260
     // (0x12B). The fader runs 0..1000 over the record's own volume byte.
     void FUN_00205d90_play_slot(std::size_t slot, int fader);
+    // FUN_00205f40: the hard stop, with no ramp in front of it.
+    void FUN_00205f40_stop_slot(std::size_t slot);
     void FUN_002063c8_ramp_up_slot(std::size_t slot, int speed, int targetFader);
     void FUN_00206260_ramp_down_slot(std::size_t slot, int speed, int targetFader);
     // == The scene-streamed sound effects ==

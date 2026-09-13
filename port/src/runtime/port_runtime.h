@@ -112,6 +112,16 @@ namespace orphen::port
     std::uint32_t setWorkIndex = 0;
     std::uint32_t setWorkValue = 0;
     std::uint32_t setWorkFrame = 1;
+    // --enemy-hp <slot>=<hp>[:<frame>]: write one pool slot's current hit
+    // points (+0x12A). A harness probe for reaching a boss's later phases --
+    // a headless run has no way to land enough damage on its own, which is
+    // what kept s14_e001's swarm phase out of reach. It writes the same field
+    // the stat record writes at spawn, so nothing downstream can tell the
+    // difference; it is still a probe, not something the game does.
+    bool hasEnemyHp = false;
+    std::uint32_t enemyHpSlot = 0;
+    std::uint32_t enemyHpValue = 0;
+    std::uint32_t enemyHpFrame = 1;
     bool hasSetEventFlag = false;
     std::uint32_t setEventFlagId = 0;
     std::uint32_t setEventFlagFrame = 1;
@@ -548,6 +558,10 @@ namespace orphen::port
     std::uint32_t setWorkIndex_ = 0;
     std::uint32_t setWorkValue_ = 0;
     std::uint32_t setWorkFrame_ = 1;
+    bool enemyHpPending_ = false;
+    std::uint32_t enemyHpSlot_ = 0;
+    std::uint32_t enemyHpValue_ = 0;
+    std::uint32_t enemyHpFrame_ = 1;
     bool setEventFlagPending_ = false;
     std::uint32_t setEventFlagId_ = 0;
     std::uint32_t setEventFlagFrame_ = 1;
