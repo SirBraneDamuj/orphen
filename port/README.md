@@ -1047,6 +1047,79 @@ at all. `s01_e012`'s six doorways come out as codes `0x28`, `0x3a`, `0x46`, `0x5
 `0x62`, `0x84` and `0x9c`, and the one the transition wants is `0x62`, at
 `(5.50, -2.75)`.
 
+### The scene remembers where you came from: `0x3A` and `--from-scene`
+
+`s01_e014`, the ship interior after the crab, halted its **start entry** at
+`0x9a5` on an unimplemented `0x3A`, and everything the start entry had left to
+do was lost with it — Cleo and Magnus were never spawned or bound, and the
+event channel that sequences the arrival was never armed.
+
+`0x3A` (`FUN_0025DAB8`) takes no operands and returns
+`bcd(DAT_00354D80) * 0x100 + bcd(DAT_00354D84)` — the section and entry of the
+scene the player **came from**, packed as decimal digits by `FUN_0025DA48`, so
+section 14 reads back as `0x14` and a script literal like `0x0113` means
+"section 01, entry 13". (`0x3B`, `FUN_0025DA78`, is the same read against the
+scene that is loaded, `DAT_003551F4`/`DAT_003551F0`.)
+
+**`DAT_00354D80`/`84` is not the `DAT_00354D78`/`7c` pair.** Both hold a
+section and an entry and both mean "previously", which is how the port came to
+have one where the original has two:
+
+- `DAT_00354D78`/`7c` is written at the **end of every load**
+  (`FUN_0022A418:409-410`). By the time the arriving script runs it already
+  names the scene that just loaded, and its readers — `FUN_0022A418:120`,
+  `FUN_00271220` — are comparing to decide whether the map genuinely changed.
+- `DAT_00354D80`/`84` is written only where a change is **requested**
+  (`FUN_0022B2C0`, `FUN_0022B298`, the debug map menu, the game-over path) and
+  nothing in the load disturbs it, so it still names the departure while the
+  destination's script runs. That is the only pair `0x3A` reads.
+
+The port's `FUN_0022B2C0` was writing the first pair. Fixed, and the second
+pair now exists.
+
+`s01_e014`'s start entry is a `0x02` switch on `0x3A` with exactly one case,
+`0x0113`:
+
+- **from `s01_e013`** (the adjacent room): the short arm at `0x9b4` — 76
+  entities, no party bind, no cutscene.
+- **anything else**, which in practice is `s14_e001`, the crab: the arm at
+  `0x9d1` — spawns and binds the two followers, then arms the event channel
+  that fades up from white, drives the camera path for ~300 frames of dialogue,
+  and hands control back with `0x6D 1`.
+
+A scene loaded straight off the command line has no departure, so
+`--from-scene sNN_eMMM` seeds the pair. Without it a direct load takes the
+default arm.
+
+### Terrain triggers now print where to stand
+
+The panel-code list under `--scr-report` groups by the terrain word's **low
+byte**, which is right for `s01_e012`'s doorway codes and useless for a scene
+whose zones live above it: four of `s01_e014`'s ten `0x61` tests use `0x100`,
+`0x400`, `0x4000` and `0x10000` and had no entry in that list at all. Each
+trigger line now carries a `--spawn` for the centroid of the triangles actually
+carrying **that mask**, or `NO TRIANGLE CARRIES THIS BIT` when none do — which
+is a port bug rather than a panel nobody stepped on.
+
+Standing on each in turn is how `s01_e014`'s zones were inventoried:
+
+| mask | what it does |
+| --- | --- |
+| `0x10` | the arrival cutscene; the spawn point sits on it |
+| `0x4`, `0x8` | the room transition — both request `s01_e014 -> s01_e013` |
+| `0x40`, `0x100` | the stairwell: fade to black, `0x6D` lock, then `0x46`/`0x47`/`0x48` driving the camera by hand every frame |
+| `0x20` | `0x6D` lock, no camera opcodes |
+| `0x400`, `0x10000` | `0x6D` lock and a `0x44` camera path |
+| `0x80` | fires, takes no control |
+| `0x4000` | not reached from a spawn; its centroid sits under a floor at `z = 5.5` |
+
+`0x6D`'s lock does hold: `PTR_FUN_0031e0e8[10]` is `jr ra; nop` and
+`OriginalPlayerController` reproduces that. The console line claiming state 10
+was unported was stale and is gone.
+
+Nothing in this scene reads an event flag it does not also write — the arrival
+branch is the only thing it inherits from the scene before it.
+
 ## Battle mode
 
 `s14_e045` stopped because it was already being driven by the battle module.

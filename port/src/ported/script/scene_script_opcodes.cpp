@@ -735,6 +735,38 @@ namespace orphen::ported::script
   // stage's bank and would resolve every streamed prop against the wrong one.
   // 0x3C is how such a scene names its own: it is the first statement of
   // s14_e045's init, at 0x17a3, and it asks for bank 10.
+  // FUN_0025DA48, the BCD pack both coordinate reads go through:
+  // `(v & 0xff) % 10 | (v & 0xff) / 10 << 4`. It is a *pack*, not a conversion
+  // to a number -- section 14 comes back as 0x14, so a script literal like
+  // s01_e014's `0x113` reads as section 01, entry 13 and the comparison is done
+  // in the digits the game prints.
+  namespace
+  {
+    std::uint32_t FUN_0025da48_bcd(std::int32_t value)
+    {
+      const std::uint32_t byte = static_cast<std::uint32_t>(value) & 0xFFu;
+      return (byte % 10u) | ((byte / 10u) << 4);
+    }
+  } // namespace
+
+  // 0x3A (FUN_0025DAB8): the scene the player came *from*, as
+  // `bcd(section) * 0x100 + bcd(entry)`. No operands. FUN_0022B2C0 stored the
+  // pair on the way out and the load did not disturb it, so a destination
+  // script can branch on its own approach -- which is exactly what s01_e014's
+  // start entry does, with a 0x02 switch whose one case is 0x0113.
+  std::uint32_t SceneCommandInterpreter::FUN_0025dab8_backup_map_coordinates()
+  {
+    return FUN_0025da48_bcd(environment_.uGpffffae10_backupSection) * 0x100u +
+           FUN_0025da48_bcd(environment_.uGpffffae14_backupEntry);
+  }
+
+  // 0x3B (FUN_0025DA78): the same read against the scene that is loaded.
+  std::uint32_t SceneCommandInterpreter::FUN_0025da78_map_coordinates()
+  {
+    return FUN_0025da48_bcd(environment_.iGpffffb284_mapSection) * 0x100u +
+           FUN_0025da48_bcd(environment_.uGpffffb280_mapEntry);
+  }
+
   std::uint32_t SceneCommandInterpreter::FUN_0025daf8_set_map_prop_bank()
   {
     const std::uint32_t bank = FUN_0025c258_evaluate();
@@ -4246,6 +4278,14 @@ namespace orphen::ported::script
       }
       return 0;
     }
+
+    case 0x3A:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025dab8_backup_map_coordinates();
+
+    case 0x3B:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_0025da78_map_coordinates();
 
     case 0x3C:
       noteOpcode(opcode, OpcodeSupport::Modelled);

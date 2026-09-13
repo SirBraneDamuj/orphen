@@ -69,6 +69,13 @@ namespace orphen::port
     std::filesystem::path voiceIndexPath;
     orphen::harness::McbSceneSelection discScene;
     bool hasDiscScene = false;
+    // --from-scene sNN_eMMM: seed DAT_00354D80/84, the pair FUN_0022B2C0 leaves
+    // naming the scene the player departed. Loading a scene straight off the
+    // command line has no departure, so without this a script that switches on
+    // opcode 0x3A takes its default arm. s01_e014 reached from the crab boss is
+    // `--from-scene s14_e001`.
+    orphen::harness::McbSceneSelection fromScene;
+    bool hasFromScene = false;
     bool exitAfterUsage = false;
     bool loadOnly = false;
     bool printSceneTree = false;
@@ -351,6 +358,15 @@ namespace orphen::port
     // was current when the load started, which the *next* load compares against.
     int DAT_00354d78_previousSection_ = -1;
     int DAT_00354d7c_previousEntry_ = -1;
+    // DAT_00354d80 / DAT_00354d84, a **different** pair -- gp `uGpffffae10` and
+    // `uGpffffae14`. Written only where a scene change is *requested*
+    // (FUN_0022B2C0, FUN_0022B298, the debug map menu, the game-over path), so
+    // unlike the pair above it still names where the player came *from* while
+    // the destination's script runs. Opcode 0x3A is its only script reader, and
+    // s01_e014's start entry switches on it to tell the arrival from s01_e013
+    // apart from the one out of the crab boss.
+    int DAT_00354d80_backupSection_ = -1;
+    int DAT_00354d84_backupEntry_ = -1;
     // DAT_0031e668. FUN_002610a8 copies the lead's +0x20..+0x28 here on the way
     // out; FUN_00261068 and FUN_0026bc10 are the two that copy it back into the
     // spawn point DAT_00325340. Neither is reached yet, so this is written and

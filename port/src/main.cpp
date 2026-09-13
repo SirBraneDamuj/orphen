@@ -33,6 +33,11 @@ namespace
                  "                  table the game loads at boot. Sets how long each\n"
                  "                  line of dialogue holds. Defaults to searching the\n"
                  "                  disc root for either.\n"
+                 "  --from-scene <sNN_eMMM>\n"
+                 "                  name the scene the player arrived from, seeding\n"
+                 "                  the pair opcode 0x3A reads. s01_e014 branches on\n"
+                 "                  it, and without it a direct load takes that\n"
+                 "                  switch's default arm.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
                  "  --scr-dump <p>  write the decoded scene script blob out, exactly as\n"
                  "                  the interpreter sees it.\n"
@@ -142,6 +147,16 @@ namespace
         }
         config.discScene = orphen::harness::parseSceneName(argv[++argumentIndex]);
         config.hasDiscScene = true;
+        continue;
+      }
+      if (argument == "--from-scene")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--from-scene requires sNN_eMMM");
+        }
+        config.fromScene = orphen::harness::parseSceneName(argv[++argumentIndex]);
+        config.hasFromScene = true;
         continue;
       }
       if (argument == "--no-scr-tick")

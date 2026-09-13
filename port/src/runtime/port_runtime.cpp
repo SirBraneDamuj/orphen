@@ -250,6 +250,15 @@ namespace orphen::port
       mapViewer_.loadDiscSceneMap(config.discRoot, config.discScene);
     }
 
+    // The command line's stand-in for a departure. FUN_0022B2C0 would have
+    // written this pair on the way out of the previous scene; a direct load has
+    // no previous scene, so --from-scene supplies it.
+    if (config.hasFromScene)
+    {
+      DAT_00354d80_backupSection_ = static_cast<int>(config.fromScene.section);
+      DAT_00354d84_backupEntry_ = static_cast<int>(config.fromScene.entry);
+    }
+
     discRoot_ = config.discRoot;
     loadMapPropDescriptors();
 
@@ -1336,6 +1345,12 @@ namespace orphen::port
     environment.entityPool = &entityPool_;
     environment.descriptors = &descriptorTable_;
     environment.state = &sceneScript_.state();
+    // DAT_003551f4 / DAT_003551f0 and the backup pair DAT_00354d80 /
+    // DAT_00354d84 the scene change leaves behind, for opcodes 0x3B and 0x3A.
+    environment.iGpffffb284_mapSection = DAT_003551f4_sceneSection_;
+    environment.uGpffffb280_mapEntry = DAT_003551f0_sceneEntry_;
+    environment.uGpffffae10_backupSection = DAT_00354d80_backupSection_;
+    environment.uGpffffae14_backupEntry = DAT_00354d84_backupEntry_;
     environment.DAT_00571dc0_screenFade = &DAT_00571dc0_screenFade_;
     environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
     environment.DAT_00355054_letterbox = &DAT_00355054_letterbox_;
@@ -1523,8 +1538,12 @@ namespace orphen::port
     {
       const auto &lead = entityPool_.leadPlayer();
       DAT_0031e668_departurePosition_ = {lead.positionX20, lead.positionZ24, lead.positionY28};
-      DAT_00354d78_previousSection_ = DAT_003551f4_sceneSection_;
-      DAT_00354d7c_previousEntry_ = DAT_003551f0_sceneEntry_;
+      // FUN_0022B2C0:8-9 writes DAT_00354d80/84, **not** the DAT_00354d78/7c
+      // pair FUN_0022A418:409 keeps. The port had it on the wrong pair, which
+      // both clobbered the load comparison early and left opcode 0x3A with
+      // nothing to read.
+      DAT_00354d80_backupSection_ = DAT_003551f4_sceneSection_;
+      DAT_00354d84_backupEntry_ = DAT_003551f0_sceneEntry_;
       DAT_00325340_requestedSpawn_ = spawn;
       DAT_003551f4_sceneSection_ = section;
       DAT_003551f0_sceneEntry_ = entry;
@@ -4551,6 +4570,38 @@ namespace orphen::port
 
     if (!scriptTrace_.terrainTriggers().empty())
     {
+      // Where the triangles carrying each tested mask actually are, so a trigger
+      // can be walked onto -- or spawned onto with --spawn -- on purpose. Keyed
+      // by the mask the script asked about rather than by the terrain word,
+      // because a mask above the low byte never appears in the panel-code list
+      // below: s01_e014 tests 0x100, 0x400, 0x4000 and 0x10000, and four of its
+      // ten zones were invisible here.
+      std::map<std::uint32_t, std::pair<std::size_t, orphen::ported::psm2::Vec3>> maskCentroids;
+      if (const auto *map = mapViewer_.loadedMap(); map != nullptr)
+      {
+        for (const auto &entry : scriptTrace_.terrainTriggers())
+        {
+          auto &accumulator = maskCentroids[entry.second.mask];
+          for (const auto &triangle : map->derivedTriangles)
+          {
+            if (triangle.primitiveIndex >= map->DAT_003556b0_dRecords78.size() ||
+                (map->DAT_003556b0_dRecords78[triangle.primitiveIndex].terrainFlags &
+                 entry.second.mask) == 0)
+            {
+              continue;
+            }
+            for (const auto vertexIndex : triangle.vertexIndices)
+            {
+              const auto &position = map->DAT_0035569c_sectionCRecords.at(vertexIndex).position;
+              accumulator.second.x += position.x;
+              accumulator.second.y += position.y;
+              accumulator.second.z += position.z;
+            }
+            accumulator.first += triangle.vertexIndices.size();
+          }
+        }
+      }
+
       std::cout << "terrain triggers (opcode 0x61, the floor panels):\n";
       for (const auto &entry : scriptTrace_.terrainTriggers())
       {
@@ -4560,7 +4611,24 @@ namespace orphen::port
                   << " (selector 0x" << static_cast<unsigned>(entry.second.selector) << ")"
                   << " lastSeen=0x" << entry.second.observedWord << std::dec
                   << " tests=" << entry.second.tests
-                  << " passes=" << entry.second.passes << '\n';
+                  << " passes=" << entry.second.passes;
+        const auto centroid = maskCentroids.find(entry.second.mask);
+        if (centroid == maskCentroids.end() || centroid->second.first == 0)
+        {
+          // No triangle in the map carries the bit, so the trigger can never
+          // fire. That is a port bug -- or a mask read wrong -- rather than a
+          // panel the player has simply not stepped on.
+          std::cout << "  NO TRIANGLE CARRIES THIS BIT";
+        }
+        else
+        {
+          const float count = static_cast<float>(centroid->second.first);
+          std::cout << "  --spawn " << std::fixed << std::setprecision(2)
+                    << centroid->second.second.x / count << ","
+                    << centroid->second.second.y / count << ","
+                    << centroid->second.second.z / count << std::defaultfloat;
+        }
+        std::cout << '\n';
       }
 
       // Which panel bits the map actually carries, so a panel that never fires
@@ -6667,8 +6735,8 @@ namespace orphen::port
     if (locks != 0 && reportedPlayerLocks_ == 0)
     {
       reportedPlayerLocks_ = 1;
-      std::cout << "[panel] player control taken (0x6D); the lead's state-10 handler"
-                   " is not ported, so it does not hold\n";
+      std::cout << "[panel] player control taken (0x6D); the lead sits in state 10"
+                   " until the script releases it\n";
     }
   }
 

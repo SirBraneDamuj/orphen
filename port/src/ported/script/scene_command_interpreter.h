@@ -673,6 +673,18 @@ namespace orphen::ported::script
     // anything, so the script layer needs to see it.
     bool DAT_003555d3_groupEScene = false;
 
+    // DAT_003551F4 / DAT_003551F0 (gp `iGpffffb284` / `uGpffffb280`): the
+    // section and entry of the scene that is loaded, which opcode 0x3B reads
+    // back as BCD.
+    int iGpffffb284_mapSection = -1;
+    int uGpffffb280_mapEntry = -1;
+    // DAT_00354D80 / DAT_00354D84 (gp `uGpffffae10` / `uGpffffae14`): the pair
+    // FUN_0022B2C0 saves the *departing* scene into when a map change is
+    // requested. It is not overwritten by the load, so while this scene runs it
+    // still names where the player came from -- opcode 0x3A's whole subject.
+    int uGpffffae10_backupSection = -1;
+    int uGpffffae14_backupEntry = -1;
+
     // FUN_00217e18: drop an installed script camera, restoring the saved pose
     // when the argument is non-zero. Opcode 0x45's whole effect.
     std::function<void(bool restore)> FUN_00217e18_release_camera;
@@ -1044,6 +1056,8 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025f548_find_entity_by_tag();  // 0x62
     std::uint32_t FUN_0025dff0_set_manual_camera();   // 0x46
     std::uint32_t FUN_00265290_get_or_set_gate_mask(); // 0xE7 / 0xE8
+    std::uint32_t FUN_0025dab8_backup_map_coordinates(); // 0x3A
+    std::uint32_t FUN_0025da78_map_coordinates();        // 0x3B
     std::uint32_t FUN_0025daf8_set_map_prop_bank();   // 0x3C
     std::uint32_t FUN_002601f8_entity_distance_or_angle(); // 0x74, 0x75
 
