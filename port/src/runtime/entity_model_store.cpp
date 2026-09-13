@@ -129,10 +129,41 @@ namespace orphen::port
     return {};
   }
 
-  const orphen::ported::model::Psc3Model *EntityModelStore::loadModel(std::uint16_t meshId,
-                                                                   std::uint8_t flags04)
+  // **Which archive a mesh id names is a property of the record, not a chain to
+  // walk.** FUN_00221FD8:268-300 loads the whole 0x1F1 item band out of ITM.BIN
+  // in one pass at boot -- PTR_DAT_0031FEC8 is exactly
+  // kDAT_0031a95c_sharedModels + 0x1F1 * 0x2C -- and stamps each record's +0x14
+  // itself, so those records never reach FUN_00222498 and their mesh id is an
+  // ITM.BIN index that means nothing to GRP.BIN. Every other record goes through
+  // FUN_00222498, whose `(flags04 >> 5) & 2` picks MAP.BIN on bit 6 and GRP.BIN
+  // otherwise.
+  EntityModelStore::ModelArchive EntityModelStore::archiveForRecord(
+      const orphen::ported::entity::EntityModelRecord &record)
   {
-    const auto existing = models_.find(meshId);
+    using orphen::ported::entity::kDAT_0031a95c_sharedModels;
+    using orphen::ported::entity::kModelRecordStride;
+    constexpr std::uint32_t kPTR_DAT_0031fec8_itemBand =
+        kDAT_0031a95c_sharedModels + 0x1F1u * kModelRecordStride;
+    constexpr std::uint32_t kItemBandEnd =
+        kPTR_DAT_0031fec8_itemBand + 0x80u * kModelRecordStride;
+    if (record.recordAddress >= kPTR_DAT_0031fec8_itemBand &&
+        record.recordAddress < kItemBandEnd)
+    {
+      return ModelArchive::Itm;
+    }
+    return (record.flags0x04 & 0x40u) != 0 ? ModelArchive::Map : ModelArchive::Grp;
+  }
+
+  const orphen::ported::model::Psc3Model *EntityModelStore::loadModel(
+      const orphen::ported::entity::EntityModelRecord &record)
+  {
+    const std::uint16_t meshId = record.meshId0x00;
+    const ModelArchive source = archiveForRecord(record);
+    // Keyed by archive as well as id now that three of them are in play: the
+    // same id is a different model in each, and a bare id let the first loader
+    // to ask cache its answer for the others.
+    const std::uint32_t cacheKey = modelCacheKey(record);
+    const auto existing = models_.find(cacheKey);
     if (existing != models_.end())
     {
       return existing->second.valid ? &existing->second : nullptr;
@@ -155,7 +186,8 @@ namespace orphen::port
     // matches the scene bundle's copy, not the boot bundle's.
     std::vector<std::uint8_t> bytes;
     const std::array<const orphen::harness::SceneResourceProvider *, 2> providers{
-        sceneResources_, bootResources_.has_value() ? &*bootResources_ : nullptr};
+        source == ModelArchive::Itm ? nullptr : sceneResources_,
+        (source != ModelArchive::Itm && bootResources_.has_value()) ? &*bootResources_ : nullptr};
     const std::array<std::uint16_t, 2> categories{orphen::harness::kGrpCategory,
                                                   orphen::harness::kMapCategory};
     for (const orphen::harness::SceneResourceProvider *provider : providers)
@@ -166,12 +198,12 @@ namespace orphen::port
       }
       for (const std::uint16_t category : categories)
       {
-        const orphen::harness::SceneResourceRecord *record = provider->find(category, meshId);
-        if (record == nullptr)
+        const orphen::harness::SceneResourceRecord *bundled = provider->find(category, meshId);
+        if (bundled == nullptr)
         {
           continue;
         }
-        bytes = provider->decodeRecord(*record);
+        bytes = provider->decodeRecord(*bundled);
         if (!bytes.empty())
         {
           break;
@@ -182,34 +214,29 @@ namespace orphen::port
         break;
       }
     }
-    // **FUN_00222498, the original's own model load.** Neither bundle answered,
-    // so go where the game goes:
+    // **FUN_00222498, the original's own model load.** No bundle answered (or
+    // this is an item record, which never asks one), so go where the game goes:
     //
     //     FUN_00223268((record->flags04 >> 5) & 2, record->meshId, staging);
     //     FUN_002F3118(staging, dest);            // the LZ the archives store
     //     if (flags04 & 1) assert *dest == 'PSC3';
     //
-    // `(flags04 >> 5) & 2` is 2 when bit 6 is set and 0 otherwise, i.e. archive
-    // 2 (MAP.BIN) or archive 0 (GRP.BIN) out of PTR_s_GRP_BIN_00315A58. Every
-    // spell effect record in the game carries flags04 = 0x2D, bit 6 clear, so
-    // **the whole spell effect set lives in GRP.BIN** -- which is the one
-    // archive a disc root is likely to be missing, and when it is, none of them
-    // can draw however well their behaviour is ported.
-    const orphen::harness::FlatBinArchive &archive =
-        (flags04 & 0x40u) != 0 ? mapArchive_ : grpArchive_;
-    if (bytes.empty() && archive.valid())
+    // Archive 0 is GRP.BIN and archive 2 is MAP.BIN out of
+    // PTR_s_GRP_BIN_00315A58; the item band's archive 4 is ITM.BIN, read whole
+    // rather than per-mesh. Every spell effect record carries flags04 = 0x2D,
+    // bit 6 clear, so the whole spell effect set lives in GRP.BIN.
+    if (bytes.empty())
     {
-      bytes = archive.decode(meshId);
-    }
-    if (bytes.empty() && itmArchive_.valid())
-    {
-      // FUN_00221fd8's own model pass: the records at PTR_DAT_0031FEC8 pull
-      // their meshes from ITM.BIN by the record's +0x00 id rather than from a
-      // bundle. That is where the 0x1F1 band's item models live.
-      bytes = itmArchive_.decode(meshId);
+      const orphen::harness::FlatBinArchive &archive = source == ModelArchive::Itm  ? itmArchive_
+                                                       : source == ModelArchive::Map ? mapArchive_
+                                                                                     : grpArchive_;
+      if (archive.valid())
+      {
+        bytes = archive.decode(meshId);
+      }
     }
     orphen::ported::model::Psc3Model model = orphen::ported::model::loadPsc3Model(bytes);
-    const auto inserted = models_.emplace(meshId, std::move(model)).first;
+    const auto inserted = models_.emplace(cacheKey, std::move(model)).first;
     return inserted->second.valid ? &inserted->second : nullptr;
   }
 
@@ -268,7 +295,7 @@ namespace orphen::port
     EntityModelBinding binding;
     binding.meshId = record.meshId0x00;
     binding.textureId = record.texId0x02;
-    binding.model = loadModel(record.meshId0x00, record.flags0x04);
+    binding.model = loadModel(record);
     if (binding.model != nullptr && !binding.model->uvAnimationScript.empty())
     {
       // FUN_00221E70's loop: four copies of the same script, each seeded by
@@ -280,7 +307,7 @@ namespace orphen::port
     }
     if (binding.model == nullptr)
     {
-      const auto stored = models_.find(record.meshId0x00);
+      const auto stored = models_.find(modelCacheKey(record));
       binding.diagnostic = stored != models_.end() && !stored->second.diagnostic.empty()
                                ? stored->second.diagnostic
                                : "grp record not in any open bundle";

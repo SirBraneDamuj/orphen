@@ -7,22 +7,30 @@
 // FUN_00266118's "make sure this record's model and texture are loaded" becomes
 // ensureLoaded below.
 //
-// Two resource sets are searched, in order:
+// **The archive a record reads from is a property of the record**, and
+// archiveForRecord below is the whole rule. The 0x1F1 item band is loaded whole
+// out of ITM.BIN at boot by FUN_00221FD8; everything else goes one model at a
+// time through FUN_00222498, whose `(flags04 >> 5) & 2` picks MAP.BIN on +0x04
+// bit 6 and GRP.BIN otherwise.
+//
+// Two resource sets are searched ahead of that, in order:
 //
 //   the scene bundle   whatever --scene selected
 //   the boot bundle    s00_e000
 //
-// The second one needs justifying. s01_e024's bundle carries grp_0001, 0003,
-// 0006, 0008, 0009, 000a, 0091, 0094 and 0128 -- the lead player, the party and
-// the enemies -- but not the chests' grp_0172 or its tex_0179. In the real game
-// those come from GRP.BIN, loaded once at boot by FUN_00221fd8, and GRP.BIN is
-// not present in this working copy. The s00_e000 bundle's records are
-// byte-identical to what the EE dump shows resident: the PSC3 at 0x00DDB000
-// matches out/target_all/s00_e000/grp_0172.psc3 exactly apart from the four
-// pointers FUN_00221f60 relocates.
+// They are a shortcut, not the original's path -- the extracted bundles carry
+// copies of many of the same models, and the port ran on them alone before the
+// flat archives were opened. They are still consulted first for a GRP or MAP
+// record because the s00_e000 bundle's records are byte-identical to what the
+// EE dump shows resident: the PSC3 at 0x00DDB000 matches
+// out/target_all/s00_e000/grp_0172.psc3 exactly apart from the four pointers
+// FUN_00221f60 relocates.
 //
-// So this reproduces the *observed memory* rather than the original's file
-// path. If GRP.BIN turns up, this is the thing to revisit.
+// **An item record skips them.** Its mesh id indexes ITM.BIN and nothing else,
+// so a bundle or GRP.BIN answer for the same number is a different model
+// entirely -- ITM.BIN id 5 is the 4-submesh Smoke of Pain glyph, GRP.BIN id 5 a
+// 35-submesh character, and letting the id fall through to GRP.BIN is what put
+// a head in Orphen's hand.
 
 #include "harness/flat_bin_archive.h"
 #include "harness/scene_resource_provider.h"
@@ -128,12 +136,26 @@ namespace orphen::port
     orphen::harness::FlatBinArchive grpArchive_;
     orphen::harness::FlatBinArchive mapArchive_;
     orphen::harness::FlatBinArchive texArchive_;
-    std::map<std::uint16_t, orphen::ported::model::Psc3Model> models_;
+    // Keyed by (archive, mesh id): see archiveForRecord.
+    std::map<std::uint32_t, orphen::ported::model::Psc3Model> models_;
     std::map<std::uint32_t, EntityModelBinding> bindings_;
     std::map<std::uint32_t, std::uint32_t> modelRecordForTypeId_;
 
     std::vector<std::uint8_t> decodeResource(std::uint16_t category, std::uint16_t resourceId) const;
-    const orphen::ported::model::Psc3Model *loadModel(std::uint16_t meshId, std::uint8_t flags04);
+    // Which of the three flat archives a model record's mesh id indexes.
+    enum class ModelArchive
+    {
+      Grp,
+      Map,
+      Itm,
+    };
+    static ModelArchive archiveForRecord(const orphen::ported::entity::EntityModelRecord &record);
+    static std::uint32_t modelCacheKey(const orphen::ported::entity::EntityModelRecord &record)
+    {
+      return (static_cast<std::uint32_t>(archiveForRecord(record)) << 16) | record.meshId0x00;
+    }
+    const orphen::ported::model::Psc3Model *loadModel(
+        const orphen::ported::entity::EntityModelRecord &record);
   };
 
 } // namespace orphen::port
