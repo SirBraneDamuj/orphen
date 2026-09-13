@@ -72,6 +72,23 @@ namespace orphen::ported::render
       DAT_00343880_rotation_ = rotationTenthDegrees;
     }
 
+    // The level-5 summons write DAT_0034387C and DAT_0034387E the same way --
+    // 0x28 on each for the creature's whole run, then zero when it leaves --
+    // and leave the offsets wherever the last 0xC9 put them.
+    void set_DAT_0034387c_scale(std::int16_t scaleX, std::int16_t scaleY)
+    {
+      DAT_0034387c_scaleX_ = scaleX;
+      DAT_0034387e_scaleY_ = scaleY;
+    }
+
+    // Falcon of Death's `DAT_00343880 = -DAT_00343880`, every frame it runs.
+    // The smear mirrors frame to frame instead of trailing, which is what makes
+    // its ghost shimmer.
+    void flip_DAT_00343880_rotation()
+    {
+      DAT_00343880_rotation_ = static_cast<std::int16_t>(-DAT_00343880_rotation_);
+    }
+
     // FUN_002000c0:214's test.
     bool FUN_002000c0_armed() const
     {

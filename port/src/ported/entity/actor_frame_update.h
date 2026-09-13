@@ -372,6 +372,50 @@ namespace orphen::ported::entity
     std::uint16_t DAT_00354e96_targetDisplayTicks = 0;
     std::uint16_t DAT_00354ecc_battleSuspended = 0;
 
+    // The other side of that gate. A level-5 summon **raises** DAT_00354ECC for
+    // its whole run -- that is what makes the spell-reward cutscene's beat wait
+    // for the creature instead of advancing the frame after the cast -- and
+    // drops it again when the creature leaves. The word lives in the battle
+    // module, so the read above is a copy and this is the write.
+    std::function<void(std::uint32_t value)> DAT_00354ecc_setBattleSuspended;
+
+    // DAT_00355700, the map draw's global fade cap, as a summon needs it: the
+    // creature's arrival ramps it 0x7F -> 3 and its exit puts it back. The
+    // chest cutscene reaches the same byte through its own context; this is the
+    // actor layer's pointer to it. Null in harnesses with no renderer, which
+    // simply leaves the map at full brightness.
+    std::uint8_t *DAT_00355700_globalFadeCap = nullptr;
+
+    // FUN_00206A90 / FUN_00206F08, the player's voice, as the summons key it:
+    // clips 2, 3 and 4 on the creature's three animation markers and 5 on one
+    // frame of Pinnacle of the Sun's. `channel` is DAT_0031DA65[+0x95], the
+    // same byte the cast incantation uses. Null in a harness with no sound.
+    std::function<bool()> FUN_00206a90_voice_busy;
+    std::function<bool(std::uint32_t channel, std::uint32_t clipIndex)> FUN_00206f08_play_voice;
+    // DAT_0031DA65 + partySlot, indexed by the *1-based* party slot in +0x95.
+    std::function<std::uint8_t(std::int16_t partySlot)> DAT_0031da65_voiceChannel;
+
+    // The three battle-owned entities a summon has to exempt from the freeze it
+    // puts on the field: DAT_0031DA8C[member] (the caster's ground ring, which
+    // it also drives to animation 3), DAT_0031DAAC[member] (the caster's shield
+    // effect) and DAT_0031DAD0 (the one shared hit effect). All three are
+    // addressed out of the battle tables, so they are resolved on that side
+    // rather than re-deriving the table layout here. False outside a battle.
+    struct SummonExemptSlots
+    {
+      std::int32_t DAT_0031da8c_castRing = -1;
+      std::int32_t DAT_0031daac_shield = -1;
+      std::int32_t DAT_0031dad0_sharedHitEffect = -1;
+    };
+    std::function<bool(std::uint32_t member, SummonExemptSlots &out)> DAT_0031da8c_summonExempt;
+
+    // DAT_00354EC0, the scripted set-piece marker table. Non-zero exactly when
+    // a scene module installed its own targeting, which every 0x26Cxxx cutscene
+    // does -- the spell-reward demo included. Pinnacle of the Sun reads it to
+    // decide whether its blast lets the victims move again, and in a set piece
+    // it does not.
+    std::uint32_t DAT_00354ec0_markerTable = 0;
+
     // DAT_003555d0. FUN_00208450 clears it at the top of every frame and raises
     // it for any collision group whose dirty byte is live -- i.e. "movable
     // collision moved this frame". FUN_002262c0:112 reads it, and it is the

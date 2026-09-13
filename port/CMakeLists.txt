@@ -140,6 +140,7 @@ target_sources(orphen_port
     src/ported/entity/entity_collision.cpp
     src/ported/entity/follower_navmesh.cpp
     src/ported/entity/original_battle_enemy.cpp
+    src/ported/entity/original_summon_stage.cpp
     src/ported/entity/original_boss_camera.cpp
     src/ported/entity/original_crab_boss.cpp
     src/ported/entity/original_swarm_crab.cpp
@@ -157,6 +158,7 @@ target_sources(orphen_port
     src/ported/entity/player_bandana.cpp
     src/ported/entity/actor_frame_update.h
     src/ported/entity/original_battle_enemy.h
+    src/ported/entity/original_summon_stage.h
     src/ported/entity/original_entity_sound.cpp
     src/ported/entity/original_entity_sound.h
     src/ported/entity/actor_trace.cpp

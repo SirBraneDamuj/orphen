@@ -1,6 +1,7 @@
 #include "ported/entity/original_battle_enemy.h"
 
 #include "ported/entity/original_enemy_attack.h"
+#include "ported/entity/original_hit_test.h"
 
 #include "ported/entity/actor_dispatch_table.h"
 #include "ported/model/psc3_skeleton.h"
@@ -56,6 +57,8 @@ namespace orphen::ported::entity
     inline constexpr std::uint16_t kFUN_00280560_enemy80DeathCue = 0x1E6;
     inline constexpr std::uint16_t kFUN_0028b698_enemy8aHitCue = 0x1CA;
     inline constexpr std::uint16_t kFUN_0028b568_enemy8aDeathCue = 0x1CB;
+    // FUN_0028BAC0 (type 0x8B) keys this before actions 2, 4 and 5 run.
+    inline constexpr std::uint16_t kFUN_0028bac0_dummy8bActionCue = 0x113;
 
     // FUN_0028b0e8, the clone's own three constants: how fast it turns toward
     // what it is chasing (no 0.03125 on this one -- it is already per tick),
@@ -118,10 +121,20 @@ namespace orphen::ported::entity
     // -- so nothing here reads a record that was never filled. The only other
     // lasting effect is DAT_00354C64, the record count, which FUN_0023f8b8
     // re-establishes for itself on the next line.
+    // Which of the three types is running one of the shared helpers below.
+    // The original has three copies of each; they differ only in the handful of
+    // constants named at each use.
+    enum class EnemyKind
+    {
+      Flyer80,
+      Maneater8a,
+      Dummy8b,
+    };
+
     void enemy_state0(OriginalEntity &entity,
                       std::size_t slot,
                       const ActorEnvironment &environment,
-                      bool isEnemy8a)
+                      EnemyKind kind)
     {
       entity.scale14c = 1.0f;
       entity.scaleZ150 = 1.0f;
@@ -152,7 +165,10 @@ namespace orphen::ported::entity
       // and the Maneater's spit carry.
       FUN_00216078_fill_attack_records(
           static_cast<std::int16_t>(entity.typeId00),
-          isEnemy8a ? DAT_0058b140_enemy8aAttacks() : DAT_005739b0_enemy80Attacks(), environment);
+          kind == EnemyKind::Maneater8a  ? DAT_0058b140_enemy8aAttacks()
+          : kind == EnemyKind::Dummy8b   ? DAT_0058b150_enemy8bAttacks()
+                                         : DAT_005739b0_enemy80Attacks(),
+          environment);
 
       // FUN_0023f8b8, from the caller the original really uses. The port also
       // calls it at the spawn, for the enemy types whose state 0 is not ported
@@ -166,7 +182,7 @@ namespace orphen::ported::entity
       // flyer's state 0. +0x1AC is what FUN_0028b568 branches on when the
       // Maneater dies: 1 means "placed, and it owns a seed link"; a clone grown
       // by FUN_0028b740 carries 2 instead and tears down its *parent's* link.
-      if (isEnemy8a)
+      if (kind == EnemyKind::Maneater8a)
       {
         entity.enemySpawnFlag1ac = 1;
       }
@@ -182,12 +198,13 @@ namespace orphen::ported::entity
     // unconditionally -- it always faces the player.
     void enemy_idle_default(OriginalEntity &entity,
                             const ActorEnvironment &environment,
-                            bool useRecordTarget,
+                            EnemyKind kind,
                             ActorEnvironment::BattleActorView &view)
     {
       const EntityPool &pool = *environment.entityPool;
-      const OriginalEntity &target =
-          useRecordTarget ? FUN_0023a958_target(pool, view.target2c) : pool.slot(0);
+      const OriginalEntity &target = kind == EnemyKind::Flyer80
+                                         ? FUN_0023a958_target(pool, view.target2c)
+                                         : pool.slot(0);
       entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, target);
 
       const std::int32_t roll =
@@ -196,18 +213,18 @@ namespace orphen::ported::entity
           static_cast<std::uint16_t>((static_cast<std::int16_t>(roll % 100) + 100) * 0x20);
 
       const std::uint32_t pick = environment.random ? environment.random() : 0;
-      if (useRecordTarget)
-      {
-        // FUN_0027f5c0: one bit, animation 1 or 0.
-        FUN_00225bf0_set_state_and_animation(entity, 1,
-                                             static_cast<std::uint16_t>((pick & 1u) == 0 ? 1 : 0));
-      }
-      else
+      if (kind == EnemyKind::Maneater8a)
       {
         // FUN_0028ac38: two bits, animation 0, 2 or 3.
         const std::uint32_t bits = pick & 3u;
         FUN_00225bf0_set_state_and_animation(
             entity, 1, static_cast<std::uint16_t>(bits == 0 ? 0 : (bits == 1 ? 2 : 3)));
+      }
+      else
+      {
+        // FUN_0027f5c0 and FUN_0028bbd8: one bit, animation 1 or 0.
+        FUN_00225bf0_set_state_and_animation(entity, 1,
+                                             static_cast<std::uint16_t>((pick & 1u) == 0 ? 1 : 0));
       }
       view.currentAction0f = 6;
     }
@@ -226,7 +243,7 @@ namespace orphen::ported::entity
                             const ActorEnvironment &environment,
                             ActorEnvironment::BattleActorView &view,
                             bool haveRecord,
-                            bool useRecordTarget,
+                            EnemyKind kind,
                             const std::function<void(std::int16_t action)> &dispatch)
     {
       if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1)
@@ -257,8 +274,20 @@ namespace orphen::ported::entity
         // The action body publishes +0x0F itself -- each arm of the table sets
         // a different one, and action 4 on type 0x8A deliberately publishes 2.
         // The pending byte is cleared after it runs, not before.
-        if (action == 1 || action == 2 || action == 4 || action == 5 || action == 6 ||
-            action == 7 || action == 8)
+        // FUN_0028BAC0's two differences from the other two wrappers: actions
+        // 2, 4 and 5 key cue 0x113 before the body runs, and the dispatch set
+        // is two wider -- 9 is the flinch the counter roll asks for and 0x11
+        // the stagger the guard reaction ends in.
+        if (kind == EnemyKind::Dummy8b && (action == 2 || action == 4 || action == 5) &&
+            environment.FUN_00267d38_playSound)
+        {
+          environment.FUN_00267d38_playSound(kFUN_0028bac0_dummy8bActionCue, entity);
+        }
+        const bool dispatched =
+            action == 1 || action == 2 || action == 4 || action == 5 || action == 6 ||
+            action == 7 || action == 8 ||
+            (kind == EnemyKind::Dummy8b && (action == 9 || action == 0x11));
+        if (dispatched)
         {
           dispatch(static_cast<std::int16_t>(action));
         }
@@ -269,7 +298,7 @@ namespace orphen::ported::entity
       {
         return false;
       }
-      enemy_idle_default(entity, environment, useRecordTarget, view);
+      enemy_idle_default(entity, environment, kind, view);
       return false;
     }
 
@@ -1327,7 +1356,7 @@ namespace orphen::ported::entity
       }
     };
 
-    if (!enemy_action_check(entity, environment, view, haveRecord, true,
+    if (!enemy_action_check(entity, environment, view, haveRecord, EnemyKind::Flyer80,
                             [&](std::int16_t action)
                             { FUN_0027f5c8_enemy80_action(entity, environment, view, action); }))
     {
@@ -1374,7 +1403,7 @@ namespace orphen::ported::entity
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
-      enemy_state0(entity, slot, environment, false);
+      enemy_state0(entity, slot, environment, EnemyKind::Flyer80);
     }
     else if (haveRecord)
     {
@@ -1504,7 +1533,7 @@ namespace orphen::ported::entity
       }
     };
 
-    if (!enemy_action_check(entity, environment, view, haveRecord, false,
+    if (!enemy_action_check(entity, environment, view, haveRecord, EnemyKind::Maneater8a,
                             [&](std::int16_t action)
                             { FUN_0028ac40_enemy8a_action(entity, environment, view, action); }))
     {
@@ -1545,7 +1574,7 @@ namespace orphen::ported::entity
     trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
     if (entity.state60 == 0)
     {
-      enemy_state0(entity, slot, environment, true);
+      enemy_state0(entity, slot, environment, EnemyKind::Maneater8a);
     }
     // Unlike the flyer's, both of the Maneater's damage states test +0x198 for
     // null themselves, so they run whether or not the entity has a record.
@@ -1584,4 +1613,982 @@ namespace orphen::ported::entity
     publish();
   }
 
+
+  // ==================================================== type 0x8B, the dummy
+  //
+  //   src/FUN_0028b848.c  the wrapper: two cue keys off the animation cursor,
+  //                       the landing cue off +0x1A8 bit 0, the action check,
+  //                       the damage reaction, then the state table
+  //   src/FUN_0028bac0.c  its action check -- FUN_0027F4B0's shape with cue
+  //                       0x113 on actions 2/4/5 and two more actions dispatched
+  //   src/FUN_0028bbd8.c  the idle default, FUN_0023A480 plus a one-bit roll
+  //   src/FUN_0028bbe0.c  the action table
+  //   src/FUN_0028d2a0.c  "walk home", shared by four of the states
+  //   0x00325B60          its twelve state handlers
+  //
+  // s14_e031 stands one of these at (3.5, 0, 0) and gives it +0x95 = 50 from
+  // the scene script's object register 0x11. **That byte plus the +0x12A its
+  // state 0 fills is the whole of the demo's targeting**: FUN_00249610 only
+  // keeps a target whose +0x12A is at least 1 and whose +0x95 is at least 9,
+  // and FUN_002476C0 only finds one through the actor record FUN_0023F8B8
+  // binds here. With the behaviour absent the dummy stood there inert, the
+  // control block's target stayed at the 1 state 120 parks it on, the spell
+  // landed two units in front of the caster instead of on the dummy, and the
+  // level-5 summon -- which needs `target > 1` -- could never fire.
+  namespace
+  {
+    // The wrapper's three: 0x10A off animation cursor 4 on animations 8 and 9,
+    // and 0x10C the frame it touches down out of animation 4.
+    inline constexpr std::uint16_t kFUN_0028b848_swingCue = 0x10A;
+    inline constexpr std::uint16_t kFUN_0028b848_landCue = 0x10C;
+    inline constexpr std::uint16_t kFUN_0028b848_guardCue = 0x110;
+    // The state handlers' own cues.
+    inline constexpr std::uint16_t kFUN_0028c3d0_lungeCue = 0x10B;
+    inline constexpr std::uint16_t kFUN_0028c768_throwCue = 0x10F;
+    inline constexpr std::uint16_t kFUN_0028d0b0_deathCueA = 0x10E;
+    inline constexpr std::uint16_t kFUN_0028d0b0_deathCueB = 0x112;
+    inline constexpr std::uint16_t kFUN_0028d160_hitCue = 0x10D;
+
+    // Every turn rate in the type is the same 0.174533 -- ten degrees at 32
+    // ticks -- and they are eight separate words in the executable, so they get
+    // eight names for the same reason the 0x80's and 0x8A's do.
+    inline constexpr float kDAT_00353548_dummy8bTurnRate = 0.17453289031982422f;
+    inline constexpr float kDAT_0035354c_dummy8bCloseTurnRate = 0.17453289031982422f;
+    inline constexpr float kDAT_0035355c_dummy8bThrowTurnRate = 0.17453289031982422f;
+    inline constexpr float kFGpffff95f0_dummy8bWanderTurnRate = 0.17453289031982422f;
+    inline constexpr float kFGpffff95f8_dummy8bWalkTurnRate = 0.17453289031982422f;
+    inline constexpr float kFGpffff960c_dummy8bHomeTurnRate = 0.17453289031982422f;
+    // The half-angle window the lunge has to be inside to connect, +-30
+    // degrees, and the hop it gives itself when it does.
+    inline constexpr float kDAT_00353550_lungeWindowLow = -0.5235989093780518f;
+    inline constexpr float kDAT_00353554_lungeWindowHigh = 0.5235989093780518f;
+    inline constexpr float kDAT_00353558_lungeHop = 0.052999999374151230f;
+    // pi, under six names: "face away from where I am going" for the states
+    // that back toward their spawn spot, and the offset FUN_0028D2A0 adds.
+    inline constexpr float kPiGpffff95f4_pushedFacing = 0.17453289031982422f;
+    inline constexpr float kPiGpffff9604_walkAway = 3.1415927410125732f;
+    inline constexpr float kPiGpffff9608_walkToward = 3.1415927410125732f;
+    inline constexpr float kPiGpffff9610_homeAway = 3.1415927410125732f;
+    inline constexpr float kPiGpffff9614_homeToward = 3.1415927410125732f;
+    inline constexpr float kDAT_0035358c_goHomeFacing = 3.1415927410125732f;
+    inline constexpr float kFGpffff9600_pushedTurn = 0.17453289031982422f;
+    // fGpffff95d0 / fGpffff95d4, both a full turn: action 7 spreads its
+    // wander up to 45/360 of one to either side of the player's bearing.
+    inline constexpr float kTauGpffff95d0_wanderSpread = 6.2831840515136719f;
+    // DAT_00353588: state 9 holds a 3.12414 guard arc, so a hit taken during
+    // the flinch is a guarded one from almost any direction.
+    inline constexpr float kDAT_00353588_flinchGuardArc = 3.1241397857666016f;
+    // The walk speed both setters write, and the 0x319C the carry timer ends on.
+    inline constexpr float kDummy8bWalkSpeed = 10.0f;
+    inline constexpr std::int32_t kFUN_0028c160_carryEnd = 0x319C;
+
+    // FUN_0023A6A0: the planar distance from an entity to a point.
+    float FUN_0023a6a0_distance_to(const OriginalEntity &entity, float x, float z)
+    {
+      const float dx = x - entity.positionX20;
+      const float dz = z - entity.positionZ24;
+      return std::sqrt(dx * dx + dz * dz);
+    }
+
+    // FUN_0023A4E8: the same between two entities.
+    float FUN_0023a4e8_distance(const OriginalEntity &a, const OriginalEntity &b)
+    {
+      return FUN_0023a6a0_distance_to(a, b.positionX20, b.positionZ24);
+    }
+
+    // FUN_0023A958 again, but as a slot rather than a reference -- the 0x8B
+    // parks what it is aimed at in +0x1AC and reads it back over several frames.
+    std::size_t FUN_0023a958_target_slot(const EntityPool &pool, std::int16_t target)
+    {
+      if (target < 0 || static_cast<std::size_t>(target) >= pool.slotCount())
+      {
+        return 0;
+      }
+      return static_cast<std::size_t>(target);
+    }
+
+    // The spawn spot the record carries, in world units. Four of the twelve
+    // states walk back to it and all four spell it the same way.
+    void dummy8b_home(const ActorEnvironment::BattleActorView &view, float &x, float &z)
+    {
+      x = static_cast<float>(view.spawnX14) / 10.0f;
+      z = static_cast<float>(view.spawnZ16) / 10.0f;
+    }
+
+    // FUN_0028D2A0: give up on whatever it was doing and head for the spawn
+    // spot, facing *away* from it -- states 5 and 6 both walk backwards.
+    void FUN_0028d2a0_dummy8b_go_home(OriginalEntity &entity,
+                                      ActorEnvironment::BattleActorView &view)
+    {
+      view.currentAction0f = 8;
+      entity.enemy8bSpeed1a0 = kDummy8bWalkSpeed;
+
+      float homeX = 0.0f;
+      float homeZ = 0.0f;
+      dummy8b_home(view, homeX, homeZ);
+      entity.battleDesiredFacing19c =
+          std::atan2(homeZ - entity.positionZ24, homeX - entity.positionX20) +
+          kDAT_0035358c_goHomeFacing;
+
+      if (FUN_0023a6a0_distance_to(entity, homeX, homeZ) > 2.0f)
+      {
+        FUN_00225bf0_set_state_and_animation(entity, 5, 3);
+      }
+      else
+      {
+        FUN_00225bf0_set_state_and_animation(entity, 6, 0x0E);
+      }
+    }
+
+    // The per-frame walk step every moving state shares: the record's own reach
+    // added to +0x1A0, scaled by the frame tick.
+    float dummy8b_step(const OriginalEntity &entity,
+                       const ActorEnvironment::BattleActorView &view,
+                       std::uint32_t frameTicks)
+    {
+      return ((entity.enemy8bSpeed1a0 + static_cast<float>(view.attackRange1a)) *
+              static_cast<float>(frameTicks)) /
+             32000.0f;
+    }
+
+    void dummy8b_advance(OriginalEntity &entity, float step)
+    {
+      entity.desiredDeltaX30 += step * std::cos(entity.facingRadians5c);
+      entity.desiredDeltaZ34 += step * std::sin(entity.facingRadians5c);
+    }
+
+    void dummy8b_retreat(OriginalEntity &entity, float step)
+    {
+      entity.desiredDeltaX30 -= step * std::cos(entity.facingRadians5c);
+      entity.desiredDeltaZ34 -= step * std::sin(entity.facingRadians5c);
+    }
+
+    // ------------------------------------------------------- the twelve states
+
+    // FUN_0028C298, state 1: turn toward +0x19C, then run the hold down. The
+    // counter roll it opens with -- FUN_0023ECE8 / FUN_0023ECB8 / FUN_0023EC80,
+    // "is someone aiming at me, and does my record want to flinch about it" --
+    // is **not ported**, so the roll never fires and the dummy stays in the
+    // branch below. That is the branch the retail dump takes too: at the frame
+    // pinnacle_of_the_sun was taken the dummy is in state 1 on animation 1,
+    // with the whole cast in flight. State 9 and FUN_002F1420's type 0x11E
+    // marker are the other half of the same deferral.
+    void FUN_0028c298_dummy8b_turn(OriginalEntity &entity,
+                                   const ActorEnvironment &environment,
+                                   ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      const float step = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kDAT_00353548_dummy8bTurnRate * 0.03125f);
+      if (step != 0.0f)
+      {
+        entity.facingRadians5c += step;
+        return;
+      }
+      const std::int16_t remaining = FUN_0023a678_countdown(
+          static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+      entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+      if (remaining == 0)
+      {
+        view.flags38 &= ~1u;
+      }
+    }
+
+    // FUN_0028C3D0, state 2: close on +0x1AC and swing. Animation 2 is the
+    // wind-up -- it walks while the hold runs and commits to animation 3 when
+    // it expires -- 3 is the lunge itself, 4 the recovery.
+    void FUN_0028c3d0_dummy8b_close(OriginalEntity &entity,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment,
+                                    ActorEnvironment::BattleActorView &view)
+    {
+      EntityPool &pool = *environment.entityPool;
+      view.flags38 |= 1u;
+      const float turn = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kDAT_0035354c_dummy8bCloseTurnRate *
+              0.03125f);
+      if (turn != 0.0f)
+      {
+        entity.facingRadians5c += turn;
+        return;
+      }
+
+      const std::size_t targetSlot = entity.enemy8bTargetSlot1ac < 0
+                                         ? 0u
+                                         : static_cast<std::size_t>(entity.enemy8bTargetSlot1ac);
+      OriginalEntity &target = pool.slot(targetSlot < pool.slotCount() ? targetSlot : 0);
+
+      if (entity.animationA0 == 2)
+      {
+        const std::int16_t remaining = FUN_0023a678_countdown(
+            static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        if (remaining == 0)
+        {
+          // Commit. The new hold is how long the lunge has to cover the gap,
+          // costed the same way the order costed the approach.
+          FUN_00225bc8_set_animation(entity, 3);
+          const float reach =
+              (entity.enemy8bSpeed1a0 + static_cast<float>(view.attackRange1a)) / 1000.0f;
+          const float distance = FUN_0023a4e8_distance(entity, target);
+          entity.fadeRamp62 = static_cast<std::uint16_t>(
+              static_cast<std::int32_t>(((distance - 1.0f) / reach) * 32.0f));
+          return;
+        }
+        entity.battleDesiredFacing19c = std::atan2(target.positionZ24 - entity.positionZ24,
+                                                   target.positionX20 - entity.positionX20);
+        if (entity.timelineCursorA8 > 5)
+        {
+          return;
+        }
+        dummy8b_advance(entity, dummy8b_step(entity, view, environment.frameTicks));
+        return;
+      }
+
+      if (entity.animationA0 == 3)
+      {
+        const std::int16_t remaining = FUN_0023a678_countdown(
+            static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        bool connected = false;
+        if (remaining != 0 &&
+            entity.radius54 + 1.0f <=
+                FUN_0023a6a0_distance_to(entity, target.positionX20, target.positionZ24))
+        {
+          const float bearing = std::atan2(target.positionZ24 - entity.positionZ24,
+                                           target.positionX20 - entity.positionX20);
+          // FUN_002166E8: the signed difference, wrapped into -pi..pi. The
+          // lunge only connects inside a 60-degree cone ahead.
+          const float offset = orphen::ported::model::FUN_002166e8_angle_delta(
+              entity.facingRadians5c, bearing);
+          if (offset >= kDAT_00353550_lungeWindowLow && offset <= kDAT_00353554_lungeWindowHigh &&
+              (entity.collisionFlags0c & 0x62u) == 0)
+          {
+            connected = true;
+            if (entity.timelineCursorA8 == 10 && (entity.flags06 & 4u) != 0)
+            {
+              entity.verticalVelocity44 = kDAT_00353558_lungeHop;
+              entity.enemy8bSpeed1a0 = 150.0f;
+              if (environment.FUN_00267d38_playSound)
+              {
+                environment.FUN_00267d38_playSound(kFUN_0028c3d0_lungeCue, entity);
+              }
+            }
+            if (entity.timelineCursorA8 == 0x12 && (entity.flags06 & 4u) != 0)
+            {
+              entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+            }
+            if (entity.verticalVelocity44 < 0.0f)
+            {
+              entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 8u);
+            }
+            if (entity.timelineCursorA8 >= 0x0C)
+            {
+              dummy8b_advance(entity, dummy8b_step(entity, view, environment.frameTicks));
+            }
+          }
+        }
+        if (!connected)
+        {
+          FUN_00225bc8_set_animation(entity, 4);
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7u);
+        }
+        return;
+      }
+
+      if (entity.animationA0 == 4)
+      {
+        if ((entity.flags06 & 1u) == 0)
+        {
+          return;
+        }
+        const std::uint32_t pick = environment.random ? environment.random() : 0;
+        FUN_00225bc8_set_animation(entity, static_cast<std::uint16_t>((pick & 1u) != 0 ? 8 : 9));
+        return;
+      }
+
+      // Anything else is the swing's own hit sweep, then the walk home.
+      if (environment.hitTest != nullptr && DAT_0058b150_enemy8bAttacks().filled)
+      {
+        FUN_002148a8_swept_hit_test(entity, slot, DAT_0058b150_enemy8bAttacks().record[0],
+                                    *environment.hitTest);
+      }
+      if ((entity.flags06 & 1u) != 0)
+      {
+        FUN_0028d2a0_dummy8b_go_home(entity, view);
+      }
+    }
+
+    // FUN_0028C768, state 3: the ranged arm. Animation 2 closes to throwing
+    // range, animation 10 is the throw itself.
+    //
+    // FUN_002ECFB8 -- what actually leaves its hand -- and the FUN_00216128
+    // that lands it are **not ported**: they are the same damage front the
+    // other two enemy types' ranged attacks are waiting on. Without them the
+    // throw still runs its animation and still walks home afterwards, so
+    // nothing parks; only the projectile is missing.
+    void FUN_0028c768_dummy8b_throw(OriginalEntity &entity,
+                                    const ActorEnvironment &environment,
+                                    ActorEnvironment::BattleActorView &view)
+    {
+      EntityPool &pool = *environment.entityPool;
+      view.flags38 |= 1u;
+      const float turn = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kDAT_0035355c_dummy8bThrowTurnRate *
+              0.03125f);
+      if (turn != 0.0f)
+      {
+        entity.facingRadians5c += turn;
+        return;
+      }
+
+      if (entity.animationA0 == 2)
+      {
+        const std::int16_t remaining = FUN_0023a678_countdown(
+            static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        if (remaining == 0)
+        {
+          FUN_00225bc8_set_animation(entity, 10);
+          return;
+        }
+        const std::size_t targetSlot = entity.enemy8bTargetSlot1ac < 0
+                                           ? 0u
+                                           : static_cast<std::size_t>(entity.enemy8bTargetSlot1ac);
+        const OriginalEntity &target = pool.slot(targetSlot < pool.slotCount() ? targetSlot : 0);
+        entity.battleDesiredFacing19c = std::atan2(target.positionZ24 - entity.positionZ24,
+                                                   target.positionX20 - entity.positionX20);
+        if (entity.timelineCursorA8 < 6)
+        {
+          dummy8b_advance(entity, dummy8b_step(entity, view, environment.frameTicks));
+        }
+        return;
+      }
+
+      if (entity.animationA0 != 10)
+      {
+        return;
+      }
+      if (entity.timelineCursorA8 == 4 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028c768_throwCue, entity);
+      }
+      if (entity.timelineCursorA8 >= 6)
+      {
+        const std::int16_t remaining = FUN_0023a678_countdown(
+            static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        if (remaining == 0)
+        {
+          // FUN_002ECFB8(self, target, record 2) -- the projectile. Deferred,
+          // and the 0x60-tick hold it re-arms is kept so the throw still takes
+          // the time the original gives it.
+          entity.fadeRamp62 = 0x60;
+        }
+      }
+      if ((entity.flags06 & 1u) != 0)
+      {
+        // FUN_00216128(record 2, self, pool slot 0): the hit the throw lands.
+        // Part of the same deferral.
+        FUN_0028d2a0_dummy8b_go_home(entity, view);
+      }
+    }
+
+    // FUN_0028C968, state 4: knocked back, or walking to the mark at
+    // +0x3C/+0x40. The two share a body because the original overlays them --
+    // a zero mark means no push is in flight, which is the walk case.
+    void FUN_0028c968_dummy8b_wander(OriginalEntity &entity,
+                                     const ActorEnvironment &environment,
+                                     ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      float step = dummy8b_step(entity, view, environment.frameTicks);
+      const float turn = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kFGpffff95f0_dummy8bWanderTurnRate *
+              0.03125f);
+      if (turn != 0.0f)
+      {
+        entity.facingRadians5c += turn;
+        return;
+      }
+
+      if (entity.velocityX3c == 0.0f && entity.velocityZ40 == 0.0f)
+      {
+        const std::int16_t remaining = FUN_0023a678_countdown(
+            static_cast<std::int16_t>(entity.fadeRamp62), environment.frameTicks);
+        entity.fadeRamp62 = static_cast<std::uint16_t>(remaining);
+        if (remaining == 0)
+        {
+          FUN_0028d2a0_dummy8b_go_home(entity, view);
+          return;
+        }
+      }
+      else
+      {
+        const float toMark =
+            FUN_0023a6a0_distance_to(entity, entity.velocityX3c, entity.velocityZ40);
+        if (toMark <= entity.radius54)
+        {
+          entity.velocityX3c = 0.0f;
+          entity.velocityZ40 = 0.0f;
+          view.flags38 &= ~1u;
+          return;
+        }
+        if (toMark < step)
+        {
+          step = toMark;
+        }
+      }
+
+      if ((entity.collisionFlags0c & 0x62u) != 0)
+      {
+        entity.battleDesiredFacing19c = entity.facingRadians5c + kPiGpffff95f4_pushedFacing;
+      }
+      if (entity.timelineCursorA8 < 6)
+      {
+        dummy8b_advance(entity, step);
+      }
+    }
+
+    // FUN_0028CB30, state 5: the long walk back to the spawn spot, backwards.
+    // Animation 3 is the walk; animation 4 is the settle, which nudges out of
+    // anything it is standing inside before it releases the record.
+    void FUN_0028cb30_dummy8b_walk_home(OriginalEntity &entity,
+                                        const ActorEnvironment &environment,
+                                        ActorEnvironment::BattleActorView &view)
+    {
+      EntityPool &pool = *environment.entityPool;
+      view.flags38 |= 1u;
+      const float turn = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kFGpffff95f8_dummy8bWalkTurnRate * 0.03125f);
+      if (turn != 0.0f)
+      {
+        entity.facingRadians5c += turn;
+        return;
+      }
+
+      float homeX = 0.0f;
+      float homeZ = 0.0f;
+      dummy8b_home(view, homeX, homeZ);
+
+      if (entity.animationA0 == 3)
+      {
+        const float toHome = FUN_0023a6a0_distance_to(entity, homeX, homeZ);
+        if (toHome <= entity.radius54)
+        {
+          entity.positionX20 = homeX;
+          entity.positionZ24 = homeZ;
+          FUN_00225bc8_set_animation(entity, 4);
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7u);
+          return;
+        }
+        if (entity.timelineCursorA8 == 10 && (entity.flags06 & 4u) != 0)
+        {
+          entity.verticalVelocity44 = kDAT_00353558_lungeHop;
+          entity.enemy8bSpeed1a0 = 150.0f;
+          if (environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(kFUN_0028c3d0_lungeCue, entity);
+          }
+        }
+        if (entity.timelineCursorA8 == 0x12 && (entity.flags06 & 4u) != 0)
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+        }
+        if (entity.verticalVelocity44 < 0.0f)
+        {
+          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 8u);
+        }
+        entity.battleDesiredFacing19c =
+            (entity.collisionFlags0c & 0x62u) == 0
+                ? std::atan2(homeZ - entity.positionZ24, homeX - entity.positionX20) +
+                      kPiGpffff9608_walkToward
+                : entity.facingRadians5c + kFGpffff9600_pushedTurn + kPiGpffff9604_walkAway;
+        if (entity.timelineCursorA8 > 0x0B)
+        {
+          float step = dummy8b_step(entity, view, environment.frameTicks);
+          if (toHome < step)
+          {
+            step = toHome;
+          }
+          dummy8b_retreat(entity, step);
+        }
+        return;
+      }
+
+      if (entity.animationA0 != 4)
+      {
+        return;
+      }
+      // The settle. Walk the pool for anything it is standing inside and push
+      // straight out of it, once.
+      if (entity.positionY28 < entity.radius54)
+      {
+        for (std::size_t other = 0; other < pool.slotCount(); ++other)
+        {
+          OriginalEntity &candidate = pool.slot(other);
+          if (candidate.typeId00 == 0 || &candidate == &entity ||
+              (candidate.halfword04 & 1u) != 0)
+          {
+            continue;
+          }
+          const float gap = FUN_0023a4e8_distance(entity, candidate);
+          if (gap <= candidate.radius54)
+          {
+            const float away = std::atan2(candidate.positionZ24 - entity.positionZ24,
+                                          candidate.positionX20 - entity.positionX20);
+            const float push = candidate.radius54 - gap;
+            entity.desiredDeltaX30 -= push * std::cos(away);
+            entity.desiredDeltaZ34 -= push * std::sin(away);
+            break;
+          }
+        }
+      }
+      if ((entity.flags06 & 1u) != 0)
+      {
+        view.flags38 &= ~1u;
+      }
+    }
+
+    // FUN_0028CEE0, state 6: the last two units home, walked backwards.
+    void FUN_0028cee0_dummy8b_settle(OriginalEntity &entity,
+                                     const ActorEnvironment &environment,
+                                     ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      float homeX = 0.0f;
+      float homeZ = 0.0f;
+      dummy8b_home(view, homeX, homeZ);
+      const float toHome = FUN_0023a6a0_distance_to(entity, homeX, homeZ);
+      if (toHome <= entity.radius54)
+      {
+        entity.positionX20 = homeX;
+        entity.positionZ24 = homeZ;
+        view.flags38 &= ~1u;
+        return;
+      }
+
+      const float turn = FUN_0023a320_approach_angle(
+          entity.facingRadians5c, entity.battleDesiredFacing19c,
+          static_cast<float>(environment.frameTicks) * kFGpffff960c_dummy8bHomeTurnRate * 0.03125f);
+      if (turn != 0.0f)
+      {
+        entity.facingRadians5c += turn;
+      }
+      entity.battleDesiredFacing19c =
+          (entity.collisionFlags0c & 0x62u) == 0
+              ? std::atan2(homeZ - entity.positionZ24, homeX - entity.positionX20) +
+                    kPiGpffff9614_homeToward
+              : entity.facingRadians5c + kFGpffff960c_dummy8bHomeTurnRate + kPiGpffff9610_homeAway;
+
+      float step = dummy8b_step(entity, view, environment.frameTicks);
+      if (toHome < step)
+      {
+        step = toHome;
+      }
+      dummy8b_retreat(entity, step);
+    }
+
+    // FUN_0028D0B0, state 7: death. Two cues off the animation cursor, then the
+    // fade request -- +0x04 bit 0x800 is what FUN_0023A568 walks down.
+    void FUN_0028d0b0_dummy8b_death(OriginalEntity &entity,
+                                    const ActorEnvironment &environment,
+                                    ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      if (entity.timelineCursorA8 == 2 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028d0b0_deathCueA, entity);
+      }
+      if (entity.timelineCursorA8 == 10 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028d0b0_deathCueB, entity);
+      }
+      if ((entity.flags06 & 1u) != 0 && (entity.flags06 & 0x10u) == 0)
+      {
+        entity.flags06 = 0x10;
+        entity.fadeRamp62 = 0;
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x801u);
+      }
+    }
+
+    // FUN_0028D160, state 8: the hit reaction. One cue, then home.
+    void FUN_0028d160_dummy8b_hit(OriginalEntity &entity,
+                                  const ActorEnvironment &environment,
+                                  ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      if (entity.timelineCursorA8 == 4 && (entity.flags06 & 4u) != 0 &&
+          environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(kFUN_0028d160_hitCue, entity);
+      }
+      if ((entity.flags06 & 1u) != 0)
+      {
+        FUN_0028d2a0_dummy8b_go_home(entity, view);
+      }
+    }
+
+    // FUN_0028D1D0, state 9: the counter flinch. Unreachable while the roll in
+    // state 1 and the action table is deferred, and ported anyway so the
+    // deferral is the only thing missing.
+    void FUN_0028d1d0_dummy8b_flinch(OriginalEntity &entity,
+                                     const ActorEnvironment &environment,
+                                     ActorEnvironment::BattleActorView &view)
+    {
+      view.flags38 |= 1u;
+      const std::int32_t remaining = static_cast<std::int32_t>(
+          static_cast<std::int16_t>(entity.enemy8bHoldTimer1a4) -
+          static_cast<std::int32_t>(environment.frameTicks));
+      entity.enemy8bHoldTimer1a4 = static_cast<std::uint16_t>(remaining);
+      if (static_cast<std::int16_t>(entity.enemy8bHoldTimer1a4) < 1)
+      {
+        view.currentAction0f = 6;
+        view.flags38 &= ~1u;
+        return;
+      }
+      if (entity.animationA0 == 0x0F && (entity.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(entity, 0x11);
+      }
+      entity.guardArc124 = kDAT_00353588_flinchGuardArc;
+    }
+
+    // LAB_0028D270, state 10: the guard hold. Ten instructions, no src/ file --
+    // recovered from SLUS_200.11 at 0x0028D270..0x0028D29C. It does one thing:
+    // release the record when the guard animation comes round.
+    void LAB_0028d270_dummy8b_guard(OriginalEntity &entity,
+                                    ActorEnvironment::BattleActorView &view)
+    {
+      if ((entity.flags06 & 1u) != 0)
+      {
+        view.flags38 &= ~1u;
+      }
+    }
+
+    // FUN_0028C160, state 11: carried. The grab teleports nothing -- it turns
+    // the dummy to face pool slot 0, raises bit 1 of +0x1A8, and runs a
+    // 0x319C-tick timer whose hundredths are the fade level. Past 50 it stops
+    // being solid; at the end it drops back to idle.
+    //
+    // FUN_002D8948 -- which re-points the carrier's status link at whatever it
+    // is now holding -- is **not ported**; nothing else in the port reads that
+    // link yet.
+    void FUN_0028c160_dummy8b_carried(OriginalEntity &entity,
+                                      const ActorEnvironment &environment,
+                                      ActorEnvironment::BattleActorView &view)
+    {
+      const EntityPool &pool = *environment.entityPool;
+      view.flags38 |= 1u;
+      if ((entity.halfword08 & 1u) != 0)
+      {
+        const OriginalEntity &carrier = pool.slot(0);
+        entity.enemy8bCarryTimer1aa = 300;
+        entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 & 0xFFFEu);
+        entity.enemy8bFlags1a8 = static_cast<std::uint16_t>(entity.enemy8bFlags1a8 | 2u);
+        const float bearing = std::atan2(carrier.positionZ24 - entity.positionZ24,
+                                         carrier.positionX20 - entity.positionX20);
+        entity.battleDesiredFacing19c = bearing;
+        entity.facingRadians5c = bearing;
+      }
+
+      const std::uint32_t level =
+          static_cast<std::uint32_t>(static_cast<std::int16_t>(entity.enemy8bCarryTimer1aa) / 100);
+      entity.fadeLevel134 = static_cast<std::uint8_t>(level);
+      if ((level & 0xFFu) > 0x32u && (entity.enemy8bFlags1a8 & 2u) != 0)
+      {
+        entity.enemy8bFlags1a8 = static_cast<std::uint16_t>(entity.enemy8bFlags1a8 & 0xFFFDu);
+        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFEEu);
+      }
+
+      const std::int32_t elapsed = static_cast<std::int32_t>(entity.enemy8bCarryTimer1aa) +
+                                   static_cast<std::int32_t>(environment.frameTicks) * 0x14;
+      entity.enemy8bCarryTimer1aa = static_cast<std::uint16_t>(elapsed);
+      if (static_cast<std::int16_t>(entity.enemy8bCarryTimer1aa) > kFUN_0028c160_carryEnd)
+      {
+        entity.fadeLevel134 = 0;
+        FUN_00225bf0_set_state_and_animation(entity, 1, 1);
+        view.currentAction0f = 6;
+        view.flags38 &= ~1u;
+      }
+    }
+
+    // FUN_0028BBE0, the action table. Every arm but three converges on one
+    // FUN_00225BF0 and then publishes the action byte it was *called* with --
+    // action 5 rewrites that byte to the 2 or 4 it rolled, so the record ends
+    // up naming the attack that actually started.
+    //
+    // Action 9 keeps the same FUN_0023ECE8 / FUN_0023ECB8 / FUN_0023EC80 roll
+    // state 1 does, and is deferred with it: the original falls straight
+    // through when the roll misses, publishing nothing, which is what this
+    // does unconditionally.
+    void FUN_0028bbe0_dummy8b_action(OriginalEntity &entity,
+                                     const ActorEnvironment &environment,
+                                     ActorEnvironment::BattleActorView &view,
+                                     std::int16_t action)
+    {
+      EntityPool &pool = *environment.entityPool;
+      std::uint16_t state = 0;
+      std::uint16_t animation = 0;
+
+      if (action == 1)
+      {
+        state = 0;
+        animation = 0;
+      }
+      else if (action == 0x11)
+      {
+        state = 0x0B;
+        animation = 0;
+      }
+      else
+      {
+        // cGpffffb6d0, the stand-down broadcast, and action 6 both take the
+        // idle default and return through its own publish. The port has no
+        // reader for that byte yet, so only action 6 reaches it -- which is the
+        // branch a scene with no battle VM driving the record takes anyway.
+        if (action == 6)
+        {
+          enemy_idle_default(entity, environment, EnemyKind::Dummy8b, view);
+          return;
+        }
+
+        if (action == 5)
+        {
+          const std::uint32_t pick = environment.random ? environment.random() : 0;
+          action = static_cast<std::int16_t>((pick & 1u) == 0 ? 2 : 4);
+        }
+
+        if (action == 2 || action == 4)
+        {
+          const std::size_t targetSlot = FUN_0023a958_target_slot(pool, view.target2c);
+          const OriginalEntity &target = pool.slot(targetSlot);
+          entity.enemy8bTargetSlot1ac = static_cast<std::int32_t>(targetSlot);
+          entity.battleDesiredFacing19c = FUN_0023a4b8_bearing(entity, target);
+          entity.enemy8bSpeed1a0 = kDummy8bWalkSpeed;
+          // Two units, costed at the record's reach plus the walk speed. The
+          // hold is what states 2 and 3 spend closing the gap.
+          const float reach =
+              (static_cast<float>(view.attackRange1a) + kDummy8bWalkSpeed) / 1000.0f;
+          entity.fadeRamp62 =
+              static_cast<std::uint16_t>(static_cast<std::int32_t>((2.0f / reach) * 32.0f));
+          if (action == 2)
+          {
+            // Only the melee arm clears the already-hit set on the way in.
+            FUN_00215e48_clear_hit_set(entity);
+          }
+          state = static_cast<std::uint16_t>(action == 2 ? 2 : 3);
+          animation = 2;
+        }
+        else if (action == 7)
+        {
+          entity.enemy8bSpeed1a0 = kDummy8bWalkSpeed;
+          if (entity.velocityX3c == 0.0f && entity.velocityZ40 == 0.0f)
+          {
+            const std::uint32_t pick = environment.random ? environment.random() : 0;
+            const float base = FUN_0023a4b8_bearing(entity, pool.slot(0));
+            const std::int32_t spread =
+                environment.random ? static_cast<std::int32_t>(environment.random() % 0x2D) : 0;
+            const float offset = (static_cast<float>(spread) * kTauGpffff95d0_wanderSpread) / 360.0f;
+            entity.battleDesiredFacing19c = (pick & 1u) == 0 ? base - offset : base + offset;
+            const std::int32_t roll =
+                environment.random ? static_cast<std::int32_t>(environment.random()) : 0;
+            entity.fadeRamp62 =
+                static_cast<std::uint16_t>((static_cast<std::int16_t>(roll % 100) + 100) * 0x20);
+          }
+          else
+          {
+            entity.battleDesiredFacing19c = std::atan2(entity.velocityZ40 - entity.positionZ24,
+                                                       entity.velocityX3c - entity.positionX20);
+          }
+          FUN_00225bf0_set_state_and_animation(entity, 4, 2);
+          view.currentAction0f = 7;
+          return;
+        }
+        else if (action == 8)
+        {
+          // FUN_0028D2A0 publishes its own 8.
+          FUN_0028d2a0_dummy8b_go_home(entity, view);
+          return;
+        }
+        else
+        {
+          // Action 9 with the roll deferred, and every action the table does
+          // not name: the original returns without touching anything.
+          return;
+        }
+      }
+
+      FUN_00225bf0_set_state_and_animation(entity, state, animation);
+      view.currentAction0f = static_cast<std::uint8_t>(action);
+    }
+  } // namespace
+
+  // FUN_0028b848 (0x0028b848), type 0x8B. Same shape as the other two
+  // wrappers, with three cues of its own in front and a wider damage reaction
+  // behind: a *negative* +0xBE is a guarded hit, which the other two types do
+  // not model at all.
+  void FUN_0028b848_enemy8b(OriginalEntity &entity,
+                            std::size_t slot,
+                            const ActorEnvironment &environment,
+                            ActorTrace &trace)
+  {
+    if (environment.entityPool == nullptr || environment.dispatchTable == nullptr)
+    {
+      return;
+    }
+
+    const std::uint16_t entryState = entity.state60;
+
+    // :14-40. Animation cursor 4 on the two swing animations keys the same cue.
+    if ((entity.animationA0 == 8 || entity.animationA0 == 9) && entity.timelineCursorA8 == 4 &&
+        (entity.flags06 & 8u) != 0 && environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(kFUN_0028b848_swingCue, entity);
+    }
+
+    // :42-63. +0x1A8 bit 0 remembers "I was off the ground last frame", so the
+    // landing cue keys once on the falling edge rather than every grounded
+    // frame. +0x0C bit 0 is the grounded flag FUN_002262C0 publishes.
+    const bool grounded = (entity.collisionFlags0c & 1u) != 0;
+    if ((entity.enemy8bFlags1a8 & 1u) != 0 && grounded && entity.animationA0 == 4 &&
+        environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(kFUN_0028b848_landCue, entity);
+    }
+    entity.enemy8bFlags1a8 = static_cast<std::uint16_t>(
+        grounded ? (entity.enemy8bFlags1a8 & 0xFFFEu) : (entity.enemy8bFlags1a8 | 1u));
+
+    ActorEnvironment::BattleActorView view;
+    const bool haveRecord = static_cast<bool>(environment.DAT_00354eb4_battleActor) &&
+                            environment.DAT_00354eb4_battleActor(entity.battleActorRecord198, view);
+    const auto publish = [&]()
+    {
+      if (haveRecord && environment.DAT_00354eb4_setBattleActor)
+      {
+        environment.DAT_00354eb4_setBattleActor(entity.battleActorRecord198, view);
+      }
+    };
+
+    if (!enemy_action_check(entity, environment, view, haveRecord, EnemyKind::Dummy8b,
+                            [&](std::int16_t action)
+                            { FUN_0028bbe0_dummy8b_action(entity, environment, view, action); }))
+    {
+      if (!FUN_0023a068_freeze_gate(entity, environment.frameTicks))
+      {
+        // :80-118. Three outcomes, and the middle one is the type's own: a
+        // *negative* +0xBE is the damage a guard absorbed, which puts it into
+        // state 10 on the guard animation and keys cue 0x110 instead of taking
+        // any hit points off.
+        if (static_cast<std::int16_t>(entity.pendingDamageBe) < 0)
+        {
+          view.flags38 |= 1u;
+          FUN_00225bf0_set_state_and_animation(entity, 10, 0x10);
+          entity.hitFlagsC2 = 0;
+          entity.pendingDamageBe = 0;
+          if (environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(kFUN_0028b848_guardCue, entity);
+          }
+        }
+        else if (static_cast<std::int16_t>(entity.pendingDamageBe) > 0)
+        {
+          entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7u);
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+          const std::int32_t remaining = static_cast<std::int32_t>(entity.staggerTimer12a) -
+                                         static_cast<std::int32_t>(entity.pendingDamageBe);
+          entity.staggerTimer12a = static_cast<std::uint16_t>(remaining);
+          const std::uint32_t pick = environment.random ? environment.random() : 0;
+          if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1)
+          {
+            entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 | 0x10u);
+            FUN_00225bf0_set_state_and_animation(entity, 7,
+                                                 static_cast<std::uint16_t>((pick & 1u) == 0 ? 6 : 5));
+          }
+          else
+          {
+            FUN_00225bf0_set_state_and_animation(
+                entity, 8, static_cast<std::uint16_t>((pick & 1u) == 0 ? 0x0C : 0x0B));
+          }
+          entity.hitFlagsC2 = 0;
+          entity.pendingDamageBe = 0;
+        }
+        // Every path clears the guard arc; state 9 is the only thing that sets
+        // it, and it sets it again each frame it runs.
+        entity.guardArc124 = 0.0f;
+      }
+    }
+
+    const std::uint32_t handler = environment.dispatchTable->stateHandler(
+        kPTR_FUN_00325B60_enemy8bStates, kEnemy8bStateCount, entity.state60);
+    // States 2, 3, 5 and 6 read the record's spawn spot and reach, so they only
+    // count as ported when there is one. State 0 builds the record, so it never
+    // has one on the frame it runs.
+    const bool implemented = entity.state60 == 0 || (haveRecord && entity.state60 <= 11);
+    trace.recordStateDispatch(entity.typeId00, entity.state60, handler, implemented);
+
+    if (entity.state60 == 0)
+    {
+      enemy_state0(entity, slot, environment, EnemyKind::Dummy8b);
+    }
+    else if (haveRecord)
+    {
+      switch (entity.state60)
+      {
+      case 1:
+        FUN_0028c298_dummy8b_turn(entity, environment, view);
+        break;
+      case 2:
+        FUN_0028c3d0_dummy8b_close(entity, slot, environment, view);
+        break;
+      case 3:
+        FUN_0028c768_dummy8b_throw(entity, environment, view);
+        break;
+      case 4:
+        FUN_0028c968_dummy8b_wander(entity, environment, view);
+        break;
+      case 5:
+        FUN_0028cb30_dummy8b_walk_home(entity, environment, view);
+        break;
+      case 6:
+        FUN_0028cee0_dummy8b_settle(entity, environment, view);
+        break;
+      case 7:
+        FUN_0028d0b0_dummy8b_death(entity, environment, view);
+        break;
+      case 8:
+        FUN_0028d160_dummy8b_hit(entity, environment, view);
+        break;
+      case 9:
+        FUN_0028d1d0_dummy8b_flinch(entity, environment, view);
+        break;
+      case 10:
+        LAB_0028d270_dummy8b_guard(entity, view);
+        break;
+      case 11:
+        FUN_0028c160_dummy8b_carried(entity, environment, view);
+        break;
+      default:
+        break;
+      }
+    }
+
+    // :128-130. FUN_002F1420 spawns the type 0x11E marker the frame the dummy
+    // *enters* state 9. Deferred with the rest of the counter roll -- nothing
+    // reaches state 9 while FUN_0023ECE8 is unported -- and kept here so the
+    // edge test is not lost when it lands.
+    (void)entryState;
+
+    publish();
+  }
 } // namespace orphen::ported::entity

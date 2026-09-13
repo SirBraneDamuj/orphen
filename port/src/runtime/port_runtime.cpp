@@ -595,6 +595,35 @@ namespace orphen::port
     environment.DAT_00354e96_targetDisplayTicks = battleParty_.DAT_00354e96_displayTimer();
     environment.DAT_00354ecc_battleSuspended =
         static_cast<std::uint16_t>(battleParty_.DAT_00354ecc());
+    // The other side of that word, and DAT_00354EC0 beside it. A level-5 summon
+    // raises the first for its whole run and reads the second to decide whether
+    // its blast lets the victims move again.
+    environment.DAT_00354ecc_setBattleSuspended = [this](std::uint32_t value) {
+      battleParty_.setDAT_00354ecc(value);
+    };
+    environment.DAT_00354ec0_markerTable = battleParty_.DAT_00354ec0_markerTable();
+    environment.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
+    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
+    { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
+    environment.DAT_0031da65_voiceChannel = [this](std::int16_t partySlot) {
+      return battleParty_.selectedSlot(partySlot);
+    };
+    environment.DAT_0031da8c_summonExempt =
+        [this](std::uint32_t member,
+               orphen::ported::entity::ActorEnvironment::SummonExemptSlots &out) {
+          using namespace orphen::ported::battle;
+          if (member >= kControlBlockCount)
+          {
+            return false;
+          }
+          out.DAT_0031da8c_castRing =
+              battleParty_.entitySlotAt(kDAT_0031da8c_slotEntity + member * 4u);
+          out.DAT_0031daac_shield =
+              battleParty_.entitySlotAt(kDAT_0031daac_shieldEntity + member * 4u);
+          out.DAT_0031dad0_sharedHitEffect = battleParty_.DAT_0031dad0_sharedHitEffect();
+          return true;
+        };
 
     environment.DAT_0031d7b0_battleMember =
         [this](std::uint32_t member,
@@ -2681,6 +2710,26 @@ namespace orphen::port
         {
           tables.write<std::uint8_t>(at, 6);
         }
+      }
+    }
+    // Module 18, FUN_0026C980 -- **s14_e031, the spell-reward scene**. Its
+    // mode-4 hook is two lines and it is the gate the whole cutscene hangs on:
+    //
+    //     if (FUN_00266368(0x35D) && sGpffffaf5c == 0) FUN_002663a0(0x35E);
+    //
+    // The script raises flag 861 when the demo cast goes off and then parks the
+    // scheduler's channel 1 on a record gated on **flag 862**, which nothing in
+    // the script ever sets. This is what sets it, and `sGpffffaf5c` is
+    // DAT_00354ECC -- the summon's battle-interrupt word -- so the beat waits
+    // exactly as long as a level-5 summon is on screen and fires the frame
+    // after it clears. With no summon spawned the two are one frame apart,
+    // which is the no-summon case the original takes too.
+    else if (mode == 4 && DAT_0032536c_sceneModule_ == 18)
+    {
+      if (sceneScript_.state().FUN_00266368_eventFlag(0x35D) &&
+          battleParty_.DAT_00354ecc() == 0)
+      {
+        sceneScript_.state().FUN_002663a0_setEventFlag(0x35E);
       }
     }
     else if (mode == 4)

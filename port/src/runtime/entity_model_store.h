@@ -118,12 +118,22 @@ namespace orphen::port
     // that archive's own table of contents. Empty when the file is absent,
     // which is not fatal -- the item just has no model.
     orphen::harness::FlatBinArchive itmArchive_;
+    // The three flat archives FUN_00222498 and FUN_00210218 actually read.
+    // **A model does not come from a scene bundle in the original at all**: the
+    // model record's +0x04 bit 6 picks GRP.BIN or MAP.BIN and the record's
+    // +0x00 is the id, straight out of the archive's u32 TOC. The bundles carry
+    // copies of some of them, which is why the port got as far as it did on
+    // bundle lookups alone -- but a scene that demonstrates a spell it does not
+    // ship the model for, which is every arm of s14_e031, has nothing to find.
+    orphen::harness::FlatBinArchive grpArchive_;
+    orphen::harness::FlatBinArchive mapArchive_;
+    orphen::harness::FlatBinArchive texArchive_;
     std::map<std::uint16_t, orphen::ported::model::Psc3Model> models_;
     std::map<std::uint32_t, EntityModelBinding> bindings_;
     std::map<std::uint32_t, std::uint32_t> modelRecordForTypeId_;
 
     std::vector<std::uint8_t> decodeResource(std::uint16_t category, std::uint16_t resourceId) const;
-    const orphen::ported::model::Psc3Model *loadModel(std::uint16_t meshId);
+    const orphen::ported::model::Psc3Model *loadModel(std::uint16_t meshId, std::uint8_t flags04);
   };
 
 } // namespace orphen::port

@@ -7,6 +7,7 @@
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
 #include "ported/entity/original_status_aura.h"
+#include "ported/entity/original_summon_stage.h"
 #include "ported/entity/original_health_bar.h"
 
 #include "ported/entity/entity_collision.h"
@@ -20,6 +21,7 @@
 #include <iomanip>
 #include <iostream>
 #include <array>
+#include <span>
 #include <cmath>
 
 namespace orphen::ported::entity
@@ -3334,11 +3336,22 @@ namespace orphen::ported::entity
   // 0x174's descriptor and model but 0x15C's and 0x178's behaviour. The port
   // resolves the handler from typeId00 every frame, so that works; caching a
   // handler at spawn time would break it silently.
+  // FUN_002DEEF0, the creature this hands over to at full charge. Its body is
+  // with the other four summons below.
+  std::int32_t FUN_002deef0_spawn_bite_summon(std::uint16_t attackPower,
+                                              std::int16_t target,
+                                              std::uint32_t hitParameters,
+                                              const orphen::ported::psm2::Vec3 &anchor,
+                                              std::int16_t casterSlot,
+                                              std::uint8_t level,
+                                              const ActorEnvironment &environment);
+
   std::int32_t FUN_002de650_launch_lightning(std::uint8_t level,
                                              std::uint16_t attackPower,
                                              std::int16_t target,
                                              std::uint32_t hitParameters,
                                              std::int16_t casterSlot,
+                                             const orphen::ported::psm2::Vec3 &summonAnchor,
                                              const orphen::ported::psm2::Vec3 &castPosition,
                                              const ActorEnvironment &environment)
   {
@@ -3350,9 +3363,10 @@ namespace orphen::ported::entity
 
     if (level == 5 && target > 1)
     {
-      // FUN_002deef0. Out of scope: it spawns type 0x13E, raises uGpffffaf5c --
-      // the battle-interrupt flag -- and runs the summon. Deliberately a gap
-      // rather than an approximation.
+      // FUN_002DEEF0: the creature, anchored at the caster's hand. The launch
+      // returns nothing, the same way the other four do.
+      FUN_002deef0_spawn_bite_summon(attackPower, target, hitParameters, summonAnchor, casterSlot,
+                                     level, environment);
       return 0;
     }
 
@@ -3615,11 +3629,14 @@ namespace orphen::ported::entity
     // FUN_0020dc88(caster, +0x194, matrixOut, positionOut). Both outputs feed
     // FUN_002de650's param_6, which only the summon branch reads -- so this is
     // kept for shape, not for a value anything on this path consumes.
+    // The summon's anchor -- param_6, which only the level-5 branch reads.
+    orphen::ported::psm2::Vec3 summonAnchor{caster.positionX20, caster.positionZ24,
+                                            caster.positionY28};
     if (environment.FUN_0020dc88_bone_point)
     {
-      (void)environment.FUN_0020dc88_bone_point(casterSlot,
-                                                static_cast<std::size_t>(effect.attachBone194),
-                                                orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+      summonAnchor = environment.FUN_0020dc88_bone_point(
+          casterSlot, static_cast<std::size_t>(effect.attachBone194),
+          orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
     }
 
     orphen::ported::psm2::Vec3 castPosition{caster.positionX20, caster.positionZ24,
@@ -3637,9 +3654,2867 @@ namespace orphen::ported::entity
             : 0;
     FUN_002de650_launch_lightning(effect.spawnParam94, effect.attackPower12c,
                                   static_cast<std::int16_t>(target), hitParameters,
-                                  static_cast<std::int16_t>(casterSlot), castPosition, environment);
+                                  static_cast<std::int16_t>(casterSlot), summonAnchor, castPosition,
+                                  environment);
   }
 
+
+  // ================================ the four other kind -2 elemental spells
+  //
+  // Falcon of Death, Hammer of Evil, Pinnacle of the Sun and Hail of Heavens
+  // are Bite of Lightning four more times. Each is a hand effect, a launch and
+  // a projectile, and the three functions are near-clones of 0x174's -- a
+  // structural diff of FUN_002dfd38 against FUN_002e2048 comes back as two
+  // constants and a label name. So they are one body and a five-row table
+  // rather than four copies, and the row is the only place an element differs.
+  //
+  //   spell 8  Falcon of Death        0x175  FUN_002e3110 / FUN_002e2d38
+  //   spell 9  Hammer of Evil         0x177  FUN_002e2048 / FUN_002e1d20
+  //   spell 10 Pinnacle of the Sun    0x179  FUN_002dfd38 / FUN_002dfb40
+  //   spell 11 Hail of Heavens        0x17C  FUN_002e0f80 / FUN_002e0c68
+  //   (spell 7 Bite of Lightning      0x174  FUN_002deae8 / FUN_002de650, above)
+  //
+  // The four differ from 0x174 in three places, all of them in the hand:
+  // they negate +0x194 so the bone index is always taken positive, they zero
+  // their own position and copy the caster's facing into +0x5C rather than
+  // leaving it at zero, and their launch takes a leading element byte 0x174's
+  // does not.
+  struct ElementalSpellB
+  {
+    std::int16_t handType;
+    std::uint8_t lightRed;
+    std::uint8_t lightGreen;
+    std::uint8_t lightBlue;
+    // The launch allocates its projectile as `handType` -- so it gets the
+    // hand's descriptor and model -- and then overwrites +0x00 with this.
+    std::int16_t projectileType;
+    // Falcon alone folds the charge level into the projectile's attack power;
+    // the other three pass the party record's number through.
+    bool foldLevelIntoPower;
+    std::uint16_t projectileAnimation;
+    // Falcon and Hammer scale the projectile with the charge; the other two
+    // leave it at 1.0.
+    bool scaleWithLevel;
+  };
+
+  inline constexpr ElementalSpellB kElementalSpellB[4]{
+      {0x175, 0x46, 0x46, 0xAA, 0x15D, true, 3, true},   // Falcon of Death
+      {0x177, 0xAA, 0x00, 0xAA, 0x156, false, 3, true},  // Hammer of Evil
+      {0x179, 0xAA, 0x0A, 0x0A, 0x158, false, 4, false}, // Pinnacle of the Sun
+      {0x17C, 0x00, 0xAA, 0xAA, 0x15A, false, 4, false}, // Hail of Heavens
+  };
+
+  const ElementalSpellB *elementalSpellBForHand(std::int16_t typeId)
+  {
+    for (const auto &row : kElementalSpellB)
+    {
+      if (row.handType == typeId)
+      {
+        return &row;
+      }
+    }
+    return nullptr;
+  }
+
+  // fGpffffa9e4 / fGpffffa9d0, both 0.4: the charge's share of the
+  // projectile's scale, which runs 1.4 at a tap to 3.0 at a full charge.
+  inline constexpr float kFGpffffa9e4_projectileScalePerLevel = 0.4000000059604645f;
+
+  // FUN_002e9668 (0x002e9668), shared by all four launches: sweep a
+  // level-sized box through the hit test and plant one spark on every victim.
+  //
+  // The box is the same shape 0x174's launch builds inline -- 1.5 per level
+  // across, 0.5 up -- and the sparks are the same type 0x15C, allocated with
+  // the element's own type so they carry its model. The one thing that is not
+  // in FUN_002de650: at level 5 the hit record's reaction byte is temporarily
+  // forced to 0x18 for the duration of the sweep and then put back.
+  void FUN_002e9668_elemental_sweep(std::int16_t elementType,
+                                    std::int32_t level,
+                                    std::uint32_t hitParameters,
+                                    OriginalEntity &projectile,
+                                    std::size_t projectileSlot,
+                                    const orphen::ported::psm2::Vec3 &castPosition,
+                                    const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    FUN_00215e48_clear_hit_set(projectile);
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xE1, projectile);
+    }
+
+    std::int8_t contacts = 0;
+    if (environment.hitTest != nullptr)
+    {
+      auto parameters = orphen::ported::resource::HitParameters::unpack(hitParameters);
+      if (level > 4)
+      {
+        parameters.reaction = 0x18;
+      }
+      const float levelF = static_cast<float>(level);
+      const float half = levelF * 1.5f;
+      const float halfY = levelF * 0.5f;
+      const std::array<float, 6> box{castPosition.x - half,  castPosition.x + half,
+                                     castPosition.y - half,  castPosition.y + half,
+                                     castPosition.z - halfY, castPosition.z + halfY};
+      contacts =
+          FUN_00215ac8_box_hit_test(projectile, projectileSlot, box, parameters, *environment.hitTest);
+    }
+    // FUN_0023bbd8(0, 7): the pad rumble. No rumble path in the port.
+
+    if (contacts == 0 || environment.hitTest == nullptr ||
+        environment.hitTest->DAT_003151c8_hitList == nullptr)
+    {
+      return;
+    }
+    const auto &hitList = *environment.hitTest->DAT_003151c8_hitList;
+    // The original stops on a non-positive entry and gives up past index 0x14.
+    const std::size_t limit = std::min<std::size_t>(hitList.size(), 21u);
+    for (std::size_t index = 0; index < limit; ++index)
+    {
+      const std::uint16_t victim = hitList[index];
+      if (victim == 0 || static_cast<std::size_t>(victim) >= kEntitySlotCount)
+      {
+        break;
+      }
+      const auto &body = pool.slot(static_cast<std::size_t>(victim));
+      const std::size_t sparkSlot = pool.FUN_00265e28_allocate_and_initialize(
+          elementType, *environment.descriptors);
+      if (sparkSlot >= kEntitySlotCount)
+      {
+        break;
+      }
+      auto &spark = pool.slot(sparkSlot);
+      spark.typeId00 = 0x15C;
+      spark.modelTypeId15c = elementType;
+      spark.descriptorFlags02 = static_cast<std::uint16_t>(spark.descriptorFlags02 | 0x1000u);
+      spark.halfword04 = 0x19;
+      spark.attackPower12c = 0;
+      spark.positionX20 = body.positionX20;
+      spark.positionZ24 = body.positionZ24;
+      spark.positionY28 = body.positionY28;
+      spark.groundHeight4c = body.positionY28;
+      spark.previousGroundHeight50 = body.positionY28;
+      spark.animationA0 = 0;
+      spark.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+      spark.scale14c = 2.0f;
+      spark.scaleZ150 = 2.0f;
+    }
+  }
+
+
+  // ======================== the four level-5 summons
+  //
+  // Released at full charge with a live target, each of the four elemental
+  // spells stops being a projectile and becomes a creature:
+  //
+  //   spell  8 Falcon of Death       0x13F  FUN_002E34B8  spawned by FUN_002E2F50
+  //   spell  9 Hammer of Evil        0x140  FUN_002E23E8  spawned by FUN_002E1F28
+  //   spell 10 Pinnacle of the Sun   0x141  FUN_002E01F8  spawned by FUN_002E00D8
+  //   spell 11 Hail of Heavens       0x142  FUN_002E1320  spawned by FUN_002E0E60
+  //
+  // The four bodies are three hundred lines apiece and near-clones of one
+  // another; the spine they share is written out once below and each body then
+  // does its own three things in its own order. What the spine is:
+  //
+  //  * **It takes the field.** The whole pool is frozen (SummonStage), a
+  //    handful of entities are handed the bit back, and everything left in the
+  //    dim set fades with the map's global cap. DAT_00354ECC goes to 1 for the
+  //    creature's whole run -- which is what makes the spell-reward cutscene's
+  //    beat wait for it, and the reason all four of those arms used to advance
+  //    a frame after the cast instead of playing out.
+  //  * **It rides the caster.** The creature does not move: every frame it
+  //    copies the caster's position and facing, and the caster is turned one
+  //    capped step toward the target. The two camera curves are sampled in the
+  //    creature's frame -- the sample's length and angle are taken apart,
+  //    the angle is added to the facing, and the result is put back -- so the
+  //    same seven points read the same way whichever way the caster stands.
+  //  * **It plays out on animation markers.** `(+0xAA & 0xF00)` naming 7, 6 and
+  //    3 with +0x06 bit 4 up are the three shouts, and 3 is also where the
+  //    damage goes off: the creature calls its own spell's launch back, at
+  //    level 6 so the summon branch cannot recurse, from the *target's*
+  //    position rather than the caster's. After that a timeline frame each
+  //    spell names starts the creature fading, and one more ends it.
+  //
+  // Not ported, and named where they belong: the flat veil the stage sits
+  // behind (see original_summon_stage.h) and DAT_0031DA1E, the first-time
+  // spirit-name banner -- three of the four arm it, nothing in the executable
+  // draws it, and the one function that reads it only counts its timer down.
+
+  struct SummonSpell
+  {
+    std::int16_t summonType;     // +0x00 of the creature
+    std::int16_t handType;       // the elemental hand whose launch it calls back
+    std::uint16_t spawnAnimation; // +0xA0 the spawner gives it
+    // The two camera curves, in the creature's own frame.
+    std::span<const orphen::ported::psm2::Vec3> eyePoints;
+    std::span<const orphen::ported::psm2::Vec3> lookAtPoints;
+    std::int16_t curveDuration; // DAT_00355574 and DAT_00355576, always equal
+    float turnRate;             // the caster's step toward the target, per tick
+    // The timeline frame the creature starts fading on, and the one that ends
+    // it. Both are read off +0xA8, which steps by two per six-byte entry.
+    std::int16_t fadeFromFrame;
+    std::int16_t endFrame;
+    // DAT_0035554C's step on the way out. The stage comes back at three
+    // different speeds and Falcon's is twice everyone else's.
+    std::int32_t exitRate;
+    // DAT_0031DA1C's bit and the banner id that goes with it, plus the frame
+    // it fires on. Zero means this spell has no banner.
+    std::int16_t bannerFrame;
+    std::uint8_t bannerBit;
+    std::uint8_t bannerId;
+  };
+
+  // DAT_0034FAE8 onward: four pairs of plain Vec3 runs, read straight out of
+  // the executable the way the boss camera's shots are. Component 1 is the
+  // original's z and component 2 its height, the same order every position in
+  // the pool is stored in.
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fbf8_falconLookAt[2]{
+      {0.345f, -0.031f, 0.941f},
+      {0.156f, -0.041f, 1.380f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fc10_falconEye[9]{
+      {-0.075f, 1.474f, 0.075f}, {0.677f, 1.474f, 0.050f},   {1.411f, 0.972f, 0.075f},
+      {1.537f, 0.094f, 0.025f},  {1.286f, -0.752f, 0.075f},  {-0.094f, -1.411f, 0.225f},
+      {-1.254f, -0.407f, 0.803f}, {-1.756f, -0.062f, 0.878f}, {-2.572f, -0.125f, 2.534f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fbb8_hammerLookAt[1]{
+      {1.104f, 0.167f, 1.405f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fbc8_hammerEye[4]{
+      {3.363f, -0.083f, -0.175f},
+      {3.087f, 1.422f, -0.125f},
+      {1.798f, 1.882f, -0.075f},
+      {-0.209f, 1.171f, 1.204f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fae8_pinnacleLookAt[2]{
+      {0.397f, 0.000f, 2.675f},
+      {0.972f, -0.041f, 1.241f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fb00_pinnacleEye[7]{
+      {-2.279f, 0.962f, 0.611f}, {-0.920f, 1.547f, 0.025f}, {0.583f, 1.819f, 0.464f},
+      {1.819f, 1.656f, 2.679f},  {2.221f, 0.158f, 3.120f},  {2.256f, -1.756f, 2.656f},
+      {2.227f, -1.706f, -0.390f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fb58_hailLookAt[2]{
+      {0.271f, 0.000f, 1.129f},
+      {-0.313f, -0.041f, 1.524f},
+  };
+  inline constexpr orphen::ported::psm2::Vec3 kDAT_0034fb70_hailEye[6]{
+      {-2.677f, 0.962f, 0.669f}, {-0.334f, 2.216f, 2.175f}, {1.798f, 1.379f, 2.718f},
+      {1.589f, -0.752f, 3.118f}, {-0.376f, -1.505f, 2.593f}, {-2.551f, 0.000f, 2.006f},
+  };
+
+  // DAT_00354928 / DAT_00354934 / DAT_00354944 / DAT_0035495C. All four are the
+  // same 0.00261799 -- an eighth of a degree a tick -- and they are four
+  // separate words in the executable, so they get four slots here.
+  inline constexpr float kSummonTurnRate = 0.0026179900858551f;
+
+  // fGpffffa9e8, 0.2: the lift Falcon of Death gives the flash it drops at the
+  // caster's feet.
+  inline constexpr float kFGpffffa9e8_flashLift = 0.2000000029802322f;
+
+  inline const SummonSpell kSummonSpells[4]{
+      {0x13F, 0x175, 5, kDAT_0034fc10_falconEye, kDAT_0034fbf8_falconLookAt, 0x21C0,
+       kSummonTurnRate, 0x2B, 0x2C, 0x12, 0x2A, 0x04, 2},
+      {0x140, 0x177, 5, kDAT_0034fbc8_hammerEye, kDAT_0034fbb8_hammerLookAt, 0x1D88,
+       kSummonTurnRate, 0x39, 0x3A, 3, 0x30, 0x20, 5},
+      {0x141, 0x179, 4, kDAT_0034fb00_pinnacleEye, kDAT_0034fae8_pinnacleLookAt, 0x21C0,
+       kSummonTurnRate, 0x33, 0x34, 9, 0x32, 0x10, 4},
+      {0x142, 0x17C, 5, kDAT_0034fb70_hailEye, kDAT_0034fb58_hailLookAt, 0x21C0,
+       kSummonTurnRate, 0x2F, 0x30, 9, 0, 0, 0},
+  };
+
+  const SummonSpell *summonForType(std::int16_t typeId)
+  {
+    for (const auto &row : kSummonSpells)
+    {
+      if (row.summonType == typeId)
+      {
+        return &row;
+      }
+    }
+    return nullptr;
+  }
+
+  const SummonSpell *summonForHand(std::int16_t handType)
+  {
+    for (const auto &row : kSummonSpells)
+    {
+      if (row.handType == handType)
+      {
+        return &row;
+      }
+    }
+    return nullptr;
+  }
+
+  // DAT_00355558 / DAT_0035555C / DAT_00355560 / DAT_00355564: the angle from
+  // the caster to the target, latched on the frame the camera starts and turned
+  // toward for the rest of the run. Four separate globals in the executable,
+  // one per spell, and never two at once.
+  float &DAT_00355558_summonFacing(const SummonSpell &spell)
+  {
+    static std::array<float, 4> facing{};
+    return facing[static_cast<std::size_t>(&spell - kSummonSpells)];
+  }
+
+  // The three battle-owned entities the stage has to keep running, resolved
+  // once so the four bodies do not each re-derive them.
+  ActorEnvironment::SummonExemptSlots summon_exempt(const OriginalEntity &caster,
+                                                    const ActorEnvironment &environment)
+  {
+    ActorEnvironment::SummonExemptSlots out{};
+    if (caster.byte95 != 0 && environment.DAT_0031da8c_summonExempt)
+    {
+      environment.DAT_0031da8c_summonExempt(static_cast<std::uint32_t>(caster.byte95) - 1u, out);
+    }
+    return out;
+  }
+
+  // The +0x94 == 0 frame: freeze the field, build the dim set, and hand the bit
+  // and the light back to the few things that keep running. The four bodies
+  // permute these writes -- there is no read between any of them -- and only
+  // Falcon leaves the camera's roll and zoom alone, because its own arrival
+  // flips DAT_00343880 instead.
+  void summon_enter(OriginalEntity &entity,
+                    std::size_t slot,
+                    const ActorEnvironment &environment,
+                    bool resetRollAndZoom)
+  {
+    EntityPool &pool = *environment.entityPool;
+    SummonStage &stage = DAT_0058bb00_summonStage();
+
+    if (environment.DAT_00354ecc_setBattleSuspended)
+    {
+      environment.DAT_00354ecc_setBattleSuspended(1);
+    }
+    entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+
+    const std::int16_t casterIndex = entity.lightningCaster1ae;
+    const bool haveCaster = casterIndex >= 0 &&
+                            static_cast<std::size_t>(casterIndex) < kEntitySlotCount;
+    const ActorEnvironment::SummonExemptSlots exempt =
+        haveCaster ? summon_exempt(pool.slot(static_cast<std::size_t>(casterIndex)), environment)
+                   : ActorEnvironment::SummonExemptSlots{};
+
+    SummonStage::FUN_002de4a8_freeze_field(pool);
+    SummonStage::FUN_002de640_release_one(entity);
+    SummonStage::FUN_002de640_release_one(pool, 0);
+    SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031dad0_sharedHitEffect);
+
+    // The caster's ground ring is driven to animation 3 -- its closed pose --
+    // on the way in, so the cast circle is not still open under the creature.
+    if (exempt.DAT_0031da8c_castRing >= 0 &&
+        static_cast<std::size_t>(exempt.DAT_0031da8c_castRing) < kEntitySlotCount)
+    {
+      pool.slot(static_cast<std::size_t>(exempt.DAT_0031da8c_castRing)).animationA0 = 3;
+    }
+    stage.FUN_002d6f38_exclude(exempt.DAT_0031da8c_castRing);
+    SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031da8c_castRing);
+
+    stage.FUN_002d6e20_build_dim_set(pool);
+    stage.FUN_002d6f38_exclude(static_cast<std::int32_t>(slot));
+    stage.FUN_002d6f38_exclude(casterIndex);
+    stage.FUN_002d6f38_exclude(exempt.DAT_0031daac_shield);
+    SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031daac_shield);
+
+    if (resetRollAndZoom && environment.camera != nullptr)
+    {
+      // uGpffffb6dc, fGpffffb6e8 and uGpffffb6ec. The third is written here and
+      // by FUN_00217FE8 and read by nothing, so the port has no field for it.
+      environment.camera->setRoll(0.0f);
+      environment.camera->setZoomLog2(1.0f);
+    }
+  }
+
+  // The +0x94 == 100 frame: install the two curves, latch the angle to the
+  // target, and start both ramps. One frame, then the creature never touches
+  // any of it again.
+  void summon_begin_camera(OriginalEntity &entity,
+                           const ActorEnvironment &environment,
+                           const SummonSpell &spell)
+  {
+    EntityPool &pool = *environment.entityPool;
+    SummonStage &stage = DAT_0058bb00_summonStage();
+
+    const std::int16_t casterIndex = entity.lightningCaster1ae;
+    if (casterIndex >= 0 && static_cast<std::size_t>(casterIndex) < kEntitySlotCount)
+    {
+      SummonStage::FUN_002de640_release_one(pool.slot(static_cast<std::size_t>(casterIndex)));
+    }
+    entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 & 0xFFFEu);
+
+    stage.FUN_00266a78_build_eye(spell.eyePoints);
+    stage.FUN_00266a78_build_look_at(spell.lookAtPoints);
+    if (environment.DAT_00355700_globalFadeCap != nullptr)
+    {
+      *environment.DAT_00355700_globalFadeCap = 0x7F;
+    }
+    stage.armCurves(spell.curveDuration, spell.curveDuration);
+    entity.spawnParam94 = 1;
+    stage.DAT_00355554_creatureFade() = 0x319C;
+    stage.DAT_0035554c_stageFade() = 0x319C;
+    if (environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      // DAT_00355661 = 100, the alpha the smear starts at.
+      environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(100);
+    }
+
+    const std::int16_t targetIndex = entity.lightningTarget1ac;
+    if (casterIndex >= 0 && static_cast<std::size_t>(casterIndex) < kEntitySlotCount &&
+        targetIndex >= 0 && static_cast<std::size_t>(targetIndex) < kEntitySlotCount)
+    {
+      const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+      const OriginalEntity &target = pool.slot(static_cast<std::size_t>(targetIndex));
+      DAT_00355558_summonFacing(spell) = std::atan2(target.positionZ24 - caster.positionZ24,
+                                                    target.positionX20 - caster.positionX20);
+    }
+  }
+
+  // Every frame after that: one capped step of the caster toward the latched
+  // angle, then the creature copies the caster outright. `heightBias` is the
+  // lift Falcon of Death alone gives its ground height.
+  void summon_track_caster(OriginalEntity &entity,
+                           const ActorEnvironment &environment,
+                           const SummonSpell &spell,
+                           float heightBias)
+  {
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = entity.lightningCaster1ae;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+
+    const float want = DAT_00355558_summonFacing(spell);
+    const float step = FUN_0023a320_approach_angle(
+        caster.facingRadians5c, want, static_cast<float>(environment.frameTicks) * spell.turnRate);
+    // FUN_0023A320 answers zero both for "already there" and for "inside the
+    // dead zone", and the caller treats both as "snap to the target".
+    caster.facingRadians5c = (step == 0.0f) ? want : caster.facingRadians5c + step;
+
+    entity.facingRadians5c = caster.facingRadians5c;
+    entity.positionX20 = caster.positionX20;
+    entity.positionZ24 = caster.positionZ24;
+    entity.positionY28 = caster.positionY28;
+    entity.groundHeight4c = caster.positionY28 + heightBias;
+    entity.previousGroundHeight50 = caster.positionY28 + heightBias;
+  }
+
+  // FUN_00266CE8 followed by the same six lines in all four: pull the sample
+  // apart into a length and an angle, add the creature's facing to the angle,
+  // put it back together, and offset by the creature's position. `radiusBias`
+  // and `yawBias` are the two trims Hammer of Evil and Falcon of Death add.
+  orphen::ported::psm2::Vec3 summon_curve_point(const OriginalEntity &entity,
+                                                const orphen::ported::psm2::Vec3 &sample,
+                                                float radiusBias,
+                                                float yawBias,
+                                                float heightBias)
+  {
+    const float radius = std::sqrt(sample.x * sample.x + sample.y * sample.y) + radiusBias;
+    const float angle = std::atan2(sample.y, sample.x);
+    return orphen::ported::psm2::Vec3{
+        radius * std::cos(entity.facingRadians5c + angle + yawBias) + entity.positionX20,
+        radius * std::sin(entity.facingRadians5c + angle + yawBias) + entity.positionZ24,
+        sample.z + entity.positionY28 + heightBias};
+  }
+
+  void summon_drive_camera(const OriginalEntity &entity,
+                           const ActorEnvironment &environment,
+                           float eyeRadiusBias,
+                           float eyeHeightBias,
+                           float lookAtYawBias,
+                           float lookAtHeightBias)
+  {
+    SummonStage &stage = DAT_0058bb00_summonStage();
+    if (stage.eyeRunning())
+    {
+      const float t = stage.stepEye(environment.frameTicks);
+      const orphen::ported::psm2::Vec3 point = summon_curve_point(
+          entity, stage.FUN_00266ce8_sample_eye(t), eyeRadiusBias, 0.0f, eyeHeightBias);
+      if (environment.camera != nullptr)
+      {
+        environment.camera->FUN_00217d40_set_eye(point);
+      }
+    }
+    if (stage.lookAtRunning())
+    {
+      const float t = stage.stepLookAt(environment.frameTicks);
+      const orphen::ported::psm2::Vec3 point = summon_curve_point(
+          entity, stage.FUN_00266ce8_sample_look_at(t), 0.0f, lookAtYawBias, lookAtHeightBias);
+      if (environment.camera != nullptr)
+      {
+        environment.camera->FUN_00217d10_set_look_at(point);
+      }
+    }
+  }
+
+  // `(+0xAA & 0xF00) == phase` with +0x06 bit 4 up, and nothing already
+  // speaking: the creature's three shouts. The channel is DAT_0031DA65 indexed
+  // by the caster's +0x95, the same byte the cast incantation uses.
+  bool summon_marker(const OriginalEntity &entity, std::uint16_t phase)
+  {
+    return (entity.flagsAa & 0xF00u) == phase && (entity.flags06 & 4u) != 0;
+  }
+
+  void summon_voice(const ActorEnvironment &environment,
+                    std::uint8_t channel,
+                    std::uint32_t clipIndex)
+  {
+    if (!environment.FUN_00206a90_voice_busy || environment.FUN_00206a90_voice_busy())
+    {
+      return;
+    }
+    if (environment.FUN_00206f08_play_voice)
+    {
+      environment.FUN_00206f08_play_voice(channel, clipIndex);
+    }
+  }
+
+  std::uint8_t summon_voice_channel(const OriginalEntity &entity,
+                                    const ActorEnvironment &environment)
+  {
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = entity.lightningCaster1ae;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount ||
+        !environment.DAT_0031da65_voiceChannel)
+    {
+      return 0;
+    }
+    return environment.DAT_0031da65_voiceChannel(
+        static_cast<std::int16_t>(pool.slot(static_cast<std::size_t>(casterIndex)).byte95));
+  }
+
+  // DAT_0031DA1E and DAT_0031DA20: the first-time spirit-name banner, armed for
+  // sixty frames when DAT_0031DA1C's bit for this spirit is up. **Not ported**:
+  // nothing in the executable draws it -- the only reader is FUN_0023FD30's
+  // timer countdown -- so there is no display to feed. Left as a named gap
+  // rather than an approximation.
+  void summon_banner(const SummonSpell &) {}
+
+  // FUN_002E2D38 and its three siblings again, with the summon branch closed:
+  // the creature's damage pass is thrown at level **6**, which clamps to 5 for
+  // everything that reads it and is not 5 for the `level == 5` test, so the
+  // launch cannot hand back to another creature. It is thrown from the target's
+  // slot as the caster, so the blast lands on what was aimed at.
+  std::int32_t FUN_002e2d38_launch_elemental(const ElementalSpellB &spell,
+                                             std::uint8_t element,
+                                             std::uint8_t level,
+                                             std::uint16_t attackPower,
+                                             std::int16_t target,
+                                             std::uint32_t hitParameters,
+                                             std::int16_t casterSlot,
+                                             const orphen::ported::psm2::Vec3 &summonAnchor,
+                                             const orphen::ported::psm2::Vec3 &castPosition,
+                                             const ActorEnvironment &environment);
+
+  void summon_damage_pass(const OriginalEntity &entity,
+                          const ActorEnvironment &environment,
+                          const SummonSpell &spell)
+  {
+    const ElementalSpellB *elemental = elementalSpellBForHand(spell.handType);
+    if (elemental == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t target = entity.lightningTarget1ac;
+    // `iVar20 < 3` takes an uninitialised stack block as the cast position in
+    // the original -- a real quirk, and unreachable in practice because the
+    // launch only reaches a summon for a target above 1 and slot 2 is the one
+    // value in that range the branch would catch. The port passes the
+    // creature's own anchor there instead of reading uninitialised memory.
+    orphen::ported::psm2::Vec3 from{entity.summonAnchorX19c, entity.summonAnchorZ1a0,
+                                    entity.summonAnchorY1a4};
+    if (target >= 3 && static_cast<std::size_t>(target) < kEntitySlotCount)
+    {
+      const OriginalEntity &victim = pool.slot(static_cast<std::size_t>(target));
+      from = orphen::ported::psm2::Vec3{victim.positionX20, victim.positionZ24, victim.positionY28};
+    }
+    const orphen::ported::psm2::Vec3 anchor{entity.summonAnchorX19c, entity.summonAnchorZ1a0,
+                                            entity.summonAnchorY1a4};
+    FUN_002e2d38_launch_elemental(*elemental, 1, 6,
+                                  static_cast<std::uint16_t>(entity.attackPower12c), target,
+                                  entity.hitParameters198, target, anchor, from, environment);
+  }
+
+  // The tail all four share: the creature's own fade past `fadeFromFrame`, then
+  // the stage's ramp in and out, and the release when the ramp has run back up.
+  // `+0x94` is the whole state machine -- 1 while the stage darkens, 3 while it
+  // comes back, and -100 the frame it is done.
+  void summon_tail(OriginalEntity &entity,
+                   std::size_t slot,
+                   const ActorEnvironment &environment,
+                   const SummonSpell &spell)
+  {
+    EntityPool &pool = *environment.entityPool;
+    SummonStage &stage = DAT_0058bb00_summonStage();
+    const std::int32_t ticks = static_cast<std::int32_t>(environment.frameTicks);
+    const std::int8_t state = static_cast<std::int8_t>(entity.spawnParam94);
+
+    if (state == -100)
+    {
+      SummonStage::FUN_002de500_release_field(pool);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = 0;
+      }
+      pool.releaseSlot(slot);
+      if (environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->FUN_00264470_set_alpha_and_transform(0, 0, 0, 0, 0,
+                                                                                     0);
+      }
+      if (environment.DAT_00354ecc_setBattleSuspended)
+      {
+        environment.DAT_00354ecc_setBattleSuspended(0);
+      }
+      return;
+    }
+
+    if (state == 1)
+    {
+      stage.DAT_0035554c_stageFade() -= ticks * 9;
+      if (stage.DAT_0035554c_stageFade() < 300)
+      {
+        stage.DAT_0035554c_stageFade() = 300;
+        entity.spawnParam94 = 0xFF;
+      }
+      const std::uint8_t cap = static_cast<std::uint8_t>(stage.DAT_0035554c_stageFade() / 100);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = cap;
+      }
+      stage.DAT_00355550_veilAlpha() = static_cast<std::uint8_t>(0x7F - cap);
+    }
+
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 3)
+    {
+      stage.DAT_0035554c_stageFade() += ticks * spell.exitRate;
+      if (stage.DAT_0035554c_stageFade() > 0x319C)
+      {
+        stage.DAT_0035554c_stageFade() = 0x1E;
+        entity.spawnParam94 = 0x9C; // -100
+      }
+      const std::uint8_t cap = static_cast<std::uint8_t>(stage.DAT_0035554c_stageFade() / 100);
+      const std::uint8_t veil = static_cast<std::uint8_t>(0x7F - cap);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = cap;
+      }
+      stage.DAT_00355550_veilAlpha() = veil;
+      // The smear follows the veil down for the last hundred levels, which is
+      // what takes the ghost off the screen before the creature does.
+      if (veil < 100 && environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(veil);
+      }
+    }
+
+    // FUN_002D7038(colour, DAT_00355550, 0x4000, 2): the veil. Not ported --
+    // see original_summon_stage.h. Its alpha is tracked above so the smear's
+    // handoff stays faithful.
+    stage.FUN_002d6fa0_apply(
+        pool, environment.DAT_00355700_globalFadeCap != nullptr
+                  ? *environment.DAT_00355700_globalFadeCap
+                  : 0);
+    (void)spell;
+  }
+
+  // The creature's own fade, which runs on the timeline rather than on the
+  // stage: past the frame each spell names, DAT_00355554 counts down the same
+  // way and lands in +0x134.
+  void summon_creature_fade(OriginalEntity &entity,
+                            const ActorEnvironment &environment,
+                            const SummonSpell &spell)
+  {
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) <= spell.fadeFromFrame)
+    {
+      return;
+    }
+    SummonStage &stage = DAT_0058bb00_summonStage();
+    stage.DAT_00355554_creatureFade() -= static_cast<std::int32_t>(environment.frameTicks) * 9;
+    if (stage.DAT_00355554_creatureFade() < 300)
+    {
+      stage.DAT_00355554_creatureFade() = 300;
+    }
+    entity.fadeLevel134 = static_cast<std::uint8_t>(stage.DAT_00355554_creatureFade() / 100);
+  }
+
+  // ---------------------------------------------------- Pinnacle of the Sun
+  //
+  // FUN_002E01F8. The one summon that puts the camera somewhere of its own on
+  // the release frame instead of leaving it on the curve: the eye goes 1.3
+  // units out at 100 degrees off the creature's facing and two up, and the
+  // look-at four units straight ahead.
+  inline constexpr float kDAT_0035492c_pinnacleEyeYaw = 1.7453299760818481f;
+  inline constexpr float kDAT_00354930_pinnacleEyeRadius = 1.2999999523162842f;
+
+  void FUN_002e01f8_pinnacle_summon(OriginalEntity &entity,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const SummonSpell &spell = kSummonSpells[2];
+    const std::int8_t state = static_cast<std::int8_t>(entity.spawnParam94);
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x80u);
+    if (state == 0)
+    {
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      summon_enter(entity, slot, environment, true);
+      entity.spawnParam94 = 100;
+      return;
+    }
+    if (state == 100)
+    {
+      summon_begin_camera(entity, environment, spell);
+    }
+    summon_track_caster(entity, environment, spell, 0.0f);
+    summon_drive_camera(entity, environment, 0.0f, 0.0f, 0.0f, 0.0f);
+
+    const std::uint8_t channel = summon_voice_channel(entity, environment);
+    if (summon_marker(entity, 0x700))
+    {
+      summon_voice(environment, channel, 2);
+    }
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.bannerFrame &&
+        (entity.flags06 & 4u) != 0)
+    {
+      summon_voice(environment, channel, 5);
+      summon_banner(spell);
+    }
+    if (summon_marker(entity, 0x600))
+    {
+      summon_voice(environment, channel, 3);
+    }
+    if (summon_marker(entity, 0x300))
+    {
+      summon_voice(environment, channel, 4);
+      if (environment.camera != nullptr)
+      {
+        environment.camera->FUN_00217d40_set_eye(orphen::ported::psm2::Vec3{
+            std::cos(entity.facingRadians5c + kDAT_0035492c_pinnacleEyeYaw) *
+                    kDAT_00354930_pinnacleEyeRadius +
+                entity.positionX20,
+            std::sin(entity.facingRadians5c + kDAT_0035492c_pinnacleEyeYaw) *
+                    kDAT_00354930_pinnacleEyeRadius +
+                entity.positionZ24,
+            entity.positionY28 + 2.0f});
+        environment.camera->FUN_00217d10_set_look_at(orphen::ported::psm2::Vec3{
+            std::cos(entity.facingRadians5c) * 4.0f + entity.positionX20,
+            std::sin(entity.facingRadians5c) * 4.0f + entity.positionZ24, entity.positionY28});
+      }
+      summon_damage_pass(entity, environment, spell);
+      // DAT_00354EC0 is the "a battle has already ended" latch; the original
+      // skips the release when it is up, because the field is being torn down
+      // anyway.
+      if (environment.DAT_00354ec0_markerTable == 0)
+      {
+        SummonStage::FUN_002de548_release_hurt(pool);
+      }
+    }
+
+    summon_creature_fade(entity, environment, spell);
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.endFrame &&
+        (entity.flags06 & 4u) != 0)
+    {
+      entity.spawnParam94 = 3;
+    }
+    if (environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0x5A);
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0x28, 0x28);
+    }
+    // Pinnacle's exit test is its own: +0x06 bit 0 up ends the run whatever the
+    // state byte says, where the other three only end on -100.
+    if ((entity.flags06 & 1u) != 0)
+    {
+      entity.spawnParam94 = 0x9C;
+    }
+    summon_tail(entity, slot, environment, spell);
+  }
+
+  // ------------------------------------------------------ Hail of Heavens
+  //
+  // FUN_002E1320. Its release frame drops the camera 1.5 units out at
+  // DAT_00354938 off the facing and points it at the *target*, not ahead of the
+  // creature, and it hands the caster back before the damage rather than after.
+  // It is also the only one of the four that never turns the smear on.
+  inline constexpr float kDAT_00354938_hailEyeYaw = 2.9670600891113281f;
+  inline constexpr float kDAT_0035493c_hailEyeHeight = 1.3999999761581421f;
+
+  void FUN_002e1320_hail_summon(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const SummonSpell &spell = kSummonSpells[3];
+    const std::int8_t state = static_cast<std::int8_t>(entity.spawnParam94);
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x80u);
+    if (state == 0)
+    {
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      summon_enter(entity, slot, environment, true);
+      // Hail alone holds at the entry frame until the voice is clear, redoing
+      // the whole setup each time. Everything it does is a write, so repeating
+      // it is idempotent.
+      if (environment.FUN_00206a90_voice_busy && environment.FUN_00206a90_voice_busy())
+      {
+        return;
+      }
+      entity.spawnParam94 = 100;
+      return;
+    }
+    if (state == 100)
+    {
+      summon_begin_camera(entity, environment, spell);
+    }
+    summon_track_caster(entity, environment, spell, 0.0f);
+    summon_drive_camera(entity, environment, 0.0f, 0.0f, 0.0f, 0.0f);
+
+    const std::uint8_t channel = summon_voice_channel(entity, environment);
+    if ((entity.flags06 & 4u) != 0)
+    {
+      if ((entity.flagsAa & 0xF00u) == 0x700)
+      {
+        summon_voice(environment, channel, 2);
+      }
+      if ((entity.flags06 & 4u) != 0 && (entity.flagsAa & 0xF00u) == 0x600)
+      {
+        summon_voice(environment, channel, 3);
+      }
+      if ((entity.flags06 & 4u) != 0 && (entity.flagsAa & 0xF00u) == 0x300)
+      {
+        summon_voice(environment, channel, 4);
+        const std::int16_t target = entity.lightningTarget1ac;
+        if (environment.camera != nullptr)
+        {
+          environment.camera->FUN_00217d40_set_eye(orphen::ported::psm2::Vec3{
+              std::cos(entity.facingRadians5c + kDAT_00354938_hailEyeYaw) * 1.5f +
+                  entity.positionX20,
+              std::sin(entity.facingRadians5c + kDAT_00354938_hailEyeYaw) * 1.5f +
+                  entity.positionZ24,
+              entity.positionY28 + kDAT_0035493c_hailEyeHeight});
+          if (target >= 0 && static_cast<std::size_t>(target) < kEntitySlotCount)
+          {
+            const OriginalEntity &victim = pool.slot(static_cast<std::size_t>(target));
+            // The look-at adds the *target's* position to the creature's for x
+            // and z and then takes the target's height on its own -- the
+            // original's own asymmetry, not a transcription slip.
+            environment.camera->FUN_00217d10_set_look_at(orphen::ported::psm2::Vec3{
+                victim.positionX20 + entity.positionX20, victim.positionZ24 + entity.positionZ24,
+                victim.positionY28});
+          }
+        }
+        const std::int16_t casterIndex = entity.lightningCaster1ae;
+        if (casterIndex >= 0 && static_cast<std::size_t>(casterIndex) < kEntitySlotCount)
+        {
+          SummonStage::FUN_002de640_release_one(pool.slot(static_cast<std::size_t>(casterIndex)));
+        }
+        summon_damage_pass(entity, environment, spell);
+        SummonStage::FUN_002de548_release_hurt(pool);
+      }
+    }
+
+    summon_creature_fade(entity, environment, spell);
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.endFrame &&
+        (entity.flags06 & 4u) != 0)
+    {
+      entity.spawnParam94 = 3;
+    }
+    if ((entity.flags06 & 1u) != 0)
+    {
+      entity.spawnParam94 = 0x9C;
+    }
+    const bool ending = static_cast<std::int8_t>(entity.spawnParam94) == -100;
+    summon_tail(entity, slot, environment, spell);
+    if (ending && environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0, 0);
+    }
+    if (ending)
+    {
+      summon_banner(spell);
+    }
+  }
+
+  // -------------------------------------------------------- Hammer of Evil
+  //
+  // FUN_002E23E8. The shortest curve of the four -- four eye points and one
+  // look-at, over 0x1D88 rather than 0x21C0 -- with a constant trim on each:
+  // the eye is pushed out by DAT_00354948 and lifted half a unit, and the
+  // look-at is swung DAT_0035494C round and lifted DAT_00354950. It also
+  // releases the whole field before its damage rather than only the victims,
+  // and its end marker is +0x06 bit **3**, not bit 2.
+  inline constexpr float kDAT_00354948_hammerEyeRadius = 0.2000000029802322f;
+  inline constexpr float kDAT_0035494c_hammerLookAtYaw = 0.3490660190582275f;
+  inline constexpr float kDAT_00354950_hammerLookAtHeight = 0.2000000029802322f;
+
+  void FUN_002e23e8_hammer_summon(OriginalEntity &entity,
+                                  std::size_t slot,
+                                  const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const SummonSpell &spell = kSummonSpells[1];
+    const std::int8_t state = static_cast<std::int8_t>(entity.spawnParam94);
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x80u);
+    if (state == 0)
+    {
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      summon_enter(entity, slot, environment, true);
+      entity.spawnParam94 = 100;
+      return;
+    }
+    if (state == 100)
+    {
+      summon_begin_camera(entity, environment, spell);
+    }
+    summon_track_caster(entity, environment, spell, 0.0f);
+    summon_drive_camera(entity, environment, kDAT_00354948_hammerEyeRadius, 0.5f,
+                        kDAT_0035494c_hammerLookAtYaw, kDAT_00354950_hammerLookAtHeight);
+
+    const std::uint8_t channel = summon_voice_channel(entity, environment);
+    if (summon_marker(entity, 0x700))
+    {
+      summon_voice(environment, channel, 2);
+    }
+    if (summon_marker(entity, 0x600))
+    {
+      summon_voice(environment, channel, 3);
+    }
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.bannerFrame &&
+        (entity.flags06 & 4u) != 0)
+    {
+      summon_banner(spell);
+    }
+    if (summon_marker(entity, 0x300))
+    {
+      summon_voice(environment, channel, 4);
+      // Hammer lifts the freeze off everything before the blast, not just off
+      // the victims, and never puts it back -- the field is running again for
+      // the whole of its exit.
+      SummonStage::FUN_002de500_release_field(pool);
+      summon_damage_pass(entity, environment, spell);
+      SummonStage::FUN_002de548_release_hurt(pool);
+    }
+
+    summon_creature_fade(entity, environment, spell);
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.endFrame &&
+        (entity.flags06 & 8u) != 0 && static_cast<std::int8_t>(entity.spawnParam94) != -100)
+    {
+      entity.spawnParam94 = 3;
+    }
+    if ((entity.flags06 & 1u) != 0)
+    {
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+    }
+    if (environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0x5A);
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0x28, 0x28);
+    }
+    const bool ending = static_cast<std::int8_t>(entity.spawnParam94) == -100;
+    summon_tail(entity, slot, environment, spell);
+    if (ending && environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0, 0);
+    }
+  }
+
+  // ------------------------------------------------------ Falcon of Death
+  //
+  // FUN_002E34B8. The longest curve -- nine eye points -- and the only one that
+  // trims the whole stage rather than the camera: half a unit on the creature's
+  // ground height and on both curve samples, DAT_00343880 flipped so the smear
+  // mirrors every frame, +0x133 pushed to 0xD0 so the creature draws in front
+  // of the field, and DAT_0058BFE3 -- slot 0's +0x133 -- to 0x30 so the player
+  // draws behind it. Its exit ramp is twice everyone else's.
+  void FUN_002e34b8_falcon_summon(OriginalEntity &entity,
+                                  std::size_t slot,
+                                  const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const SummonSpell &spell = kSummonSpells[0];
+    const std::int8_t state = static_cast<std::int8_t>(entity.spawnParam94);
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x80u);
+    if (state == 0)
+    {
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      // DAT_00355E14 = 0. Falcon is the only summon that touches it, and
+      // nothing else in the executable reads it back.
+      summon_enter(entity, slot, environment, false);
+      entity.spawnParam94 = 100;
+      return;
+    }
+    if (state == 100)
+    {
+      summon_begin_camera(entity, environment, spell);
+    }
+    summon_track_caster(entity, environment, spell, 0.5f);
+    summon_drive_camera(entity, environment, 0.5f, 0.5f, 0.0f, 0.5f);
+
+    if (environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0x5A);
+      environment.DAT_00343878_frameFeedback->flip_DAT_00343880_rotation();
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0x28, 0x28);
+    }
+    entity.depthBias133 = static_cast<std::int8_t>(0xD0);
+    pool.slot(0).depthBias133 = 0x30;
+
+    const std::uint8_t channel = summon_voice_channel(entity, environment);
+    if (summon_marker(entity, 0x700))
+    {
+      summon_voice(environment, channel, 2);
+    }
+    if (summon_marker(entity, 0x600))
+    {
+      summon_voice(environment, channel, 3);
+    }
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.bannerFrame &&
+        (entity.flags06 & 4u) != 0)
+    {
+      summon_banner(spell);
+    }
+    if (summon_marker(entity, 0x300))
+    {
+      summon_voice(environment, channel, 4);
+      summon_damage_pass(entity, environment, spell);
+      SummonStage::FUN_002de548_release_hurt(pool);
+    }
+
+    summon_creature_fade(entity, environment, spell);
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == spell.endFrame &&
+        (entity.flags06 & 4u) != 0 && static_cast<std::int8_t>(entity.spawnParam94) != -100)
+    {
+      entity.spawnParam94 = 3;
+    }
+    if ((entity.flags06 & 1u) != 0)
+    {
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+    }
+    const bool ending = static_cast<std::int8_t>(entity.spawnParam94) == -100;
+    summon_tail(entity, slot, environment, spell);
+    if (ending && environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0, 0);
+    }
+  }
+
+  void FUN_002e01f8_summon(OriginalEntity &entity,
+                           std::size_t slot,
+                           const ActorEnvironment &environment)
+  {
+    switch (entity.typeId00)
+    {
+    case 0x13F:
+      FUN_002e34b8_falcon_summon(entity, slot, environment);
+      break;
+    case 0x140:
+      FUN_002e23e8_hammer_summon(entity, slot, environment);
+      break;
+    case 0x141:
+      FUN_002e01f8_pinnacle_summon(entity, slot, environment);
+      break;
+    case 0x142:
+      FUN_002e1320_hail_summon(entity, slot, environment);
+      break;
+    default:
+      break;
+    }
+  }
+
+  // FUN_002E00D8 / FUN_002E0E60 / FUN_002E1F28 / FUN_002E2F50: the spawners.
+  // One shape for all four -- Falcon of Death alone follows it with a second
+  // entity, a type 0x1D9 flash parked at the caster's feet.
+  std::int32_t FUN_002e00d8_spawn_summon(const SummonSpell &spell,
+                                         std::uint8_t element,
+                                         std::uint16_t attackPower,
+                                         std::int16_t target,
+                                         std::uint32_t hitParameters,
+                                         const orphen::ported::psm2::Vec3 &anchor,
+                                         std::int16_t casterSlot,
+                                         const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t slot = pool.FUN_00265e28_allocate_and_initialize(
+        static_cast<std::uint32_t>(spell.summonType), *environment.descriptors);
+    if (slot >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    const bool haveCaster =
+        casterSlot >= 0 && static_cast<std::size_t>(casterSlot) < kEntitySlotCount;
+    const float casterFacing =
+        haveCaster ? pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c : 0.0f;
+
+    OriginalEntity &creature = pool.slot(slot);
+    creature.spawnParam94 = 0;
+    creature.summonAnchorX19c = anchor.x;
+    creature.positionX20 = anchor.x;
+    creature.attackPower12c = attackPower;
+    creature.summonAnchorZ1a0 = anchor.y;
+    creature.positionZ24 = anchor.y;
+    creature.halfword04 = 0x19;
+    creature.descriptorFlags02 =
+        static_cast<std::uint16_t>(creature.descriptorFlags02 | 0x1000u);
+    // Falcon of Death lifts its anchor half a unit and stores the lifted value;
+    // the other three keep it as it came.
+    const float height =
+        (spell.summonType == 0x13F) ? anchor.z + 0.5f : anchor.z;
+    creature.summonAnchorY1a4 = height;
+    creature.groundHeight4c = height;
+    creature.positionY28 = height;
+    creature.previousGroundHeight50 = height;
+    creature.facingRadians5c = casterFacing;
+    creature.hitParameters198 = hitParameters;
+    creature.lightningTarget1ac = target;
+    creature.lightningCaster1ae = casterSlot;
+    creature.lightningLevel1b3 = 5;
+    creature.fadeRamp62 = 0;
+    creature.animationA0 = spell.spawnAnimation;
+    creature.lightningTimer1b0 = FUN_00248e48_arm_timer(0x20);
+    (void)element;
+
+    if (spell.summonType == 0x13F)
+    {
+      // The flash. It is allocated as **0x175** -- Falcon's hand -- and then
+      // retyped to 0x1D9, so it draws the hand's model with the flash's
+      // behaviour, the same trick the elemental launches use for their discs.
+      const std::size_t flashSlot =
+          pool.FUN_00265e28_allocate_and_initialize(0x175, *environment.descriptors);
+      if (flashSlot < kEntitySlotCount && haveCaster)
+      {
+        const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterSlot));
+        OriginalEntity &flash = pool.slot(flashSlot);
+        flash.typeId00 = 0x1D9;
+        flash.positionX20 = caster.positionX20;
+        flash.positionZ24 = caster.positionZ24;
+        flash.animationA0 = 4;
+        flash.halfword08 = static_cast<std::uint16_t>(flash.halfword08 | 0x80u);
+        flash.halfword04 = 0x19;
+        const float lifted = caster.positionY28 + kFGpffffa9e8_flashLift;
+        flash.groundHeight4c = lifted;
+        flash.positionY28 = lifted;
+        flash.previousGroundHeight50 = lifted;
+        flash.facingRadians5c = caster.facingRadians5c;
+      }
+    }
+    return static_cast<std::int32_t>(slot);
+  }
+
+
+  // ---------------------------------------------- Bite of Lightning's summon
+  //
+  // FUN_002DF018, type 0x13E, spawned by FUN_002DEEF0. It sets the same stage
+  // as the other four -- the same freeze, the same dim set, the same two fade
+  // ramps out of the same two globals -- and then does three things none of
+  // them do:
+  //
+  //  * **Its camera is its own rig, not a curve.** FUN_0020DD78 finds the bone
+  //    carrying role 1 on the creature's model and role 2 beside it, and the
+  //    eye and the look-at are simply those two bones' world positions. There
+  //    are no spline points anywhere for it.
+  //  * **Its state machine runs off the animation's own phase word** rather
+  //    than off timeline frames: 0x400 ends the creature, 0x500 starts its
+  //    fade, and the release is the frame +0x08 bit 0 comes up, not a frame
+  //    number.
+  //  * **Its fields are all somewhere else.** FUN_002DEEF0 writes the target to
+  //    +0x1A8, the caster to +0x1AA, the timer to +0x1AC and the level to
+  //    +0x1B4 -- every one of them different from the block the other four
+  //    share -- and it does its own freeze at spawn rather than waiting for the
+  //    creature's first frame.
+  //
+  // fGpffffb5D8 is a fifth facing global beside the other four, and
+  // iGpffffb5D4 / iGpffffb5CC / cGpffffb790 / cGpffffb5D0 are the same
+  // DAT_00355554 / DAT_0035554C / DAT_00355700 / DAT_00355550 the rest use.
+  inline constexpr float kFGpffffa9b0_biteTurnRate = 0.0026179900858551f;
+  inline constexpr float kFGpffffa9b4_biteLift = 0.1000000014901161f;
+
+  float &fGpffffb5d8_biteFacing()
+  {
+    static float facing = 0.0f;
+    return facing;
+  }
+
+  std::int32_t FUN_002de650_launch_lightning(std::uint8_t level,
+                                             std::uint16_t attackPower,
+                                             std::int16_t target,
+                                             std::uint32_t hitParameters,
+                                             std::int16_t casterSlot,
+                                             const orphen::ported::psm2::Vec3 &summonAnchor,
+                                             const orphen::ported::psm2::Vec3 &castPosition,
+                                             const ActorEnvironment &environment);
+
+  // FUN_002DEEF0: the spawner. Unlike the other four it freezes the field
+  // itself, on the frame the creature is made, and hands the bit straight back
+  // to the creature and to the player.
+  std::int32_t FUN_002deef0_spawn_bite_summon(std::uint16_t attackPower,
+                                              std::int16_t target,
+                                              std::uint32_t hitParameters,
+                                              const orphen::ported::psm2::Vec3 &anchor,
+                                              std::int16_t casterSlot,
+                                              std::uint8_t level,
+                                              const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t slot =
+        pool.FUN_00265e28_allocate_and_initialize(0x13E, *environment.descriptors);
+    if (slot >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    OriginalEntity &creature = pool.slot(slot);
+    creature.spawnParam94 = 0;
+    creature.summonAnchorX19c = anchor.x;
+    creature.attackPower12c = attackPower;
+    creature.positionX20 = anchor.x;
+    creature.descriptorFlags02 =
+        static_cast<std::uint16_t>(creature.descriptorFlags02 | 0x1000u);
+    creature.halfword04 = 0x19;
+    creature.summonAnchorZ1a0 = anchor.y;
+    creature.positionZ24 = anchor.y;
+    creature.summonAnchorY1a4 = anchor.z;
+    creature.groundHeight4c = anchor.z;
+    creature.positionY28 = anchor.z;
+    creature.previousGroundHeight50 = anchor.z;
+    creature.hitParameters198 = hitParameters;
+    creature.biteSummonTarget1a8 = target;
+    creature.biteSummonCaster1aa = casterSlot;
+    creature.biteSummonLevel1b4 = static_cast<std::int8_t>(level);
+    creature.fadeRamp62 = 0;
+    creature.animationA0 = 5;
+    creature.biteSummonTimer1ac = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+
+    if (environment.DAT_00354ecc_setBattleSuspended)
+    {
+      environment.DAT_00354ecc_setBattleSuspended(1);
+    }
+    SummonStage::FUN_002de4a8_freeze_field(pool);
+    SummonStage::FUN_002de640_release_one(creature);
+    SummonStage::FUN_002de640_release_one(pool, 0);
+    return static_cast<std::int32_t>(slot);
+  }
+
+  void FUN_002df018_bite_summon(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    SummonStage &stage = DAT_0058bb00_summonStage();
+    const std::int32_t ticks = static_cast<std::int32_t>(environment.frameTicks);
+    const std::int16_t casterIndex = entity.biteSummonCaster1aa;
+    const bool haveCaster =
+        casterIndex >= 0 && static_cast<std::size_t>(casterIndex) < kEntitySlotCount;
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x80u);
+
+    const std::uint8_t channel =
+        (haveCaster && environment.DAT_0031da65_voiceChannel)
+            ? environment.DAT_0031da65_voiceChannel(static_cast<std::int16_t>(
+                  pool.slot(static_cast<std::size_t>(casterIndex)).byte95))
+            : 0;
+
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 0)
+    {
+      const std::int16_t target = entity.biteSummonTarget1a8;
+      if (haveCaster && target >= 0 && static_cast<std::size_t>(target) < kEntitySlotCount)
+      {
+        const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+        const OriginalEntity &victim = pool.slot(static_cast<std::size_t>(target));
+        fGpffffb5d8_biteFacing() = std::atan2(victim.positionZ24 - caster.positionZ24,
+                                              victim.positionX20 - caster.positionX20);
+      }
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      if (environment.DAT_00354ecc_setBattleSuspended)
+      {
+        environment.DAT_00354ecc_setBattleSuspended(1);
+      }
+
+      const ActorEnvironment::SummonExemptSlots exempt =
+          haveCaster ? summon_exempt(pool.slot(static_cast<std::size_t>(casterIndex)), environment)
+                     : ActorEnvironment::SummonExemptSlots{};
+      stage.FUN_002d6e20_build_dim_set(pool);
+      stage.FUN_002d6f38_exclude(static_cast<std::int32_t>(slot));
+      stage.FUN_002d6f38_exclude(casterIndex);
+      stage.FUN_002d6f38_exclude(exempt.DAT_0031daac_shield);
+      entity.spawnParam94 = 0x5A;
+      SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031daac_shield);
+      // The caster's shield effect is driven to animation 2 -- its closed pose
+      // -- where the other four leave it alone and close the ground ring
+      // instead.
+      if (exempt.DAT_0031daac_shield >= 0 &&
+          static_cast<std::size_t>(exempt.DAT_0031daac_shield) < kEntitySlotCount)
+      {
+        FUN_00225bc8_set_animation(
+            pool.slot(static_cast<std::size_t>(exempt.DAT_0031daac_shield)), 2);
+      }
+      SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031da8c_castRing);
+      if (exempt.DAT_0031da8c_castRing >= 0 &&
+          static_cast<std::size_t>(exempt.DAT_0031da8c_castRing) < kEntitySlotCount)
+      {
+        pool.slot(static_cast<std::size_t>(exempt.DAT_0031da8c_castRing)).animationA0 = 3;
+      }
+      stage.FUN_002d6f38_exclude(exempt.DAT_0031da8c_castRing);
+      SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031dad0_sharedHitEffect);
+      return;
+    }
+
+    // `(byte)(+0x94 + 0xBA) < 0x1E` -- the window 0x46..0x63, i.e. the 0x5A the
+    // entry parks on. One frame of nothing, then the camera takes over.
+    const std::uint8_t held = static_cast<std::uint8_t>(entity.spawnParam94 + 0xBAu);
+    if (held < 0x1E)
+    {
+      entity.spawnParam94 = 100;
+      return;
+    }
+
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 100)
+    {
+      SummonStage::FUN_002de640_release_one(pool, casterIndex);
+      entity.fadeRamp62 = 0;
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEFu);
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 & 0xFFFEu);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = 0x7F;
+      }
+      entity.spawnParam94 = 1;
+      stage.DAT_00355554_creatureFade() = 0x319C;
+      stage.DAT_0035554c_stageFade() = 0x319C;
+      if (environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(0xEC, entity);
+      }
+      if (environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(1, 1);
+        environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(100);
+      }
+    }
+
+    if (haveCaster)
+    {
+      OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+      const float want = fGpffffb5d8_biteFacing();
+      const float step = FUN_0023a320_approach_angle(
+          caster.facingRadians5c, want,
+          static_cast<float>(environment.frameTicks) * kFGpffffa9b0_biteTurnRate);
+      caster.facingRadians5c = (step == 0.0f) ? want : caster.facingRadians5c + step;
+      entity.facingRadians5c = caster.facingRadians5c;
+      entity.positionX20 = caster.positionX20;
+      entity.positionZ24 = caster.positionZ24;
+      const float lifted = caster.positionY28 + kFGpffffa9b4_biteLift;
+      entity.groundHeight4c = lifted;
+      entity.positionY28 = lifted;
+      entity.previousGroundHeight50 = lifted;
+    }
+
+    // The camera rig: roles 1 and 2 on the creature's own model.
+    if (environment.camera != nullptr && environment.FUN_0020dd78_bone_for_role &&
+        environment.FUN_0020dc88_bone_point)
+    {
+      const orphen::ported::psm2::Vec3 origin{0.0f, 0.0f, 0.0f};
+      const std::size_t eyeBone = environment.FUN_0020dd78_bone_for_role(slot, 1);
+      environment.camera->FUN_00217d40_set_eye(
+          environment.FUN_0020dc88_bone_point(slot, eyeBone, origin));
+      const std::size_t lookBone = environment.FUN_0020dd78_bone_for_role(slot, 2);
+      environment.camera->FUN_00217d10_set_look_at(
+          environment.FUN_0020dc88_bone_point(slot, lookBone, origin));
+      environment.camera->setZoomLog2(1.0f);
+      environment.camera->setRoll(0.0f);
+    }
+
+    if (summon_marker(entity, 0x700))
+    {
+      summon_voice(environment, channel, 2);
+    }
+    // The second shout keys on +0x06 bit **3**, not bit 2 like the first.
+    if ((entity.flags06 & 8u) != 0 && (entity.flagsAa & 0xF00u) == 0x600)
+    {
+      summon_voice(environment, channel, 3);
+    }
+    if ((entity.flagsAa & 0xF00u) == 0x200 && (entity.flags06 & 4u) != 0)
+    {
+      // DAT_0031DA1E = 1: the spirit-name banner. Not ported -- nothing draws
+      // it; see the four above.
+    }
+    if (summon_marker(entity, 0x300))
+    {
+      summon_voice(environment, channel, 4);
+      // The blast is a level-(n-1) Bite cast *from whatever the caster is
+      // aimed at*, which is why it cannot recurse into another creature.
+      orphen::ported::psm2::Vec3 landing{entity.positionX20, entity.positionZ24,
+                                         entity.positionY28};
+      std::int32_t victim = -1;
+      if (haveCaster && environment.FUN_002493f0_spell_landing)
+      {
+        victim = environment.FUN_002493f0_spell_landing(static_cast<std::size_t>(casterIndex),
+                                                        landing);
+      }
+      orphen::ported::psm2::Vec3 from = landing;
+      if (victim >= 3 && static_cast<std::size_t>(victim) < kEntitySlotCount)
+      {
+        const OriginalEntity &at = pool.slot(static_cast<std::size_t>(victim));
+        from = orphen::ported::psm2::Vec3{at.positionX20, at.positionZ24, at.positionY28};
+      }
+      const orphen::ported::psm2::Vec3 anchor{entity.summonAnchorX19c, entity.summonAnchorZ1a0,
+                                              entity.summonAnchorY1a4};
+      FUN_002de650_launch_lightning(static_cast<std::uint8_t>(entity.biteSummonLevel1b4 - 1),
+                                    entity.attackPower12c,
+                                    static_cast<std::int16_t>(entity.biteSummonTarget1a8),
+                                    entity.hitParameters198, static_cast<std::int16_t>(victim),
+                                    anchor, from, environment);
+      SummonStage::FUN_002de548_release_hurt(pool);
+    }
+    if ((entity.flagsAa & 0xF00u) == 0x400 && (entity.flags06 & 4u) != 0)
+    {
+      entity.spawnParam94 = 3;
+    }
+    if ((entity.flagsAa & 0xF00u) == 0x500)
+    {
+      entity.fadeRamp62 = 1;
+    }
+    if (entity.fadeRamp62 != 0)
+    {
+      stage.DAT_00355554_creatureFade() -= ticks * 9;
+      if (stage.DAT_00355554_creatureFade() < 300)
+      {
+        stage.DAT_00355554_creatureFade() = 300;
+        entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      }
+      entity.fadeLevel134 = static_cast<std::uint8_t>(stage.DAT_00355554_creatureFade() / 100);
+    }
+
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 1)
+    {
+      stage.DAT_0035554c_stageFade() -= ticks * 9;
+      if (stage.DAT_0035554c_stageFade() < 300)
+      {
+        stage.DAT_0035554c_stageFade() = 300;
+        entity.spawnParam94 = 0xFF;
+      }
+      const std::uint8_t cap = static_cast<std::uint8_t>(stage.DAT_0035554c_stageFade() / 100);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = cap;
+      }
+      stage.DAT_00355550_veilAlpha() = static_cast<std::uint8_t>(0x7F - cap);
+    }
+    // State 2 is written by nothing in the executable -- every path that could
+    // reach it writes 3 instead -- but the original tests for it, so it is kept
+    // rather than folded away.
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 2)
+    {
+      stage.DAT_0035554c_stageFade() += ticks * 0x1B;
+      if (stage.DAT_0035554c_stageFade() > 0x319C)
+      {
+        stage.DAT_0035554c_stageFade() = 0;
+        entity.spawnParam94 = 0xFF;
+      }
+    }
+    if (static_cast<std::int8_t>(entity.spawnParam94) == 3)
+    {
+      stage.DAT_0035554c_stageFade() += ticks * 0x1B;
+      if (stage.DAT_0035554c_stageFade() > 0x319C)
+      {
+        stage.DAT_0035554c_stageFade() = 0x1E;
+        entity.spawnParam94 = 0xFF;
+      }
+      const std::uint8_t cap = static_cast<std::uint8_t>(stage.DAT_0035554c_stageFade() / 100);
+      std::uint8_t veil = static_cast<std::uint8_t>(0x7F - cap);
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = cap;
+      }
+      // A fully dark stage reads as 1 rather than 0x7F here, which keeps the
+      // veil from snapping back to full on the last frame of the ramp.
+      if (veil == 0x7F)
+      {
+        veil = 1;
+      }
+      stage.DAT_00355550_veilAlpha() = veil;
+    }
+    // FUN_002D7038(0xA18, DAT_00355550, 0x4000, 2): the veil. Not ported.
+
+    // The release is the frame the animation reports done, not a frame number.
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) > 4 && (entity.halfword08 & 1u) != 0)
+    {
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = 0;
+      }
+      pool.releaseSlot(slot);
+      if (environment.DAT_00343878_frameFeedback != nullptr)
+      {
+        environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0);
+        environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0, 0);
+      }
+      if (environment.DAT_00354ecc_setBattleSuspended)
+      {
+        environment.DAT_00354ecc_setBattleSuspended(0);
+      }
+      SummonStage::FUN_002de500_release_field(pool);
+      // FUN_002D6FA0 still runs after the release in the original, on a slot
+      // that is already free; the mask's own live test drops it.
+    }
+    stage.FUN_002d6fa0_apply(pool, environment.DAT_00355700_globalFadeCap != nullptr
+                                       ? *environment.DAT_00355700_globalFadeCap
+                                       : 0);
+  }
+
+  // FUN_002e2d38 / FUN_002e1d20 / FUN_002dfb40 / FUN_002e0c68: the launch.
+  //
+  // **The level-5 summon is the first branch and it is still a gap**, exactly
+  // as it is for Bite of Lightning. FUN_002e2f50 and its three siblings spawn
+  // the type 0x13F..0x142 creature whose own behaviour -- three hundred lines
+  // apiece -- is not ported; spawning one with nothing to drive it would leave
+  // it standing in the arena. The demo in s14_e031 *does* reach this branch
+  // (the pinnacle_of_the_sun save state has a type 0x141 on animation 4), so
+  // this is the next thing to land, not a branch that cannot happen.
+  std::int32_t FUN_002e2d38_launch_elemental(const ElementalSpellB &spell,
+                                             std::uint8_t element,
+                                             std::uint8_t level,
+                                             std::uint16_t attackPower,
+                                             std::int16_t target,
+                                             std::uint32_t hitParameters,
+                                             std::int16_t casterSlot,
+                                             const orphen::ported::psm2::Vec3 &summonAnchor,
+                                             const orphen::ported::psm2::Vec3 &castPosition,
+                                             const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return 0;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    // FUN_002E2F50 / FUN_002E1F28 / FUN_002E00D8 / FUN_002E0E60: at full charge
+    // with a live target the spell is not thrown at all -- it becomes a
+    // creature, anchored at the caster's hand rather than at the landing point,
+    // and the launch returns nothing for the hand to hold on to.
+    if (level == 5 && target > 1)
+    {
+      const SummonSpell *summon = summonForHand(spell.handType);
+      if (summon != nullptr)
+      {
+        FUN_002e00d8_spawn_summon(*summon, element, attackPower, target, hitParameters,
+                                  summonAnchor, casterSlot, environment);
+      }
+      return 0;
+    }
+
+    std::int32_t scaled = (level == 0) ? 1 : static_cast<std::int32_t>(level);
+    if (scaled > 5)
+    {
+      scaled = 5;
+    }
+    const std::int8_t levelB = static_cast<std::int8_t>(scaled);
+
+    const std::size_t slot =
+        pool.FUN_00265e28_allocate_and_initialize(spell.handType, *environment.descriptors);
+    if (slot >= kEntitySlotCount)
+    {
+      return 0;
+    }
+    auto &projectile = pool.slot(slot);
+    projectile.typeId00 = spell.projectileType;
+    projectile.modelTypeId15c = spell.handType;
+    projectile.attackPower12c =
+        spell.foldLevelIntoPower
+            ? static_cast<std::uint16_t>(attackPower + scaled * 4 + 1)
+            : attackPower;
+    projectile.depthBias133 = static_cast<std::int8_t>(levelB * -0x0C);
+    projectile.descriptorFlags02 =
+        static_cast<std::uint16_t>(projectile.descriptorFlags02 | 0x1000u);
+    projectile.halfword04 = 0x19;
+    projectile.positionX20 = castPosition.x;
+    projectile.positionZ24 = castPosition.y;
+    projectile.positionY28 = castPosition.z;
+    projectile.groundHeight4c = castPosition.z;
+    projectile.previousGroundHeight50 = castPosition.z;
+    projectile.facingRadians5c = (static_cast<std::size_t>(casterSlot) < kEntitySlotCount)
+                                     ? pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c
+                                     : 0.0f;
+    projectile.hitParameters198 = hitParameters;
+    projectile.state60 = element;
+    projectile.lightningTarget1ac = target;
+    projectile.lightningCaster1ae = casterSlot;
+    projectile.lightningLevel1b3 = levelB;
+    projectile.lightningByte1b2 = 0;
+    projectile.fadeRamp62 = 0;
+    projectile.animationA0 = spell.projectileAnimation;
+    FUN_00215e48_clear_hit_set(projectile);
+    const float scale =
+        spell.scaleWithLevel
+            ? static_cast<float>(scaled) * kFGpffffa9e4_projectileScalePerLevel + 1.0f
+            : 1.0f;
+    projectile.scale14c = scale;
+    projectile.scaleZ150 = scale;
+    if (scaled == 5)
+    {
+      // +0x19B is byte 3 of the four the launch copied into +0x198, i.e. the
+      // hit record's reaction. The original writes it on the spawn as well as
+      // inside the sweep.
+      projectile.hitParameters198 = (hitParameters & 0x00FFFFFFu) | (0x18u << 24);
+    }
+    if (casterSlot == 0 && target > 2 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+        (pool.slot(static_cast<std::size_t>(target)).effectFlags96 & 0x40u) != 0)
+    {
+      projectile.effectFlags96 = static_cast<std::uint8_t>(projectile.effectFlags96 | 0x40u);
+    }
+
+    FUN_002e9668_elemental_sweep(spell.handType, scaled, hitParameters, projectile, slot,
+                                 castPosition, environment);
+    return static_cast<std::int32_t>(slot);
+  }
+
+  // FUN_002e3110 / FUN_002e2048 / FUN_002dfd38 / FUN_002e0f80: the charge in
+  // Orphen's hand. Line for line FUN_002deae8 above, with the three
+  // differences named at the top of this block.
+  void FUN_002e3110_elemental_hand(OriginalEntity &effect,
+                                   const ActorEnvironment &environment,
+                                   const ElementalSpellB &spell)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    const std::size_t casterSlot = static_cast<std::size_t>(casterIndex);
+    OriginalEntity &caster = pool.slot(casterSlot);
+
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C; // 0xF4
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+    // The bone index is taken negative here and negated again at the launch, so
+    // FUN_0020DC88 always sees the positive one. 0x174 skips both halves.
+    if (effect.attachBone194 > 0)
+    {
+      effect.attachBone194 = static_cast<std::int8_t>(-effect.attachBone194);
+    }
+    // And the effect parks itself at the origin, riding the caster's bone
+    // rather than a world position, with the caster's facing.
+    effect.positionX20 = 0.0f;
+    effect.positionZ24 = 0.0f;
+    effect.positionY28 = 0.0f;
+    effect.facingRadians5c = caster.facingRadians5c;
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+
+    std::int16_t step = static_cast<std::int16_t>(effect.animationA0);
+    if (step != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x74u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      step = static_cast<std::int16_t>(effect.animationA0);
+    }
+
+    if (step == 0 || step == 1)
+    {
+      if (casterSlot == 0 && environment.FUN_002f1380_show_hit_effect &&
+          environment.FUN_002493f0_spell_landing)
+      {
+        ActorEnvironment::BattleMemberView lead;
+        const OriginalEntity &player = pool.slot(0);
+        std::int32_t charge = 0;
+        if (player.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+            environment.DAT_0031d7b0_battleMember(static_cast<std::uint32_t>(player.byte95) - 1u,
+                                                  lead))
+        {
+          charge = lead.chargeTimer3c > 0x2580 ? 0x2580 : lead.chargeTimer3c;
+        }
+        orphen::ported::psm2::Vec3 landing{};
+        environment.FUN_002493f0_spell_landing(0, landing);
+        environment.FUN_002f1380_show_hit_effect(static_cast<float>(charge) / 1000.0f + 1.5f, 1.0f,
+                                                 landing);
+      }
+      FUN_002da220_spell_light(effect, casterSlot, haveBlock ? view.chargeTimer3c : 0,
+                               spell.lightRed, spell.lightGreen, spell.lightBlue, 1000,
+                               environment);
+    }
+
+    if (step == 1)
+    {
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+    }
+    else if (step == 0)
+    {
+      effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      // FUN_002660D0(caster): drop the caster's own light request. 0x174 does
+      // not have this line; the four that do reach it only on animation 0.
+    }
+    else if (step == 2)
+    {
+      if ((effect.flags06 & 1u) != 0)
+      {
+        effect.parentSlot192 = casterIndex;
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+        if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195))
+              .radius = 0.0f;
+          effect.lightSlot195 = -1;
+        }
+      }
+    }
+
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+    effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    FUN_00225bc8_set_animation(effect, 2);
+    effect.state60 = 0;
+
+    // The bone point is the summon's anchor -- the launch's param_6, which only
+    // the level-5 branch reads. The thrown projectile spawns at the landing
+    // point below instead.
+    orphen::ported::psm2::Vec3 summonAnchor{caster.positionX20, caster.positionZ24,
+                                            caster.positionY28};
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      summonAnchor = environment.FUN_0020dc88_bone_point(
+          casterSlot, static_cast<std::size_t>(-effect.attachBone194),
+          orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+
+    orphen::ported::psm2::Vec3 castPosition{caster.positionX20, caster.positionZ24,
+                                            caster.positionY28};
+    std::int32_t target = -1;
+    if (environment.FUN_002493f0_spell_landing)
+    {
+      target = environment.FUN_002493f0_spell_landing(casterSlot, castPosition);
+    }
+    const std::uint32_t hitParameters =
+        environment.DAT_0031d3c8_battleTableWord
+            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+            : 0;
+    // The leading 1 is the element byte the launch parks in the projectile's
+    // +0x60. Every one of the four passes the same 1; 0x174 has no such
+    // argument and leaves its disc at 0.
+    FUN_002e2d38_launch_elemental(spell, 1, effect.spawnParam94, effect.attackPower12c,
+                                  static_cast<std::int16_t>(target), hitParameters,
+                                  static_cast<std::int16_t>(casterSlot), summonAnchor, castPosition,
+                                  environment);
+  }
+
+  // 0x002E3490 / 0x002E23C8 / 0x002E00B8 / 0x002E1300: the four projectiles'
+  // whole behaviour, eight instructions each and no src/ file -- recovered from
+  // SLUS_200.11. Free the entity when its animation comes round. Falcon's is
+  // the only one that also forces animation 1 on the way out.
+  void LAB_002e3490_elemental_projectile(OriginalEntity &effect,
+                                         std::size_t slot,
+                                         const ActorEnvironment &environment,
+                                         bool forceAnimationOne)
+  {
+    if (forceAnimationOne)
+    {
+      effect.animationA0 = 1;
+    }
+    if ((effect.flags06 & 1u) != 0 && environment.entityPool != nullptr)
+    {
+      environment.entityPool->releaseSlot(slot);
+    }
+  }
+
+
+  // ======================== the four other kind-12 elemental spells
+  //
+  // Bolt of Thunder, Feathers of the Hurricane, Smoke of Pain and Coldness of
+  // Destruction: Hand of Pyro's shape four more times, and the only one of the
+  // three families where the *projectile* is genuinely per-element.
+  //
+  //   spell 2  Bolt of Thunder           0x13A  FUN_002db548 / FUN_002db258 / 0x155 FUN_002db7d0
+  //   spell 3  Feathers of the Hurricane 0x13B  FUN_002dbf48 / FUN_002dbc68 / 0x157 FUN_002dc1c8
+  //   spell 4  Smoke of Pain             0x13C  FUN_002dc960 / FUN_002dc688 / 0x159 FUN_002dcc20
+  //   spell 6  Coldness of Destruction   0x194  FUN_002dd358 / FUN_002dd078 / 0x195 FUN_002dd618
+  //   (spell 5 Hand of Pyro              0x13D  FUN_002da8a0 / FUN_002dab70 / 0x15B FUN_002dae60)
+  //
+  // The hands come in two shapes and the launches in one; the four projectiles
+  // share a skeleton -- sweep, burst-on-hit, life countdown, motion, successor,
+  // free -- and differ only in how they steer and how many successors they
+  // throw. The bursts cost nothing at all: types 0x170, 0x171, 0x172 and 0x196
+  // are `j 0x2db230`, the same two instructions Hand of Pyro's 0x173 runs, so
+  // they are four extra labels on a case that is already here.
+  enum class Kind12Element
+  {
+    Bolt,
+    Feathers,
+    Smoke,
+    Cold,
+  };
+
+  struct Kind12Spell
+  {
+    Kind12Element element;
+    std::int16_t handType;
+    std::int16_t projectileType;
+    std::int16_t burstType;
+    // The hand. Bolt and Feathers take the bone index negative and ride the
+    // caster's facing; Smoke and Cold park a fixed pose the way Hand of Pyro
+    // does and tilt it by the caster's class.
+    bool negateBone;
+    // The launch.
+    std::uint16_t successorTicks; // FUN_00248E48's argument for +0x62
+    std::uint16_t lifeTicks;      // and for +0x1C4
+    float unaimedSpeed;           // +0x1BC when there is nothing to aim at
+    float aimedSpeedDivisor;      // the flight-time divisor; 0 means "use unaimedSpeed"
+    // The projectile.
+    float burstFacingOffset; // added to the burst's facing when it lands
+    float homeRate;          // FUN_0023A320's cap while it tracks
+    std::array<float, 4> chainYaw; // the spread, indexed by chain - 1
+  };
+
+  // Every homing rate in all four is the same 0.00436332 -- a quarter degree a
+  // tick -- and every burst offset is pi. They are sixteen separate words in the
+  // executable and they get sixteen slots here for the same reason the enemies'
+  // turn rates do.
+  inline constexpr Kind12Spell kKind12Spells[4]{
+      {Kind12Element::Bolt, 0x13A, 0x155, 0x170, true, 1, 0x6C, 0.00347222f, 0.00347222f,
+       3.1415927f, 0.00436332f, {{0.0f, 0.0f, 0.0f, 0.0f}}},
+      {Kind12Element::Feathers, 0x13B, 0x157, 0x171, true, 0x0F, 0x6C, 0.00347222f, 0.00347222f,
+       3.1415927f, 0.00436332f, {{2.79253f, -2.79253f, 1.74533f, -1.74533f}}},
+      {Kind12Element::Smoke, 0x13C, 0x159, 0x172, false, 0x28, 0x1B0, 0.000868056f, 0.0f,
+       3.1415927f, 0.00436332f, {{1.39626f, -1.39626f, 1.39626f, -1.39626f}}},
+      {Kind12Element::Cold, 0x194, 0x195, 0x196, false, 0x1E, 0x6C, 0.00347222f, 0.00347222f,
+       3.1415927f, 0.00436332f, {{2.79253f, -2.79253f, 2.61799f, -2.61799f}}},
+  };
+
+  const Kind12Spell *kind12ForHand(std::int16_t typeId)
+  {
+    for (const auto &row : kKind12Spells)
+    {
+      if (row.handType == typeId)
+      {
+        return &row;
+      }
+    }
+    return nullptr;
+  }
+
+  const Kind12Spell *kind12ForProjectile(std::int16_t typeId)
+  {
+    for (const auto &row : kKind12Spells)
+    {
+      if (row.projectileType == typeId)
+      {
+        return &row;
+      }
+    }
+    return nullptr;
+  }
+
+  // Coldness of Destruction alone gives itself a hop as the spread ends, and
+  // bumps its facing once more on the way out.
+  inline constexpr float kDAT_00354904_coldHop = 0.038f;
+  inline constexpr float kDAT_00354910_coldDeathYaw = 0.5235990f;
+  // uGpffffa8e0 / DAT_003548b8, the pose Smoke and Cold park, and the two class
+  // tilts that go with it. Hand of Pyro's class-4 arm also writes +0x158; these
+  // two do not.
+  inline constexpr float kSmokeColdPoseFacing = 1.5707964f;
+  inline constexpr float kSmokeColdTiltClass1 = 0.6981317f;
+  inline constexpr float kSmokeColdTiltClass4 = 2.6179900f;
+  // The light all four hang on the caster's hand -- grey where Hand of Pyro's
+  // is orange -- and the one the projectile carries.
+  inline constexpr std::uint8_t kKind12LightGrey = 0x42;
+  // DAT_00354880 / DAT_003548AC / fGpffffa968 / DAT_0035490C, all a full turn:
+  // the numerator of the degrees-to-radians the spread and trim are expressed
+  // in. Four words, one value, kept as one name here because all four uses are
+  // inside this block.
+  inline constexpr float kKind12Tau = 6.2831840515136719f;
+
+  // FUN_002D6BD0: one cue for the whole volley, picked off the first victim's
+  // pending damage. Under 4 is 0xE2, under 11 is 0xE3, anything more is 0xE4.
+  void FUN_002d6bd0_hit_cue(const ActorEnvironment &environment, const OriginalEntity &source)
+  {
+    if (environment.hitTest == nullptr || environment.hitTest->DAT_003151c8_hitList == nullptr ||
+        environment.entityPool == nullptr || !environment.FUN_00267d38_playSound)
+    {
+      return;
+    }
+    const auto &hitList = *environment.hitTest->DAT_003151c8_hitList;
+    for (std::size_t index = 0; index < hitList.size() && index < 256u; ++index)
+    {
+      const std::uint16_t victim = hitList[index];
+      if (victim == 0 || static_cast<std::size_t>(victim) >= kEntitySlotCount)
+      {
+        continue;
+      }
+      const std::int16_t damage = static_cast<std::int16_t>(
+          environment.entityPool->slot(static_cast<std::size_t>(victim)).pendingDamageBe);
+      if (damage <= 0)
+      {
+        continue;
+      }
+      environment.FUN_00267d38_playSound(damage < 4 ? 0xE2 : (damage < 0x0B ? 0xE3 : 0xE4), source);
+      return;
+    }
+  }
+
+  // FUN_002DB7D0:29-40 and its three twins: when the player cast it, offer every
+  // victim to the camera and key the rumble.
+  //
+  // FUN_0023C220 is the offer -- it parks the victim in DAT_00354E84 so
+  // FUN_0023C340 swings the camera onto it -- and it is **not ported**: the
+  // battle camera's reaction shot is a whole subsystem this does not touch, and
+  // getting it half-right would move the camera at the wrong moments. The cue
+  // and the burst are what the volley is actually made of, and both are here.
+  void kind12_landed(OriginalEntity &projectile,
+                     std::size_t slot,
+                     const Kind12Spell &spell,
+                     const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    // FUN_0023C220 per victim and FUN_0023BBD8(0, 6), the pad rumble, are the
+    // caster == 0 half and are not ported; FUN_002D6BD0 is unconditional and
+    // is what the volley actually sounds like.
+    FUN_002d6bd0_hit_cue(environment, projectile);
+
+    // The burst. It inherits the projectile's position and the *negated* +0x154,
+    // so the splash leans the opposite way to the shot that made it.
+    const std::size_t burstSlot = pool.FUN_00265e28_allocate_and_initialize(
+        static_cast<std::uint32_t>(spell.burstType), *environment.descriptors);
+    if (burstSlot < kEntitySlotCount)
+    {
+      auto &burst = pool.slot(burstSlot);
+      burst.positionX20 = projectile.positionX20;
+      burst.positionZ24 = projectile.positionZ24;
+      burst.positionY28 = projectile.positionY28;
+      if (spell.element == Kind12Element::Smoke)
+      {
+        // Smoke of Pain alone carries the ground height across too.
+        burst.groundHeight4c = projectile.groundHeight4c;
+        burst.previousGroundHeight50 = projectile.groundHeight4c;
+      }
+      burst.facingRadians5c = projectile.facingRadians5c + spell.burstFacingOffset;
+      burst.rotationX154 = -projectile.rotationX154;
+      FUN_00225bc8_set_animation(burst, 0);
+    }
+    pool.releaseSlot(slot);
+  }
+
+  // FUN_002DC1C8:120-155, shared verbatim with FUN_002DD618: the fan.
+  //
+  // Fill all five entries with the shot's own target, then put pool slot 2 in
+  // the second if it is a live battle participant, then walk 3..255 taking
+  // every live entity whose +0x96 bit 0 is up -- the bit FUN_0023F8B8 sets when
+  // something is bound into an actor record -- until six are collected. The
+  // volley then throws one successor per charge level, each aimed at the next
+  // entry, so a full charge fans across the whole field and a tap does not.
+  std::array<std::int16_t, 5> kind12_fan_targets(const EntityPool &pool, std::int16_t ownTarget)
+  {
+    std::array<std::int16_t, 5> targets{};
+    targets.fill(ownTarget);
+
+    std::size_t filled = 1;
+    std::size_t candidate = 3;
+    const bool slot2Live = pool.slotCount() > 2 && pool.status(2) != SlotStatus::Free;
+    if (slot2Live && (pool.slot(2).battleFlags96 & 1u) != 0)
+    {
+      targets[1] = 2;
+      filled = 2;
+    }
+    else if (!slot2Live)
+    {
+      candidate = 2;
+    }
+    for (; candidate < pool.slotCount() && candidate < 0x100u; ++candidate)
+    {
+      if (pool.status(candidate) == SlotStatus::Free)
+      {
+        continue;
+      }
+      if ((pool.slot(candidate).battleFlags96 & 1u) == 0)
+      {
+        continue;
+      }
+      targets[filled] = static_cast<std::int16_t>(candidate);
+      ++filled;
+      if (filled >= targets.size())
+      {
+        break;
+      }
+    }
+    return targets;
+  }
+
+  // The fan itself: one successor per charge level, each at the next entry of
+  // the target list, thrown from where this shot is standing and owned by it.
+  void kind12_throw_fan(OriginalEntity &shot,
+                        std::size_t slot,
+                        const Kind12Spell &spell,
+                        const ActorEnvironment &environment);
+
+  // FUN_002DB258 / FUN_002DBC68 / FUN_002DC688 / FUN_002DD078: the launch, and
+  // the one function of the three that really is the same four times.
+  //
+  // Structurally FUN_002DAB70 with three differences: the light is grey rather
+  // than orange, the successor timer is a per-element constant rather than
+  // `8 - charge`, and Bolt of Thunder parks its chain and charge two bytes
+  // further up so it can keep +0x1C6 as the aimed shot's flight time.
+  std::int32_t FUN_002db258_launch_kind12(const Kind12Spell &spell,
+                                          std::uint8_t chainIndex,
+                                          std::uint8_t chargeLevel,
+                                          std::uint16_t attackPower,
+                                          std::int16_t target,
+                                          std::uint32_t hitParameters,
+                                          float originX,
+                                          float originZ,
+                                          float originY,
+                                          std::int16_t casterSlot,
+                                          const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t spawned = pool.FUN_00265e28_allocate_and_initialize(
+        static_cast<std::uint32_t>(spell.projectileType), *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &shot = pool.slot(spawned);
+
+    if (chainIndex == 0)
+    {
+      shot.effectFlags96 = static_cast<std::uint8_t>(shot.effectFlags96 | 0x40u);
+    }
+    shot.attackPower12c = attackPower;
+    shot.fireballOriginX19c = originX;
+    shot.positionX20 = originX;
+    shot.fireballOriginZ1a0 = originZ;
+    shot.positionZ24 = originZ;
+    shot.fireballOriginY1a4 = originY;
+    shot.positionY28 = originY;
+    shot.hitParameters198 = hitParameters;
+    shot.fireballTarget1c0 = target;
+    shot.fireballCaster1c2 = casterSlot;
+    if (spell.element == Kind12Element::Bolt)
+    {
+      shot.boltChain1c8 = chainIndex;
+      shot.boltCharge1c9 = chargeLevel;
+    }
+    else
+    {
+      shot.fireballChain1c6 = chainIndex;
+      shot.fireballCharge1c7 = chargeLevel;
+    }
+    shot.fadeRamp62 = 0;
+    shot.animationA0 = 0;
+
+    // Its own light. FUN_0023EB20 is the same two-stage allocator
+    // FUN_002DA220 uses, and FUN_002660D0 puts it on the entity.
+    if (environment.DAT_00343888_lights != nullptr)
+    {
+      if (shot.lightSlot195 < 0)
+      {
+        const std::int32_t high = environment.DAT_00343888_lights->FUN_00266008_allocateFromThree();
+        const std::int32_t allocated =
+            high >= 0 ? high : environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+        shot.lightSlot195 = static_cast<std::int8_t>(allocated);
+      }
+      if (shot.lightSlot195 >= 0)
+      {
+        auto &light =
+            environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(shot.lightSlot195));
+        light.radius = 2.0f;
+        light.red = kKind12LightGrey;
+        light.green = kKind12LightGrey;
+        light.blue = kKind12LightGrey;
+        light.x = shot.positionX20;
+        light.y = shot.positionZ24;
+        light.z = shot.positionY28;
+      }
+    }
+
+    std::uint8_t spark = chargeLevel;
+    if (spark != 0)
+    {
+      if (spark == chainIndex)
+      {
+        // The last link: no successor timer, which is what ends the chain.
+        if (spark == 5)
+        {
+          shot.animationA0 = 0;
+          spark = 0x18;
+        }
+        else
+        {
+          shot.fireballSparkId19b = static_cast<std::uint8_t>(spark + 0x14);
+        }
+      }
+      else
+      {
+        shot.fadeRamp62 =
+            static_cast<std::uint16_t>(FUN_00248e48_arm_timer(spell.successorTicks));
+      }
+    }
+    if (spark == 5)
+    {
+      shot.fireballSparkId19b = 0x18;
+    }
+
+    shot.facingRadians5c = (static_cast<std::size_t>(casterSlot) < kEntitySlotCount)
+                               ? pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c
+                               : 0.0f;
+    shot.fireballLife1c4 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(spell.lifeTicks));
+
+    const bool aimed = target > 1 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+                       pool.slot(static_cast<std::size_t>(target)).typeId00 != 0;
+    if (!aimed)
+    {
+      shot.fireballSpeed1bc = spell.unaimedSpeed;
+      shot.fireballRise1b0 = 0.0f;
+    }
+    else
+    {
+      const auto &victim = pool.slot(static_cast<std::size_t>(target));
+      const float dx = victim.positionX20 - originX;
+      const float dz = victim.positionZ24 - originZ;
+      const float dy = victim.positionY28 - originY;
+      // FUN_00216648 over the divisor: the flight time in ticks at the
+      // element's fixed speed. Smoke of Pain is the odd one -- it divides by its
+      // own speed and then *keeps* that speed rather than solving for it, so its
+      // shot always travels at the same rate and only its climb varies.
+      const float divisor =
+          spell.aimedSpeedDivisor != 0.0f ? spell.aimedSpeedDivisor : spell.unaimedSpeed;
+      const float flight = std::sqrt(dx * dx + dz * dz + dy * dy) / divisor;
+      if (flight > 0.0f)
+      {
+        shot.fireballRise1b0 =
+            ((victim.positionY28 + victim.height58 * 0.5f) - originY) / flight;
+        shot.fireballSpeed1bc = spell.element == Kind12Element::Smoke
+                                    ? spell.unaimedSpeed
+                                    : std::sqrt(dx * dx + dz * dz) / flight;
+      }
+      if (spell.element == Kind12Element::Bolt)
+      {
+        // +0x1C6 as a short: the costed flight plus 0xF00. The projectile
+        // counts it down and stops homing when it reaches zero.
+        shot.boltFlight1c6 =
+            static_cast<std::uint16_t>(static_cast<std::int32_t>(flight) + 0xF00);
+      }
+    }
+
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xCC, shot);
+    }
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002DB548 / FUN_002DBF48 / FUN_002DC960 / FUN_002DD358: the charge in
+  // Orphen's hand. Hand of Pyro's body with a per-element pose and light.
+  void FUN_002db548_kind12_hand(OriginalEntity &effect,
+                                const ActorEnvironment &environment,
+                                const Kind12Spell &spell)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    const std::size_t casterSlot = static_cast<std::size_t>(casterIndex);
+    OriginalEntity &caster = pool.slot(casterSlot);
+
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C; // 0xF4
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+    if (spell.negateBone)
+    {
+      // Bolt and Feathers take the bone negative here and negate it again at
+      // the throw, so FUN_0020DC88 always sees the positive index.
+      if (effect.attachBone194 > 0)
+      {
+        effect.attachBone194 = static_cast<std::int8_t>(-effect.attachBone194);
+      }
+      effect.facingRadians5c = caster.facingRadians5c;
+    }
+    else
+    {
+      effect.facingRadians5c = 0.0f;
+    }
+
+    ActorEnvironment::BattleMemberView view;
+    const std::uint32_t member = static_cast<std::uint32_t>(caster.byte95) - 1u;
+    const bool haveBlock = caster.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+
+    std::int16_t step = static_cast<std::int16_t>(effect.animationA0);
+    if (step != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      // `1 < (byte)(current + 0x76)` -- anything outside the kind-12 action
+      // pair 0x8A and 0x8B, i.e. the caster has stopped casting.
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x76u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      step = static_cast<std::int16_t>(effect.animationA0);
+    }
+
+    if (step == 1)
+    {
+      if (!spell.negateBone)
+      {
+        // Smoke and Cold park the pose here rather than riding the caster.
+        effect.facingRadians5c = kSmokeColdPoseFacing;
+        if (haveBlock && view.characterClass == 1)
+        {
+          effect.rotationX154 = kSmokeColdTiltClass1;
+        }
+        else if (haveBlock && view.characterClass == 4)
+        {
+          effect.rotationX154 = kSmokeColdTiltClass4;
+        }
+      }
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+    }
+    else if (step == 0)
+    {
+      // The hold. Grey where Hand of Pyro's is orange, same 500 base radius.
+      FUN_002da220_spell_light(effect, casterSlot, haveBlock ? view.chargeTimer3c : 0,
+                               kKind12LightGrey, kKind12LightGrey, kKind12LightGrey, 500,
+                               environment);
+    }
+    else if (step == 2)
+    {
+      if ((effect.flags06 & 1u) != 0)
+      {
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+        // FUN_00266098: give the light slot back.
+        if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195))
+              .radius = 0.0f;
+          effect.lightSlot195 = -1;
+        }
+      }
+    }
+
+    // **The throw.** +0x60 is 1 for one frame, written by FUN_0024BAE0 when the
+    // release animation reaches its +0xAA bit 0x100 marker.
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+    effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    FUN_00225bc8_set_animation(effect, 2);
+    effect.state60 = 0;
+
+    orphen::ported::psm2::Vec3 origin{effect.positionX20, effect.positionZ24, effect.positionY28};
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      const std::size_t bone = static_cast<std::size_t>(
+          spell.negateBone ? -effect.attachBone194 : effect.attachBone194);
+      origin = environment.FUN_0020dc88_bone_point(casterSlot, bone,
+                                                   orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+    const std::uint32_t hitParameters =
+        environment.DAT_0031d3c8_battleTableWord
+            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+            : 0;
+    // FUN_002493B8, not FUN_002493F0: the kind-12 arm throws at the control
+    // block's target slot rather than at a landing spot.
+    FUN_002db258_launch_kind12(spell, 0, effect.spawnParam94, effect.attackPower12c,
+                               haveBlock ? view.target : -1, hitParameters, origin.x, origin.y,
+                               origin.z, static_cast<std::int16_t>(casterSlot), environment);
+  }
+
+  void kind12_throw_fan(OriginalEntity &shot,
+                        std::size_t slot,
+                        const Kind12Spell &spell,
+                        const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::uint8_t charge = shot.fireballCharge1c7;
+    if (charge == 0)
+    {
+      return;
+    }
+    // Coldness stamps 0x50 first so the fan happens once whichever of its two
+    // exits reaches it -- the sweep or the wall.
+    if (spell.element == Kind12Element::Cold)
+    {
+      shot.fireballChain1c6 = 0x50;
+    }
+    const auto targets = kind12_fan_targets(pool, shot.fireballTarget1c0);
+    for (std::size_t index = 0; index < charge && index < targets.size(); ++index)
+    {
+      FUN_002db258_launch_kind12(spell, static_cast<std::uint8_t>(index + 1), charge,
+                                 shot.attackPower12c, targets[index], shot.hitParameters198,
+                                 shot.positionX20, shot.positionZ24, shot.positionY28,
+                                 static_cast<std::int16_t>(slot), environment);
+    }
+  }
+
+  // FUN_002DB7D0 / FUN_002DC1C8 / FUN_002DCC20 / FUN_002DD618: the projectile.
+  //
+  // The skeleton is the same four times -- keep the light on, clear the damage
+  // fields, sweep, burst and die on a hit, run the life down, steer, move,
+  // throw the successor, die on a wall -- and the steering is what makes each
+  // spell look like itself:
+  //
+  //   Bolt of Thunder   the chain fans by a *time-scaled* yaw, so the bolts
+  //                     splay wider the longer they have been flying, and each
+  //                     one homes on a +0x1B4 that tracks the target
+  //                     separately from the yaw it is drawn at
+  //   Feathers          the chain takes a fixed yaw step, flies blind until it
+  //                     has turned, then homes; the volley fans across up to
+  //                     five different enemies rather than stacking on one
+  //   Smoke of Pain     the chain is a fixed yaw *bias* held for the whole
+  //                     flight, so the shots corkscrew around the aim line, and
+  //                     each one throws exactly one successor and then halves
+  //                     its own speed
+  //   Coldness          Feathers' fan, plus a hop as the spread ends, and the
+  //                     fan is thrown when it *lands* rather than on a timer
+  //
+  // The pitch term every one of them computes is `(spread * tau / 360 / N) *
+  // elapsed`, and in three of the four the spread is multiplied by a literal
+  // zero -- the compiler kept the multiply, so the trim is always zero for
+  // Feathers, Smoke and Cold and only Bolt actually climbs or dips.
+  void FUN_002db7d0_kind12_projectile(OriginalEntity &shot,
+                                      std::size_t slot,
+                                      const ActorEnvironment &environment,
+                                      const Kind12Spell &spell)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::uint16_t ticks = static_cast<std::uint16_t>(environment.frameTicks);
+    const std::int16_t target = shot.fireballTarget1c0;
+    const std::uint8_t chain =
+        spell.element == Kind12Element::Bolt ? shot.boltChain1c8 : shot.fireballChain1c6;
+    const std::uint8_t charge =
+        spell.element == Kind12Element::Bolt ? shot.boltCharge1c9 : shot.fireballCharge1c7;
+
+    // FUN_002660D0: the light rides the entity.
+    if (shot.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &light =
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(shot.lightSlot195));
+      light.x = shot.positionX20;
+      light.y = shot.positionZ24;
+      light.z = shot.positionY28;
+    }
+    shot.hitSourceC0 = 0;
+    shot.hitFlagsC2 = 0;
+    shot.pendingDamageBe = 0;
+    shot.freezeTimerBd = 0;
+    shot.halfword08 = static_cast<std::uint16_t>(shot.halfword08 | 0x4000u);
+
+    // Coldness of Destruction is the one that does not sweep every frame: while
+    // it still owes a successor *and* has its hop, it skips the test entirely.
+    const bool sweepThisFrame = spell.element != Kind12Element::Cold ||
+                                shot.fadeRamp62 == 0 || shot.verticalVelocity44 == 0.0f;
+    if (sweepThisFrame && environment.hitTest != nullptr)
+    {
+      FUN_00215e48_clear_hit_set(shot);
+      const std::int8_t contacts = FUN_002148a8_swept_hit_test(
+          shot, slot, orphen::ported::resource::HitParameters::unpack(shot.hitParameters198),
+          *environment.hitTest);
+      if (contacts != 0)
+      {
+        if (spell.element == Kind12Element::Cold && chain == 0)
+        {
+          kind12_throw_fan(shot, slot, spell, environment);
+        }
+        kind12_landed(shot, slot, spell, environment);
+        return;
+      }
+    }
+
+    // Bolt of Thunder's first frame: its drawn yaw is rebuilt from the spread
+    // every frame, so the launch angle is moved into +0x1B4 and +0x5C is zeroed
+    // before anything reads it.
+    if (spell.element == Kind12Element::Bolt &&
+        shot.fireballLife1c4 == static_cast<std::uint16_t>(FUN_00248e48_arm_timer(spell.lifeTicks)))
+    {
+      shot.fireballBaseFacing1b4 = shot.facingRadians5c;
+      shot.facingRadians5c = 0.0f;
+    }
+
+    const std::uint16_t life = FUN_00248e58_step_timer(shot.fireballLife1c4, ticks);
+    shot.fireballLife1c4 = life;
+    if (life == 0)
+    {
+      pool.releaseSlot(slot);
+      return;
+    }
+    const float elapsed = static_cast<float>(static_cast<std::int16_t>(
+        static_cast<std::uint16_t>(spell.lifeTicks * 16u) - life));
+    const float pitchDivisor = spell.element == Kind12Element::Smoke ? 13824.0f : 3456.0f;
+
+    const bool targetAlive = target > 0 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+                             pool.slot(static_cast<std::size_t>(target)).typeId00 > 0 &&
+                             static_cast<std::int16_t>(
+                                 pool.slot(static_cast<std::size_t>(target)).staggerTimer12a) > 0;
+    const auto bearingToTarget = [&]() {
+      const auto &victim = pool.slot(static_cast<std::size_t>(target));
+      return std::atan2(victim.positionZ24 - shot.positionZ24,
+                        victim.positionX20 - shot.positionX20);
+    };
+
+    float pitchSpread = 0.0f;
+    float drawYaw = shot.facingRadians5c;
+
+    switch (spell.element)
+    {
+    case Kind12Element::Bolt:
+    {
+      // :74-102. The fan only opens once the shot is 0x144 ticks old, and it is
+      // a *rate*: the yaw is re-derived from `spread * elapsed` every frame, so
+      // the three bolts keep spreading apart the whole way out.
+      float yawSpread = 0.0f;
+      if (elapsed > -1404.0f) // -0x57C
+      {
+        if (chain == 0)
+        {
+          pitchSpread = charge == 5 ? 4.0f : 0.0f;
+        }
+        else
+        {
+          shot.fireballSpeed1bc = 0.00694444f; // DAT_0035487C, the chain's own speed
+          if (chain == 1)
+          {
+            if (charge != 1)
+            {
+              yawSpread = 35.0f; // 0x23
+            }
+            else
+            {
+              pitchSpread = -5.0f;
+            }
+          }
+          else if (chain == 2)
+          {
+            yawSpread = -35.0f;
+          }
+          else
+          {
+            pitchSpread = chain == 3 ? -5.0f : 0.0f;
+          }
+        }
+      }
+      // :104-107. The homing gate is three-way: a dead target, or the flight
+      // budget at +0x1C6 running out, ends the bolt outright.
+      if (!targetAlive || shot.boltFlight1c6 == 0)
+      {
+        pool.releaseSlot(slot);
+        return;
+      }
+      shot.facingRadians5c =
+          ((yawSpread * kKind12Tau) / 360.0f / 3456.0f) * elapsed +
+          shot.fireballBaseFacing1b4;
+      drawYaw = shot.facingRadians5c;
+      const float bearing = bearingToTarget();
+      const float turn = FUN_0023a320_approach_angle(shot.fireballBaseFacing1b4, bearing,
+                                                     static_cast<float>(ticks) * spell.homeRate);
+      shot.fireballBaseFacing1b4 = turn == 0.0f ? bearing : shot.fireballBaseFacing1b4 + turn;
+      const std::int32_t remaining =
+          static_cast<std::int32_t>(shot.boltFlight1c6) - static_cast<std::int32_t>(ticks);
+      shot.boltFlight1c6 = static_cast<std::uint16_t>(remaining);
+      if (static_cast<std::int16_t>(shot.boltFlight1c6) < 0)
+      {
+        shot.boltFlight1c6 = 0;
+      }
+      break;
+    }
+
+    case Kind12Element::Feathers:
+    case Kind12Element::Cold:
+    {
+      // :66-92. One fixed yaw step per chain position, then the chain index is
+      // pushed past 100 so the step happens exactly once; from then on the
+      // shot homes. Coldness also gives itself a hop on the same frame.
+      std::uint32_t chainNow = chain;
+      if (chainNow != 0)
+      {
+        if (chainNow >= 1 && chainNow <= 4)
+        {
+          shot.facingRadians5c += spell.chainYaw[chainNow - 1];
+        }
+        if (chainNow < 10)
+        {
+          chainNow += 100;
+          shot.fireballChain1c6 = static_cast<std::uint8_t>(shot.fireballChain1c6 + 100);
+          if (spell.element == Kind12Element::Cold)
+          {
+            shot.verticalVelocity44 = kDAT_00354904_coldHop;
+          }
+        }
+      }
+      if (chainNow >= 100 && targetAlive)
+      {
+        const float bearing = bearingToTarget();
+        const float turn = FUN_0023a320_approach_angle(shot.facingRadians5c, bearing,
+                                                       static_cast<float>(ticks) * spell.homeRate);
+        shot.facingRadians5c = turn == 0.0f ? bearing : shot.facingRadians5c + turn;
+      }
+      drawYaw = shot.facingRadians5c;
+      break;
+    }
+
+    case Kind12Element::Smoke:
+    {
+      // :64-104. The bias is held for the whole flight rather than folded into
+      // the facing, so the shot flies at an angle to the line it is steering
+      // along -- which is what makes the volley corkscrew.
+      shot.fireballBaseFacing1b4 =
+          chain >= 1 && chain <= 4 ? spell.chainYaw[chain - 1] : 0.0f;
+      if (target >= 1 && targetAlive)
+      {
+        const float bearing = bearingToTarget();
+        const float turn =
+            FUN_0023a320_approach_angle(shot.facingRadians5c + shot.fireballBaseFacing1b4, bearing,
+                                        static_cast<float>(ticks) * spell.homeRate);
+        shot.facingRadians5c = turn == 0.0f ? bearing : shot.facingRadians5c + turn;
+      }
+      drawYaw = shot.facingRadians5c + shot.fireballBaseFacing1b4;
+      break;
+    }
+    }
+
+    // The motion every one of them shares.
+    shot.fireballVelX1a8 = shot.fireballSpeed1bc * std::cos(drawYaw);
+    shot.fireballVelZ1ac = shot.fireballSpeed1bc * std::sin(drawYaw);
+    const float horizontal = std::sqrt(shot.fireballVelX1a8 * shot.fireballVelX1a8 +
+                                       shot.fireballVelZ1ac * shot.fireballVelZ1ac);
+    shot.fireballRiseOffset1b8 =
+        ((pitchSpread * kKind12Tau) / 360.0f / pitchDivisor) * elapsed;
+    shot.desiredDeltaY38 =
+        shot.fireballRise1b0 * static_cast<float>(ticks) + shot.fireballRiseOffset1b8;
+    shot.rotationX154 = std::atan2(-shot.fireballRise1b0, horizontal);
+    shot.desiredDeltaX30 = shot.fireballVelX1a8 * static_cast<float>(ticks);
+    shot.desiredDeltaZ34 = shot.fireballVelZ1ac * static_cast<float>(ticks);
+
+    // The successor. Bolt and Smoke throw exactly one; Feathers throws the fan.
+    if (shot.fadeRamp62 != 0)
+    {
+      shot.fadeRamp62 = FUN_00248e58_step_timer(shot.fadeRamp62, ticks);
+      if (shot.fadeRamp62 == 0)
+      {
+        switch (spell.element)
+        {
+        case Kind12Element::Bolt:
+          // From the launch origin, not from here, and carrying the caster on.
+          FUN_002db258_launch_kind12(spell, static_cast<std::uint8_t>(chain + 1), charge,
+                                     shot.attackPower12c, target, shot.hitParameters198,
+                                     shot.fireballOriginX19c, shot.fireballOriginZ1a0,
+                                     shot.fireballOriginY1a4, shot.fireballCaster1c2, environment);
+          break;
+        case Kind12Element::Feathers:
+          if (chain == 0)
+          {
+            kind12_throw_fan(shot, slot, spell, environment);
+          }
+          break;
+        case Kind12Element::Smoke:
+          if (chain < 4)
+          {
+            FUN_002db258_launch_kind12(spell, static_cast<std::uint8_t>(chain + 1), charge,
+                                       shot.attackPower12c, target, shot.hitParameters198,
+                                       shot.positionX20, shot.positionZ24, shot.positionY28,
+                                       static_cast<std::int16_t>(slot), environment);
+          }
+          // Every shot but the first halves its own speed once it has handed
+          // the chain on, so the tail of the volley trails behind the head.
+          if (chain != 0)
+          {
+            shot.desiredDeltaX30 *= 0.5f;
+            shot.desiredDeltaZ34 *= 0.5f;
+            shot.desiredDeltaY38 *= 0.5f;
+          }
+          break;
+        case Kind12Element::Cold:
+          // Cold throws its fan when it lands, not on the timer.
+          break;
+        }
+      }
+    }
+
+    // +0x0C bits 0x4066: a wall, the ceiling or the floor.
+    if ((shot.collisionFlags0c & 0x4066u) != 0)
+    {
+      if (spell.element == Kind12Element::Cold)
+      {
+        if (chain == 0)
+        {
+          kind12_throw_fan(shot, slot, spell, environment);
+        }
+        shot.facingRadians5c += kDAT_00354910_coldDeathYaw;
+      }
+      pool.releaseSlot(slot);
+    }
+  }
+  // ============================================ the three shield barriers
+  //
+  // LAB_002DE0B8, the behaviour of types **0x127, 0x143 and 0x144** -- Shield
+  // of Inferno, Shield of Immunity and Armor of Purity. One body, three
+  // entries: 0x002DE0A8 and 0x002DE0B0 are two-instruction `j` thunks for the
+  // first two types and 0x144 enters the body directly, which is why the
+  // dispatch table has three different addresses for one function.
+  //
+  // **It is a Ghidra LAB with no src/ file and no JP counterpart** -- neither
+  // thunk is reached by a `jal`, only through the pointer table, so no function
+  // was ever created. Recovered from SLUS_200.11 at 0x002DE0B8..0x002DE36C,
+  // 172 instructions.
+  //
+  // The animation order is **1 -> 0 -> 2**, not 0 -> 1 -> 2, and that matters:
+  // state 115 spawns the barrier on animation 1 (FUN_0024BD30's
+  // FUN_00248EE0(effect, 1)) and ends the cast the moment it reads animation 2
+  // back. 1 is the rise, 0 is the hold, 2 is the drop. With the behaviour
+  // absent the entity simply sat at whatever it spawned with, so all three
+  // shield demos in s14_e031 released instantly with nothing on screen.
+  //
+  // The `shield_of_immunity` save state has slot 10 as a type 0x143 on
+  // animation 0 with the player in state 115 -- the hold, which is where a
+  // barrier spends its life.
+  void LAB_002de0b8_shield_barrier(OriginalEntity &barrier,
+                                   std::size_t slot,
+                                   const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    // +0x94 is the caster's pool slot, stamped by state 115 on the spawn.
+    const std::size_t ownerSlot = static_cast<std::size_t>(barrier.spawnParam94);
+    if (ownerSlot >= kEntitySlotCount)
+    {
+      return;
+    }
+    OriginalEntity &owner = pool.slot(ownerSlot);
+
+    // :14-40. While the barrier is not already dropping, watch the caster's
+    // current action: `(action + 0x72) < 2` is true only for 0x8E and 0x8F, the
+    // shield pair. Anything else means the cast is over, so hide and drop.
+    if (barrier.animationA0 != 2)
+    {
+      ActorEnvironment::BattleMemberView view;
+      const std::uint32_t member = static_cast<std::uint32_t>(owner.byte95) - 1u;
+      const bool haveBlock = owner.byte95 != 0 && environment.DAT_0031d7b0_battleMember &&
+                             environment.DAT_0031d7b0_battleMember(member, view);
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x72u) >= 2u)
+      {
+        barrier.halfword08 = static_cast<std::uint16_t>(barrier.halfword08 | 1u);
+        FUN_00225bc8_set_animation(barrier, 2);
+      }
+    }
+
+    // :42-63. It rides the caster, half a unit up, every frame and in every
+    // animation.
+    barrier.positionX20 = owner.positionX20;
+    barrier.positionZ24 = owner.positionZ24;
+    const float top = owner.positionY28 + 0.5f;
+    barrier.positionY28 = top;
+    barrier.groundHeight4c = top;
+    barrier.previousGroundHeight50 = top;
+
+    const std::int16_t animation = static_cast<std::int16_t>(barrier.animationA0);
+    if (animation == 1)
+    {
+      // The rise. The cue is keyed once, on the first frame, and only 0x143
+      // also takes a depth bias -- it is the one that draws in front.
+      if (barrier.barrierCued1a0 == 0)
+      {
+        if (barrier.typeId00 == 0x143)
+        {
+          barrier.depthBias133 = -10;
+          if (environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(0xD5, barrier);
+          }
+        }
+        else if (barrier.typeId00 == 0x127)
+        {
+          if (environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(0xD3, barrier);
+          }
+        }
+        else if (barrier.typeId00 == 0x144)
+        {
+          if (environment.FUN_00267d38_playSound)
+          {
+            environment.FUN_00267d38_playSound(0xD1, barrier);
+          }
+        }
+        barrier.barrierCued1a0 = 1;
+      }
+      const std::uint16_t flags06 = static_cast<std::uint16_t>(barrier.flags06 & 0xFFEFu);
+      barrier.barrierRaised19c = 1;
+      barrier.halfword08 = static_cast<std::uint16_t>(barrier.halfword08 & 0xFFFEu);
+      barrier.flags06 = flags06;
+      barrier.facingRadians5c = owner.facingRadians5c;
+      if ((flags06 & 1u) != 0)
+      {
+        // The rise is done: hold.
+        FUN_00225bc8_set_animation(barrier, 0);
+      }
+    }
+    else if (animation == 0)
+    {
+      // The hold. One frame after the hold animation comes round it goes
+      // straight to the drop -- **skipping animation 1**, which has already
+      // played -- and that is the frame state 115 is waiting for.
+      barrier.barrierCued1a0 = 1;
+      barrier.barrierRaised19c = 1;
+      if ((barrier.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(barrier, 2);
+      }
+    }
+    else if (animation == 2)
+    {
+      // The drop. Its cue keys once, gated on the same latch the rise set, and
+      // the entity hides itself when the animation ends.
+      if (barrier.barrierRaised19c == 1)
+      {
+        barrier.barrierCued1a0 = 1;
+        if (environment.FUN_00267d38_playSound)
+        {
+          if (barrier.typeId00 == 0x143)
+          {
+            environment.FUN_00267d38_playSound(0xD6, barrier);
+          }
+          else if (barrier.typeId00 == 0x127)
+          {
+            environment.FUN_00267d38_playSound(0xD4, barrier);
+          }
+          else if (barrier.typeId00 == 0x144)
+          {
+            environment.FUN_00267d38_playSound(0xD2, barrier);
+          }
+        }
+        barrier.barrierRaised19c = 0;
+      }
+      if ((barrier.flags06 & 1u) != 0)
+      {
+        barrier.flags06 = static_cast<std::uint16_t>(barrier.flags06 | 0x10u);
+        barrier.halfword08 = static_cast<std::uint16_t>(barrier.halfword08 | 1u);
+      }
+    }
+
+    // :183-190. +0x60 is 1 for one frame, written by state 115 when an incoming
+    // attack's element *matched* the shield. The original then tail-calls
+    // 0x002DDC68 -- the shatter burst, another LAB with no src/ file -- with
+    // (self, 0, +0x198).
+    //
+    // **Not ported**, and unreachable in s14_e031: the demo has nothing
+    // attacking the caster, so state 115 never writes the 1. The latch is still
+    // consumed here so a future hit does not leave it set.
+    if (barrier.state60 == 1)
+    {
+      barrier.state60 = 0;
+    }
+    (void)slot;
+  }
   // FUN_002dee08 (0x002dee08), the behaviour of type 0x15C -- the ground disc
   // the launch lays down, and the spark it plants on each victim. Both are the
   // same entity; only the scale differs.
@@ -3976,6 +6851,35 @@ namespace orphen::ported::entity
     case 0x002D73E8u: // FUN_002d73e8, type 0x192, the target cursor
     case 0x002D9C88u: // FUN_002d9c88, type 0x18F, the ground ring
     case 0x002DEAE8u: // FUN_002deae8, type 0x174, Bite of Lightning's hand effect
+    case 0x002E3110u: // FUN_002e3110, type 0x175, Falcon of Death's hand effect
+    case 0x002E2048u: // FUN_002e2048, type 0x177, Hammer of Evil's hand effect
+    case 0x002DFD38u: // FUN_002dfd38, type 0x179, Pinnacle of the Sun's hand effect
+    case 0x002E0F80u: // FUN_002e0f80, type 0x17C, Hail of Heavens' hand effect
+    case 0x002E3490u: // 0x002e3490, type 0x15D, Falcon of Death's projectile
+    case 0x002E23C8u: // 0x002e23c8, type 0x156, Hammer of Evil's projectile
+    case 0x002E00B8u: // 0x002e00b8, type 0x158, Pinnacle of the Sun's projectile
+    case 0x002E1300u: // 0x002e1300, type 0x15A, Hail of Heavens' projectile
+    case 0x002E9628u: // 0x002e9628, type 0x1D9, Falcon of Death's arrival flash
+    case 0x002DE0A8u: // LAB_002de0a8, type 0x143, Shield of Immunity
+    case 0x002DE0B0u: // LAB_002de0b0, type 0x127, Shield of Inferno
+    case 0x002DE0B8u: // LAB_002de0b8, type 0x144, Armor of Purity
+    case 0x002DB548u: // FUN_002db548, type 0x13A, Bolt of Thunder's hand effect
+    case 0x002DBF48u: // FUN_002dbf48, type 0x13B, Feathers of the Hurricane's hand
+    case 0x002DC960u: // FUN_002dc960, type 0x13C, Smoke of Pain's hand
+    case 0x002DD358u: // FUN_002dd358, type 0x194, Coldness of Destruction's hand
+    case 0x002DB7D0u: // FUN_002db7d0, type 0x155, Bolt of Thunder's shot
+    case 0x002DC1C8u: // FUN_002dc1c8, type 0x157, Feathers' shot
+    case 0x002DCC20u: // FUN_002dcc20, type 0x159, Smoke of Pain's shot
+    case 0x002DD618u: // FUN_002dd618, type 0x195, Coldness' shot
+    case 0x002DBC60u: // 0x002dbc60, type 0x170 -- `j 0x2db230`, the shared burst
+    case 0x002DC680u: // 0x002dc680, type 0x171, the same
+    case 0x002DD070u: // 0x002dd070, type 0x172, the same
+    case 0x002DDC60u: // 0x002ddc60, type 0x196, the same
+    case 0x002DF018u: // FUN_002df018, type 0x13E, Bite of Lightning's summon
+    case 0x002E34B8u: // FUN_002e34b8, type 0x13F, Falcon of Death's summon
+    case 0x002E23E8u: // FUN_002e23e8, type 0x140, Hammer of Evil's summon
+    case 0x002E01F8u: // FUN_002e01f8, type 0x141, Pinnacle of the Sun's summon
+    case 0x002E1320u: // FUN_002e1320, type 0x142, Hail of Heavens' summon
     case 0x002DEE08u: // FUN_002dee08, type 0x15C, its ground disc and victim sparks
     case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
     case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
@@ -3987,6 +6891,7 @@ namespace orphen::ported::entity
     case 0x00276C30u: // FUN_00276c30, type 0x7E, the crab's swarm
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
+    case 0x0028B848u: // FUN_0028b848, type 0x8B, the s14_e031 target dummy
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
     case 0x002EB990u: // FUN_002eb990, type 0x10E, the flyer's shot
     case 0x002EBC30u: // FUN_002ebc30, type 0x10F, the swoop's dust
@@ -4048,6 +6953,61 @@ namespace orphen::ported::entity
       return "FUN_002d9c88 (cast marker)";
     case 0x002DEAE8u:
       return "FUN_002deae8 (bite of lightning)";
+    case 0x002E3110u:
+      return "FUN_002e3110 (falcon hand 0x175)";
+    case 0x002E2048u:
+      return "FUN_002e2048 (hammer hand 0x177)";
+    case 0x002DFD38u:
+      return "FUN_002dfd38 (pinnacle hand 0x179)";
+    case 0x002E0F80u:
+      return "FUN_002e0f80 (hail hand 0x17c)";
+    case 0x002E3490u:
+      return "LAB_002e3490 (falcon projectile 0x15d)";
+    case 0x002E23C8u:
+      return "LAB_002e23c8 (hammer projectile 0x156)";
+    case 0x002E00B8u:
+      return "LAB_002e00b8 (pinnacle projectile 0x158)";
+    case 0x002E1300u:
+      return "LAB_002e1300 (hail projectile 0x15a)";
+    case 0x002E9628u:
+      return "0x002e9628 (Falcon arrival flash)";
+    case 0x002DE0A8u:
+      return "LAB_002de0b8 (shield of immunity 0x143)";
+    case 0x002DE0B0u:
+      return "LAB_002de0b8 (shield of inferno 0x127)";
+    case 0x002DE0B8u:
+      return "LAB_002de0b8 (armor of purity 0x144)";
+    case 0x002DB548u:
+      return "FUN_002db548 (bolt of thunder hand 0x13a)";
+    case 0x002DBF48u:
+      return "FUN_002dbf48 (feathers hand 0x13b)";
+    case 0x002DC960u:
+      return "FUN_002dc960 (smoke of pain hand 0x13c)";
+    case 0x002DD358u:
+      return "FUN_002dd358 (coldness hand 0x194)";
+    case 0x002DB7D0u:
+      return "FUN_002db7d0 (bolt of thunder shot 0x155)";
+    case 0x002DC1C8u:
+      return "FUN_002dc1c8 (feathers shot 0x157)";
+    case 0x002DCC20u:
+      return "FUN_002dcc20 (smoke of pain shot 0x159)";
+    case 0x002DD618u:
+      return "FUN_002dd618 (coldness shot 0x195)";
+    case 0x002DBC60u:
+    case 0x002DC680u:
+    case 0x002DD070u:
+    case 0x002DDC60u:
+      return "FUN_002db230 (elemental burst)";
+    case 0x002DF018u:
+      return "FUN_002df018 (Bite of Lightning summon)";
+    case 0x002E34B8u:
+      return "FUN_002e34b8 (Falcon of Death summon)";
+    case 0x002E23E8u:
+      return "FUN_002e23e8 (Hammer of Evil summon)";
+    case 0x002E01F8u:
+      return "FUN_002e01f8 (Pinnacle of the Sun summon)";
+    case 0x002E1320u:
+      return "FUN_002e1320 (Hail of Heavens summon)";
     case 0x002DEE08u:
       return "FUN_002dee08 (lightning disc)";
     case 0x002E4C00u:
@@ -4070,6 +7030,8 @@ namespace orphen::ported::entity
       return "FUN_0027f288 (battle enemy 0x80)";
     case 0x0028A958u:
       return "FUN_0028a958 (battle enemy 0x8a)";
+    case 0x0028B848u:
+      return "FUN_0028b848 (target dummy 0x8b)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     default:
@@ -4226,6 +7188,76 @@ namespace orphen::ported::entity
       case 0x002DEAE8u:
         FUN_002deae8_lightning_hand(entity, slot, slotEnvironment);
         break;
+      case 0x002E3110u:
+      case 0x002E2048u:
+      case 0x002DFD38u:
+      case 0x002E0F80u:
+      {
+        const ElementalSpellB *spell = elementalSpellBForHand(entity.typeId00);
+        if (spell != nullptr)
+        {
+          FUN_002e3110_elemental_hand(entity, slotEnvironment, *spell);
+        }
+        break;
+      }
+      case 0x002E3490u:
+        LAB_002e3490_elemental_projectile(entity, slot, slotEnvironment, true);
+        break;
+      case 0x002E23C8u:
+      case 0x002E00B8u:
+      case 0x002E1300u:
+      // 0x002E9628, type 0x1D9: the same eight instructions again. It is the
+      // flash Falcon of Death's spawner drops at the caster's feet, and it goes
+      // away the frame its animation comes round like every other one.
+      case 0x002E9628u:
+        LAB_002e3490_elemental_projectile(entity, slot, slotEnvironment, false);
+        break;
+      case 0x002DE0A8u:
+      case 0x002DE0B0u:
+      case 0x002DE0B8u:
+        LAB_002de0b8_shield_barrier(entity, slot, slotEnvironment);
+        break;
+      case 0x002DB548u:
+      case 0x002DBF48u:
+      case 0x002DC960u:
+      case 0x002DD358u:
+      {
+        const Kind12Spell *spell = kind12ForHand(entity.typeId00);
+        if (spell != nullptr)
+        {
+          FUN_002db548_kind12_hand(entity, slotEnvironment, *spell);
+        }
+        break;
+      }
+      case 0x002DB7D0u:
+      case 0x002DC1C8u:
+      case 0x002DCC20u:
+      case 0x002DD618u:
+      {
+        const Kind12Spell *spell = kind12ForProjectile(entity.typeId00);
+        if (spell != nullptr)
+        {
+          FUN_002db7d0_kind12_projectile(entity, slot, slotEnvironment, *spell);
+        }
+        break;
+      }
+      // Types 0x170, 0x171, 0x172 and 0x196 are two-instruction jumps into
+      // 0x002DB230, so they run Hand of Pyro's burst unchanged.
+      case 0x002DBC60u:
+      case 0x002DC680u:
+      case 0x002DD070u:
+      case 0x002DDC60u:
+        FUN_002db230_fireball_burst(entity, slot, slotEnvironment);
+        break;
+      case 0x002DF018u:
+        FUN_002df018_bite_summon(entity, slot, slotEnvironment);
+        break;
+      case 0x002E34B8u:
+      case 0x002E23E8u:
+      case 0x002E01F8u:
+      case 0x002E1320u:
+        FUN_002e01f8_summon(entity, slot, slotEnvironment);
+        break;
       case 0x002DEE08u:
         FUN_002dee08_lightning_disc(entity, slot, slotEnvironment);
         break;
@@ -4258,6 +7290,9 @@ namespace orphen::ported::entity
         break;
       case 0x0028A958u:
         FUN_0028a958_enemy8a(entity, slot, slotEnvironment, trace);
+        break;
+      case 0x0028B848u:
+        FUN_0028b848_enemy8b(entity, slot, slotEnvironment, trace);
         break;
       case kFUN_00239e78_noOp:
       default:

@@ -1937,8 +1937,34 @@ namespace orphen::ported::battle
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
-        respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                          context.entitySlot, false, false);
+        const std::int32_t spawned =
+            respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
+                              context.entitySlot, false, false);
+        // FUN_0024BD30:32-39. **The four writes 111 and 113 do not do**, and
+        // the barrier's behaviour needs all of them:
+        //
+        //   +0x94  the caster's pool slot -- LAB_002DE0B8 reads it every frame
+        //          to ride the caster, where 111 and 113 use +0x192 instead
+        //   the animation, which must be **1** (the rise). The barrier walks
+        //          1 -> 0 -> 2 and state 115 ends the cast the moment it sees
+        //          2, so spawning it at 0 releases on the very first frame --
+        //          which is exactly what the port did before this line, and
+        //          why all three shield demos played with nothing on screen
+        //   +0x12C and +0x198, the power and element block for the slot,
+        //          stamped here rather than at a release marker
+        if (spawned != kNoEntity && context.environment->pool != nullptr)
+        {
+          auto &shieldEffect =
+              context.environment->pool->slot(static_cast<std::size_t>(spawned));
+          shieldEffect.spawnParam94 = static_cast<std::uint8_t>(context.entitySlot);
+          FUN_00248ee0_set_animation(shieldEffect, 1);
+          const std::uint32_t chosen =
+              party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+          const std::uint32_t shieldRecord = BattleTables::partyRecord(context.member);
+          shieldEffect.attackPower12c = static_cast<std::uint16_t>(
+              party.tables().read<std::int8_t>(shieldRecord + record::kSpellByte14 + chosen));
+          shieldEffect.hitParameters198 = shieldRecord + record::kSpellBlock18 + chosen * 4;
+        }
       }
 
       const std::uint32_t slot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));

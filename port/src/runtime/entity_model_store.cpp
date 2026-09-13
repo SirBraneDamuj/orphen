@@ -50,6 +50,9 @@ namespace orphen::port
     if (!discRoot.empty())
     {
       itmArchive_.open(discRoot / "ITM.BIN");
+      grpArchive_.open(discRoot / "GRP.BIN");
+      mapArchive_.open(discRoot / "MAP.BIN");
+      texArchive_.open(discRoot / "TEX.BIN");
       try
       {
         bootResources_ = orphen::harness::SceneResourceProvider::loadFromDisc(
@@ -64,8 +67,14 @@ namespace orphen::port
     }
 
     textureSlots_.setLoader([this](std::uint16_t textureId) -> std::optional<orphen::ported::resource::BmpaTexture> {
-      const std::vector<std::uint8_t> bytes =
+      // FUN_00210218 loads a page with FUN_00223268(3, id, ...) -- archive 3 is
+      // TEX.BIN -- so the bundle is the shortcut and TEX.BIN is the real home.
+      std::vector<std::uint8_t> bytes =
           decodeResource(orphen::harness::kTextureCategory, textureId);
+      if (bytes.empty() && texArchive_.valid())
+      {
+        bytes = texArchive_.decode(textureId);
+      }
       if (bytes.size() < 4 || bytes[0] != 'B' || bytes[1] != 'M' || bytes[2] != 'P' || bytes[3] != 'A')
       {
         return std::nullopt;
@@ -120,7 +129,8 @@ namespace orphen::port
     return {};
   }
 
-  const orphen::ported::model::Psc3Model *EntityModelStore::loadModel(std::uint16_t meshId)
+  const orphen::ported::model::Psc3Model *EntityModelStore::loadModel(std::uint16_t meshId,
+                                                                   std::uint8_t flags04)
   {
     const auto existing = models_.find(meshId);
     if (existing != models_.end())
@@ -171,6 +181,25 @@ namespace orphen::port
       {
         break;
       }
+    }
+    // **FUN_00222498, the original's own model load.** Neither bundle answered,
+    // so go where the game goes:
+    //
+    //     FUN_00223268((record->flags04 >> 5) & 2, record->meshId, staging);
+    //     FUN_002F3118(staging, dest);            // the LZ the archives store
+    //     if (flags04 & 1) assert *dest == 'PSC3';
+    //
+    // `(flags04 >> 5) & 2` is 2 when bit 6 is set and 0 otherwise, i.e. archive
+    // 2 (MAP.BIN) or archive 0 (GRP.BIN) out of PTR_s_GRP_BIN_00315A58. Every
+    // spell effect record in the game carries flags04 = 0x2D, bit 6 clear, so
+    // **the whole spell effect set lives in GRP.BIN** -- which is the one
+    // archive a disc root is likely to be missing, and when it is, none of them
+    // can draw however well their behaviour is ported.
+    const orphen::harness::FlatBinArchive &archive =
+        (flags04 & 0x40u) != 0 ? mapArchive_ : grpArchive_;
+    if (bytes.empty() && archive.valid())
+    {
+      bytes = archive.decode(meshId);
     }
     if (bytes.empty() && itmArchive_.valid())
     {
@@ -239,7 +268,7 @@ namespace orphen::port
     EntityModelBinding binding;
     binding.meshId = record.meshId0x00;
     binding.textureId = record.texId0x02;
-    binding.model = loadModel(record.meshId0x00);
+    binding.model = loadModel(record.meshId0x00, record.flags0x04);
     if (binding.model != nullptr && !binding.model->uvAnimationScript.empty())
     {
       // FUN_00221E70's loop: four copies of the same script, each seeded by

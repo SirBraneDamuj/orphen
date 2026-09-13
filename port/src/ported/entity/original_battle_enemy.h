@@ -129,4 +129,12 @@ namespace orphen::ported::entity
                             const ActorEnvironment &environment,
                             ActorTrace &trace);
 
+  // FUN_0028b848 (0x0028b848), type 0x8B -- the training dummy every spell
+  // demo in s14_e031 is aimed at, and the reason that scene has a target at
+  // all. See the block above FUN_0028b848_enemy8b in the .cpp.
+  void FUN_0028b848_enemy8b(OriginalEntity &entity,
+                            std::size_t slot,
+                            const ActorEnvironment &environment,
+                            ActorTrace &trace);
+
 } // namespace orphen::ported::entity

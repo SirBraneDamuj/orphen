@@ -81,6 +81,11 @@ namespace orphen::ported::entity
   constexpr std::size_t kEnemy80StateCount = 9;
   constexpr std::uint32_t kPTR_FUN_00325B40_enemy8aStates = 0x00325B40;
   constexpr std::size_t kEnemy8aStateCount = 20;
+  // Type 0x8B, the training dummy s14_e031 stands in front of. Twelve
+  // handlers: 0x00325B60 + 12*4 is 0x00325B90, whose first words are 3, 5, 7
+  // and 9 -- data, not code -- so the run really does end at 11.
+  constexpr std::uint32_t kPTR_FUN_00325B60_enemy8bStates = 0x00325B60;
+  constexpr std::size_t kEnemy8bStateCount = 12;
 
   // 0x0025ABB8: `jr ra; nop`, verified in the executable.
   constexpr std::uint32_t kLAB_0025abb8_noOp = 0x0025ABB8;

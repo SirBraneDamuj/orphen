@@ -386,6 +386,33 @@ namespace orphen::ported::entity
     // wrapped from 60 back to -40. Type 0x80 only.
     float enemyWobblePhase1d0 = 0.0f;
 
+    // Type 0x8B's own reading of the same five words, kept apart from the two
+    // above for the reason the comment on +0x1A0 gives: the original overlays
+    // them and an entity is never two of these types at once.
+    //
+    //   +0x1A0  a speed, not a reach. Every state that moves reads it as
+    //           `(speed + record +0x1A) * frameTicks / 32000`, and both places
+    //           that set it write 10.0.
+    //   +0x1A4  state 9's hold, in ticks, seeded from FUN_0023EC80 << 5.
+    //   +0x1A8  bit 0 is "I was airborne last frame" -- the wrapper keys the
+    //           landing cue 0x10C off its falling edge -- and bit 1 is "I am
+    //           being carried", raised by state 11 when the grab lands.
+    //   +0x1AA  state 11's carry timer, 0..0x319C, whose hundredths are also
+    //           the fade level +0x134 the carried body dissolves with.
+    //   +0x1AC  what it is aimed at, as a pool slot.
+    float enemy8bSpeed1a0 = 0.0f;
+    std::uint16_t enemy8bHoldTimer1a4 = 0;
+    std::uint16_t enemy8bFlags1a8 = 0;
+    std::uint16_t enemy8bCarryTimer1aa = 0;
+    std::int32_t enemy8bTargetSlot1ac = -1;
+
+    // Types 0x127 / 0x143 / 0x144, the three shield barriers, at +0x19C and
+    // +0x1A0. Both are plain one-shot latches in LAB_002DE0B8: +0x19C is "I am
+    // up" -- raised when the rise animation ends, cleared when the drop cue has
+    // played -- and +0x1A0 is "I have already keyed the cue for this half".
+    std::int32_t barrierRaised19c = 0;
+    std::int32_t barrierCued1a0 = 0;
+
     // Type 0x7F's block, the giant crab. See ported/entity/original_crab_boss.h.
     // Held apart from the 0x80/0x8A words above for the same reason every other
     // per-type overlay is: the original reuses the storage and an entity is
@@ -714,6 +741,15 @@ namespace orphen::ported::entity
     std::uint8_t fireballCharge1c7 = 0; // +0x1C7: the charge level the cast was released at.
     // +0x19B: the hit-spark variant, chargeLevel + 0x14, or 0x18 at full charge.
     std::uint8_t fireballSparkId19b = 0;
+    // Bolt of Thunder's type 0x155 moves the pair two bytes up and takes +0x1C6
+    // for something else entirely. FUN_002DB258 writes the chain to **+0x1C8**
+    // and the charge to **+0x1C9**, and +0x1C6 becomes a short: the flight time
+    // FUN_0030BD20 costed for the aimed shot, plus 0xF00, counted down by the
+    // projectile and used as its "am I still allowed to home" gate. The other
+    // three kind-12 spells and the fireball all use +0x1C6/+0x1C7.
+    std::uint16_t boltFlight1c6 = 0;
+    std::uint8_t boltChain1c8 = 0;
+    std::uint8_t boltCharge1c9 = 0;
     // +0x96 bit 0x40: set on the first fireball of a chain only.
     std::uint8_t effectFlags96 = 0;
 
@@ -729,6 +765,26 @@ namespace orphen::ported::entity
     std::uint16_t lightningTimer1b0 = 0; // +0x1B0: FUN_00248e48(0x20), 32 frames of life.
     std::uint8_t lightningByte1b2 = 0;   // +0x1B2: cleared on spawn; nothing in src/ reads it.
     std::int8_t lightningLevel1b3 = 0;   // +0x1B3: the charge level, 1..5.
+
+    // The level-5 summon block, types 0x13F..0x142. It sits **on top of** the
+    // burst block above rather than beside it: FUN_002E00D8 and its three
+    // siblings write +0x1AC, +0x1AE, +0x1B0 and +0x1B3 at exactly the offsets
+    // the burst uses, so those four fields are shared and only the anchor is
+    // new. +0x19C/+0x1A0/+0x1A4 are where the cast was aimed -- the creature
+    // rides the caster, so this is the only record of the landing point, and
+    // the damage pass at the end of the animation reads it back.
+    float summonAnchorX19c = 0.0f;
+    float summonAnchorZ1a0 = 0.0f;
+    float summonAnchorY1a4 = 0.0f;
+
+    // Bite of Lightning's summon, type 0x13E, moves every one of those. Its own
+    // spawner FUN_002DEEF0 writes the target to **+0x1A8**, the caster to
+    // +0x1AA, the timer to +0x1AC and the level to +0x1B4, which is why it
+    // cannot share the block above even though it does the same job.
+    std::int16_t biteSummonTarget1a8 = 0;
+    std::int16_t biteSummonCaster1aa = 0;
+    std::uint16_t biteSummonTimer1ac = 0;
+    std::int8_t biteSummonLevel1b4 = 0;
 
     // The type 0x37 party follower's block, PTR_FUN_0031e1a0's states. It
     // **overlaps** the two blocks above the same way they overlap each other --
