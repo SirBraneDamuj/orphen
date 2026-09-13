@@ -1776,6 +1776,36 @@ namespace orphen::port
                                                burst.colour, frameTicks, roll);
       };
 
+      // Opcodes 0x110 and 0x111 into the DAT_0054F080 smoke cloud. Only 0x110
+      // reseeds; FUN_00212D60 changes the parameters and leaves the records
+      // where the last arm put them.
+      environment.FUN_00212db0_arm_smoke =
+          [this, roll](const orphen::ported::script::ScriptSmokeCloud &cloud)
+      {
+        if (cloud.reseed)
+        {
+          const auto &lead = entityPool_.leadPlayer();
+          DAT_0054f080_smoke_.FUN_00212db0_arm(
+              cloud.count, cloud.colour, cloud.scale,
+              {lead.positionX20, lead.positionZ24, lead.positionY28}, roll);
+        }
+        else
+        {
+          DAT_0054f080_smoke_.FUN_00212d60_set(cloud.count, cloud.colour, cloud.scale);
+        }
+        // Only the reseed is worth a line. s01_e014 ramps the colour and the
+        // alpha ceiling with a 0x111 every frame -- 98 of them in that one
+        // cutscene -- and a line each would bury everything else.
+        if (cloud.reseed)
+        {
+          std::cout << "[smoke] cloud armed (0x110): "
+                    << DAT_0054f080_smoke_.DAT_00354c5c_count() << " particles, colour 0x"
+                    << std::hex << cloud.colour << std::dec << ", scale "
+                    << DAT_0054f080_smoke_.DAT_00355a48_scale()
+                    << " -- stepped, not drawn; see original_smoke_cloud.h\n";
+        }
+      };
+
       // Opcode 0x10F into the DAT_00355B60 fountain pool.
       environment.FUN_0021ed50_spawn_fountain =
           [this, roll](const orphen::ported::script::ScriptFountainBurst &burst)
@@ -6626,6 +6656,15 @@ namespace orphen::port
     // DAT_00355620. Zero alive with a behaviour installed means every particle
     // a burst seeded has since faded out, which is the normal resting state.
     std::cout << "dust puffs: alive=" << DAT_00355a9c_dust_.aliveCount() << "\n";
+    std::cout << "smoke cloud: particles=" << DAT_0054f080_smoke_.DAT_00354c5c_count()
+              << " visible=" << DAT_0054f080_smoke_.visibleCount()
+              << " rgb=0x" << std::hex << DAT_0054f080_smoke_.DAT_00355a44_rgb()
+              << " alphaCeiling=0x" << DAT_0054f080_smoke_.DAT_00355a40_alphaCeiling() << std::dec
+              << " scale=" << DAT_0054f080_smoke_.DAT_00355a48_scale()
+              << (DAT_0054f080_smoke_.DAT_00354c5c_count() > 0
+                      ? "  (stepped; NOT DRAWN -- FUN_00212F38's packet carries no TEX0)"
+                      : "")
+              << '\n';
     std::cout << "spray particles: alive=" << DAT_00355b58_spray_.DAT_00355b54_aliveCount()
               << " gate=" << (DAT_00355b58_spray_.DAT_00354cbc_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b58_spray_.drawList().size() << "\n";
@@ -7029,6 +7068,29 @@ namespace orphen::port
       // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
       // its first step on the next one rather than on the frame it was seeded.
       DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+      // FUN_00212F38, the first call in FUN_002192C0 and so the first of the
+      // effect systems. The camera forward it wants is DAT_0058BEA0, which
+      // FUN_00216AA0:436-449 builds as normalise(lookAt - eye) -- rebuilt here
+      // rather than cached, since the port keeps the pair and not the vector.
+      {
+        const auto &eye = fieldCamera_.DAT_0058c0a8_eye();
+        const auto &lookAt = fieldCamera_.DAT_0058be90_lookAt();
+        orphen::ported::psm2::Vec3 forward{lookAt.x - eye.x, lookAt.y - eye.y, lookAt.z - eye.z};
+        const float lengthSquared =
+            forward.x * forward.x + forward.y * forward.y + forward.z * forward.z;
+        if (lengthSquared > 0.0f)
+        {
+          const float scale = 1.0f / std::sqrt(lengthSquared);
+          forward.x *= scale;
+          forward.y *= scale;
+          forward.z *= scale;
+        }
+        const auto &lead = entityPool_.leadPlayer();
+        DAT_0054f080_smoke_.FUN_00212f38_step(
+            eye, forward, {lead.positionX20, lead.positionZ24, lead.positionY28},
+            lead.height58, static_cast<std::int16_t>(lead.animationA0),
+            DAT_003555b4_frameCounter_);
+      }
       // FUN_0021A760 runs in the same half of the frame: it is walked from
       // the simulation and its quads are collected at publish time.
       DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
@@ -7408,6 +7470,10 @@ namespace orphen::port
     // the previous map keeps stepping.
     DAT_00355620_particles_.FUN_002d3290_reset([this] { return FUN_00216868_random(); });
     DAT_00355a9c_dust_.FUN_0021a698_reset();
+    // FUN_0022F020:75, the one `uGpffffacec = 0` in the executable: the smoke
+    // count is cleared with the rest of the map's effect state, so a cloud does
+    // not follow the player into the next scene.
+    DAT_0054f080_smoke_.FUN_0022f020_clear();
     DAT_00355b58_spray_.FUN_0021e540_reset();
     DAT_00355b60_fountain_.FUN_0021f108_reset();
     DAT_00355b80_gather_.reset();

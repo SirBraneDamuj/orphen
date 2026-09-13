@@ -11,6 +11,7 @@
 #include "ported/camera/original_camera_path.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
+#include "ported/entity/original_smoke_cloud.h"
 #include "ported/script/object_registers.h"
 
 #include <cmath>
@@ -5312,6 +5313,41 @@ namespace orphen::ported::script
       if (environment_.FUN_0021ed50_spawn_fountain)
       {
         environment_.FUN_0021ed50_spawn_fountain(burst);
+      }
+      return 0;
+    }
+
+    // 0x110 and 0x111 (FUN_00262CF0): the **smoke cloud**. Three expressions
+    // into a three-word stack block, handed on out of order --
+    //
+    //     FUN_00212DB0(expr3 / 100000, expr1, expr2)   // 0x110, reseeds
+    //     FUN_00212D60(expr3 / 100000, expr1, expr2)   // 0x111, does not
+    //
+    // so the count comes first, then a packed 0xAARRGGBB, then a scale that is
+    // a world value like every other coordinate operand. The two divisors
+    // (fGpffff8d18, fGpffff8d1c) are separate globals holding the same 100000.
+    //
+    // This was the halt that left s01_e014's argument scene frozen: the slot
+    // stopped at 0x1ff8 every frame, so the `0x6D 1` that ends the beat was
+    // never reached and the lead sat in state 10 for good.
+    case 0x110:
+    case 0x111:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint16_t opcode = currentOpcode_;
+      orphen::ported::script::ScriptSmokeCloud cloud;
+      cloud.count = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      cloud.colour = FUN_0025c258_evaluate();
+      cloud.scale = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) /
+                    orphen::ported::entity::kFGpffff8d18_smokeScaleDivisor;
+      cloud.reseed = opcode == 0x110;
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00212db0_arm_smoke)
+      {
+        environment_.FUN_00212db0_arm_smoke(cloud);
       }
       return 0;
     }

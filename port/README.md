@@ -1162,10 +1162,57 @@ the original's. Still not gated the way the original gates it —
 `FUN_002239C8:126` leaves for `FUN_002241E0` whenever `DAT_00354D2C` is non-zero
 at all, where the port's `cutsceneFrame` tests only for the cutscene mode.
 
-**Open:** the `0x400`/`0x10000` zone — the "which way do we go" argument — plays
-its whole dialogue and then does not give control back. At 8000 frames the lead
-is still in state 10 with the last line ("Get to the deck! Fast!") already
-spent. That is the tail of that cutscene, not the camera handshake.
+### The smoke cloud, and the halt hiding behind it
+
+The `0x400`/`0x10000` zone — the "which way do we go" argument — played its whole
+dialogue and then never gave control back. The cause was one unimplemented
+opcode, **`0x110` at blob offset `0x1ff8`**, hit 6619 times in an 8000-frame
+run: the object-script slot is re-entered from the top every frame, so it halted
+at the same instruction every frame and the `0x6D 1` that ends the beat was
+never reached. Control now returns around frame 2400.
+
+`0x110` and `0x111` share `FUN_00262CF0`, which reads three expressions into one
+stack block and hands them on out of order: `FUN_00212DB0(expr3 / 100000,
+expr1, expr2)` for `0x110` and `FUN_00212D60(...)` for `0x111`. So the operands
+are a count, a packed `0xAARRGGBB`, and a scale. `0x110` reseeds every record;
+`0x111` changes the parameters and leaves them alone — s01_e014 arms once with
+`0x110` and then ramps the colour with a `0x111` every frame, 98 of them,
+walking grey from `0x000000` up to `0x292929` and the alpha ceiling from `0x0A`
+down to `0x04`.
+
+**Nothing in the pool has a position.** A record is three 16-bit phase angles
+plus a packed nibble triple, and the world position is rebuilt every frame
+relative to the camera:
+
+```
+box[c]  = eye[c] + forward[c] * 1.5          (c = 0, 1)
+box[2]  = eye.z  + (0.6 - 0.2) + forward.z * 2
+u       = (phase[c] - (int)(box[c] * 65536/3)) & 0xFFFF
+pos[c]  = u * 3/65536 + box[c] - 1.5
+```
+
+— a 3x3x3 box hanging in front of the eye, wrapping in all three axes, with the
+alpha falling linearly to nothing within 1/16 of a turn of the seam so nothing
+pops as it wraps. The packed word's top nibble is a shove counter: a particle
+inside a 0.8 x 0.8 x 1.1 box around the lead's waist has it set to 15 whenever
+the lead is moving, and while it is up the particle drifts an extra
+`dir * counter * 2` a frame. "Moving" is `+0xA0 >= 3` — any animation but a
+stand — or, when standing, an actual change in position.
+
+`src/ported/entity/original_smoke_cloud.*` is all of that, stepped in
+FUN_002192C0's first slot and reported by `--actor-report`.
+
+**It is not drawn, deliberately.** `FUN_00212F38` builds a VU1 program's input,
+not a GIF stream: 40 quadwords of template to VU address 32, then 32 positions
+(V4-32 to address 6) and 32 four-byte attribute quads (V4-8 to address 47) whose
+byte 0 is `(i & 3) * 10` and byte 3 the alpha. The template's GIFtag reads
+NLOOP 1, EOP, PRE, NREG 9, PACKED, REGS = RGBAQ then four (UV, XYZ2) pairs, and
+PRIM = triangle fan with TME, ABE and FST set — a flat, textured, blended quad
+whose corners are `0x510` and `0x5F0` in 4-bit fixed, texels 81..95 on both
+axes. **There is no TEX0 anywhere in the packet**, and no ALPHA register behind
+that ABE, so which sheet those texels belong to and how it blends are not in
+this function. Picking either would be a guess. A GS dump taken while the smoke
+is up, read with `port/attic/gsparse.py`, settles both.
 
 Nothing in this scene reads an event flag it does not also write — the arrival
 branch is the only thing it inherits from the scene before it.

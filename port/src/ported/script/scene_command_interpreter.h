@@ -445,6 +445,20 @@ namespace orphen::ported::script
     std::uint32_t colour = 0;
   };
 
+  // The smoke cloud, as opcodes 0x110 and 0x111 spell it. FUN_00262CF0 reads
+  // three expressions into a three-word stack block and then hands them over
+  // *out of order*: the third goes in f12 divided by 100000, the first in a1
+  // and the second in a2. Both opcodes share the function; `reseed` is the only
+  // difference, and it is what separates 0x110's FUN_00212DB0 from 0x111's
+  // FUN_00212D60.
+  struct ScriptSmokeCloud
+  {
+    int count = 0;
+    std::uint32_t colour = 0; // 0xAARRGGBB -- the top byte is the alpha ceiling
+    float scale = 0.0f;
+    bool reseed = false;
+  };
+
   // One burst of the DAT_00355B60 fountain pool, as opcode 0x10F spells it.
   // FUN_00262B90 reads fourteen expressions; nine of them are scaled by 100000
   // (fGpffff8d14) and reach FUN_0021ED50 in f12..f19 plus one stack slot, and
@@ -617,6 +631,11 @@ namespace orphen::ported::script
     // nothing with it. s14_e031 -- the new-spell scene -- fires one of these
     // every frame.
     std::function<void(const ScriptSprayBurst &)> FUN_0021e088_spawn_spray;
+
+    // FUN_00212DB0 / FUN_00212D60, opcodes 0x110 and 0x111: arm the smoke
+    // cloud. s01_e014's sinking-ship argument is the one scene in the port that
+    // reaches it.
+    std::function<void(const ScriptSmokeCloud &)> FUN_00212db0_arm_smoke;
 
     // FUN_00262B90 -> FUN_0021ED50, opcode 0x10F: the fountain pool at
     // DAT_00355B60, which sits one word along from the spray pool's globals and

@@ -34,6 +34,7 @@
 #include "ported/entity/original_hit_sparks.h"
 #include "ported/entity/original_fountain_particles.h"
 #include "ported/entity/original_gather_particles.h"
+#include "ported/entity/original_smoke_cloud.h"
 #include "ported/entity/original_spray_particles.h"
 #include "ported/render/original_entity_draw.h"
 #include "ported/render/original_weapon_trail.h"
@@ -484,6 +485,11 @@ namespace orphen::port
     // alive into the same display list the billboards use.
     orphen::ported::entity::ParticlePool DAT_00355620_particles_;
     orphen::ported::entity::DustPool DAT_00355a9c_dust_;
+    // DAT_0054F080, the smoke cloud opcodes 0x110 and 0x111 arm -- the first
+    // system FUN_002192C0 walks, and the only one whose particles have no
+    // position of their own. See original_smoke_cloud.h, including why it is
+    // stepped but not yet drawn.
+    orphen::ported::entity::SmokeCloud DAT_0054f080_smoke_;
     // DAT_00355B58, the spray opcode 0x10D throws -- 2000 entries of 0x30,
     // carved by FUN_0021E540 and walked by FUN_0021E5E0. It is neither of the
     // two above: no shared struct, no shared spawn convention, its own gate.
