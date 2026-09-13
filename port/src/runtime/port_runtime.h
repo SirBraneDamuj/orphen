@@ -703,7 +703,10 @@ namespace orphen::port
     // hook is called with a mode number at ten points in the frame; the port
     // reaches two of them, load (1) and pre-update (4).
     std::int16_t DAT_0032536c_sceneModule_ = -1;
-    void FUN_0032536c_scene_module(int mode);
+    void FUN_0032536c_scene_module(int mode, std::uint32_t frameTicks = 0);
+    // iGpffffb2c8: module 32's camera-move timer, in frame ticks. One global,
+    // because only one of its zones can be running at a time.
+    int iGpffffb2c8_cameraElapsed_ = 0;
 
   // FUN_0022DC68(selector, enable, 0x800). Shared by opcode 0xA6 and by the
   // crab's swipe, which is why it is a member rather than a lambda body.

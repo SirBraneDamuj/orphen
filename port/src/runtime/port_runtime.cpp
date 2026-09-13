@@ -2631,7 +2631,7 @@ namespace orphen::port
     }
   }
 
-  void PortRuntime::FUN_0032536c_scene_module(int mode)
+  void PortRuntime::FUN_0032536c_scene_module(int mode, std::uint32_t frameTicks)
   {
     if (DAT_0032536c_sceneModule_ < 0)
     {
@@ -2713,10 +2713,79 @@ namespace orphen::port
         sceneScript_.state().FUN_002663a0_setEventFlag(0x35E);
       }
     }
+    // Module 32, FUN_0026D838 -- **s01_e014's forced camera**, and the first
+    // mode-4 hook in the port that a *field* scene needs. The zone scripts do
+    // not move the camera themselves; they raise flags and this hook answers.
+    //
+    //     718 (0x2CE)  a camera zone is active
+    //     719 (0x2CF)  build the move       -- cleared here when it is built
+    //     720 (0x2D0)  run the move         -- cleared here when it finishes
+    //
+    // The script's side is a four-state machine per zone: state 0 takes control
+    // with 0x6D, pins the actor (+0x04 |= 0x4100, +0x06 |= 0x10) and sets 719;
+    // state 1 waits for 719 to come back down and then sets 720; state 2 waits
+    // for 720; state 3 undoes all of it and gives control back. **Nothing in
+    // the script ever clears either flag**, so with no hook the lead is locked
+    // in state 10 for good -- which is what "Orphen freezes on the panel and I
+    // can't do anything" is.
+    //
+    // The move itself is a two-knot eye curve from wherever the camera is to
+    // `(15.0, lead+0x24, min(lead+0x28 + 1.0, 3.5))` and a one-knot look-at
+    // curve holding the current look point, stepped over 0x3C0 ticks -- 30
+    // frames at the nominal 0x20. `iGpffffb64c` is that per-frame tick and is
+    // only ever assigned 0x20 (FUN_002239C8:27, :102), so frameTicks is it.
+    //
+    // Sibling module 31 (FUN_0026D640) is the same handshake with a longer
+    // 0x780 move and a destination chosen by work[58]; no scene the port runs
+    // names it yet, and s01_e014 writes work[16] and work[20] rather than
+    // work[58], so it is deliberately not guessed at here.
+    else if (mode == 4 && DAT_0032536c_sceneModule_ == 32)
+    {
+      auto &state = sceneScript_.state();
+      if (!state.FUN_00266368_eventFlag(0x2CE))
+      {
+        return;
+      }
+      if (state.FUN_00266368_eventFlag(0x2CF))
+      {
+        const auto &lead = entityPool_.leadPlayer();
+        float height = lead.positionY28 + 1.0f;
+        if (3.5f < height)
+        {
+          height = 3.5f;
+        }
+        const std::array<orphen::ported::psm2::Vec3, 2> eyePoints{
+            fieldCamera_.DAT_0058c0a8_eye(),
+            orphen::ported::psm2::Vec3{15.0f, lead.positionZ24, height}};
+        const std::array<orphen::ported::psm2::Vec3, 1> lookAtPoints{
+            fieldCamera_.DAT_0058be90_lookAt()};
+
+        // FUN_00217E88's own two lines: drop whatever camera is installed, then
+        // build. No roll/zoom curve -- the two-curve installer has none.
+        fieldCamera_.FUN_00217e18_release_manual_camera(false);
+        fieldCamera_.FUN_00217fe8_set_camera_path(eyePoints, {}, {}, lookAtPoints);
+        iGpffffb2c8_cameraElapsed_ = 0;
+        state.FUN_002663d8_clearEventFlag(0x2CF);
+      }
+      else if (state.FUN_00266368_eventFlag(0x2D0))
+      {
+        iGpffffb2c8_cameraElapsed_ += static_cast<int>(frameTicks);
+        // `< 0x3c1`, so the sample at exactly the duration is taken and the
+        // flag comes down on the frame after it.
+        if (iGpffffb2c8_cameraElapsed_ < 0x3C1)
+        {
+          fieldCamera_.FUN_00217f38_step_camera_path(iGpffffb2c8_cameraElapsed_, 0x3C0);
+        }
+        else
+        {
+          state.FUN_002663d8_clearEventFlag(0x2D0);
+        }
+      }
+    }
     else if (mode == 4)
     {
       // Named in --battle-report rather than on stdout: eighteen of the
-      // twenty-eight modules belong to field scenes -- s01_e024 is module 13 --
+      // thirty-three modules belong to field scenes -- s01_e024 is module 13 --
       // and a line per scene load would be noise in every run that never looks
       // at the battle module.
       sceneModuleReported_ = true;
@@ -6872,6 +6941,20 @@ namespace orphen::port
                   << " at frame " << frameCount_ << '\n';
       }
 
+      // FUN_002239C8:129-130 -- `(*DAT_0032536c)(4); FUN_0025b778();`. The
+      // scene module's per-frame hook runs **before** the script tick, not
+      // after it. The port had it a step later, down by the player update,
+      // which puts a whole frame between a script raising a flag the module
+      // answers and the module answering it. s01_e014's camera zones are a
+      // three-flag handshake between exactly those two, so the order is not
+      // cosmetic.
+      //
+      // Still not gated the way the original gates it: FUN_002239C8:126 leaves
+      // for FUN_002241E0 whenever DAT_00354D2C is non-zero at all, where the
+      // port's `cutsceneFrame` tests only for the cutscene mode. Widening that
+      // reaches well past this scene and is left alone for now.
+      FUN_0032536c_scene_module(4, frameTicks);
+
       if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
@@ -6901,9 +6984,6 @@ namespace orphen::port
       // set bit 0 of sGpffffb052. Nothing about the field path runs while it
       // does, which is why the player stands still in battle: the movement
       // request above is simply never spent.
-      // FUN_002239C8:115. The scene module's per-frame hook runs immediately
-      // before the player update, whichever controller is about to take it.
-      FUN_0032536c_scene_module(4);
       if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
