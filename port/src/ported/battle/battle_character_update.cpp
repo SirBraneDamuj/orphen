@@ -268,12 +268,21 @@ namespace orphen::ported::battle
     // same slot re-uses the blade already in the caster's hand rather than
     // dropping and rebuilding it mid-swing. The tail -- attachment, power,
     // element block -- runs either way.
+    //
+    // `attachToCaster` is the other. **FUN_0024BD30 writes neither +0x192 nor
+    // +0x194**, where FUN_0024C058:41-47 and the state-113 body both do, so the
+    // shield barrier keeps the -1 FUN_00245A00 spawned it with and stands in the
+    // world on its own +0x20..+0x28. `shield_of_immunity` confirms it: slot 10
+    // is a type 0x143 whose +0x192 is -1. Leaving the hand attachment on rooted
+    // the barrier in the caster's hand bone -- a tilted matrix a metre off the
+    // floor -- which unrolled the cylinder into a slab beside him.
     std::int32_t respawnSlotEffect(const BattleUpdateEnvironment &environment,
                                    std::uint32_t member,
                                    std::uint32_t tableBase,
                                    std::size_t casterSlot,
                                    bool onlyWhenTypeChanged,
-                                   bool assignHitParameters)
+                                   bool assignHitParameters,
+                                   bool attachToCaster = true)
     {
       BattleParty &party = *environment.party;
       const auto &caster = environment.pool->slot(casterSlot);
@@ -305,16 +314,19 @@ namespace orphen::ported::battle
       }
 
       auto &effect = environment.pool->slot(static_cast<std::size_t>(spawned));
-      effect.parentSlot192 = static_cast<std::int16_t>(casterSlot);
-      const std::int16_t characterClass =
-          party.tables().read<std::int16_t>(BattleTables::partyRecord(member) + record::kClass00);
-      if (characterClass == 1)
+      if (attachToCaster)
       {
-        effect.attachBone194 = 0x12;
-      }
-      else if (characterClass == 4)
-      {
-        effect.attachBone194 = 0x0E;
+        effect.parentSlot192 = static_cast<std::int16_t>(casterSlot);
+        const std::int16_t characterClass = party.tables().read<std::int16_t>(
+            BattleTables::partyRecord(member) + record::kClass00);
+        if (characterClass == 1)
+        {
+          effect.attachBone194 = 0x12;
+        }
+        else if (characterClass == 4)
+        {
+          effect.attachBone194 = 0x0E;
+        }
       }
 
       // +0x12C is the effect's attack power: the caster's, plus the per-slot
@@ -1939,7 +1951,7 @@ namespace orphen::ported::battle
         FUN_00248e98_set_animation_if_changed(entity, 0x14);
         const std::int32_t spawned =
             respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
-                              context.entitySlot, false, false);
+                              context.entitySlot, false, false, false);
         // FUN_0024BD30:32-39. **The four writes 111 and 113 do not do**, and
         // the barrier's behaviour needs all of them:
         //

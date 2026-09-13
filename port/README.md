@@ -8475,12 +8475,26 @@ Not ported, and named at the call sites:
 - `DAT_0031DA1E`, the first-time spirit-name banner. Four of the five arm it;
   nothing in the executable draws it, and its only reader counts its timer down.
 
-### Still open
+### The barrier was attached to the caster's hand
 
-- the shield barrier draws as a flat panel rather than a cylinder. This is a
-  **poser** problem, not a behaviour one: at the frame `shield_of_immunity` was
-  taken the port is in the same animation state as hardware -- animation 0,
-  `poseColumn(+0xAC) = 1`, `prev(+0xAE) = 18`, blend `0.04` against retail's
-  `0.027` -- and produces a posed box of `0.26 x 1.53 x 1.52` where the bind
-  mesh is +-0.55 across X and Y over 10 submeshes. Every other effect in the
-  scene poses correctly, so it is specific to `grp_00bd`'s rig.
+For a while the shield barrier drew as a flat green slab standing beside the
+player instead of a cylinder around him, and it read as a poser bug because the
+port's animation state matched hardware exactly -- animation 0,
+`poseColumn(+0xAC) = 1`, `prev(+0xAE) = 18`. It was not. `grp_00bd` is eight
+coincident curved sheets on eight children of one bone, with no rotation key in
+any of them at the hold column, so the shape is entirely the root matrix's
+doing; `shield_of_immunity` has slot 10's `+0x192` at **-1**, and the port had
+it at **0 / bone 0x12** -- the caster's hand.
+
+**`FUN_0024BD30` writes neither `+0x192` nor `+0x194`.** `FUN_0024C058:41-47`
+(state 111) and the state-113 body both do, and the port shared one
+`respawnSlotEffect` helper across all three, so the barrier inherited the hand
+attachment and took the caster's hand bone as its root -- a tilted matrix a
+metre off the floor. The helper now takes an `attachToCaster` flag and state 115
+passes false, which is the original's own split.
+
+The whole live palette matches hardware after it, bone for bone: bone 0 at
+`(0.200, -0.000, 0.000)` with a clean 90-degree yaw at scale 1.5, and children
+at `(0.222, -0.037, 0.753)`, `(0.219, -0.007, 0.806)`, `(0.220, -0.039, 0.702)`
+and on through bone 9's sentinel, every one of them the `shield_of_immunity`
+value to three decimals.
