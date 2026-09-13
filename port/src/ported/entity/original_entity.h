@@ -122,9 +122,12 @@ namespace orphen::ported::entity
     std::uint8_t byte95 = 0;
     // +0x96: bit 0 is raised by FUN_0023f8b8 the moment the entity is bound
     // into a battle actor record, so "this thing is a battle participant" can be
-    // asked without walking the table. FUN_00216140's hit test and
-    // FUN_002446e8 both gate on bits of this byte; neither is ported yet, so
-    // only bit 0 is written.
+    // asked without walking the table. **Bit 0x20 suppresses the health bar** --
+    // FUN_00216140:102 is its only reader, and a set bit is what skips
+    // FUN_002D5630 on an otherwise ordinary hit. Scripts write the byte through
+    // object register 0x40; s14_e031's target dummy takes 32 so the spell demo
+    // lands damage without sliding a gauge on screen. FUN_002446e8 reads other
+    // bits of it and is not ported.
     std::uint8_t battleFlags96 = 0;
     // +0x98: index of the map placement record this entity was built from.
     // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.

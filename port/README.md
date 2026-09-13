@@ -8532,3 +8532,38 @@ does sort at the caster's own depth on hardware.
 `s01_e024` and `s14_e012` are visually unchanged by it, and the `--frames 1200
 --actor-report --scr-report` guard is byte-identical on both plus `s14_e001`:
 this is a render-side read of a field the simulation was already writing.
+### Two HUD pieces the spell demo showed and hardware does not
+
+`s14_e031` drew a health bar for every spell that lands on the target dummy, and
+left the target cursor parked in the corner of the screen through the narration
+close-up. Both are the same shape of bug: a gate the original has and the port
+did not read.
+
+**The bar.** `FUN_00216140:102` arms `FUN_002D5630` only when the victim's
+`+0x02` carries one of `0x4B` **and its `+0x96` bit `0x20` is clear**. The dummy
+(type `0x8B`) has descriptor flags `0x0008`, so it passes the first test and
+takes the upper bank -- and the scene's init writes `32` into its `+0x96`
+through object register `0x40` for exactly that reason. That register was the
+one `FUN_0025C8F8` case the port had a name for but no implementation, so the
+write was counted as unmodelled and dropped, and the gauge slid on. Bit `0x20`
+has one reader in the whole executable and this is it.
+
+**The cursor.** `FUN_002D73E8` never returns early. Its VU0 divide is clamped,
+so `FUN_0020B600` always writes a screen position back, and the two depth
+rejects either side of it -- `w` over `DAT_0035479C`, the pre-divide `z` at or
+under `DAT_003547A0` (0.3) -- only raise `+0x198` bit 0 and fall through to the
+tail, where a non-zero `+0x198` is what raises `+0x08` bit 0 and stops the draw.
+The port bailed out at the rejection instead, so the marker kept the last
+position it had projected to; the narration camera looks away from the dummy, so
+that position was the top-left corner and it stayed there.
+
+Two more gates went in with it, both of which decide the same thing and neither
+of which fires in this scene: `DAT_00354FC2 & 5` must read exactly 1 (running,
+not suspended by opcode `0xBD` method `0x76`), and `DAT_0031DA6C` bit `0x20` on
+the driven member hides them too. The third term, `DAT_003555C6`, is the
+attract-mode demo flag `FUN_00271558` raises on a title-screen timeout; the port
+has no attract mode, so it is zero by construction.
+
+All eleven arms still hand off to the same destination scenes, and the
+`--frames 1200` guard is byte-identical on `s01_e024`, `s14_e001` and
+`s14_e012`.

@@ -114,6 +114,12 @@ namespace orphen::ported::script
     // modelled; for type 0x3A that is the chest's event flag id.
     case 0x38: entity.eventFlagId198 = value; return true;
 
+    // +0x96, written as a byte. The only reader of bit 0x20 is FUN_00216140's
+    // hit test, which skips FUN_002D5630 when it is set -- so this write is how
+    // a script says "hitting this thing raises no health bar". s14_e031's
+    // target dummy takes 32 here for exactly that reason.
+    case 0x40: entity.battleFlags96 = byte; return true;
+
     default: return false;
     }
   }
@@ -171,6 +177,9 @@ namespace orphen::ported::script
     case 0x29: value = fromField(entity.height58); return true;
 
     case 0x38: value = entity.eventFlagId198; return true;
+
+    // Read back unsigned, unlike the 0x10 and 0x11 byte cases above.
+    case 0x40: value = entity.battleFlags96; return true;
 
     default: return false;
     }

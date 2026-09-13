@@ -365,6 +365,12 @@ namespace orphen::ported::entity
     std::function<bool(const orphen::ported::psm2::Vec3 &world, ProjectedPoint &out)>
         FUN_0020b600_project;
 
+    // DAT_00354FC2 (sGpffffb052), the battle state word. FUN_002d73e8 draws a
+    // target cursor only while `& 5` reads exactly 1: bit 0 is "a battle is
+    // running" and bit 2 is the suspend opcode 0xBD method 0x76 raises. Zero
+    // outside a battle, which hides every cursor.
+    std::uint32_t DAT_00354fc2_battleState = 0;
+
     // DAT_00354E96 and DAT_00354ECC. The first is the target-display timer the
     // D-pad re-arms and the second the "battle is suspended" gate; FUN_002d73e8
     // reads both to decide whether the cursor is lit and whether it draws at

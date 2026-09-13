@@ -10,6 +10,7 @@
 #include "ported/entity/original_summon_stage.h"
 #include "ported/entity/original_health_bar.h"
 
+#include "ported/battle/battle_tables.h"
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/party_follower.h"
 #include "ported/original_frame_timing.h"
@@ -2366,7 +2367,42 @@ namespace orphen::ported::entity
         cursor.cursorOffsetZ1a8 == 0.0f ? target.height58 * 0.75f : cursor.cursorOffsetZ1a8;
     const float worldZ = target.positionY28 + lift + target.hitVolumeOffset110[2];
     cursor.positionY28 = worldZ;
-    cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xFDu);
+    const std::uint8_t flags198OnEntry = cursor.cursorFlags198;
+    cursor.cursorFlags198 = static_cast<std::uint8_t>(flags198OnEntry & 0xFDu);
+
+    // :119-122 and :288-292. **The two gates that decide whether a cursor is
+    // shown at all**, both of which fall to the same tail: +0x198 non-zero, so
+    // +0x08 bit 0 goes up and the sprite pass drops it.
+    //
+    //   DAT_00354FC2 & 5 must read exactly 1 -- the battle running (bit 0) and
+    //   *not* suspended (bit 2, which only opcode 0xBD method 0x76 raises). Bit
+    //   1, the "a battle is built" bit FUN_002432D8 sets, is deliberately not in
+    //   the mask. Failing it takes +0x198 bit 1.
+    //   DAT_0031DA6C's bit 0x20 on the driven member hides them too, and that
+    //   one takes bit 2 instead.
+    //
+    // DAT_003555C6, the third term, is the attract-mode demo flag: FUN_00271558
+    // raises it when the title screen times out and FUN_00271220 clears it on
+    // every scene load. The port has no attract mode, so it is zero by
+    // construction rather than by a read.
+    if ((environment.DAT_00354fc2_battleState & 5u) != 1u)
+    {
+      cursor.cursorFlags198 = static_cast<std::uint8_t>((flags198OnEntry & 0xFDu) | 2u);
+      cursor.halfword08 |= 1u;
+      return;
+    }
+    cursor.cursorFlags198 = static_cast<std::uint8_t>(flags198OnEntry & 0xF9u);
+    if (environment.DAT_0031d3c8_battleTableWord)
+    {
+      const std::uint32_t memberFlags = environment.DAT_0031d3c8_battleTableWord(
+          orphen::ported::battle::kDAT_0031da6c_memberFlags);
+      if ((memberFlags & 0x20u) != 0)
+      {
+        cursor.cursorFlags198 = static_cast<std::uint8_t>((flags198OnEntry & 0xF9u) | 4u);
+        cursor.halfword08 |= 1u;
+        return;
+      }
+    }
 
     // :198-205. The battle is over: the cursor shrinks out and stops drawing.
     // DAT_0031d7be is control block 0's +0x0E, and 0x0B is the action every
@@ -2399,34 +2435,52 @@ namespace orphen::ported::entity
     }
     ActorEnvironment::ProjectedPoint projected;
     const orphen::ported::psm2::Vec3 world{cursor.positionX20, cursor.positionZ24, worldZ};
-    if (!environment.FUN_0020b600_project(world, projected))
+    // :148. The clear comes *before* FUN_0020b600, and every rejection below is
+    // an OR into the same bit.
+    cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xFEu);
+    // :163-166 and :192-195. **A rejected point is not an early exit.** The VU0
+    // divide is clamped, so FUN_0020b600 always writes a screen position back,
+    // and the two depth tests either side of it -- w over DAT_0035479c, and the
+    // pre-divide z at or under DAT_003547a0 (0.3) -- only raise +0x198 bit 0 and
+    // fall through to the tail, which is where +0x08 bit 0 stops the draw.
+    // Returning here instead left the cursor drawn at the last position it
+    // projected to: s14_e031's narration close-up looks away from the target
+    // dummy, so the marker sat in the corner of the screen for the whole of it.
+    //
+    // The port skips the position stores rather than reproducing the clamped
+    // numbers -- vf1's minimum is part of the VU register bank the caller sets
+    // up, not of this function -- which changes nothing on screen, because a
+    // cursor that reaches the tail with +0x198 set does not draw.
+    const bool projectedOntoScreen = environment.FUN_0020b600_project(world, projected);
+    if (!projectedOntoScreen)
     {
       cursor.cursorFlags198 |= 1u;
-      return;
     }
     // :151-162. The GS origin is 0x8000 in both axes, and the subtraction is
     // biased so the arithmetic shift that follows truncates toward zero rather
     // than down: -0x7FF1 is -0x8000 + 15 for the >> 4, -0x7FF9 is -0x8000 + 7
     // for the >> 3. X divides by 16 and Y by 8 because the GS output is 2:1.
-    const std::int32_t rawX = projected.gsX - 0x8000;
-    const std::int32_t rawY = projected.gsY - 0x8000;
-    const std::int32_t biasedX = rawX >= 0 ? rawX : projected.gsX - 0x7FF1;
-    const std::int32_t biasedY = rawY >= 0 ? rawY : projected.gsY - 0x7FF9;
-    cursor.cursorScreenX1ac = static_cast<float>(biasedX >> 4);
-    cursor.cursorScreenY1b0 = static_cast<float>(biasedY >> 3);
-    cursor.cursorScreenZ1b4 = static_cast<float>(projected.gsZ);
-    const float screenX = static_cast<float>((biasedX >> 4) + 320);
-    const float screenY = static_cast<float>((biasedY >> 3) + 220);
-    cursor.positionX20 = screenX;
-    cursor.positionZ24 = screenY;
-    cursor.cursorProjectedDepth28 = projected.gsZ;
-    cursor.halfword08 |= 0x1000u;
-
-    // :180-198. The window the original rejects on, in pixels.
-    cursor.cursorFlags198 = static_cast<std::uint8_t>(cursor.cursorFlags198 & 0xFEu);
-    if (screenX < 0.0f || screenX > 640.0f || screenY < 0.0f || screenY > 440.0f)
+    if (projectedOntoScreen)
     {
-      cursor.cursorFlags198 |= 1u;
+      const std::int32_t rawX = projected.gsX - 0x8000;
+      const std::int32_t rawY = projected.gsY - 0x8000;
+      const std::int32_t biasedX = rawX >= 0 ? rawX : projected.gsX - 0x7FF1;
+      const std::int32_t biasedY = rawY >= 0 ? rawY : projected.gsY - 0x7FF9;
+      cursor.cursorScreenX1ac = static_cast<float>(biasedX >> 4);
+      cursor.cursorScreenY1b0 = static_cast<float>(biasedY >> 3);
+      cursor.cursorScreenZ1b4 = static_cast<float>(projected.gsZ);
+      const float screenX = static_cast<float>((biasedX >> 4) + 320);
+      const float screenY = static_cast<float>((biasedY >> 3) + 220);
+      cursor.positionX20 = screenX;
+      cursor.positionZ24 = screenY;
+      cursor.cursorProjectedDepth28 = projected.gsZ;
+      cursor.halfword08 |= 0x1000u;
+
+      // :180-198. The window the original rejects on, in pixels.
+      if (screenX < 0.0f || screenX > 640.0f || screenY < 0.0f || screenY > 440.0f)
+      {
+        cursor.cursorFlags198 |= 1u;
+      }
     }
 
     // :215-238. **The rotation.** +0x08 bit 0x400 switches the sprite pass from

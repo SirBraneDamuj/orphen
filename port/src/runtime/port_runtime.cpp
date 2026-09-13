@@ -592,6 +592,7 @@ namespace orphen::port
 
     // DAT_00354E96 / DAT_00354ECC, which FUN_002d73e8 reads to decide whether
     // the target display is up and whether the cursors draw at all.
+    environment.DAT_00354fc2_battleState = battleParty_.DAT_00354fc2();
     environment.DAT_00354e96_targetDisplayTicks = battleParty_.DAT_00354e96_displayTimer();
     environment.DAT_00354ecc_battleSuspended =
         static_cast<std::uint16_t>(battleParty_.DAT_00354ecc());
