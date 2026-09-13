@@ -43,6 +43,13 @@ namespace orphen::port
     // 0x80 = x1.0 scale and **zero means fully opaque**, not invisible. The
     // chest cutscene's cross-fade is the only thing that drives it so far.
     std::uint8_t fadeLevel = 0;
+    // Entity +0x133. FUN_0020c810:216 scales it by fGpffff80c4 into the draw
+    // context's ctx+0x140, and FUN_0020eec0:181 adds that to the view depth
+    // before keying the sort bucket -- so a negative byte pulls the whole model
+    // in front of things it is geometrically level with. Effects that wrap the
+    // caster live on it: the three shield barriers set -10, the summon veil
+    // -48 with +48 on the caster, the ground rings and markers -12.
+    std::int8_t depthBias133 = 0;
 
     // Null when the type has no static descriptor (the map-streamed ids from
     // 0x272) or the grp record is not in any open bundle.

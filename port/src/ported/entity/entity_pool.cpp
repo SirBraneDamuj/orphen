@@ -104,7 +104,10 @@ namespace orphen::ported::entity
       entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x20);
     }
     entity.flags06 = static_cast<std::uint16_t>(static_cast<std::int16_t>(descriptor->byte0x14));
-    // FUN_00229c40:75. The billboard pass is the only reader; see +0x133.
+    // FUN_00229c40:75. Both draw passes read it: FUN_0020f6f8 scales it into
+    // the sprite's GS z, and FUN_0020c810:216 into the model draw context's
+    // +0x140, which FUN_0020eec0 adds to the depth its sort bucket is keyed
+    // on. 44 of the 124 primary types carry -2 for that reason.
     entity.depthBias133 = static_cast<std::int8_t>(descriptor->byte0x02);
     entity.radius54 = descriptor->radius0x08;
     entity.height58 = descriptor->height0x0c;

@@ -20,17 +20,24 @@
 // pass runs through ViewProjection::screenDepth, so the port reuses that rather
 // than keeping a second copy of the projection terms.
 //
-// Two details are deliberately not reproduced. The bias at ctx+0x140 is
-// `(char)something * fGpffff80c4`, a per-entity sort nudge whose source byte
-// FUN_0020c810 fills from a field the port does not model. And the blend flag
-// lives in the render context at ctx+0x1F0, not on the entity, so nothing here
-// can set it honestly -- no entity in s01_e024 is blended, and when one is it
-// will sort as opaque until that context is ported.
+// The bias at ctx+0x140 **is** reproduced: FUN_0020c810:216 fills it from
+// entity +0x133 scaled by fGpffff80c4, and an effect that must draw over the
+// character it surrounds is nothing but that byte. The shield barriers set
+// -10, the summon veil -48 while pushing the caster +48 the other way, and the
+// ground rings and markers -12. Without it a barrier sorts at the caster's own
+// depth and loses the tie, which is why Orphen stood in front of his own
+// shield instead of inside it.
+//
+// One detail is still not reproduced: the blend flag lives in the render
+// context at ctx+0x1F0, not on the entity, so nothing here can set it
+// honestly -- no entity in s01_e024 is blended, and when one is it will sort
+// as opaque until that context is ported.
 
 #include "ported/render/original_view_projection.h"
 #include "runtime/scene_object_view.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace orphen::ported::render
@@ -45,6 +52,14 @@ namespace orphen::ported::render
     // Past the end of the shared table, so blended entities draw after every
     // opaque thing regardless of depth.
     inline constexpr int kBlendedBucket = 0x1005;
+    // fGpffff80c4, 0x00352034. Entity +0x133 is a signed byte of view-space
+    // units at this scale, added to the depth the bucket is keyed on --
+    // negative pulls the entity toward the camera. The sprite pass reads the
+    // same 0.08 out of its own copy at DAT_003520a0.
+    inline constexpr float kfGpffff80c4_depthBiasScale = 0.0799999982f;
+    // fGpffff811c, 0x0035208c. FUN_0020eec0:182 rejects a biased depth below
+    // this to the far end of the table rather than dropping the entity.
+    inline constexpr float kfGpffff811c_minimumDepth = 0.100000001f;
   } // namespace entityDraw
 
   struct EntityDrawItem
@@ -56,7 +71,11 @@ namespace orphen::ported::render
   // FUN_0020eec0 lines 181-205 for one entity. Split out because
   // FUN_0020e840's motion trails need the same number: they submit into
   // `bucket + 1`, one step in front of the model they belong to.
-  int FUN_0020eec0_depthBucket(const Vec3 &worldOrigin, const ViewProjection &viewProjection);
+  //
+  // `depthBias133` is the entity's own +0x133, not yet scaled.
+  int FUN_0020eec0_depthBucket(const Vec3 &worldOrigin,
+                               const ViewProjection &viewProjection,
+                               std::int8_t depthBias133 = 0);
 
   // FUN_0020c5a8's walk reduced to what the port has: the view list is already
   // the set of live, drawable entities, so this is FUN_0020eec0's sorting half.

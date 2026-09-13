@@ -5,7 +5,9 @@
 namespace orphen::ported::render
 {
 
-  int FUN_0020eec0_depthBucket(const Vec3 &worldOrigin, const ViewProjection &viewProjection)
+  int FUN_0020eec0_depthBucket(const Vec3 &worldOrigin,
+                               const ViewProjection &viewProjection,
+                               std::int8_t depthBias133)
   {
     // The entity's origin in view space. FUN_0020c810 stores this at ctx+0x68
     // after running the world transform through VU0 -- and for an entity
@@ -13,13 +15,19 @@ namespace orphen::ported::render
     // `worldOrigin` carries. Sorting the bandana by its own +0x20 put it at the
     // world origin, thirteen units from where it draws.
     const Vec3 viewPosition = viewProjection.toViewSpace(worldOrigin);
-    if (viewPosition.z <= 0.0f)
+    // FUN_0020eec0:181. ctx+0x140 is FUN_0020c810:216's
+    // `(char)(entity + 0x133) * fGpffff80c4`, and the sort is keyed on the sum,
+    // not on the depth alone.
+    const float depth = viewPosition.z + static_cast<float>(depthBias133) *
+                                             entityDraw::kfGpffff80c4_depthBiasScale;
+    if (depth < entityDraw::kfGpffff811c_minimumDepth)
     {
-      // FUN_0020eec0 line 184's near reject, which pushes the entity to the far
-      // end rather than dropping it.
+      // FUN_0020eec0 line 184's near reject: the key is pinned at 0x7FFFFFFF,
+      // which survives the shift and clamps to the far end rather than dropping
+      // the entity.
       return entityDraw::kMaximumBucket;
     }
-    const float key = viewProjection.screenDepth(viewPosition.z);
+    const float key = viewProjection.screenDepth(depth);
     int bucket = key > 0.0f ? static_cast<int>(key) : 0;
     bucket >>= 4;
     return std::clamp(bucket, entityDraw::kMinimumBucket, entityDraw::kMaximumBucket);
@@ -40,7 +48,9 @@ namespace orphen::ported::render
         continue;
       }
 
-      drawList.push_back({index, FUN_0020eec0_depthBucket(object.worldOrigin, viewProjection)});
+      drawList.push_back(
+          {index,
+           FUN_0020eec0_depthBucket(object.worldOrigin, viewProjection, object.depthBias133)});
     }
 
     // Low bucket to high is far to near, the same order the map draw list is

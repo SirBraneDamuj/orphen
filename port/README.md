@@ -8498,3 +8498,37 @@ The whole live palette matches hardware after it, bone for bone: bone 0 at
 at `(0.222, -0.037, 0.753)`, `(0.219, -0.007, 0.806)`, `(0.220, -0.039, 0.702)`
 and on through bone 9's sentinel, every one of them the `shield_of_immunity`
 value to three decimals.
+
+### Orphen stood in front of his own shield: entity `+0x133`
+
+With the barrier rooted correctly it was still drawn *behind* the caster -- the
+cylinder's near wall never covered him, where hardware shows him dimly through
+it. Nothing about the pose was wrong. Blended primitives draw with `ZMSK` set,
+so they test depth without writing it, which makes submission order the only
+thing that decides who wins; the barrier's origin is the caster's own position
+plus half a unit, so it sorted into the caster's bucket and lost.
+
+`FUN_0020C810:216` reads entity `+0x133`, scales it by `fGpffff80c4`
+(`0x00352034` = 0.08) into the draw context's `+0x140`, and `FUN_0020EEC0:181`
+keys the sort on `ctx+0x68 + ctx+0x140` -- the view depth **plus that bias** --
+rejecting the result below `fGpffff811c` (0.1) to the far end of the table. The
+port applied the byte on the sprite path only, and the model path's own comment
+recorded it as "a field the port does not model".
+
+It is how every effect that wraps a character gets in front of it:
+
+| writer | `+0x133` | effect |
+|---|---|---|
+| `LAB_002DE0B8` (type `0x143` only) | `-10` | Shield of Immunity's cylinder |
+| `FUN_002E34B8` | `-48` on the veil, `+48` on slot 0 | the summon veil, caster pushed the other way |
+| ground rings, markers, discs | `-12` | a unit nearer than they stand |
+| 44 of the 124 primary descriptors | `-2` | every character, uniformly |
+
+Only `0x143` takes the bias: `0x002DE1F0` tests the type against `323` and
+branches past the `addiu v0,zero,-10` / `sb v0,0x133(s0)` pair for `0x127` and
+`0x144`, which get their cue and nothing else. Shield of Inferno's cage really
+does sort at the caster's own depth on hardware.
+
+`s01_e024` and `s14_e012` are visually unchanged by it, and the `--frames 1200
+--actor-report --scr-report` guard is byte-identical on both plus `s14_e001`:
+this is a render-side read of a field the simulation was already writing.
