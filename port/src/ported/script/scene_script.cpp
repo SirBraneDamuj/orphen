@@ -1,5 +1,8 @@
 #include "ported/script/scene_script.h"
 
+#include <algorithm>
+#include <iterator>
+
 namespace orphen::ported::script
 {
   namespace
@@ -34,8 +37,21 @@ namespace orphen::ported::script
   {
     blob_.clear();
     texturePageIds_.clear();
-    // FUN_0025b390 clears the work array and the object-script slots at load.
-    state_ = SceneScriptState{};
+    // FUN_0025b390 clears the work array and the object-script slots at load --
+    // and **only** those. The event flags are not part of the scene script's
+    // memory at all: they live in the game-wide array at DAT_00342B70, which
+    // nothing on the load path touches, so they carry from one scene to the
+    // next. Wiping them here broke every cross-scene flag; the one that made it
+    // visible is BFLG 50..62, which s14_e001 sets to tell s14_e031 which spell
+    // to demonstrate and which arrived in the next scene reading zero.
+    {
+      decltype(SceneScriptState::DAT_00342b70_flags) carried;
+      std::copy(std::begin(state_.DAT_00342b70_flags), std::end(state_.DAT_00342b70_flags),
+                std::begin(carried));
+      state_ = SceneScriptState{};
+      std::copy(std::begin(carried), std::end(carried),
+                std::begin(state_.DAT_00342b70_flags));
+    }
 
     if (decodedScript.size() < kSceneScriptHeaderWordCount * 4)
     {

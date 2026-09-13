@@ -273,6 +273,11 @@ namespace orphen::ported::entity
     // cGpffffbc0c. FUN_00220910 returns immediately when this is not positive,
     // so it is both a fast path and the pool's "anything showing" flag.
     std::int8_t DAT_00355b7c_activeGroups() const { return activeGroups_; }
+    // FUN_002218F0 -- opcode 0x115, in the *other* pool at DAT_00355B80 --
+    // decrements this byte when it releases one of its own groups, because its
+    // gp offset is one word short of the one it means. Handing out a reference
+    // is the only way to reproduce that from outside.
+    std::int8_t &DAT_00355b7c_activeGroupsRef() { return activeGroups_; }
     std::size_t aliveCount() const;
 
   private:

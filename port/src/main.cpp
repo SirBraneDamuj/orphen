@@ -56,6 +56,12 @@ namespace
                  "  --hold-right    <first>-<last>   so a range is one step: Left and\n"
                  "                  Right walk the enemies one at a time and Up and\n"
                  "                  Down jump half the table across.\n"
+                 "  --spell-power-scale <f>\n"
+                 "                  multiply the player's spell power by <f> on the\n"
+                 "                  way into the party record. A debug cheat for\n"
+                 "                  getting through a boss quickly; 1.0 (the default)\n"
+                 "                  is the shipped behaviour, and anything else makes\n"
+                 "                  the run unusable as a fidelity check.\n"
                  "  --model-report  parse every grp record in the scene bundle and\n"
                  "                  print its geometry counts.\n"
                  "  --no-screen-smear  skip FUN_00201a38's feedback quad, so the same\n"
@@ -416,6 +422,48 @@ namespace
             static_cast<std::uint32_t>(std::stoul(std::string(argv[++argumentIndex])));
         continue;
       }
+      if (argument == "--set-work")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--set-work needs <index>=<value>[:<frame>]");
+        }
+        const std::string value{argv[++argumentIndex]};
+        const std::size_t equals = value.find('=');
+        if (equals == std::string::npos)
+        {
+          throw std::runtime_error("--set-work needs <index>=<value>[:<frame>]");
+        }
+        const std::size_t colon = value.find(':', equals);
+        config.setWorkIndex = static_cast<std::uint32_t>(std::stoul(value.substr(0, equals)));
+        config.setWorkValue = static_cast<std::uint32_t>(
+            std::stoul(value.substr(equals + 1, colon == std::string::npos
+                                                    ? std::string::npos
+                                                    : colon - equals - 1)));
+        config.setWorkFrame =
+            colon == std::string::npos
+                ? 1u
+                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
+        config.hasSetWork = true;
+        continue;
+      }
+      if (argument == "--set-event-flag")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--set-event-flag needs <id>[:<frame>]");
+        }
+        const std::string value{argv[++argumentIndex]};
+        const std::size_t colon = value.find(':');
+        config.setEventFlagId =
+            static_cast<std::uint32_t>(std::stoul(value.substr(0, colon)));
+        config.setEventFlagFrame =
+            colon == std::string::npos
+                ? 1u
+                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
+        config.hasSetEventFlag = true;
+        continue;
+      }
       if (argument == "--arm-stream")
       {
         if (argumentIndex + 1 >= argc)
@@ -448,6 +496,15 @@ namespace
         config.scrTraceRangeLow = static_cast<std::uint32_t>(std::stoul(range.substr(0, dash), nullptr, 16));
         config.scrTraceRangeHigh = static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1), nullptr, 16));
         config.hasScrTraceRange = true;
+        continue;
+      }
+      if (argument == "--spell-power-scale")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--spell-power-scale needs a multiplier");
+        }
+        config.spellPowerScale = std::stof(argv[++argumentIndex]);
         continue;
       }
       if (argument == "--draw-distance")

@@ -255,13 +255,58 @@ namespace orphen::ported::text
     switch (code)
     {
     case 0x00:
-      // FUN_00239178. Its live branch raises flag 0x8FE and sets the 0x2000
-      // gate bit -- "the record has finished" -- and leaves the cursor where it
-      // is, so the handler re-runs harmlessly every frame after. DialogueStream
-      // owns those two pieces of state; here it is just the end of the walk,
-      // and the window stays up behind it.
+      // FUN_00239178, **and it is a RETURN before it is an end**. Its first
+      // test is `depth < 8`: with a frame on the stack it pops the saved cursor
+      // and carries on, and only at the outermost level does it take the branch
+      // that raises flag 0x8FE and sets the 0x2000 gate bit -- "the record has
+      // finished". DialogueStream owns those two pieces of state; here the
+      // outer case is just the end of the walk, and the window stays up behind
+      // it.
+      if (DAT_00355c64_callDepth_ < kCallDepth)
+      {
+        const CallFrame &frame = DAT_005716a0_callStack_[DAT_00355c64_callDepth_];
+        ++DAT_00355c64_callDepth_;
+        cursor_ = frame.cursor;
+        end_ = frame.end;
+        return;
+      }
       FUN_00239178_end_record();
       return;
+
+    case 0x10:
+    {
+      // LAB_00239548, **the CALL**. Four bytes of little-endian displacement
+      // follow, added to the address of the byte *after* the opcode, and the
+      // return address pushed is five past the opcode. A call with the stack
+      // full traps in the original; here it is dropped and recorded, which is
+      // the only difference.
+      if (cursor_ + 5 > blob_.size() || DAT_00355c64_callDepth_ == 0)
+      {
+        noteUnhandled(code);
+        ++cursor_;
+        return;
+      }
+      const std::uint32_t displacement =
+          static_cast<std::uint32_t>(blob_[cursor_ + 1]) |
+          (static_cast<std::uint32_t>(blob_[cursor_ + 2]) << 8) |
+          (static_cast<std::uint32_t>(blob_[cursor_ + 3]) << 16) |
+          (static_cast<std::uint32_t>(blob_[cursor_ + 4]) << 24);
+      const std::size_t target = static_cast<std::size_t>(
+          static_cast<std::uint32_t>(cursor_ + 1) + displacement);
+      if (target >= blob_.size())
+      {
+        noteUnhandled(code);
+        cursor_ += 5;
+        return;
+      }
+      --DAT_00355c64_callDepth_;
+      DAT_005716a0_callStack_[DAT_00355c64_callDepth_] = CallFrame{cursor_ + 5, end_};
+      cursor_ = target;
+      // The called record is not bounded by the caller's; the original walks it
+      // to its own terminator.
+      end_ = blob_.size();
+      return;
+    }
 
     case 0x01:
       // FUN_002391d0 raises the book prompt without advancing the cursor, and
@@ -291,6 +336,14 @@ namespace orphen::ported::text
       // LAB_00239328: `pcGpffffaec0 = 0` then FUN_00237b38(0) -- the real close,
       // and the only thing that wipes the slots between records.
       LAB_00239328_close();
+      return;
+
+    case 0x06:
+      // LAB_00239338: FUN_00238F18 and nothing else -- wipe every glyph slot
+      // and step one byte. s14_e031's narrator records end each of their voice
+      // blocks with one, clearing the window between clips.
+      FUN_00238f18_clearSlots();
+      ++cursor_;
       return;
 
     case 0x07:

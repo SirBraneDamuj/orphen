@@ -510,7 +510,12 @@ namespace orphen::ported::battle
       tables_.write<std::uint8_t>(recordBase + record::kSpellByte14 + static_cast<std::uint32_t>(slot),
                                   record->byte07);
       tables_.write<std::uint16_t>(blockCursor, element.mask);
-      tables_.write<std::uint8_t>(blockCursor + 2, element.power);
+      // The one place --spell-power-scale applies. Off (1.0) by default; the
+      // byte is what it is in the item record then, and this is a plain write.
+      const float scaled = static_cast<float>(element.power) * debugSpellPowerScale_;
+      const auto power = static_cast<std::uint8_t>(
+          scaled < 0.0f ? 0.0f : (scaled > 255.0f ? 255.0f : scaled));
+      tables_.write<std::uint8_t>(blockCursor + 2, power);
       tables_.write<std::uint8_t>(blockCursor + 3, record->byte08);
       blockCursor += 4;
     }

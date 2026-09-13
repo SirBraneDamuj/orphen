@@ -21,6 +21,13 @@ namespace orphen::ported::text
     constexpr std::uint32_t kGateMaskText = 0x6000;
     constexpr std::uint32_t kGateBitRecordEnded = 0x2000;
 
+    // FUN_00239178. It is the RETURN from a 0x10 call first and the end of the
+    // record only at the outermost level -- see the call stack in
+    // FUN_00237b38_start.
+    constexpr std::uint8_t kControlReturn = 0x00;
+    // LAB_00239548, the CALL: a signed 32-bit displacement from the byte after
+    // the opcode, five bytes in all.
+    constexpr std::uint8_t kControlCall = 0x10;
     constexpr std::uint8_t kControlTerminate = 0x02;   // LAB_00239328
     constexpr std::uint8_t kControlSpeaker = 0x13;     // FUN_00239760
     constexpr std::uint8_t kControlArmVoice = 0x16;    // LAB_00239990
@@ -56,8 +63,24 @@ namespace orphen::ported::text
     // Without the cap one such record printed a kilobyte of the code segment
     // read as ASCII.
     constexpr std::size_t kMaxRecordBytes = 512;
-    const std::size_t end = std::min<std::size_t>(
+    std::size_t end = std::min<std::size_t>(
         {static_cast<std::size_t>(recordEnd), blob.size(), recordBegin + kMaxRecordBytes});
+
+    // LAB_00239548's call stack, the same eight frames DialogueWindow keeps.
+    // This pre-scan has to follow a 0x10 as well, and for a second reason: the
+    // 0x16/0x18 pair that names the clip a record waits on can live inside the
+    // *called* record, and s14_e031's two narrator lines are exactly that --
+    // nothing but a chain of voice codes behind a call, with no glyphs at all.
+    // Without following it the hold falls back to an estimate and the line
+    // comes out as the displacement bytes read as ASCII.
+    constexpr std::size_t kCallDepth = 8;
+    struct ScanFrame
+    {
+      std::size_t at = 0;
+      std::size_t end = 0;
+    };
+    std::array<ScanFrame, kCallDepth> callStack{};
+    std::size_t callDepth = kCallDepth;
 
     if (recordBegin < blob.size())
     {
@@ -103,13 +126,87 @@ namespace orphen::ported::text
 
         switch (byte)
         {
-        case kControlTerminate:
+        case kControlReturn:
+          // FUN_00239178 returns before it ends: a frame on the stack pops and
+          // the scan carries on behind the call. At the outermost level it is
+          // the end of the record.
+          if (callDepth < kCallDepth)
+          {
+            at = callStack[callDepth].at;
+            end = callStack[callDepth].end;
+            ++callDepth;
+            continue;
+          }
           at = end;
           continue;
 
+        case kControlTerminate:
+          // LAB_00239328 is the hard close and does not unwind.
+          at = end;
+          continue;
+
+        case kControlCall:
+        {
+          // LAB_00239548. A signed 32-bit displacement from the byte after the
+          // opcode; the return address is five past it.
+          if (at + 5 > blob.size() || callDepth == 0)
+          {
+            break;
+          }
+          const std::uint32_t displacement =
+              static_cast<std::uint32_t>(blob[at + 1]) |
+              (static_cast<std::uint32_t>(blob[at + 2]) << 8) |
+              (static_cast<std::uint32_t>(blob[at + 3]) << 16) |
+              (static_cast<std::uint32_t>(blob[at + 4]) << 24);
+          const std::size_t target =
+              static_cast<std::size_t>(static_cast<std::uint32_t>(at + 1) + displacement);
+          if (target >= blob.size())
+          {
+            break;
+          }
+          --callDepth;
+          callStack[callDepth] = ScanFrame{at + 5, end};
+          at = target;
+          end = std::min<std::size_t>(blob.size(), target + kMaxRecordBytes);
+          continue;
+        }
+
         case kControlSpeaker:
+        {
+          // FUN_00239760 consumes the name **itself** -- a recursive
+          // FUN_00237DE8 loop that stops on a 0x00 and then steps past it -- so
+          // the outer walk never sees that terminator. Doing the same here is
+          // what lets the 0x00 below keep its real meaning: return from a 0x10
+          // call, or end the record. Treating a name's terminator as the end of
+          // the record swallowed every line in s01_e012's opening.
+          ++at;
+          std::string name;
+          while (at < end && blob[at] != kControlReturn)
+          {
+            const std::uint8_t glyph = blob[at];
+            if (glyph >= kFirstTextByte)
+            {
+              if (printable(glyph))
+              {
+                name.push_back(static_cast<char>(glyph));
+              }
+              ++at;
+              continue;
+            }
+            at += controlWidth(glyph);
+          }
+          if (at < end)
+          {
+            ++at;
+          }
           sawSpeakerCode = true;
-          break;
+          if (!name.empty())
+          {
+            speaker_ = name;
+            speakerTaken = true;
+          }
+          continue;
+        }
 
         case kControlArmVoice:
           // FUN_00206ae0(id, channel, wait): cache the clip against the

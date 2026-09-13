@@ -371,6 +371,14 @@ namespace orphen::ported::battle
     std::int32_t entitySlotAt(std::uint32_t address) const;
     void setEntitySlotAt(std::uint32_t address, std::int32_t slot);
 
+    // **A debug cheat, not a ported behaviour.** --spell-power-scale multiplies
+    // the power byte FUN_002432d8:145 writes into the player's element block,
+    // so a test run can get through a boss without playing the whole fight. 1.0
+    // is the shipped value and the only one a fidelity run may use; the scale
+    // touches member 0 only, and the item record itself is left alone.
+    void setDebugSpellPowerScale(float scale) { debugSpellPowerScale_ = scale; }
+    float debugSpellPowerScale() const { return debugSpellPowerScale_; }
+
   private:
     // FUN_002432d8:67-150. Member 0, the player: its loadout row comes from
     // party record 0's class and its masks are written at DAT_00354ebe - 1.
@@ -400,6 +408,7 @@ namespace orphen::ported::battle
     std::int16_t DAT_00354ebc_ = 0;
     // sGpffffaf4e = DAT_00354ebe: which member the player drives, 1-based.
     std::int16_t DAT_00354ebe_ = 1;
+    float debugSpellPowerScale_ = 1.0f;
     // cGpffffaf4a / DAT_00354eba and iGpffffaf44 / DAT_00354eb4 -- the actor
     // table -- moved to BattleEncounter, because they are loaded out of the
     // scene script rather than out of the executable and have to be reloaded

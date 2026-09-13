@@ -48,6 +48,17 @@ namespace orphen::ported::entity
                                    const ActorEnvironment &environment,
                                    ActorTrace &trace);
 
+  // FUN_00257C78 on its own. The follower is not its only caller: **script
+  // opcode 0x67** (FUN_0025FA40) turns any selected entity's head and bust
+  // toward a world point, with its own override duration rather than the
+  // follower's fixed ten frames.
+  int FUN_00257c78_look_at_entity(OriginalEntity &entity,
+                                  const ActorEnvironment &environment,
+                                  std::size_t slot,
+                                  float targetX,
+                                  float targetZ,
+                                  int overrideFrames);
+
   // PTR_FUN_0031e1a0, the eleven state handlers. Exposed so the trace can name
   // the one it could not run.
   inline constexpr std::uint32_t kPTR_FUN_0031e1a0_followerStates = 0x0031E1A0;

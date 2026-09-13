@@ -243,11 +243,16 @@ namespace orphen::ported::entity
     //
     // Only the caller's `!= 0` matters: state 1 stops and turns in place when
     // this answers 0.
+    // `overrideFrames` is FUN_00257C78's own fourth argument, forwarded
+    // straight to FUN_0020D8C0. The follower path passes 10; **script opcode
+    // 0x67 passes its sixth expression**, so it is not the constant it looks
+    // like from inside this file.
     int FUN_00257c78_look_at(OriginalEntity &entity,
                              const ActorEnvironment &environment,
                              std::size_t slot,
                              float targetX,
-                             float targetZ)
+                             float targetZ,
+                             int overrideFrames)
     {
       const float dx = targetX - entity.positionX20;
       const float dz = targetZ - entity.positionZ24;
@@ -282,9 +287,9 @@ namespace orphen::ported::entity
         bustPose[kYawField] = delta;
         headPose[kYawField] = delta * kfGpffff8a78_bustShare;
         orphen::ported::model::FUN_0020d8c0_set_bone_override(*state, bustBone, bustPose,
-                                                              kLookOverrideFrames);
+                                                              overrideFrames);
         orphen::ported::model::FUN_0020d8c0_set_bone_override(*state, headBone, headPose,
-                                                              kLookOverrideFrames);
+                                                              overrideFrames);
         return 1;
       }
 
@@ -304,13 +309,13 @@ namespace orphen::ported::entity
           twist != 0.0f)
       {
         orphen::ported::model::FUN_0020d8c0_set_bone_override(*state, bustBone, bustPose,
-                                                              kLookOverrideFrames);
+                                                              overrideFrames);
       }
       if (orphen::ported::model::FUN_0020d968_bone_override_status(*state, headBone) != 0 &&
           twist != 0.0f)
       {
         orphen::ported::model::FUN_0020d8c0_set_bone_override(*state, headBone, headPose,
-                                                              kLookOverrideFrames);
+                                                              overrideFrames);
       }
       return 0;
     }
@@ -1059,7 +1064,7 @@ namespace orphen::ported::entity
         {
           if (FUN_00257f18_look_idle(environment, slot) &&
               FUN_00257c78_look_at(entity, environment, slot, lead.positionX20,
-                                   lead.positionZ24) == 0)
+                                   lead.positionZ24, kLookOverrideFrames) == 0)
           {
             // Too far round to twist to. Unwind both bones over ten frames and
             // turn the whole body instead: +0x1AC becomes the turn rate state 3
@@ -1380,6 +1385,16 @@ namespace orphen::ported::entity
       entity.desiredDeltaZ34 += step * std::sin(facing);
     }
   } // namespace
+
+  int FUN_00257c78_look_at_entity(OriginalEntity &entity,
+                                  const ActorEnvironment &environment,
+                                  std::size_t slot,
+                                  float targetX,
+                                  float targetZ,
+                                  int overrideFrames)
+  {
+    return FUN_00257c78_look_at(entity, environment, slot, targetX, targetZ, overrideFrames);
+  }
 
   void FUN_00258ab8_party_follower(OriginalEntity &entity,
                                    const ActorEnvironment &environment,

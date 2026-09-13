@@ -221,6 +221,37 @@ namespace orphen::ported::script
     return &environment_.entityPool->slot(index);
   }
 
+  // FUN_0025D6C0 with the **caller's saved current entity** as the 0x100
+  // fallback, which is how every original that takes a selector spells it:
+  //
+  //     uVar1 = DAT_00355044;          // saved before anything is evaluated
+  //     FUN_0025c258(&selector);
+  //     FUN_0025c258(&operand);        // may itself select something else
+  //     FUN_0025d6c0(selector, uVar1); // 0x100 means uVar1, not "whatever is
+  //                                    // current now"
+  //
+  // An operand expression can contain a statement opcode that re-selects, and
+  // several do. s14_e001's victory pose is the case that exposed it: opcode
+  // 0x55 places the close-up rig at three 0x53 reads of the *player's*
+  // position, and each 0x53 selects the player. Resolving 0x100 afterwards put
+  // the rig's pose on pool slot 0 and left the rig at the origin, off camera,
+  // with no Orphen anywhere in the shot.
+  orphen::ported::entity::OriginalEntity *
+  SceneCommandInterpreter::resolveEntityFrom(std::uint32_t index, std::size_t savedCurrent)
+  {
+    if (index != orphen::ported::entity::kCurrentEntityIndex)
+    {
+      return resolveEntity(index);
+    }
+    if (environment_.entityPool == nullptr ||
+        savedCurrent >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return nullptr;
+    }
+    currentEntity_ = savedCurrent;
+    return &environment_.entityPool->slot(savedCurrent);
+  }
+
   // 0x01 (FUN_0025bdd0): take the branch when the expression is zero, otherwise
   // step over the four-byte offset.
   void SceneCommandInterpreter::FUN_0025bdd0_conditional_jump()
@@ -1119,6 +1150,11 @@ namespace orphen::ported::script
 
     auto &state = *environment_.state;
     const bool before = state.FUN_00266368_eventFlag(flagId);
+    if (trace_.tracingCurrentOpcode())
+    {
+      std::cout << "[scr]   flag id " << flagId << " (0x" << std::hex << flagId << std::dec
+                << ") was " << (before ? 1 : 0) << "\n";
+    }
 
     switch (opcode)
     {
@@ -1164,6 +1200,7 @@ namespace orphen::ported::script
     // for exactly this reason. Reading it afterwards made this handler fall
     // through its switch and silently do nothing.
     const std::uint16_t opcode = currentOpcode_;
+    const std::size_t savedCurrent = currentEntity_;
     const std::uint32_t selector = FUN_0025c258_evaluate();
     const std::uint32_t registerIndex = FUN_0025c258_evaluate();
     const std::uint32_t operand = FUN_0025c258_evaluate();
@@ -1173,12 +1210,11 @@ namespace orphen::ported::script
     }
 
     // FUN_0025d6c0 selects the object the register writes go through. Index
-    // 0x100 keeps whatever was already current.
+    // 0x100 keeps whatever was current **when the opcode started** -- see
+    // resolveEntityFrom; the original saves DAT_00355044 in its first
+    // instruction for exactly this reason.
     std::size_t bank = SceneScriptState::kObjectRegisterBanks - 1;
-    if (selector != orphen::ported::entity::kCurrentEntityIndex)
-    {
-      resolveEntity(selector);
-    }
+    resolveEntityFrom(selector, savedCurrent);
     if (currentEntity_ < orphen::ported::entity::kEntitySlotCount)
     {
       bank = currentEntity_;
@@ -1245,6 +1281,7 @@ namespace orphen::ported::script
   // the value comes back from a tail call into FUN_0025c548 in $v0.
   std::uint32_t SceneCommandInterpreter::FUN_00260318_read_object_register()
   {
+    const std::size_t savedCurrent = currentEntity_;
     const std::uint32_t selector = FUN_0025c258_evaluate();
     const std::uint32_t registerIndex = FUN_0025c258_evaluate();
     if (halted_)
@@ -1253,10 +1290,7 @@ namespace orphen::ported::script
     }
 
     std::size_t bank = SceneScriptState::kObjectRegisterBanks - 1;
-    if (selector != orphen::ported::entity::kCurrentEntityIndex)
-    {
-      resolveEntity(selector);
-    }
+    resolveEntityFrom(selector, savedCurrent);
     if (currentEntity_ < orphen::ported::entity::kEntitySlotCount)
     {
       bank = currentEntity_;
@@ -2951,16 +2985,14 @@ namespace orphen::ported::script
   // else returns zero rather than reading past the triple.
   std::uint32_t SceneCommandInterpreter::FUN_0025ee08_read_position()
   {
+    const std::size_t savedCurrent = currentEntity_;
     const std::uint32_t selector = FUN_0025c258_evaluate();
     const std::uint32_t axis = FUN_0025c258_evaluate();
     if (halted_)
     {
       return 0;
     }
-    if (selector != orphen::ported::entity::kCurrentEntityIndex)
-    {
-      resolveEntity(selector);
-    }
+    resolveEntityFrom(selector, savedCurrent);
     if (currentEntity_ >= orphen::ported::entity::kEntitySlotCount || environment_.entityPool == nullptr)
     {
       return 0;
@@ -3578,6 +3610,11 @@ namespace orphen::ported::script
   {
     const bool sampleTerrain = (currentOpcode_ == 0x55);
 
+    // The original works out the target *before* the three coordinates are
+    // evaluated -- `puVar1 = puGpffffb0d4` on the line after the selector, then
+    // the loop, then `puGpffffb0d4 = puVar1` -- because the coordinates are
+    // expressions and can select something else on the way through.
+    const std::size_t savedCurrent = currentEntity_;
     const std::uint32_t index = FUN_0025c258_evaluate();
     const float x = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
     const float y = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
@@ -3587,7 +3624,7 @@ namespace orphen::ported::script
       return;
     }
 
-    auto *entity = resolveEntity(index);
+    auto *entity = resolveEntityFrom(index, savedCurrent);
     if (entity == nullptr)
     {
       return;
@@ -4103,6 +4140,42 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return FUN_002610a8_request_scene_change();
 
+    // 0x8C (FUN_00260F78): six expressions -- section, entry, flags, then the
+    // spawn x/y/z scaled by fGpffff8cb8, which is the same 100000 every other
+    // coordinate uses. Two of the flag bits act before the request is made:
+    // 0x200000 runs FUN_0025D610 and 0x02 arms the fade-out and sets the lead's
+    // +0x58BF10 to 10. The port arms the fade -- the scene-change service
+    // already waits on bit 2 -- and does neither of the other two.
+    //
+    // The original gates the whole thing on iGpffffb27c, a "a mode transition
+    // is already running" latch that only the game-over path raises; the port
+    // has no such path, so the gate is always open.
+    case 0x8C:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const auto section = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const auto entry = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::uint32_t flags = FUN_0025c258_evaluate();
+      const float spawnX = scaledOperand();
+      const float spawnY = scaledOperand();
+      const float spawnZ = scaledOperand();
+      if (halted_)
+      {
+        return 0;
+      }
+      if ((flags & 2u) != 0 && environment_.DAT_00571dc0_screenFade != nullptr)
+      {
+        environment_.DAT_00571dc0_screenFade->FUN_0025d1c0_arm(true, 0xC, 0x000000);
+      }
+      trace_.recordSceneChange(entry);
+      if (environment_.FUN_0022b2c0_request_map_change)
+      {
+        environment_.FUN_0022b2c0_request_map_change(
+            section, entry, flags, orphen::ported::psm2::Vec3{spawnX, spawnY, spawnZ});
+      }
+      return 0;
+    }
+
 
 
     case 0x64:
@@ -4199,6 +4272,63 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       FUN_00263c58_set_entity_short_and_word();
       return 0;
+
+    // 0xB5 (FUN_00263b18): three expressions -- an object selector, a bone
+    // index, and a **work-memory index**, which the original asserts is 3..0x82.
+    // It bakes that bone's world origin into three consecutive work words,
+    // scaled by fGpffff8d40 (0x00352CB0, 100000.0) and truncated the way the
+    // EE's FPU does.
+    //
+    // `iGpffffb0f0` and `DAT_00355060` are the same pointer: FUN_00242C40 spells
+    // the battle's script variable 25 as `*(int *)(iGpffffb0f0 + 100)`, which is
+    // work[25]. So this writes the same array 0x36/0x37 read and write, and a
+    // script can sample a bone and then do arithmetic on the result.
+    //
+    // The local point handed to FUN_0020DC88 is a zeroed 0x20-byte block, so the
+    // sample is the bone origin itself, not an offset from it.
+    case 0xB5:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedCurrent = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      const auto bone = static_cast<int>(FUN_0025c258_evaluate());
+      const auto workIndex = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      // `uVar2 = uGpffffb0d4` in the original's first instruction, handed to
+      // FUN_0025D6C0 after the three expressions.
+      auto *entity = resolveEntityFrom(selector, savedCurrent);
+      if (entity == nullptr || !environment_.FUN_0020dc88_bone_point ||
+          currentEntity_ >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return 0;
+      }
+      const auto world = environment_.FUN_0020dc88_bone_point(currentEntity_, bone,
+                                                              orphen::ported::psm2::Vec3{0.0f, 0.0f,
+                                                                                         0.0f});
+      if (!world.has_value())
+      {
+        return 0;
+      }
+      // Three consecutive words; the original range-checks the base only, so a
+      // base of 0x82 would run one word past the array. The port clamps instead
+      // of writing out of bounds.
+      const float axis[3] = {world->x, world->y, world->z};
+      SceneScriptState &state = *environment_.state;
+      for (std::int32_t lane = 0; lane < 3; ++lane)
+      {
+        const std::int32_t at = workIndex + lane;
+        if (at < 0 || static_cast<std::size_t>(at) >= SceneScriptState::kWorkWordCount)
+        {
+          continue;
+        }
+        state.DAT_00355060_work[static_cast<std::size_t>(at)] = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(axis[lane] * kFGpffff8d40_boneSampleScale));
+      }
+      return 0;
+    }
 
     case 0x6D:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -4748,6 +4878,18 @@ namespace orphen::ported::script
         }
         return environment_.FUN_002443f8_start_path(currentEntity_, waypoints, arg4);
       }
+      // 0x77 -> FUN_00244CA0(entity, channel, clip): two lines of wrapper over
+      // FUN_00206F08, the same bank-directory read the battle module's spell
+      // lines use. The selected entity is not touched -- the original takes it
+      // as param_1 and never looks at it. s14_e001's post-victory ladder uses
+      // this for the line that narrates the new spell.
+      case 0x77:
+        if (environment_.FUN_00206f08_play_voice)
+        {
+          environment_.FUN_00206f08_play_voice(arg3, arg4);
+        }
+        return 0;
+
       case 0x72:
         // FUN_002445c8. Non-zero while walking; 0 once the follower slot is
         // released, which is the value the script's wait subproc spins for.
@@ -4770,6 +4912,41 @@ namespace orphen::ported::script
       FUN_0025c258_evaluate();
       readU8();
       FUN_0025c258_evaluate();
+      return 0;
+    }
+
+    // 0x67 (FUN_0025FA40): six expressions, of which the call uses four. The
+    // first is the selector, the second and third the world x and y scaled by
+    // fGpffff8c70 (100000, like every other coordinate), and the sixth the
+    // bone-override duration. The fourth and fifth are read into the frame and
+    // never passed on -- the original evaluates them and drops them.
+    //
+    // s14_e001 issues one of these on the way back from the spell scene, which
+    // is the beat where Cleo and Magnus speak.
+    case 0x67:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedCurrent = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      const float targetX = scaledOperand();
+      const float targetZ = scaledOperand();
+      FUN_0025c258_evaluate();
+      FUN_0025c258_evaluate();
+      const auto overrideFrames =
+          static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      if (halted_)
+      {
+        return 0;
+      }
+      // `uVar1 = uGpffffb0d4` on the first line, handed to FUN_0025D6C0 after
+      // every expression -- the same save-and-restore every selector opcode
+      // does, and the reason resolveEntityFrom exists.
+      resolveEntityFrom(selector, savedCurrent);
+      if (currentEntity_ < orphen::ported::entity::kEntitySlotCount &&
+          environment_.FUN_00257c78_look_at)
+      {
+        environment_.FUN_00257c78_look_at(currentEntity_, targetX, targetZ, overrideFrames);
+      }
       return 0;
     }
 
@@ -5027,6 +5204,154 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0x10D (FUN_002629C0): nine expressions into FUN_0021E088, the spray
+    // pool. The read order and the call order are not the same -- the count is
+    // read first but passed fifth, and the rise is read second but passed
+    // first. FUN_002629C0 builds its frame as `&slot | 4`, `| 8`, `| 0xC`,
+    // which is the same four consecutive words an ordinary `&x, &x+1` would
+    // give, so the stream order is simply: count, rise, speedRange, lifeUnit,
+    // x, y, z, mode, colour.
+    case 0x10D:
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptSprayBurst burst;
+      burst.count = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.rise = scaledOperand();
+      burst.speedRange = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.lifeUnit = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.mode = static_cast<std::int8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      // The ninth expression reaches FUN_0021E088 in t0, a general register --
+      // it is a packed RGB, not a number that was ever converted to float.
+      burst.colour = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0021e088_spawn_spray)
+      {
+        environment_.FUN_0021e088_spawn_spray(burst);
+      }
+      return 0;
+    }
+
+    // 0x10F (FUN_00262B90): fourteen expressions into FUN_0021ED50, the
+    // fountain pool. Read order and call order differ again -- the count is
+    // read first and passed in a0, and the tenth expression is the base z,
+    // which is the one float that spills past f19 onto the stack.
+    case 0x10F:
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptFountainBurst burst;
+      burst.count = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      burst.rise = scaledOperand();
+      burst.fall = scaledOperand();
+      burst.drift = scaledOperand();
+      burst.speedRange = scaledOperand();
+      burst.zJitterRange = scaledOperand();
+      burst.size = scaledOperand();
+      burst.lifeUnit = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.loop = static_cast<std::uint8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      burst.cameraRelative = static_cast<std::int8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      burst.colour = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0021ed50_spawn_fountain)
+      {
+        environment_.FUN_0021ed50_spawn_fountain(burst);
+      }
+      return 0;
+    }
+
+    // 0x112 (FUN_00262D88) and 0x113 (FUN_00262DB0): one expression each,
+    // stored straight into a particle pool's gate word.
+    //
+    //   0x112 -> uGpffffad50 = DAT_00354CC0, the DAT_00355B60 fountain's gate
+    //   0x113 -> uGpffffad54 = DAT_00354CC4, the DAT_00355B6C emitters' gate
+    //
+    // The second pool is not ported (see the eight-pools note), so 0x113 keeps
+    // the value where a report can see it and does nothing else. Both are plain
+    // stores with no bounds test at all in the original.
+    case 0x112:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t value = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00262d88_set_fountain_gate)
+      {
+        environment_.FUN_00262d88_set_fountain_gate(value);
+      }
+      return 0;
+    }
+    case 0x113:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t value = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.state != nullptr)
+      {
+        environment_.state->DAT_00354cc4_emitterGate = value;
+      }
+      return 0;
+    }
+
+    // 0x114 (FUN_00262DD8): eleven expressions into FUN_00220F70.
+    case 0x114:
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptGatherBurst burst;
+      burst.count = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      burst.x = scaledOperand();
+      burst.y = scaledOperand();
+      burst.z = scaledOperand();
+      burst.speed = scaledOperand();
+      burst.radiusRange = scaledOperand();
+      burst.yaw = scaledOperand();
+      burst.pitch = scaledOperand();
+      burst.spread = scaledOperand();
+      burst.size = scaledOperand();
+      burst.colour = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00220f70_spawn_gather)
+      {
+        environment_.FUN_00220f70_spawn_gather(burst);
+      }
+      return 0;
+    }
+
+    // 0x115 (FUN_00262F10): one expression, the low byte of which is the group
+    // to release. Negative releases every group.
+    case 0x115:
+    {
+      note(OpcodeSupport::Modelled);
+      const auto group = static_cast<std::int8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_002218f0_release_gather)
+      {
+        environment_.FUN_002218f0_release_gather(group);
+      }
+      return 0;
+    }
+
     // 0x129 (FUN_00261500): slot, then fader, into FUN_00205d90 -- start a
     // sequence the scene already loaded into that slot. s01_e012 issues one of
     // these, `(6, 1000)`, which is the piece under Sephy's scene.
@@ -5075,18 +5400,91 @@ namespace orphen::ported::script
 
     case 0x12C:
     case 0x12D:
+    // 0x132 / 0x133 (FUN_00261700 / FUN_00261760): one expression -- the
+    // channel, which the original asserts is 0..2 -- then an **inline u32**
+    // VOICE.BIN entry id read straight off the stream, into
+    // FUN_00206AE0(id, channel, mode). The two differ only in that third
+    // argument, the "block until the bank is in" flag. Nothing streams
+    // asynchronously here (the bank is read off the disc image on demand), so
+    // both arm the channel the same way and 0x134 always answers idle.
+    case 0x132:
+    case 0x133:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t channel = FUN_0025c258_evaluate();
+      const std::uint32_t bankId = FUN_0025c1d0_readStreamU32();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00206ae0_cache_voice)
+      {
+        environment_.FUN_00206ae0_cache_voice(bankId, channel);
+      }
+      return 0;
+    }
+
+    // 0x135 (FUN_002617E0) and 0x136 (FUN_00261808): start the entry cached on
+    // the channel. 0x136 takes a second expression first -- a 0..255 volume the
+    // original reduces by hand rather than masking -- and parks it in
+    // uGpffffb667 (0x003555D7, which boots at 0x80) beside the two bytes
+    // opcodes 0x130 and 0x131 write. Nothing in the port reads that byte yet, so
+    // it is evaluated and named rather than applied.
+    case 0x135:
+    case 0x136:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t channel = FUN_0025c258_evaluate();
+      if (opcode == 0x136)
+      {
+        const auto volume = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+        // `iVar1 + 0xff` when negative, then `- (iVar1 >> 8) * 0x100`: a
+        // truncating-toward-zero modulo 256, not a mask.
+        const std::int32_t rounded = volume < 0 ? volume + 0xFF : volume;
+        DAT_003555d7_voiceVolume_ = static_cast<std::uint8_t>(volume - (rounded >> 8) * 0x100);
+      }
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00206d98_play_voice)
+      {
+        environment_.FUN_00206d98_play_voice(channel);
+      }
+      return 0;
+    }
+
+    // 0x137 (FUN_00261868): one expression, evaluated and thrown away, then
+    // FUN_00206A90 with no arguments -- and **its result is the opcode's**,
+    // which is the whole point. The handler used to consume the operand and
+    // return 0, so a script waiting for the line to end read "nothing playing"
+    // on the first poll and walked straight past it.
     case 0x137:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      note(OpcodeSupport::Modelled);
+      FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      return environment_.FUN_00206a90_voice_busy && environment_.FUN_00206a90_voice_busy() ? 1u
+                                                                                           : 0u;
+    }
 
     case 0x12E:
     case 0x12F:
       note(OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 2);
 
+    // 0x134 (FUN_002617C0): no operands, and the **return value is the point**
+    // -- FUN_00206C28 answers 1 once no bank load is in flight. Returning 0 the
+    // way `consumeOnly` did reads as "still loading", which parks any ladder
+    // that waits on it.
     case 0x134:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 0);
+      note(OpcodeSupport::Modelled);
+      return environment_.FUN_00206c28_voice_load_idle && environment_.FUN_00206c28_voice_load_idle()
+                 ? 1u
+                 : 0u;
 
     case 0x149:
       note(OpcodeSupport::Modelled);

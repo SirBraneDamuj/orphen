@@ -145,6 +145,9 @@ target_sources(orphen_port
     src/ported/entity/original_swarm_crab.cpp
     src/ported/entity/original_bubble_effect.cpp
     src/ported/entity/original_dust_pool.cpp
+    src/ported/entity/original_spray_particles.cpp
+    src/ported/entity/original_fountain_particles.cpp
+    src/ported/entity/original_gather_particles.cpp
     src/ported/entity/original_water_splash.cpp
     src/ported/entity/original_enemy_attack.cpp
     src/ported/entity/original_health_bar.cpp

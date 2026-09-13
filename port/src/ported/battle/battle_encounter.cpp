@@ -768,6 +768,328 @@ namespace orphen::ported::battle
         continue;
       }
 
+      case 4:
+      {
+        // FUN_00242188, **the ten-way utility opcode**. Its sub-op at +0x01
+        // picks the body, and the three ways it ends are all different:
+        //
+        //   pc += 8 / 0xC and return -1   the loop runs the next opcode now
+        //   pc += 8 / 0xC and return 0    the frame ends here
+        //   pc unmoved and return yield+1 the same instruction is retried next
+        //                                 frame -- LAB_00242440, the only
+        //                                 place in the function that parks
+        //
+        // Sub-ops 6..9 name the block they act on with a byte, and **zero means
+        // the block the VM is running on**; anything else goes through
+        // FUN_0023EBA0, which resolves ids below 10 to a control block and the
+        // rest to an actor record. Sub-ops 3 and 4 do not: they index the
+        // control blocks directly as `byte - 1`.
+        //
+        // s14_e031's master script is two of these and nothing else. At 0x19DC
+        // sub-op 6 ORs bit 2 into control block 1's +0x38, and at 0x19E0 -- an
+        // address the loop only reaches by jumping *into* the middle of that
+        // instruction, which this VM's scripts do routinely -- sub-op 0 asks
+        // FUN_00242C40 for camera mode 10 and parks until it is granted.
+        const std::int8_t sub = read<std::int8_t>(pc + 1);
+
+        // FUN_0023EBA0 plus the "zero means me" rule the four block sub-ops
+        // share. `member` >= 0 is a control block; otherwise `record` is a
+        // record offset, and 0 means the master pseudo-record, which the port
+        // models as loose fields rather than as memory.
+        struct Resolved
+        {
+          std::int32_t member = -1;
+          std::uint32_t record = 0;
+          bool valid = false;
+        };
+        const auto resolve = [&](std::uint8_t id, bool includeDead) -> Resolved
+        {
+          Resolved found;
+          if (id == 0)
+          {
+            found.record = block.record;
+            found.valid = block.record != 0;
+            return found;
+          }
+          if (id < 10)
+          {
+            if (environment.FUN_0023eba0_find_control_block)
+            {
+              found.member = environment.FUN_0023eba0_find_control_block(id, includeDead);
+              found.valid = found.member >= 0;
+            }
+            return found;
+          }
+          found.record = FUN_0023eba0_find_record(id, includeDead);
+          found.valid = found.record != 0;
+          return found;
+        };
+        const auto readField = [&](const Resolved &at, std::uint32_t offset, int width) -> std::uint32_t
+        {
+          if (at.member >= 0)
+          {
+            return environment.DAT_0031d7b0_read
+                       ? environment.DAT_0031d7b0_read(at.member, offset, width)
+                       : 0u;
+          }
+          if (width == 1)
+          {
+            return read<std::uint8_t>(at.record + offset);
+          }
+          if (width == 2)
+          {
+            return read<std::uint16_t>(at.record + offset);
+          }
+          return read<std::uint32_t>(at.record + offset);
+        };
+        const auto writeField = [&](const Resolved &at, std::uint32_t offset, int width,
+                                    std::uint32_t value)
+        {
+          if (at.member >= 0)
+          {
+            if (environment.DAT_0031d7b0_write)
+            {
+              environment.DAT_0031d7b0_write(at.member, offset, width, value);
+            }
+            return;
+          }
+          if (width == 1)
+          {
+            write<std::uint8_t>(at.record + offset, static_cast<std::uint8_t>(value));
+          }
+          else if (width == 2)
+          {
+            write<std::uint16_t>(at.record + offset, static_cast<std::uint16_t>(value));
+          }
+          else
+          {
+            write<std::uint32_t>(at.record + offset, value);
+          }
+        };
+
+        if (sub == 0)
+        {
+          // FUN_00242C40(mode, delay), the same camera request opcode 12 makes.
+          // Granted means the next opcode runs immediately; refused parks on
+          // this instruction and tries again next frame.
+          const std::int16_t mode = read<std::int16_t>(pc + 4);
+          const std::int16_t delay = read<std::int16_t>(pc + 6);
+          if (FUN_00242c40_request_camera(mode, delay, environment, result) > 0)
+          {
+            block.pc = pc + 8;
+            continue;
+          }
+          yield = static_cast<std::int16_t>(block.yield + 1);
+          break;
+        }
+
+        if (sub == 1)
+        {
+          // Script-variable arithmetic. `+0x02` picks the operation and `+0x03`
+          // the destination index; note the immediate form writes the index at
+          // +0x04 and the three-address forms write the one at +0x03.
+          const std::int8_t op = read<std::int8_t>(pc + 2);
+          const std::uint32_t left = read<std::uint16_t>(pc + 4);
+          const std::uint32_t right = read<std::uint16_t>(pc + 6);
+          const auto var = [&](std::uint32_t index) -> std::int32_t
+          {
+            return index < environment.scriptVarCount
+                       ? static_cast<std::int32_t>(environment.scriptVars[index])
+                       : 0;
+          };
+          const auto setVar = [&](std::uint32_t index, std::int32_t value)
+          {
+            if (index < environment.scriptVarCount)
+            {
+              environment.scriptVars[index] = static_cast<std::uint32_t>(value);
+            }
+          };
+          if (op == 0)
+          {
+            setVar(left, static_cast<std::int32_t>(right));
+          }
+          else
+          {
+            const std::uint32_t destination = read<std::uint8_t>(pc + 3);
+            if (op == 1)
+            {
+              setVar(destination, var(left) + var(right));
+            }
+            else if (op == 2)
+            {
+              setVar(destination, var(left) - var(right));
+            }
+            else if (op == 3)
+            {
+              setVar(destination, var(left) * var(right));
+            }
+            else if (op == 4 && var(right) != 0)
+            {
+              // The original traps on a zero divisor rather than guarding it.
+              setVar(destination, var(left) / var(right));
+            }
+          }
+          block.pc = pc + 8;
+          continue;
+        }
+
+        if (sub == 2)
+        {
+          // Send every bound record somewhere: request action 8 and set the
+          // home spot at +0x14. `+0x02` chooses between the three halfwords the
+          // instruction carries and the record's own +0x26..+0x2A, and it also
+          // decides whether the instruction is eight bytes or twelve.
+          const bool useOwnSpot = read<std::int8_t>(pc + 2) != 0;
+          const std::int32_t count = DAT_00354eba_actorCount();
+          for (std::int32_t index = 0; index < count; ++index)
+          {
+            const std::uint32_t record = actorArray_ + static_cast<std::uint32_t>(index) *
+                                                           kActorRecordStride;
+            if (read<std::int32_t>(record + actor::kEntity08) == 0)
+            {
+              continue;
+            }
+            write<std::uint8_t>(record + actor::kPendingAction0e, 8);
+            if (useOwnSpot)
+            {
+              write<std::uint16_t>(record + actor::kSpawnX14,
+                                   read<std::uint16_t>(record + 0x26));
+              write<std::uint16_t>(record + actor::kSpawnZ18,
+                                   read<std::uint16_t>(record + 0x2A));
+              write<std::uint16_t>(record + actor::kSpawnY16,
+                                   read<std::uint16_t>(record + 0x28));
+            }
+            else
+            {
+              write<std::uint16_t>(record + actor::kSpawnX14, read<std::uint16_t>(pc + 4));
+              write<std::uint16_t>(record + actor::kSpawnY16, read<std::uint16_t>(pc + 6));
+              write<std::uint16_t>(record + actor::kSpawnZ18, read<std::uint16_t>(pc + 8));
+            }
+          }
+          block.pc = pc + (useOwnSpot ? 8u : 0xCu);
+          yield = 0;
+          break;
+        }
+
+        if (sub == 3 || sub == 4)
+        {
+          // Hand one party member an order, but **only while it is idle**: a
+          // pending action already in +0x0E parks the instruction instead of
+          // overwriting it, which is what keeps a scripted beat from cutting
+          // off the move the player just started. 0x81 is the order; bit 0x80
+          // is the "forced" flag the state machine strips.
+          const std::int32_t member = static_cast<std::int32_t>(read<std::uint8_t>(pc + 2)) - 1;
+          const std::uint32_t pending =
+              environment.DAT_0031d7b0_read
+                  ? environment.DAT_0031d7b0_read(member, control::kPendingAction0e, 1)
+                  : 0u;
+          if (pending == 0)
+          {
+            if (environment.DAT_0031d7b0_write)
+            {
+              environment.DAT_0031d7b0_write(member, control::kPendingAction0e, 1, 0x81);
+            }
+            if (sub == 4 && pool != nullptr && environment.DAT_0031d7b0_write)
+            {
+              // Sub-op 4 also aims it, by the same tag search opcode 13 uses.
+              // The 0x4000 is not a slot bias -- FUN_00249610 reads +0x2C's
+              // low bits as the slot and that bit as "the script chose this".
+              const std::int32_t slot =
+                  FUN_00248f18_find_by_tag(*pool, read<std::uint8_t>(pc + 6));
+              environment.DAT_0031d7b0_write(
+                  member, control::kTarget2c, 2,
+                  static_cast<std::uint16_t>(static_cast<std::int16_t>(slot + 0x4000)));
+            }
+            block.pc = pc + 8;
+            yield = block.yield;
+            break;
+          }
+          yield = static_cast<std::int16_t>(block.yield + 1);
+          break;
+        }
+
+        if (sub == 5)
+        {
+          // Twelve bytes, no effect. The operands are read by nothing.
+          block.pc = pc + 0xC;
+          continue;
+        }
+
+        if (sub == 6)
+        {
+          const Resolved at = resolve(read<std::uint8_t>(pc + 2), false);
+          if (at.valid && readField(at, control::kEntity08, 4) != 0)
+          {
+            const std::int8_t mode = read<std::int8_t>(pc + 3);
+            const std::uint32_t operand = read<std::uint32_t>(pc + 4);
+            std::uint32_t flags = readField(at, control::kFlags38, 4);
+            if (mode == 0)
+            {
+              flags |= operand;
+            }
+            else if (mode == 1)
+            {
+              flags &= operand;
+            }
+            else if (mode == 2)
+            {
+              flags = read<std::uint8_t>(pc + 4);
+            }
+            else if (mode == 4)
+            {
+              flags &= ~operand;
+            }
+            writeField(at, control::kFlags38, 4, flags);
+          }
+          block.pc = pc + 8;
+          continue;
+        }
+
+        if (sub == 7)
+        {
+          // Note the id byte is at +0x03 here and at +0x02 in every other
+          // block sub-op, and that this one passes `includeDead`.
+          const Resolved at = resolve(read<std::uint8_t>(pc + 3), true);
+          if (at.valid)
+          {
+            writeField(at, actor::kStat24, 1, read<std::uint8_t>(pc + 4));
+            writeField(at, actor::kStat25, 1, read<std::uint8_t>(pc + 6));
+          }
+          block.pc = pc + 8;
+          continue;
+        }
+
+        if (sub == 8 || sub == 9)
+        {
+          // The target preference ring. Sub-op 8 drops the current target
+          // (+0x2C = -1) and writes three entries; sub-op 9 clears it to zero
+          // and writes seven, and takes twelve bytes rather than eight.
+          const Resolved at = resolve(read<std::uint8_t>(pc + 2), true);
+          const int entries = (sub == 8) ? 3 : 7;
+          if (at.valid)
+          {
+            writeField(at, actor::kTarget2c, 2, (sub == 8) ? 0xFFFFu : 0u);
+            for (int entry = 0; entry < entries; ++entry)
+            {
+              // Sub-op 8's three bytes are +0x03, +0x04 and **+0x06** -- it
+              // skips +0x05 -- where sub-op 9's seven run straight through.
+              const std::uint32_t source =
+                  (sub == 8) ? pc + 3 + static_cast<std::uint32_t>(entry == 2 ? 3 : entry)
+                             : pc + 3 + static_cast<std::uint32_t>(entry);
+              writeField(at, actor::kRing1d + static_cast<std::uint32_t>(entry), 1,
+                         read<std::uint8_t>(source));
+            }
+          }
+          block.pc = pc + ((sub == 8) ? 8u : 0xCu);
+          continue;
+        }
+
+        // Sub-op 10 and up: the original returns the yield with the program
+        // counter untouched, so the script sits on the instruction forever.
+        yield = block.yield;
+        break;
+      }
+
       case 5:
       {
         // FUN_00242660. Sub-op 1 is the timer wait: the first visit returns
@@ -1325,6 +1647,53 @@ namespace orphen::ported::battle
 
 
   // FUN_00248f18: the pool slot whose +0x95 carries this id, or -1.
+  std::uint32_t BattleEncounter::FUN_0023eba0_find_record(std::uint16_t id,
+                                                          bool includeDead) const
+  {
+    if (actorArray_ == 0)
+    {
+      return 0;
+    }
+    const std::int32_t count = DAT_00354eba_actorCount();
+    for (std::int32_t index = 0; index < count; ++index)
+    {
+      const std::uint32_t record =
+          actorArray_ + static_cast<std::uint32_t>(index) * kActorRecordStride;
+      // An unbound record is skipped unless the caller asked for it. The
+      // original still reads its id byte in that case and only the *loop*
+      // differs, which is why a dead record can never match by accident.
+      if (read<std::int32_t>(record + actor::kEntity08) == 0 && !includeDead)
+      {
+        continue;
+      }
+      if (read<std::uint8_t>(record + actor::kId00) == static_cast<std::uint8_t>(id))
+      {
+        return record;
+      }
+    }
+    return 0;
+  }
+
+  std::int32_t BattleEncounter::FUN_00242c40_request_camera(std::int16_t mode,
+                                                            std::int16_t delay,
+                                                            const VmEnvironment &environment,
+                                                            VmStepResult &result) const
+  {
+    (void)delay;
+    if (mode < 1)
+    {
+      return -2;
+    }
+    if (environment.scriptVarCount > 25 &&
+        static_cast<std::int32_t>(environment.scriptVars[25]) < 1000)
+    {
+      environment.scriptVars[25] = static_cast<std::uint32_t>(mode);
+      result.cameraMode = mode;
+      return 1;
+    }
+    return -1;
+  }
+
   std::int32_t BattleEncounter::FUN_00248f18_find_by_tag(
       const orphen::ported::entity::EntityPool &pool, std::uint8_t id)
   {

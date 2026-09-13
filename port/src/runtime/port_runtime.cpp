@@ -1,5 +1,7 @@
 #include "runtime/port_runtime.h"
 
+#include "ported/entity/party_follower.h"
+
 
 #include "harness/flat_bin_archive.h"
 
@@ -267,12 +269,26 @@ namespace orphen::port
     printModelReport_ = config.printModelReport;
     hideSlots_ = config.hideSlots;
     snapshotFrame_ = config.snapshotFrame;
+    setWorkPending_ = config.hasSetWork;
+    setWorkIndex_ = config.setWorkIndex;
+    setWorkValue_ = config.setWorkValue;
+    setWorkFrame_ = config.setWorkFrame;
+    setEventFlagPending_ = config.hasSetEventFlag;
+    setEventFlagId_ = config.setEventFlagId;
+    setEventFlagFrame_ = config.setEventFlagFrame;
     armStreamPending_ = config.hasArmStream;
     armStreamOffset_ = config.armStreamOffset;
     armStreamFrame_ = config.armStreamFrame;
     if (config.hasScrTraceRange)
     {
       scriptTrace_.setTraceRange(config.scrTraceRangeLow, config.scrTraceRangeHigh);
+    }
+    if (config.spellPowerScale != 1.0f)
+    {
+      battleParty_.setDebugSpellPowerScale(config.spellPowerScale);
+      std::cout << "[battle] --spell-power-scale " << config.spellPowerScale
+                << ": the player's spell power is scaled. This is a cheat, not the"
+                   " shipped behaviour.\n";
     }
     loadExecutable(config);
 
@@ -1206,6 +1222,82 @@ namespace orphen::port
               static_cast<std::uint32_t>(member)) +
           orphen::ported::battle::control::kEntity08);
     };
+    // FUN_0023EBA0's control-block half, and the two accessors VM opcode 4
+    // needs to reach one. The id it matches is the block's own +0x00, not the
+    // member index, and a block with no entity is skipped unless the caller
+    // passes the original's second argument.
+    vm.FUN_0023eba0_find_control_block = [this](std::uint16_t id,
+                                                bool includeDead) -> std::int32_t {
+      const auto &tables = battleParty_.tables();
+      const std::int32_t count = battleParty_.DAT_00354ebc_memberCount();
+      for (std::int32_t member = 0; member < count &&
+                                    member < static_cast<std::int32_t>(
+                                                 orphen::ported::battle::kControlBlockCount);
+           ++member)
+      {
+        const std::uint32_t block = orphen::ported::battle::BattleTables::controlBlock(
+            static_cast<std::uint32_t>(member));
+        const bool bound =
+            tables.read<std::uint32_t>(block + orphen::ported::battle::control::kEntity08) != 0;
+        if (!bound && !includeDead)
+        {
+          continue;
+        }
+        if (tables.read<std::uint8_t>(block + orphen::ported::battle::control::kPartySlot00) ==
+            static_cast<std::uint8_t>(id))
+        {
+          return member;
+        }
+      }
+      return -1;
+    };
+    vm.DAT_0031d7b0_read = [this](std::int32_t member, std::uint32_t offset,
+                                  int width) -> std::uint32_t {
+      if (member < 0 ||
+          member >= static_cast<std::int32_t>(orphen::ported::battle::kControlBlockCount))
+      {
+        return 0;
+      }
+      const auto &tables = battleParty_.tables();
+      const std::uint32_t address =
+          orphen::ported::battle::BattleTables::controlBlock(
+              static_cast<std::uint32_t>(member)) +
+          offset;
+      if (width == 1)
+      {
+        return tables.read<std::uint8_t>(address);
+      }
+      if (width == 2)
+      {
+        return tables.read<std::uint16_t>(address);
+      }
+      return tables.read<std::uint32_t>(address);
+    };
+    vm.DAT_0031d7b0_write = [this](std::int32_t member, std::uint32_t offset, int width,
+                                   std::uint32_t value) {
+      if (member < 0 ||
+          member >= static_cast<std::int32_t>(orphen::ported::battle::kControlBlockCount))
+      {
+        return;
+      }
+      auto &tables = battleParty_.tables();
+      const std::uint32_t address =
+          orphen::ported::battle::BattleTables::controlBlock(
+              static_cast<std::uint32_t>(member)) +
+          offset;
+      if (width == 1)
+      {
+        tables.write<std::uint8_t>(address, static_cast<std::uint8_t>(value));
+      }
+      else if (width == 2)
+      {
+        tables.write<std::uint16_t>(address, static_cast<std::uint16_t>(value));
+      }
+      else
+      {
+        tables.write<std::uint32_t>(address, value);
+      }
+    };
     // FUN_00244248's party half. The block is `DAT_0031D780 + slot *
     // 0x3C`, which is controlBlock(slot - 1) + 0x0C, so the pending and
     // current action bytes land on +0x0E and +0x0F exactly as they do on
@@ -1436,6 +1528,23 @@ namespace orphen::port
       DAT_003551ec_sceneRequest_ = 0x20001;
     };
 
+    // FUN_0022b2c0, opcode 0x8C. The map change names its destination outright
+    // rather than taking the group-E path 0x8E uses, so it writes the section
+    // and the entry and lets the flags carry bit 0x20000 -- or not.
+    environment.FUN_0022b2c0_request_map_change =
+        [this](std::int32_t section, std::int32_t entry, std::uint32_t flags,
+               const orphen::ported::psm2::Vec3 &spawn)
+    {
+      const auto &lead = entityPool_.leadPlayer();
+      DAT_0031e668_departurePosition_ = {lead.positionX20, lead.positionZ24, lead.positionY28};
+      DAT_00354d78_previousSection_ = DAT_003551f4_sceneSection_;
+      DAT_00354d7c_previousEntry_ = DAT_003551f0_sceneEntry_;
+      DAT_00325340_requestedSpawn_ = spawn;
+      DAT_003551f4_sceneSection_ = section;
+      DAT_003551f0_sceneEntry_ = entry;
+      DAT_003551ec_sceneRequest_ = flags | 1u;
+    };
+
     // FUN_0025daf8, opcode 0x3C. One assignment in the original; here it has to
     // reach both readers of DAT_00355208.
     environment.FUN_0025daf8_set_map_prop_bank = [this](std::int32_t bank)
@@ -1582,6 +1691,31 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
     };
 
+    // Opcodes 0x132..0x137, the script's voice channel. The same DAT_00356480
+    // cache and the same FUN_00206F08 read the battle module's spell lines go
+    // through, so a script line and a spell line cannot disagree about which
+    // bank is armed on a channel.
+    environment.FUN_00206ae0_cache_voice = [this](std::uint32_t bankId, std::uint32_t channel)
+    {
+      if (channel >= std::size(DAT_00356480_voiceBankCache_))
+      {
+        return false;
+      }
+      DAT_00356480_voiceBankCache_[channel] = bankId;
+      return true;
+    };
+    environment.FUN_00206c28_voice_load_idle = [] { return true; };
+    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
+    { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
+    environment.FUN_00206d98_play_voice = [this](std::uint32_t channel)
+    {
+      // FUN_00206D98 plays the *whole* cached entry. FUN_00206F08's directory
+      // read falls back to exactly that for clip 0 on an entry with no
+      // directory, which is what an ordinary narrated line is.
+      return FUN_00206f08_play_voice_clip(channel, 0);
+    };
+
     // FUN_0025b778's two debug lines. The gate byte travels with the
     // environment so the check stays where the original makes it.
     environment.DAT_003555dd_debugDisplay = DAT_003555dd_debugDisplay_;
@@ -1623,6 +1757,61 @@ namespace orphen::port
         DAT_00355a9c_dust_.FUN_00219d60_spawn_script_ring_coloured(
             burst.x, burst.y, burst.z, burst.size, burst.jitterX, burst.jitterY, burst.radius,
             burst.lifeSpread, burst.outerCount, burst.innerCount, burst.colour, burst.shape, roll);
+      };
+
+      // Opcode 0x10D into the DAT_00355B58 spray pool. FUN_0021E088 folds the
+      // *current* frame delta into the rise at spawn time rather than at each
+      // step, so the burst needs the tick count the scene script is running
+      // under, not the one the step will later see.
+      environment.FUN_0021e088_spawn_spray =
+          [this, roll, frameTicks](const orphen::ported::script::ScriptSprayBurst &burst)
+      {
+        DAT_00355b58_spray_.FUN_0021e088_spawn(burst.rise, burst.x, burst.y, burst.z, burst.count,
+                                               burst.speedRange, burst.lifeUnit, burst.mode,
+                                               burst.colour, frameTicks, roll);
+      };
+
+      // Opcode 0x10F into the DAT_00355B60 fountain pool.
+      environment.FUN_0021ed50_spawn_fountain =
+          [this, roll](const orphen::ported::script::ScriptFountainBurst &burst)
+      {
+        DAT_00355b60_fountain_.FUN_0021ed50_spawn(
+            burst.rise, burst.fall, burst.drift, burst.speedRange, burst.zJitterRange, burst.size,
+            burst.x, burst.y, burst.z, burst.count, burst.lifeUnit, burst.loop,
+            burst.cameraRelative, burst.colour, roll);
+      };
+
+      // Opcodes 0x114 / 0x115 into the DAT_00355B80 pool. The release is
+      // handed the hit sparks' active-group byte on purpose: FUN_002218F0
+      // decrements gp-0x43F4, which is theirs and not this pool's.
+      environment.FUN_00220f70_spawn_gather =
+          [this, roll](const orphen::ported::script::ScriptGatherBurst &burst)
+      {
+        DAT_00355b80_gather_.FUN_00220f70_spawn(burst.x, burst.y, burst.z, burst.speed,
+                                                burst.radiusRange, burst.yaw, burst.pitch,
+                                                burst.spread, burst.count, burst.colour,
+                                                burst.size, roll);
+      };
+      environment.FUN_00262d88_set_fountain_gate = [this](std::uint32_t value)
+      { DAT_00355b60_fountain_.FUN_00262d88_set_gate(value != 0); };
+      // Opcode 0x67. The look-at needs an ActorEnvironment, which only the
+      // runtime can build, so it arrives as a callback like the path-follow
+      // pair beside it.
+      environment.FUN_00257c78_look_at = [this, frameTicks](std::size_t entitySlot, float targetX,
+                                                            float targetZ, int overrideFrames)
+      {
+        if (entitySlot >= orphen::ported::entity::kEntitySlotCount)
+        {
+          return;
+        }
+        orphen::ported::entity::FUN_00257c78_look_at_entity(
+            entityPool_.slot(entitySlot), actorEnvironment(frameTicks), entitySlot, targetX,
+            targetZ, overrideFrames);
+      };
+      environment.FUN_002218f0_release_gather = [this](std::int8_t group)
+      {
+        DAT_00355b80_gather_.FUN_002218f0_release(
+            group, &DAT_00355b74_hitSparks_.DAT_00355b7c_activeGroupsRef());
       };
     }
 
@@ -2139,39 +2328,47 @@ namespace orphen::port
     // disc image, so a load is never in flight.
     environment.FUN_00206c28_voice_load_idle = [] { return true; };
     environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
-    environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex) {
-      if (channel >= 4)
-      {
-        return false;
-      }
-      const std::uint32_t bankId = DAT_00356480_voiceBankCache_[channel];
-      if (bankId == 0 || !voiceIndex_.valid())
-      {
-        return false;
-      }
-      const std::uint32_t hold = voiceIndex_.bankClipHoldTicks(bankId, clipIndex);
-      if (hold == 0)
-      {
-        return false;
-      }
-      // Modelled as a countdown rather than a mixer query, so --frames output
-      // does not depend on whether audio was enabled.
-      DAT_00356788_voiceHoldTicks_ = hold;
-      std::cout << "[spell voice] bank " << bankId << " clip " << clipIndex << " (" << hold
-                << " ticks)" << std::endl;
-      if (voiceAudioEnabled_ && voiceIndex_.hasAudio())
-      {
-        const std::vector<std::uint8_t> adpcm = voiceIndex_.readBankClipAdpcm(bankId, clipIndex);
-        if (!adpcm.empty())
-        {
-          soundEngine_.FUN_00207010_play_voice_line(
-              orphen::ported::sound::decodePsAdpcm(adpcm).samples,
-              static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
-        }
-      }
-      return true;
-    };
+    environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
+    { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
     return environment;
+  }
+
+  // FUN_00206F08 with FUN_00206D98's fallback: start the clip cached on a
+  // channel. Shared by the battle module's spell lines (which name a clip inside
+  // a multi-clip bank) and by script opcodes 0x135/0x136 (which want the whole
+  // entry, i.e. clip 0).
+  bool PortRuntime::FUN_00206f08_play_voice_clip(std::uint32_t channel, std::uint32_t clipIndex)
+  {
+    if (channel >= std::size(DAT_00356480_voiceBankCache_))
+    {
+      return false;
+    }
+    const std::uint32_t bankId = DAT_00356480_voiceBankCache_[channel];
+    if (bankId == 0 || !voiceIndex_.valid())
+    {
+      return false;
+    }
+    const std::uint32_t hold = voiceIndex_.bankClipHoldTicks(bankId, clipIndex);
+    if (hold == 0)
+    {
+      return false;
+    }
+    // Modelled as a countdown rather than a mixer query, so --frames output
+    // does not depend on whether audio was enabled.
+    DAT_00356788_voiceHoldTicks_ = hold;
+    std::cout << "[voice] bank " << bankId << " clip " << clipIndex << " (" << hold << " ticks)"
+              << std::endl;
+    if (voiceAudioEnabled_ && voiceIndex_.hasAudio())
+    {
+      const std::vector<std::uint8_t> adpcm = voiceIndex_.readBankClipAdpcm(bankId, clipIndex);
+      if (!adpcm.empty())
+      {
+        soundEngine_.FUN_00207010_play_voice_line(
+            orphen::ported::sound::decodePsAdpcm(adpcm).samples,
+            static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
+      }
+    }
+    return true;
   }
 
   // One --battle-report line per frame the player's action byte, state, charge
@@ -2677,7 +2874,18 @@ namespace orphen::port
   void PortRuntime::runSceneScript()
   {
     scriptTrace_.reset();
+    // The event flags at DAT_00342B70 are game-wide: nothing on the original's
+    // scene-load path clears them, and a scene that raises one for the next
+    // scene to read is relying on exactly that. s14_e001 sets BFLG 58 to tell
+    // s14_e031 which spell to demonstrate. Replacing the whole SceneScript here
+    // threw the array away, so every such flag arrived at zero; carry it over
+    // the way the hardware does.
+    decltype(orphen::ported::script::SceneScriptState::DAT_00342b70_flags) carriedFlags;
+    std::copy(std::begin(sceneScript_.state().DAT_00342b70_flags),
+              std::end(sceneScript_.state().DAT_00342b70_flags), std::begin(carriedFlags));
     sceneScript_ = {};
+    std::copy(std::begin(carriedFlags), std::end(carriedFlags),
+              std::begin(sceneScript_.state().DAT_00342b70_flags));
 
     // FUN_0022a360's per-load seed, applied before anything scene specific.
     // Every early return below then leaves the renderer on these rather than on
@@ -2729,6 +2937,22 @@ namespace orphen::port
       return;
     }
     sceneScript_.state().FUN_002294d0_load_party_records(characterStats_);
+
+    // --set-event-flag <id>:0 lands here rather than in the frame loop, because
+    // a scene that branches on a flag does it in its **init** entry, which has
+    // already run by the time the first frame steps. s14_e031 is the case that
+    // needs it: its init is an eleven-way ladder on BFLG 50..60 choosing which
+    // spell to demonstrate, so the flag has to stand before the scene loads or
+    // the ladder falls through every arm. Still a harness probe, not a
+    // behaviour -- the game raises these from the scene before.
+    if (setEventFlagPending_ && setEventFlagFrame_ == 0)
+    {
+      setEventFlagPending_ = false;
+      sceneScript_.state().FUN_002663a0_setEventFlag(setEventFlagId_);
+      std::cout << "[set-event-flag] " << setEventFlagId_
+                << " raised before the init entry -- a harness probe, not something the game"
+                   " does here.\n";
+    }
 
     // FUN_0022a418:261 -> FUN_0023f318(0). The scene's encounter data is the
     // first entry of the script's own section table at header word 7; a scene
@@ -3766,6 +3990,137 @@ namespace orphen::port
       }
     }
 
+    // FUN_0021E808's draw half, collected by the step above. The corners are
+    // built here because the billboard turn needs the camera yaw, which the
+    // simulation half does not have -- FUN_0021E5E0 builds the same matrix once
+    // for the whole pool, so it is hoisted out of the loop the way it is there.
+    for (const auto &particle : DAT_00355b58_spray_.drawList())
+    {
+      const auto corners =
+          orphen::ported::entity::FUN_0021e808_build_corners(particle, renderCameraYaw_);
+
+      orphen::ported::render::SpriteQuad quad;
+      quad.oriented = true;
+      bool visible = true;
+      for (int corner = 0; corner < 4; ++corner)
+      {
+        const auto view = viewProjection.toViewSpace(corners[corner]);
+        // FUN_00218EE0, the same guard FUN_002190F8 checks before it submits:
+        // one corner too near the eye drops the whole quad.
+        if (!(view.z >= orphen::ported::entity::kHitSparkMinViewDepth))
+        {
+          visible = false;
+          break;
+        }
+        quad.cornerX[corner] = view.x;
+        quad.cornerY[corner] = view.y;
+        quad.cornerZ[corner] = view.z;
+        quad.cornerU[corner] = orphen::ported::entity::kSprayTexels[corner][0];
+        quad.cornerV[corner] = orphen::ported::entity::kSprayTexels[corner][1];
+      }
+      if (!visible)
+      {
+        continue;
+      }
+
+      const std::uint32_t rgb = particle.colour != 0
+                                    ? particle.colour
+                                    : orphen::ported::entity::kSprayDefaultColour;
+      // FUN_00207DE8's textured fold again -- the packet's texture halfword is
+      // 0x0021 or 0x0121, both non-zero, so all four channels are halved.
+      const auto folded = [](std::uint32_t component)
+      { return static_cast<float>((component & 0xFEu) >> 1) / 128.0f; };
+      quad.colour[0] = folded(rgb & 0xFFu);
+      quad.colour[1] = folded((rgb >> 8) & 0xFFu);
+      quad.colour[2] = folded((rgb >> 16) & 0xFFu);
+      quad.colour[3] = folded(static_cast<std::uint32_t>(particle.alpha) & 0xFFu);
+
+      quad.blendMode = orphen::ported::entity::kSprayBlendMode;
+      quad.textureSlot = orphen::ported::entity::kSprayTextureSlot;
+      quad.displayListBucket = orphen::ported::entity::kSprayDisplayListBucket;
+      quad.clutBank =
+          particle.colour == 0 ? orphen::ported::entity::kSprayDefaultClutBank : -1;
+      quad.depthTest = true;
+      quads.push_back(quad);
+    }
+
+    // FUN_0021F310's draw half. A screen-aligned rectangle in GS units around
+    // the projected origin, the way the dust puffs are built and not the way
+    // the spray pool's world billboard is.
+    if (!DAT_00355b60_fountain_.drawList().empty())
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+
+      for (const auto &particle : DAT_00355b60_fountain_.drawList())
+      {
+        const orphen::ported::psm2::Vec3 world{particle.x, particle.y, particle.z};
+        const auto viewSpace = viewProjection.toViewSpace(world);
+        if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+        {
+          continue;
+        }
+        // DAT_003523CC, the same 0.7 near cutoff the dust pool has: a particle
+        // *closer* than about a unit and a half is dropped, not a far one.
+        if (1.0f / viewSpace.z >
+            orphen::ported::entity::kDAT_003523cc_fountainNearCutoff)
+        {
+          continue;
+        }
+
+        orphen::ported::entity::FountainQuadInputs inputs;
+        inputs.gsOriginX =
+            static_cast<int>(viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        inputs.gsOriginY =
+            static_cast<int>(viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        inputs.viewZ = viewSpace.z;
+        inputs.projectionScaleX = projectionScaleX;
+        inputs.projectionScaleY = projectionScaleY;
+        inputs.screenCentreX = screenCentreX;
+        inputs.screenCentreY = screenCentreY;
+        inputs.size = particle.size;
+        inputs.colour = particle.colour;
+        inputs.alpha = particle.alpha;
+
+        quads.push_back(
+            orphen::ported::entity::FUN_0021f310_build_fountain_quad(inputs));
+      }
+    }
+
+    // FUN_00221608's draw half -- the same screen-space rectangle the fountain
+    // pool builds, at a point the entry's own cached matrix has already placed.
+    if (!DAT_00355b80_gather_.drawList().empty())
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+
+      for (const auto &streak : DAT_00355b80_gather_.drawList())
+      {
+        const orphen::ported::psm2::Vec3 world{streak.x, streak.y, streak.z};
+        const auto viewSpace = viewProjection.toViewSpace(world);
+        if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+        {
+          continue;
+        }
+        if (1.0f / viewSpace.z > orphen::ported::entity::kDAT_00352418_gatherNearCutoff)
+        {
+          continue;
+        }
+
+        const auto gsOriginX =
+            static_cast<int>(viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        const auto gsOriginY =
+            static_cast<int>(viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        quads.push_back(orphen::ported::entity::FUN_00221608_build_gather_quad(
+            streak, gsOriginX, gsOriginY, viewSpace.z, projectionScaleX, projectionScaleY,
+            screenCentreX, screenCentreY));
+      }
+    }
+
     // FUN_00220910, the hit sparks, in the slot FUN_002192c0 gives it: the
     // *draw* phase, after both entity passes. That is why they step here and
     // the DAT_00355620 pool steps beside the actor loop -- the original runs
@@ -4582,8 +4937,17 @@ namespace orphen::port
       else { pair = "0x8C -> 0x8D (states 113 -> 114)"; field = mask::kTriggerSpellB14; }
       const std::uint32_t maskWord =
           tables.read<std::uint32_t>(BattleTables::buttonMask(0) + field);
+      // The element block is packed over non-empty slots, so this only lines
+      // up with `slot` while every slot has an item -- which the shipped
+      // loadout does. Printed so --spell-power-scale can be seen to land.
+      const std::uint32_t elementBlock =
+          BattleTables::partyRecord(0) + orphen::ported::battle::record::kSpellBlock18 +
+          slot * 4;
       std::cout << " kind=" << static_cast<int>(kind) << " mask+" << hex(field, 2) << "="
-                << hex(maskWord, 2) << " " << pair << " effect type "
+                << hex(maskWord, 2) << " " << pair << " element "
+                << hex(tables.read<std::uint16_t>(elementBlock), 4) << " power "
+                << static_cast<int>(tables.read<std::uint8_t>(elementBlock + 2))
+                << " effect type "
                 << hex(tables.read<std::uint16_t>(kDAT_0031da3a_effectTypes + slot * 2), 4)
                 << "\n";
     }
@@ -6112,6 +6476,15 @@ namespace orphen::port
     // DAT_00355620. Zero alive with a behaviour installed means every particle
     // a burst seeded has since faded out, which is the normal resting state.
     std::cout << "dust puffs: alive=" << DAT_00355a9c_dust_.aliveCount() << "\n";
+    std::cout << "spray particles: alive=" << DAT_00355b58_spray_.DAT_00355b54_aliveCount()
+              << " gate=" << (DAT_00355b58_spray_.DAT_00354cbc_gate() ? 1 : 0)
+              << " drawn=" << DAT_00355b58_spray_.drawList().size() << "\n";
+    std::cout << "fountain particles: alive=" << DAT_00355b60_fountain_.DAT_00355b5c_aliveCount()
+              << " gate=" << (DAT_00355b60_fountain_.DAT_00354cc0_gate() ? 1 : 0)
+              << " drawn=" << DAT_00355b60_fountain_.drawList().size() << "\n";
+    std::cout << "gather streaks: groups=" << DAT_00355b80_gather_.DAT_00355b88_activeGroups()
+              << " gate=" << (DAT_00355b80_gather_.DAT_00354cc8_gate() ? 1 : 0)
+              << " drawn=" << DAT_00355b80_gather_.drawList().size() << "\n";
     std::cout << "particles: alive=" << DAT_00355620_particles_.aliveCount()
               << " behaviour="
               << (DAT_00355620_particles_.DAT_00355e0c_behaviour() ==
@@ -6377,6 +6750,22 @@ namespace orphen::port
       // --arm-stream, applied just before the tick that will first pay it out.
       // This is what a floor panel's body does with opcode 0xA1: set channel
       // 0's cursor and zero its timer.
+      if (setWorkPending_ && frameCount_ >= setWorkFrame_ && sceneScript_.loaded() &&
+          setWorkIndex_ < orphen::ported::script::SceneScriptState::kWorkWordCount)
+      {
+        setWorkPending_ = false;
+        sceneScript_.state().DAT_00355060_work[setWorkIndex_] = setWorkValue_;
+        std::cout << "[set-work] work[" << setWorkIndex_ << "] = " << setWorkValue_
+                  << " at frame " << frameCount_
+                  << " -- a harness probe, not something the game does here.\n";
+      }
+      if (setEventFlagPending_ && frameCount_ >= setEventFlagFrame_ && sceneScript_.loaded())
+      {
+        setEventFlagPending_ = false;
+        sceneScript_.state().FUN_002663a0_setEventFlag(setEventFlagId_);
+        std::cout << "[set-event-flag] " << setEventFlagId_ << " raised at frame " << frameCount_
+                  << " -- a harness probe, not something the game does here.\n";
+      }
       if (armStreamPending_ && frameCount_ >= armStreamFrame_ && sceneScript_.loaded())
       {
         armStreamPending_ = false;
@@ -6467,6 +6856,27 @@ namespace orphen::port
       // FUN_0021A760 runs in the same half of the frame: it is walked from
       // the simulation and its quads are collected at publish time.
       DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
+      // FUN_0021E5E0, in the slot FUN_002192C0 gives it: after FUN_0021A760
+      // and before FUN_00220910. It steps and draws in one walk, so the step
+      // records which particles survived and the publish pass turns that list
+      // into quads -- the same split the two pools either side of it use.
+      DAT_00355b58_spray_.FUN_0021e5e0_step(
+          frameTicks, [this] { return FUN_00216868_random(); });
+      // FUN_0021F1A8, immediately after it in FUN_002192C0. The camera frame is
+      // only read on a restart, by the +0x42 particles FUN_0021EBE8 places.
+      {
+        orphen::ported::entity::FountainCameraFrame cameraFrame;
+        cameraFrame.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+        cameraFrame.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
+        const auto &eye = fieldCamera_.pose().eye;
+        cameraFrame.DAT_0058c0a8_eyeX = eye.x;
+        cameraFrame.DAT_0058c0ac_eyeY = eye.y;
+        cameraFrame.DAT_0058c0b0_eyeZ = eye.z;
+        DAT_00355b60_fountain_.FUN_0021f1a8_step(frameTicks, cameraFrame);
+      }
+      // FUN_00221398, the last effect pool FUN_002192C0 walks before the
+      // screen passes.
+      DAT_00355b80_gather_.FUN_00221398_step(frameTicks);
 
       // FUN_002239c8:129 -> FUN_0023fd30 -> FUN_002462c8. The command input
       // runs *after* the actor loop, not before it, so a press is read against
@@ -6557,15 +6967,21 @@ namespace orphen::port
           orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
         }
         sampleBattleTrace(input.rawHeldPad);
-
-        // DAT_00356788 counts the clip out. The original clears its flag when
-        // the stream ends; the port spends the clip's own length so the release
-        // shout is dropped for a short charge exactly as the original drops it.
-        DAT_00356788_voiceHoldTicks_ =
-            DAT_00356788_voiceHoldTicks_ > frameTicks
-                ? DAT_00356788_voiceHoldTicks_ - frameTicks
-                : 0u;
       }
+
+      // DAT_00356788 counts the clip out. The original clears its flag when the
+      // stream ends; the port spends the clip's own length so the release shout
+      // is dropped for a short charge exactly as the original drops it.
+      //
+      // **Outside the battle block.** FUN_00206A90 is the sound driver's own
+      // "a voice is still playing" answer and has nothing to do with battle
+      // mode; script opcode 0x137 polls it too, and s14_e001's post-victory
+      // ladder waits on the narration line *after* the battle has been torn
+      // down. Counting down only while a battle was running left that wait
+      // spinning forever.
+      DAT_00356788_voiceHoldTicks_ = DAT_00356788_voiceHoldTicks_ > frameTicks
+                                         ? DAT_00356788_voiceHoldTicks_ - frameTicks
+                                         : 0u;
 
       // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and
       // before FUN_0025b918's late slots. It spends whatever the tick wrote
@@ -6817,6 +7233,9 @@ namespace orphen::port
     // the previous map keeps stepping.
     DAT_00355620_particles_.FUN_002d3290_reset([this] { return FUN_00216868_random(); });
     DAT_00355a9c_dust_.FUN_0021a698_reset();
+    DAT_00355b58_spray_.FUN_0021e540_reset();
+    DAT_00355b60_fountain_.FUN_0021f108_reset();
+    DAT_00355b80_gather_.reset();
     // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two
     // type 0x68 health bars, pool slots 2 and 3. Built on every scene load, not
     // only a battle one -- FUN_002d5630 is what refuses to raise one outside a

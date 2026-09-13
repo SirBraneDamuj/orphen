@@ -216,6 +216,30 @@ namespace orphen::ported::text
     std::span<const std::uint8_t> blob_;
     std::size_t cursor_ = 0;   // pcGpffffaec0
     std::size_t end_ = 0;
+
+    // **The dialogue stream has a call stack**, eight deep, at DAT_005716A0
+    // with its depth in DAT_00355C64 (gp-0x430C). Control code 0x10 is a CALL
+    // -- a signed 32-bit displacement from the byte after itself -- and 0x00 is
+    // its RETURN; the depth counts *down* from 8, so 8 means empty and a 0x00
+    // at that level really is the end of the record.
+    //
+    // Missing this turned two of s14_e031's narrator lines into mojibake: the
+    // walk skipped the 0x10 but not its four operand bytes and rendered the
+    // displacement as glyphs. Both records it calls are pure voice sequences
+    // with no visible text at all, which is what a disembodied narrator is.
+    //
+    // The port carries the record's end bound alongside the return address.
+    // The original has no such bound -- its walk stops at a terminator -- so a
+    // called record runs to the end of the blob and the caller's bound comes
+    // back with it.
+    static constexpr std::size_t kCallDepth = 8;
+    struct CallFrame
+    {
+      std::size_t cursor = 0;
+      std::size_t end = 0;
+    };
+    std::array<CallFrame, kCallDepth> DAT_005716a0_callStack_{};
+    std::size_t DAT_00355c64_callDepth_ = kCallDepth;
     bool open_ = false;
     bool complete_ = false;
     // pcGpffffaec0 != 0 -- whether there is a window on screen at all, as

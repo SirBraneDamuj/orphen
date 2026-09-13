@@ -42,6 +42,10 @@ namespace orphen::ported::script
   // of 1000 is one world unit. This is a script-to-world scale and is unrelated
   // to the 4096 fixed point used elsewhere in the engine.
   constexpr float kScriptCoordinateScale = 100000.0f;
+  // fGpffff8d40 (0x00352CB0), opcode 0xB5's bone-sample scale. The same
+  // 100000.0 as every coordinate literal, kept separate because it is a
+  // different gp word and could have been anything.
+  constexpr float kFGpffff8d40_boneSampleScale = 100000.0f;
 
   // Script-visible state that outlives one entry point. These are globals in the
   // original, so they persist across the init and start runs the way they do on
@@ -51,6 +55,11 @@ namespace orphen::ported::script
     // DAT_00355060: 128 words, cleared by FUN_0025b390 at scene load.
     static constexpr std::size_t kWorkWordCount = 128;
     std::uint32_t DAT_00355060_work[kWorkWordCount]{};
+
+    // DAT_00354CC4 (uGpffffad54), opcode 0x113's target: the gate on the
+    // DAT_00355B6C emitter pool, which is not ported. Kept so the value a scene
+    // writes is visible rather than silently dropped.
+    std::uint32_t DAT_00354cc4_emitterGate = 0;
 
     // DAT_0031e770: which of those 128 work words the SCEN WORK DISP submenu
     // has switched on, as four 32-bit words. FUN_0026a508 XORs a bit per menu
@@ -417,6 +426,67 @@ namespace orphen::ported::script
     std::uint8_t shape = 0;
   };
 
+  // One burst of the DAT_00355B58 spray pool, as opcode 0x10D spells it.
+  // FUN_002629C0 reads nine expressions and hands them over **out of order**:
+  // the first is the count and the second the rise, then the three coordinates,
+  // then the speed range, the life unit, the mode and the colour. Only the rise
+  // and the three coordinates are scaled by 100000 (fGpffff8d0c); everything
+  // else goes in raw, the colour as the bit pattern the expression produced.
+  struct ScriptSprayBurst
+  {
+    float rise = 0.0f;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    int count = 0;
+    int speedRange = 0;
+    std::int16_t lifeUnit = 0;
+    std::int8_t mode = 0;
+    std::uint32_t colour = 0;
+  };
+
+  // One burst of the DAT_00355B60 fountain pool, as opcode 0x10F spells it.
+  // FUN_00262B90 reads fourteen expressions; nine of them are scaled by 100000
+  // (fGpffff8d14) and reach FUN_0021ED50 in f12..f19 plus one stack slot, and
+  // the other five -- the count, the life unit, the two flag bytes and the
+  // colour -- go in general registers, raw.
+  struct ScriptFountainBurst
+  {
+    int count = 0;
+    float rise = 0.0f;
+    float fall = 0.0f;
+    float drift = 0.0f;
+    float speedRange = 0.0f;
+    float zJitterRange = 0.0f;
+    float size = 0.0f;
+    std::int16_t lifeUnit = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    std::uint8_t loop = 0;
+    std::int8_t cameraRelative = 0;
+    std::uint32_t colour = 0;
+  };
+
+  // One burst of the DAT_00355B80 pool, as opcode 0x114 spells it. Eleven
+  // expressions: the count first, then nine scaled by 100000 (fGpffff8d20),
+  // then the colour raw. The ninth scaled one is the sprite size, and it is the
+  // float that spills past f19 onto FUN_00220F70's stack.
+  struct ScriptGatherBurst
+  {
+    std::int16_t count = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float speed = 0.0f;
+    float radiusRange = 0.0f;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    float spread = 0.0f;
+    float size = 0.0f;
+    std::uint32_t colour = 0;
+  };
+
   // Everything a handler is allowed to touch. Terrain and lead movement arrive
   // as callbacks so this stays free of harness and runtime dependencies, the
   // same way the player controller takes its terrain sampler.
@@ -542,6 +612,48 @@ namespace orphen::ported::script
     std::function<void(const ScriptDustBurst &)> FUN_00219fc8_spawn_dust_scatter;
     std::function<void(const ScriptDustBurst &)> FUN_00219d60_spawn_dust_ring_coloured;
 
+    // FUN_002629C0 -> FUN_0021E088, opcode 0x10D: the spray pool at
+    // DAT_00355B58, which is a different pool from the dust above and shares
+    // nothing with it. s14_e031 -- the new-spell scene -- fires one of these
+    // every frame.
+    std::function<void(const ScriptSprayBurst &)> FUN_0021e088_spawn_spray;
+
+    // FUN_00262B90 -> FUN_0021ED50, opcode 0x10F: the fountain pool at
+    // DAT_00355B60, which sits one word along from the spray pool's globals and
+    // is otherwise unrelated to it.
+    std::function<void(const ScriptFountainBurst &)> FUN_0021ed50_spawn_fountain;
+
+    // FUN_00262DD8 -> FUN_00220F70 (opcode 0x114) and FUN_00262F10 ->
+    // FUN_002218F0 (0x115): the converging streaks at DAT_00355B80. 0x114
+    // takes a whole group of them and 0x115 is the only thing that ever gives
+    // one back -- nothing in that pool expires on its own.
+    std::function<void(const ScriptGatherBurst &)> FUN_00220f70_spawn_gather;
+    std::function<void(std::int8_t group)> FUN_002218f0_release_gather;
+
+    // FUN_00262D88, opcode 0x112: a bare store into uGpffffad50, which is
+    // DAT_00354CC0 -- the **fountain pool's gate**, the word FUN_0021F1A8
+    // checks before it walks anything. A scene turns its fountain off by
+    // writing zero here rather than by releasing the particles, so they stay
+    // allocated and come straight back when it writes one again.
+    std::function<void(std::uint32_t value)> FUN_00262d88_set_fountain_gate;
+
+    // FUN_0025FA40 -> FUN_00257C78, opcode 0x67: turn the selected entity's
+    // head and bust toward a world point without moving its body. The follower
+    // already drives the same function; this is the script's way in, and it
+    // chooses its own bone-override duration rather than the follower's ten.
+    std::function<void(std::size_t entitySlot, float targetX, float targetZ,
+                       int overrideFrames)>
+        FUN_00257c78_look_at;
+
+    // FUN_00260F78 -> FUN_0022B2C0, opcode 0x8C: the **map** change, as against
+    // 0x8E's group-E scene change. It names a section and an entry outright,
+    // carries the spawn point the next scene puts the lead on, and its flags go
+    // into DAT_003551EC with bit 0 forced on. s14_e001's case 3020 is one of
+    // these -- `0x8C(1, 14, ...)`, the exit to s01_e014.
+    std::function<void(std::int32_t section, std::int32_t entry, std::uint32_t flags,
+                       const orphen::ported::psm2::Vec3 &spawn)>
+        FUN_0022b2c0_request_map_change;
+
     // FUN_002582d0: teleport the lead player and camera.
     std::function<void(float x, float y, float z)> teleportLead;
 
@@ -641,6 +753,26 @@ namespace orphen::ported::script
     std::function<void(int slot, std::int32_t subprocId)> FUN_002681c0_subprocLine;
     //   0x0034CA78  " %02d:%d(%X)\n"        work index, its value twice
     std::function<void(int index, std::uint32_t value)> FUN_002681c0_sceneWorkLine;
+
+    // == The script's own voice channel ==
+    //
+    // Three channels, the same DAT_00356480 cache the dialogue stream's text
+    // codes 0x16/0x18 and the battle module's spell lines use:
+    //
+    //   0x132 / 0x133  FUN_00206AE0  cache a VOICE.BIN entry against a channel
+    //   0x134          FUN_00206C28  1 once no bank load is in flight
+    //   0x135 / 0x136  FUN_00206D98  start the entry cached on a channel
+    //   0x137          FUN_00206A90  non-zero while one is still playing
+    //
+    // s14_e001's post-victory ladder is built out of all four, which is why the
+    // victory line is the first thing past the crab's death that needs them.
+    std::function<bool(std::uint32_t bankId, std::uint32_t channel)> FUN_00206ae0_cache_voice;
+    std::function<bool()> FUN_00206c28_voice_load_idle;
+    std::function<bool(std::uint32_t channel)> FUN_00206d98_play_voice;
+    std::function<bool()> FUN_00206a90_voice_busy;
+    // FUN_00206F08 proper -- a named clip inside a multi-clip bank. Opcode
+    // 0xBD's method 0x77 is a two-line wrapper over it.
+    std::function<bool(std::uint32_t channel, std::uint32_t clipIndex)> FUN_00206f08_play_voice;
 
     // The music slots. 0x129 starts a slot the scene preloaded, 0x12A ramps one
     // up and 0x12B ramps one down -- see FUN_00205d90 / FUN_002063c8 /
@@ -840,6 +972,10 @@ namespace orphen::ported::script
     std::uint8_t peekU8() const;
     std::uint8_t readU8();
     std::uint32_t FUN_0025c1d0_readStreamU32(); // unaligned 32-bit read, advances 4
+
+    // uGpffffb667 / 0x003555D7, opcode 0x136's volume byte. Boots at 0x80 like
+    // the two beside it; nothing reads it back yet.
+    std::uint8_t DAT_003555d7_voiceVolume_ = 0x80;
     void FUN_0025c220_relativeJump();
 
     // FUN_0025c258 / FUN_0025bf70.
@@ -963,6 +1099,11 @@ namespace orphen::ported::script
     std::uint32_t FUN_00263118_clear_lead_slot();   // 0xAA
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
+    // FUN_0025D6C0 with the caller's saved current entity as the 0x100
+    // fallback. Use this, not resolveEntity, in any handler whose operands are
+    // evaluated before the selector is applied.
+    orphen::ported::entity::OriginalEntity *resolveEntityFrom(std::uint32_t index,
+                                                              std::size_t savedCurrent);
 
     // puGpffffb0d8, or null when nothing is in focus.
     orphen::ported::entity::OriginalEntity *focusEntity();

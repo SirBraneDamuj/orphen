@@ -32,6 +32,9 @@
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_hit_sparks.h"
+#include "ported/entity/original_fountain_particles.h"
+#include "ported/entity/original_gather_particles.h"
+#include "ported/entity/original_spray_particles.h"
 #include "ported/render/original_entity_draw.h"
 #include "ported/render/original_weapon_trail.h"
 #include "ported/entity/original_particles.h"
@@ -98,6 +101,20 @@ namespace orphen::port
     // square that no constant stick input will reliably find. This reaches them
     // without solving navigation, which is the only way to exercise the second
     // half of a scene's choreography headlessly.
+    // --set-event-flag <id>[:<frame>]: raise one event flag from the harness.
+    // A probe, not a ported behaviour: it exists so a path the port cannot yet
+    // reach on its own -- s14_e001's post-victory chain, which waits on flag
+    // 820 -- can be walked and checked against hardware.
+    // --set-work <index>=<value>[:<frame>]: poke one scene work word. The same
+    // kind of probe as --set-event-flag: it stands in for something the port
+    // cannot yet reach on its own so the rest of a sequence can be walked.
+    bool hasSetWork = false;
+    std::uint32_t setWorkIndex = 0;
+    std::uint32_t setWorkValue = 0;
+    std::uint32_t setWorkFrame = 1;
+    bool hasSetEventFlag = false;
+    std::uint32_t setEventFlagId = 0;
+    std::uint32_t setEventFlagFrame = 1;
     bool hasArmStream = false;
     std::uint32_t armStreamOffset = 0;
     std::uint32_t armStreamFrame = 1;
@@ -183,6 +200,11 @@ namespace orphen::port
     // DAT_00355628 override, for experimenting before the script opcode that
     // normally sets it (FUN_00263cb8) is wired up.
     std::optional<float> drawDistanceOverride;
+    // --spell-power-scale: a debug cheat that multiplies the player's spell
+    // power on the way into the party record, so a test run can get through a
+    // boss quickly. 1.0 is the shipped behaviour; anything else is a
+    // divergence and must not be used for a fidelity comparison.
+    float spellPowerScale = 1.0f;
     // --probe: dump the primitives around a world point and stop.
     std::optional<orphen::ported::psm2::Vec3> probeCentre;
     float probeRadius = 2.0f;
@@ -324,6 +346,12 @@ namespace orphen::port
     // spawn point DAT_00325340. Neither is reached yet, so this is written and
     // held rather than read.
     orphen::ported::psm2::Vec3 DAT_0031e668_departurePosition_{};
+    // DAT_00325340/44/48, the spawn point FUN_0022B2C0 stores for the scene it
+    // is asking for. The port's loader takes its spawn from the incoming
+    // scene's own defaults block (FUN_0025B600), so like the departure position
+    // above this is written and held rather than read -- recorded so the value
+    // a script asks for is visible rather than silently dropped.
+    orphen::ported::psm2::Vec3 DAT_00325340_requestedSpawn_{};
     orphen::ported::entity::MapPropDescriptorTable mapPropTable_;
     // Opcode 0xBD's path-follow slots. Ticked just before the actor loop.
     //
@@ -430,6 +458,16 @@ namespace orphen::port
     // alive into the same display list the billboards use.
     orphen::ported::entity::ParticlePool DAT_00355620_particles_;
     orphen::ported::entity::DustPool DAT_00355a9c_dust_;
+    // DAT_00355B58, the spray opcode 0x10D throws -- 2000 entries of 0x30,
+    // carved by FUN_0021E540 and walked by FUN_0021E5E0. It is neither of the
+    // two above: no shared struct, no shared spawn convention, its own gate.
+    orphen::ported::entity::SprayParticlePool DAT_00355b58_spray_;
+    // DAT_00355B60, the fountain opcode 0x10F throws -- 2000 entries of 0x44,
+    // carved by FUN_0021F108 and walked by FUN_0021F1A8. Adjacent in RAM to
+    // the spray pool and unrelated to it in every other way.
+    orphen::ported::entity::FountainParticlePool DAT_00355b60_fountain_;
+    // DAT_00355B80, the converging streaks opcodes 0x114 and 0x115 drive.
+    orphen::ported::entity::GatherParticlePool DAT_00355b80_gather_;
 
     // DAT_00355B74, the hit sparks -- a thousand entries in ten fixed groups.
     // FUN_002205d0 carves it out at boot, FUN_00216140 fires bursts into it,
@@ -485,6 +523,9 @@ namespace orphen::port
     // stream ends, and reading the mixer instead would make `--frames` output
     // depend on whether audio was enabled.
     std::uint32_t DAT_00356480_voiceBankCache_[4] = {0, 0, 0, 0};
+    // FUN_00206F08 with FUN_00206D98's fallback. Shared by the battle module's
+    // spell lines and by script opcodes 0x135/0x136.
+    bool FUN_00206f08_play_voice_clip(std::uint32_t channel, std::uint32_t clipIndex);
     std::uint32_t DAT_00356788_voiceHoldTicks_ = 0;
 
     // DAT_00355588. The shared hit effect's one-frame request word: FUN_002f1380
@@ -503,6 +544,13 @@ namespace orphen::port
     std::uint32_t DAT_003555d0_liveFrames_ = 0;
     std::uint32_t pushOutCount_ = 0;
     bool armStreamPending_ = false;
+    bool setWorkPending_ = false;
+    std::uint32_t setWorkIndex_ = 0;
+    std::uint32_t setWorkValue_ = 0;
+    std::uint32_t setWorkFrame_ = 1;
+    bool setEventFlagPending_ = false;
+    std::uint32_t setEventFlagId_ = 0;
+    std::uint32_t setEventFlagFrame_ = 1;
     std::uint32_t armStreamOffset_ = 0;
     std::uint32_t armStreamFrame_ = 1;
     std::vector<int> hideSlots_;

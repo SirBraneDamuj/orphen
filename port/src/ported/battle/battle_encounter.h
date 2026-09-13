@@ -268,6 +268,24 @@ namespace orphen::ported::battle
       // those. 1 = accepted, -1 = busy, 0 = no such block.
       std::function<std::int32_t(std::uint8_t partySlot, std::uint8_t action, bool force)>
           FUN_00244248_party;
+
+      // FUN_0023EBA0's `id < 10` branch. That function hands back a control
+      // block and an actor record through one pointer -- they share the 0x3C
+      // stride, the id at +0x00 and the entity at +0x08 -- but the ten control
+      // blocks live in BattleParty's tables and the records live in the script
+      // window this class owns, so the control side arrives as a callback.
+      // Returns the member index, or -1. `includeDead` is the original's second
+      // argument: without it a block whose +0x08 is zero is skipped.
+      std::function<std::int32_t(std::uint16_t id, bool includeDead)>
+          FUN_0023eba0_find_control_block;
+      // One field of a control block, by member and offset. `width` is 1, 2 or
+      // 4 bytes; a 4-byte read of +0x08 is the raw biased slot, so zero really
+      // does mean "no entity" the way the original's null pointer does.
+      std::function<std::uint32_t(std::int32_t member, std::uint32_t offset, int width)>
+          DAT_0031d7b0_read;
+      std::function<void(std::int32_t member, std::uint32_t offset, int width,
+                         std::uint32_t value)>
+          DAT_0031d7b0_write;
     };
 
     // One block the VM can be running on: the master pseudo-record DAT_0031DBA8
@@ -313,6 +331,20 @@ namespace orphen::ported::battle
     VmStepResult FUN_0023fd30_step_actor_scripts(const VmEnvironment &environment);
     static std::int32_t FUN_00248f18_find_by_tag(const orphen::ported::entity::EntityPool &pool,
                                                  std::uint8_t id);
+
+    // FUN_0023EBA0's `id >= 10` branch: the actor records, which live in the
+    // script window. Returns the record offset, or 0 for none -- the port's
+    // standing substitution for the original's null pointer, and the reason a
+    // record offset of zero is never a valid record here.
+    std::uint32_t FUN_0023eba0_find_record(std::uint16_t id, bool includeDead) const;
+
+    // FUN_00242C40(mode, delay). Script variable 25 takes the mode unless it is
+    // already at 1000 or more; 1 means granted, -1 refused and -2 a mode below
+    // one. The five camera globals it also writes are the swing this port does
+    // not reproduce.
+    std::int32_t FUN_00242c40_request_camera(std::int16_t mode, std::int16_t delay,
+                                             const VmEnvironment &environment,
+                                             VmStepResult &result) const;
     bool masterHalted() const { return masterHalted_; }
     bool actorHalted() const { return actorHalted_; }
     std::uint8_t actorHaltOpcode() const { return actorHaltOpcode_; }

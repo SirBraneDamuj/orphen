@@ -1900,6 +1900,112 @@ namespace orphen::ported::battle
       return 0;
     }
 
+    // FUN_0024bd30 (state 115): the **shield** hold -- the kind == -1 spells,
+    // Shield of Immunity, Shield of Inferno and Armor of Purity. Unlike 111 and
+    // 113 it does not charge; the effect entity is a barrier that stands until
+    // something hits it, and the handler's whole body is what happens when
+    // something does.
+    //
+    // Three ways out:
+    //
+    //   nothing hit it            +0x124 takes uGpffff8838, and the shield's own
+    //                             animation reaching 2 asks for the release
+    //   the element **matched**   the shield eats the blow: its state goes to 1,
+    //                             the damage and its element are cleared, cue
+    //                             0xD0 plays and the turn ends
+    //   the element did not       the damage is **negated** -- +0xBE = -damage,
+    //                             which is how a resisted hit is spelled -- and
+    //                             the character drops straight back to idle
+    //
+    // The comparison is the party record's own element halfword for the equipped
+    // slot against the hit's +0xC2, so a shield only stops what it is made for.
+    std::uint16_t stateShieldHold115(const StateContext &context, std::uint16_t charge)
+    {
+      (void)charge;
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+
+      if (party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4) == kNoEntity)
+      {
+        entity.state60 = 0x4078;
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        setAction(context, kActionIdle06);
+        return 0;
+      }
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        FUN_00248e98_set_animation_if_changed(entity, 0x14);
+        respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
+                          context.entitySlot, false, false);
+      }
+
+      const std::uint32_t slot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+      const std::uint32_t record = BattleTables::partyRecord(context.member);
+      const std::int32_t shield =
+          party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4);
+
+      std::int16_t reactionSource = static_cast<std::int16_t>(entity.timelineCursorA8);
+
+      if (entity.pendingDamageBe == 0)
+      {
+        // FUN_0024BD30:40-45. The barrier's own animation reaching 2 is the
+        // end of it; the release is asked for through the *pending* byte, not
+        // the current one.
+        if (shield != kNoEntity && context.environment->pool != nullptr &&
+            context.environment->pool->slot(static_cast<std::size_t>(shield)).animationA0 == 2)
+        {
+          party.tables().write<std::uint8_t>(context.control + control::kPendingAction0e, 0x8F);
+        }
+      }
+      else
+      {
+        const std::uint16_t shieldElement =
+            party.tables().read<std::uint16_t>(record + record::kSpellBlock18 + slot * 4);
+        if (shieldElement == entity.hitFlagsC2 && shield != kNoEntity &&
+            context.environment->pool != nullptr &&
+            context.environment->pool->slot(static_cast<std::size_t>(shield)).animationA0 == 0)
+        {
+          // The shield absorbs it outright and the turn is over.
+          context.environment->pool->slot(static_cast<std::size_t>(shield)).state60 = 1;
+          entity.hitSourceC0 = 0;
+          entity.hitFlagsC2 = 0;
+          entity.pendingDamageBe = 0;
+          party.tables().write<std::uint8_t>(context.control + control::kPendingAction0e, 0x8F);
+          if (context.environment->FUN_00267d38_play_at_entity)
+          {
+            context.environment->FUN_00267d38_play_at_entity(0xD0, context.entitySlot);
+          }
+          // FUN_0023BBD8(0, 8) is the player's own guard-broke HUD cue and
+          // FUN_0023F620(4, slot) the turn bookkeeping; neither is in this
+          // slice, and both are cosmetic against what the state itself does.
+          return 0;
+        }
+
+        reactionSource = static_cast<std::int16_t>(entity.pendingDamageBe);
+        entity.guardArc124 = 0.0f;
+        // **The negation is the resist.** FUN_002CD0A0 drains +0xBE into the
+        // hit points, so a negative value heals the difference back and the bar
+        // does not move.
+        entity.pendingDamageBe = static_cast<std::uint16_t>(-reactionSource);
+        // FUN_002D6CE0(0.5, 0.5, 1, &entity +0x20) is the sparkle at the point
+        // of impact and FUN_002D5630 the floating number; neither is ported.
+        entity.state60 = 0x4078;
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+        setAction(context, kActionIdle06);
+        reactionSource = static_cast<std::int16_t>(entity.timelineCursorA8);
+      }
+
+      // FUN_0024BD30's tail, shared by both halves: a timeline cursor of 6 with
+      // the contact bit up raises +0x06 bit 0x10.
+      if (reactionSource == 6 && (entity.flags06 & 4) != 0)
+      {
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+      }
+      return 0;
+    }
+
     // The class-1 table at 0x0031DD60, states 100..123. A null entry is a state
     // whose handler this slice does not port; --battle-report names any that a
     // run actually reached.
@@ -1919,7 +2025,7 @@ namespace orphen::ported::battle
         stateReleaseSpellA112, // 112 FUN_0024c3e0
         stateChargeSpellB113,  // 113 FUN_0024c538
         stateReleaseSpellB114, // 114 FUN_0024c910
-        nullptr,               // 115 FUN_0024bd30
+        stateShieldHold115,    // 115 FUN_0024bd30, the shield hold
         stateEndAction116,     // 116 LAB_0024bd08
         stateGuard117,         // 117 FUN_0024cba0
         stateEndAction118,     // 118 LAB_0024cef8
