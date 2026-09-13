@@ -50,3 +50,9 @@ out/
 
 SLUS_200.11
 *.zst
+
+*.iso
+*.IRX
+*.MV3
+*.CNF
+*.IMG
