@@ -1927,6 +1927,16 @@ namespace orphen::port
       orphen::ported::psm2::FUN_00260738_set_group_translation(*map, group, channel, value);
     };
 
+    // FUN_00265EC0 itself, which opcode 0x5C is a wrapper around and which the
+    // 0x142 binding below reaches one layer down. EntityPool::releaseSlot is the
+    // map-load blank and is not a substitute: this frees the dynamic light slot
+    // and cascades through the whole parented subtree.
+    environment.FUN_00265ec0_destroy_entity = [this](std::size_t slot)
+    {
+      orphen::ported::entity::FUN_00265ec0_destroy_entity(
+          slot, entityPool_, &sceneScript_.state().DAT_00343888_lights);
+    };
+
     // FUN_002606d0's body, opcode 0x142.
     environment.FUN_002606d0_detach_children = [this](std::size_t slot)
     {
@@ -1941,26 +1951,21 @@ namespace orphen::port
       // parented to the character and a second layer is parented to the head.
       // The original's status test is `> 0`, so a slot merely reserved by
       // FUN_00265dc0 is not swept up.
-      std::vector<std::size_t> pending{slot};
-      while (!pending.empty())
+      //
+      // The recursion, the light slot and the `+0x168` clear all live in
+      // FUN_00265EC0 now, so this only has to find the first layer. Walking the
+      // subtree here with a bare pool release was the same divergence opcode
+      // 0x5C had: the grandchildren survived and the light slots leaked.
+      for (std::size_t child = 0; child < entityPool_.slotCount(); ++child)
       {
-        const std::size_t parent = pending.back();
-        pending.pop_back();
-        for (std::size_t child = 0; child < entityPool_.slotCount(); ++child)
+        if (child == slot ||
+            entityPool_.status(child) != orphen::ported::entity::SlotStatus::ScriptSpawned ||
+            entityPool_.slot(child).parentSlot192 != static_cast<std::int16_t>(slot))
         {
-          if (child == parent ||
-              entityPool_.status(child) != orphen::ported::entity::SlotStatus::ScriptSpawned ||
-              entityPool_.slot(child).parentSlot192 != static_cast<std::int16_t>(parent))
-          {
-            continue;
-          }
-          entityPool_.releaseSlot(child);
-          // FUN_00229c40 zeroes the whole 0x1D8-byte entity when the slot is
-          // reused, and +0x168 is inside it, so a freed slot must not carry its
-          // hides into whatever lands there next.
-          DAT_004a7e00_boneOverrides_[child].reset();
-          pending.push_back(child);
+          continue;
         }
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            child, entityPool_, &sceneScript_.state().DAT_00343888_lights);
       }
 
       // FUN_002298d0 maps type 1 to 0 and everything else to non-zero, so only

@@ -624,7 +624,15 @@ namespace orphen::ported::entity
 
   // FUN_00265ec0: release a pool slot the way the original does -- give the
   // dynamic light back, cascade to anything attached, then blank it. Exposed
-  // because the crab's swipe frees the three entities its throw stood up.
+  // because the crab's swipe frees the three entities its throw stood up, and
+  // because the scene script reaches it through two opcodes of its own.
+  //
+  // The pool-and-lights overload is the one the script side uses: it is
+  // everything FUN_00265EC0 actually touches, and an ActorEnvironment is more
+  // than the interpreter has.
+  void FUN_00265ec0_destroy_entity(std::size_t slot,
+                                   EntityPool &pool,
+                                   orphen::ported::render::LightTable *lights);
   void FUN_00265ec0_destroy_entity(std::size_t slot, const ActorEnvironment &environment);
 
   // FUN_002d2f40, type 0x28: allocate the close-up rig (types 0x26, 0x27, 0x19)

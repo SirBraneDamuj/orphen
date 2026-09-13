@@ -822,6 +822,15 @@ namespace orphen::ported::script
     // underneath it.
     std::function<void(std::size_t slot)> FUN_002606d0_detach_children;
 
+    // FUN_00265EC0, which opcode 0x5C (FUN_0025F238) is a two-line wrapper
+    // around. It is not the pool's own release: it gives the entity's dynamic
+    // light slot back and it takes every entity parented to this one down with
+    // it, recursively. A script destroys a rig by naming its visible pieces and
+    // relies on the cascade for the rest -- s14_e031 never names the close-up
+    // bandana, because destroying the bust it hangs off is supposed to be
+    // enough.
+    std::function<void(std::size_t slot)> FUN_00265ec0_destroy_entity;
+
     // Opcodes 0xA4 and 0xA6 (FUN_00261f60 -> FUN_0022dbc8 / FUN_0022dc68).
     //
     // Both take a group mask and test it against the 0x78 terrain record's

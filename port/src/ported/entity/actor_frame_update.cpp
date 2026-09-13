@@ -24,6 +24,7 @@
 #include <array>
 #include <span>
 #include <cmath>
+#include <vector>
 
 namespace orphen::ported::entity
 {
@@ -1379,36 +1380,82 @@ namespace orphen::ported::entity
   // FUN_00265f70, the second, cascades to anything attached to this entity.
   // FUN_0020e7e0, the third, releases eight sound handles at +0xB0..+0xB8; the
   // port's sound path holds no per-entity handles, so there is nothing to free.
+  //
+  // **The cascade is the whole subtree, not the first layer of it.**
+  // FUN_00265F70 does not release a child itself -- it calls FUN_00265EC0 on
+  // each one, which runs FUN_00265F70 again on its way out. A one-level sweep
+  // leaves a grandchild alive with its `+0x192` naming a slot that has already
+  // been handed to something else. s14_e031 is where that showed: the scene
+  // tears its first close-up rig down with three opcode 0x5C calls -- the
+  // `0x26` bust, the `0x27` hair, the `0x28` mount -- and never names the
+  // `0x19` cloth, because on hardware the bust takes its cloth with it. The
+  // port kept the cloth, the slot it pointed at was recycled into the *next*
+  // rig's cloth, and Orphen wore two bandanas through the whole close-up.
+  //
+  // The status byte is cleared before the rescan, which is also what stops a
+  // parent cycle looping: the original zeroes DAT_005A96B0 at the top of
+  // FUN_00265EC0, before FUN_00265F70 ever runs.
+  void FUN_00265ec0_destroy_entity(std::size_t slot,
+                                   EntityPool &pool,
+                                   orphen::ported::render::LightTable *lights)
+  {
+    if (slot >= pool.slotCount())
+    {
+      return;
+    }
+
+    std::vector<std::size_t> pending{slot};
+    while (!pending.empty())
+    {
+      const std::size_t current = pending.back();
+      pending.pop_back();
+
+      // `*entity < 1`: FUN_00265EC0's short branch clears +0x96, the type and
+      // +0x95 and stops -- no light given back, and no cascade. The pool's
+      // release is a superset of those three writes.
+      if (pool.slot(current).typeId00 < 1)
+      {
+        pool.releaseSlot(current);
+        continue;
+      }
+
+      // FUN_00266098.
+      const std::int8_t lightSlot = pool.slot(current).lightSlot195;
+      if (lightSlot >= 0 && lights != nullptr)
+      {
+        lights->slot(static_cast<std::uint32_t>(lightSlot)).radius = 0.0f;
+      }
+      pool.slot(current).lightSlot195 = -1;
+
+      // Released before the scan below, standing in for the original's leading
+      // status write. Nothing after this point reads the slot: FUN_0020E7E0's
+      // sound handles are not modelled, and the `+0x02 & 0x8000` script hook is
+      // the one piece of FUN_00265EC0 the port still does not have.
+      pool.releaseSlot(current);
+
+      // FUN_00265f70: every live slot whose +0x192 names this one, each of them
+      // through FUN_00265EC0 again.
+      for (std::size_t child = 0; child < pool.slotCount(); ++child)
+      {
+        if (child == current || pool.status(child) != SlotStatus::ScriptSpawned)
+        {
+          continue;
+        }
+        if (pool.slot(child).parentSlot192 == static_cast<std::int16_t>(current))
+        {
+          pending.push_back(child);
+        }
+      }
+    }
+  }
+
   void FUN_00265ec0_destroy_entity(std::size_t slot, const ActorEnvironment &environment)
   {
     if (environment.entityPool == nullptr)
     {
       return;
     }
-    EntityPool &pool = *environment.entityPool;
-
-    // FUN_00266098.
-    const std::int8_t lightSlot = pool.slot(slot).lightSlot195;
-    if (lightSlot >= 0 && environment.DAT_00343888_lights != nullptr)
-    {
-      environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(lightSlot)).radius = 0.0f;
-    }
-    pool.slot(slot).lightSlot195 = -1;
-
-    // FUN_00265f70: everything whose +0x192 names this slot goes with it.
-    for (std::size_t child = 0; child < kEntitySlotCount; ++child)
-    {
-      if (child == slot || pool.status(child) != SlotStatus::ScriptSpawned)
-      {
-        continue;
-      }
-      if (pool.slot(child).parentSlot192 == static_cast<std::int16_t>(slot))
-      {
-        pool.releaseSlot(child);
-      }
-    }
-
-    pool.releaseSlot(slot);
+    FUN_00265ec0_destroy_entity(slot, *environment.entityPool, environment.DAT_00343888_lights);
   }
 
   // FUN_00256130's spawn block, reached on the frame the swing's timeline

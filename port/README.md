@@ -8572,3 +8572,52 @@ has no attract mode, so it is zero by construction.
 All eleven arms still hand off to the same destination scenes, and the
 `--frames 1200` guard is byte-identical on `s01_e024`, `s14_e001` and
 `s14_e012`.
+
+### The second bandana, and why destroying an entity is not releasing a slot
+
+Orphen wore two bandanas through `s14_e031`'s camera swoop -- one trailing off
+the close-up bust correctly, a second forking away from it. The extra one was a
+real entity, pool slot 14, type `0x19`, and it had been alive since the scene's
+init entry.
+
+`s14_e031` builds the close-up rig **twice**. The init entry runs opcode `0x13F`,
+which clears `+0x94` and calls `FUN_002D2F40`; that lands a mount at slot 11 with
+hair at 12, bust at 13 and cloth at 14. The scene then tears that first rig down
+again with three opcode `0x5C` calls -- slot 13 (the `0x26` bust), slot 12 (the
+`0x27` hair), slot 11 (the `0x28` mount) -- and builds a fresh one later at
+10/11/12/13.
+
+**It never names the cloth.** It does not have to: `FUN_0025F238`, opcode `0x5C`'s
+whole body, is a call to `FUN_00265EC0`, and `FUN_00265EC0` calls `FUN_00265F70`,
+which destroys every entity whose `+0x192` names this one **through `FUN_00265EC0`
+again**. The cascade is the whole subtree. Destroying the bust takes the cloth
+hanging off it, because the cloth is the bust's child.
+
+The port had two separate divergences that added up to the same entity surviving:
+
+- Opcode `0x5C` called `EntityPool::releaseSlot`, which is the map-load blank --
+  no light slot given back, no cascade at all.
+- `FUN_00265ec0_destroy_entity` did cascade, but only one level: it released each
+  direct child with a bare `releaseSlot` rather than recursing. A grandchild
+  always survived.
+
+So the first rig's cloth outlived its bust, its `+0x192` kept naming slot 13, and
+slot 13 was recycled into the *second* rig's cloth -- which is why the stray
+bandana tracked the real one instead of hanging somewhere random.
+
+`FUN_00265EC0` is now one function taking a pool and the light table, with the
+`ActorEnvironment` form as a thin wrapper, and `0x5C` and `0x142`
+(`FUN_002606D0`, which calls `FUN_00265F70` outright) both go through it. Two
+details of it that are easy to miss:
+
+- The status byte is cleared **before** the rescan -- the original zeroes
+  `DAT_005A96B0[slot]` at the top of `FUN_00265EC0`, ahead of everything else.
+  That is what stops a parent cycle looping, and the port's release-then-scan
+  order stands in for it.
+- A slot whose type reads `< 1` takes the short branch: `+0x96`, the type and
+  `+0x95` are cleared and nothing else happens -- no light freed, no cascade.
+
+Verified: the rig at frame 1400 of arm 853 is four entities (mount 10, hair 11,
+bust 12, cloth 13) plus the field bandana in slot 4, where it was five; the swoop
+draws one tail; all eleven arms still reach the same destination scenes; and the
+`--frames 1200` guard is byte-identical on `s01_e024`, `s14_e001` and `s14_e012`.

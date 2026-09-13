@@ -3903,11 +3903,17 @@ namespace orphen::ported::script
     // 0x5C (FUN_0025f238): one expression. Below 0x100 it names a pool slot,
     // otherwise the current selection is destroyed. s01_e012's handoff runs
     // this over work[10..12] to clear away the props it spawned.
+    //
+    // The whole body is `FUN_00265EC0(entity)`, so this is a full teardown --
+    // the dynamic light slot given back and the entity's whole parented subtree
+    // destroyed with it -- not the pool's blank-the-slot release. Using the
+    // latter left s14_e031 with a second bandana: the scene destroys the
+    // close-up bust and expects the cloth hanging off it to go too.
     case 0x5C:
     {
       noteOpcode(opcode, OpcodeSupport::Modelled);
       const std::uint32_t index = FUN_0025c258_evaluate();
-      if (halted_ || environment_.entityPool == nullptr)
+      if (halted_ || !environment_.FUN_00265ec0_destroy_entity)
       {
         return 0;
       }
@@ -3916,7 +3922,7 @@ namespace orphen::ported::script
                                    : currentEntity_;
       if (slot < orphen::ported::entity::kEntitySlotCount)
       {
-        environment_.entityPool->releaseSlot(slot);
+        environment_.FUN_00265ec0_destroy_entity(slot);
       }
       return 0;
     }
