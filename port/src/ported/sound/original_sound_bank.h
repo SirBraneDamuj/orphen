@@ -74,6 +74,11 @@ namespace orphen::ported::sound
     std::uint16_t adsr1 = 0;
     std::uint16_t adsr2 = 0;
     std::int16_t waveform = 0; // 1-based index into the VAG table
+    // VagAtr `mode` at +1: 4 routes the tone through the effect bus, 0 keeps it
+    // dry. Those are the only two values in the game -- all 400 tones of the
+    // three boot banks are 0, and SND resource 170, the piece under s14_e031,
+    // is 11 wet against one dry. See Spu2Reverb.
+    bool reverb = false;
   };
 
   struct VabProgram

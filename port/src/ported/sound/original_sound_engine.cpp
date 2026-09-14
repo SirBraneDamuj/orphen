@@ -152,7 +152,9 @@ namespace orphen::ported::sound
 
   bool SoundEngine::FUN_00205938_load_slot(std::size_t slot, std::uint16_t sndResource,
                                            std::uint8_t baseVolume,
-                                           std::span<const std::uint8_t> bankResource)
+                                           std::span<const std::uint8_t> bankResource,
+                                           std::int16_t reverbType,
+                                           std::uint16_t reverbDepth)
   {
     if (slot >= kMusicSlotCount)
     {
@@ -160,6 +162,19 @@ namespace orphen::ported::sound
     }
     const std::lock_guard<std::mutex> guard(mixLock_);
     slotResource_[slot] = sndResource;
+
+    // FUN_00205938:90-113. The whole block sits behind `-1 < sVar2`, so a
+    // record declining to choose leaves both the type and the depth exactly as
+    // the last scene left them -- the depth included, which is why this is one
+    // test and not two.
+    if (reverbType >= 0)
+    {
+      // setPreset zeroes the delay buffer when the selection moves, which is
+      // the 0x100 bit the EE always ORs into the type: the driver wipes the
+      // work area so a new preset does not start on the old one's tail.
+      reverb_.setPreset(reverbType);
+      reverb_.setDepth(reverbDepth);
+    }
     const bool ok = musicSlots_[slot].FUN_00205938_load(bankResource, baseVolume);
 
     // FUN_00205310:36-45 reads the lender's entry out of the eleven-entry bank
@@ -561,11 +576,38 @@ namespace orphen::ported::sound
       // The eight sequence slots. These run on the mixer's clock rather than the
       // simulation's, exactly like the voice line: nothing here can reach the
       // simulation, so --frames stays byte-identical with or without a device.
+      // The wet bus, when there is one to fill. A tone routed to the effect
+      // bus with the effect switched off is silent on hardware, but the port
+      // would rather lose the reverb than lose the note, so with no preset
+      // selected every voice goes straight to the dry mix.
+      float *wet = nullptr;
+      if (reverb_.active() && !reverbDisabled_)
+      {
+        wetBus_.assign(frames * 2, 0.0f);
+        wet = wetBus_.data();
+      }
+
       for (SequencePlayer &slot : musicSlots_)
       {
         if (slot.audible())
         {
-          slot.render(interleavedStereo, frames);
+          slot.render(interleavedStereo, wet, frames);
+        }
+      }
+
+      if (wet != nullptr)
+      {
+        for (std::size_t frame = 0; frame < frames; ++frame)
+        {
+          float returnL = 0.0f;
+          float returnR = 0.0f;
+          reverb_.process(wet[frame * 2], wet[frame * 2 + 1], returnL, returnR);
+          // A wet tone is still heard dry. This is a PS1-shaped VAB, and
+          // there the per-voice reverb bit is purely an extra send -- every
+          // voice reaches the main mix whether or not it also feeds the
+          // effect bus -- so `mode` 4 means "and also wet", not "wet instead".
+          interleavedStereo[frame * 2] += wet[frame * 2] + returnL;
+          interleavedStereo[frame * 2 + 1] += wet[frame * 2 + 1] + returnR;
         }
       }
 

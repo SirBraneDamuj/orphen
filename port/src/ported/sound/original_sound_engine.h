@@ -43,6 +43,7 @@
 
 #include "ported/sound/original_sequence_player.h"
 #include "ported/sound/original_sound_bank.h"
+#include "ported/sound/spu2_reverb.h"
 
 #include <array>
 #include <cstdint>
@@ -154,6 +155,11 @@ namespace orphen::ported::sound
     // the whole mix. Nothing about the simulation changes.
     void setMusicSolo(bool solo) { musicSolo_ = solo; }
 
+    // --no-reverb. Holds the effect bus off no matter what a record asks for,
+    // which is what makes the wet path A/B-able against the dry mix. A
+    // divergence by construction -- diagnostic only.
+    void setReverbDisabled(bool disabled) { reverbDisabled_ = disabled; }
+
     // FUN_00267d38 with a non-zero entity: FUN_00267a80(x, y, z, cue, 100).
     void FUN_00267d38_play_at(std::uint16_t cue, float x, float y, float z);
     // FUN_00267d38 with a null entity, which reaches FUN_002057c8 at full pan.
@@ -195,9 +201,19 @@ namespace orphen::ported::sound
 
     // FUN_00205938: put a bank resource into a slot. The caller resolves the
     // SND.BIN id through musicRecord() first and passes it back for the report.
+    //
+    // `reverbType` and `reverbDepth` are the record's `+4` and `+6`, passed
+    // through unchanged: FUN_00205938:90-113 is where they are acted on, and a
+    // type below zero deliberately leaves the previous scene's choice standing.
     bool FUN_00205938_load_slot(std::size_t slot, std::uint16_t sndResource,
                                 std::uint8_t baseVolume,
-                                std::span<const std::uint8_t> bankResource);
+                                std::span<const std::uint8_t> bankResource,
+                                std::int16_t reverbType = -1,
+                                std::uint16_t reverbDepth = 0);
+
+    // --sound-report: what the effect bus ended up set to.
+    int reverbPreset() const { return reverb_.preset(); }
+    std::uint16_t reverbDepth() const { return reverb_.depth(); }
     // FUN_00205d90 (opcode 0x129), FUN_002063c8 (0x12A) and FUN_00206260
     // (0x12B). The fader runs 0..1000 over the record's own volume byte.
     void FUN_00205d90_play_slot(std::size_t slot, int fader);
@@ -290,6 +306,14 @@ namespace orphen::ported::sound
 
     void startVoice(const KeyOn &request);
     const SoundBank *bankFor(const KeyOn &request) const;
+
+    // The effect bus. One per machine, not one per slot: FUN_00205938 caches
+    // the last type and depth globally in sGpffffbab4/sGpffffbab6, so eight
+    // slots share a single reverb and the last one to ask wins.
+    Spu2Reverb reverb_;
+    bool reverbDisabled_ = false;
+    // Scratch for the wet sum, sized to whatever the callback asks for.
+    std::vector<float> wetBus_;
 
     std::vector<SoundCue> cues_;
     std::array<SoundBank, kBankCount> banks_;

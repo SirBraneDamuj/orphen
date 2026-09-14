@@ -3542,7 +3542,9 @@ namespace orphen::port
         soundEngine_.logMusicSlot(log);
         continue;
       }
-      if (!soundEngine_.FUN_00205938_load_slot(slot, record->sndResource, record->volume, resource))
+      if (!soundEngine_.FUN_00205938_load_slot(slot, record->sndResource, record->volume,
+                                               resource, record->reverbType,
+                                               record->reverbDepth))
       {
         // A bank whose section 2 is "NSEQ" carries no sequence at all. That is
         // normal for a sound-effect bank and not an error.
@@ -3624,6 +3626,7 @@ namespace orphen::port
     dialogueStream_.setVoiceIndex(&voiceIndex_);
     voiceAudioEnabled_ = config.audio || !config.soundDumpPath.empty();
     soundEngine_.setMusicSolo(config.musicSolo);
+    soundEngine_.setReverbDisabled(config.noReverb);
     if (config.noSubprocDisplay)
     {
       DAT_003555dd_debugDisplay_ &=
@@ -5004,6 +5007,18 @@ namespace orphen::port
                 << (player.desynced() ? ", DESYNCED" : "")
                 << ", fader " << player.fader() << ", "
                 << (player.playing() ? "playing" : "stopped") << '\n';
+    }
+    // FUN_00205938:90-113's effect bus. One setting for all eight slots, which
+    // is why this is a line rather than a column.
+    {
+      static const char *const kReverbModes[] = {"off",   "room", "studio A",   "studio B",
+                                                 "studio C", "hall", "space echo", "echo",
+                                                 "delay", "pipe"};
+      const int preset = soundEngine_.reverbPreset();
+      const std::uint16_t depth = soundEngine_.reverbDepth();
+      std::cout << "reverb: type " << preset << " (" << kReverbModes[preset] << "), depth "
+                << depth << " -> effect volume 0x" << std::hex << (depth << 8) << std::dec
+                << '\n';
     }
     for (const auto &entry : soundEngine_.musicEventLog())
     {

@@ -6445,9 +6445,6 @@ bursts in that WAV start at frames 166 and 391, matching the cue log.
 
 - **Absolute loudness.** The chain reproduces the game's relative volumes, but
   nothing models the IOP's own master, so the overall level is a guess.
-- **Reverb.** `FUN_00205938:90-113` sets an SPU2 reverb type and depth per music
-  slot. Not ported, so sequences play dry -- see *The reverb is never sent, and
-  s14_e031 is where you hear it* below for what that costs.
 
 ## Music, and where every note of it was hiding
 
@@ -6529,11 +6526,11 @@ both `FUN_00206840` and opcode 0x129 pass. `FUN_002063c8` (0x12A, up) and
 `FUN_00206260` (0x12B, down) ramp it, over a frame count worked out from the
 0..127 delta rather than the fader delta.
 
-### The reverb is never sent, and s14_e031 is where you hear it
+### The reverb, and the table that was never in the EE image
 
-A music record is eight bytes and the port uses two of them. `+0` is the SND
-resource and `+2` the volume; `+4` is a **reverb type** and `+6` a **reverb
-depth**. `FUN_00205938:90-113` is their only reader:
+A music record is eight bytes. `+0` is the SND resource and `+2` the volume;
+`+4` is a **reverb type** and `+6` a **reverb depth**. `FUN_00205938:90-113` is
+their only reader:
 
 - `+4 >= 0` sends the type to the IOP as command `0x7314` with `type | 0x100`,
   then command `6` with 1 to turn the effect on (0 when the type is 0).
@@ -6542,28 +6539,107 @@ depth**. `FUN_00205938:90-113` is their only reader:
 
 Both are cached in `sGpffffbab4` and `sGpffffbab6`, so a slot asking for what is
 already set resends nothing, and a `+4` of `-1` skips the block outright and
-leaves whatever the last scene chose.
+leaves whatever the last scene chose. **78 of the 285 music records select a
+preset** -- 26 of 51 in category 0, 28 of 33 in category 1, 24 of 201 in
+category 2. (An earlier count here said 71, which was the type-4 records alone.)
 
-The port parses both fields into `MusicRecord` and then hands
-`FUN_00205938_load_slot` the volume alone. There is no wet bus in the mixer, so
-every sequence plays dry. **71 of the 285 music records ask for reverb** -- 21 of
-51 in category 0, 27 of 33 in category 1, 23 of 201 in category 2 -- so this is
-most of the game's music rather than a corner of it.
+#### The coefficients are on the disc, not in the ELF
 
-`s14_e031` is where it stops being subtle. Its track is category 2 index 84 ->
-SND resource 170, `vol 70, reverb type 4, depth 60`: a send of `0x3C00` out of
-`0x7FFF` on both channels, with every tone in the bank at VAB mode 4, which is
-the per-tone "route me through the reverb" flag. The SEQp is seven channels at
-48 ticks per quarter and 480000 us per quarter, so a tick is 10 ms -- and
-**channel 6 is a note-for-note copy of channel 3 delayed by 32 ticks**. 512
-note-ons against 507, no pitch mismatches, the offset exactly 32 on every one,
-the same instrument on both (programs 3 and 6 are a single tone each on VAG 4),
-and only the channel volume different: CC7 120 against 73. It is an authored
-slap delay. Wet, it is the tail of a room. Dry, it is the melody played twice
-320 ms apart, which is what the port sounds like today.
+The EE never holds a single reverb coefficient. It forwards a type number, and
+the table that turns that number into hardware registers lives in the game's own
+IOP sound driver, `cdrom0:\RSPU2DRV.IRX` -- which is on the ISO but was never in
+the flattened disc root here. `scripts/extract_spu2_reverb_presets.py` pulls it
+out of either, and generates `port/src/ported/sound/spu2_reverb_presets.h`.
 
-Porting it means the SPU2 reverb network and its preset coefficient bank, plus a
-wet send in `SoundEngine::mix`. Not started.
+Two tables in the module's `.data`:
+
+- **0x16390** -- ten `u32` buffer sizes in eight-byte units, `0x4D8` through
+  `0x780`. These are the stock Sony sizes: `0x4D8 * 8` is room's `0x26C0`.
+- **0x163C0** -- ten `0x44`-byte entries, `{ u32 fieldMask; u16 params[32] }`.
+  The mask is zero in every shipped entry, which the driver reads as "write
+  every field".
+
+So the modes are the familiar ten: 0 off, 1 room, 2-4 studio small/medium/large,
+5 hall, 6 space echo, 7 echo, 8 delay, 9 pipe. `s14_e031`'s type 4 is **studio
+large**. Across the whole game only 4 (x71), 3 (x4), 5 (x2), 2 (x1) and 0 (x2)
+are ever asked for.
+
+The driver's writer at `0xF6F0` walks the entry front to back against ascending
+register indices, which is what pins the field order down with nothing left to
+guess: `+4`/`+6` are `APF1_SIZE`/`APF2_SIZE`, `+8` through `+0x16` are the ten
+volume coefficients at `0x774`-`0x782`, `+0x18` through `+0x3E` are the twenty
+delay-line addresses at `0x2EC`-`0x338` in order, and `+0x40`/`+0x42` are
+`IN_COEF_L`/`IN_COEF_R`. Addresses go out as `value << 2` -- eight-byte units to
+16-bit words -- and `ESA` as `(memtop - (size * 8 - 2)) >> 1`, so the buffer is
+exactly the PS1's byte geometry and a preset unit is four samples.
+
+#### Routing is per tone, and the flag is the VAB's
+
+A VagAtr's `mode` byte at `+1` is **4** for a tone that feeds the effect bus and
+**0** for one that does not. Those are the only two values anywhere in the game.
+The three boot banks are 400 tones of solid 0, which is why sound effects have
+never wanted this, and of the 283 banks the music tables reference only **61**
+carry a wet tone at all -- a scene can select a preset and still route nothing to
+it, which is exactly what `s01_e012` does.
+
+This is a PS1-shaped VAB, where the per-voice reverb bit is purely an extra
+send: a wet tone is still heard dry. `mode` 4 means "and also wet", not "wet
+instead".
+
+#### s14_e031
+
+Its track is category 2 index 84 -> SND resource 170, `vol 70, reverb type 4,
+depth 60`: a send of `0x3C00` out of `0x7FFF` on both channels, and **11 of its
+12 tones at mode 4**. (An earlier note here said every tone in the bank; one is
+dry.) The SEQp is seven channels at 48 ticks per quarter and 480000 us per
+quarter, so a tick is 10 ms -- and **channel 6 is a note-for-note copy of
+channel 3 delayed by 32 ticks**. 512 note-ons against 507, no pitch mismatches,
+the offset exactly 32 on every one, the same instrument on both (programs 3 and
+6 are a single tone each on VAG 4), and only the channel volume different: CC7
+120 against 73. It is an authored slap delay. Wet, it is the tail of a room.
+Dry, it was the melody played twice 320 ms apart.
+
+#### What the port runs
+
+`Spu2Reverb` is the documented SPU reverb topology: two cross-coupled IIR comb
+lines feeding a four-tap early-echo comb, then two all-pass sections, all of them
+reading and writing one delay buffer that scrolls a sample per tick. The
+different-side lines cross -- the left one feeds back off the *right* source tap
+-- and straightening that out collapses the stereo image, which is how you notice
+it has been got wrong. Field names in the code are the driver's, so `sameLDst`
+is the address the hardware's `SAME_L_DST` holds.
+
+Two deliberate departures, both audible only under a null test: it runs in float
+where the hardware is 16-bit fixed point with a saturating multiply, and the wet
+return is linearly interpolated across the sample pair a tick covers rather than
+resampled through the hardware's FIR. It does tick at half the output rate, as
+the hardware does.
+
+Measured on `s14_e031`, 15 s of `--music-solo` at frames 900, wet against
+`--no-reverb`:
+
+| | dry | wet |
+|---|---|---|
+| RMS | 5885 | 6758 |
+| peak | 24119 | 30526 |
+| L/R correlation | 0.858 | 0.632 |
+
+The difference signal is 3278 RMS, a little over half the dry level, which is
+where a `0x3C00`-of-`0x7FFF` send should land. Nothing clips and the IIR does not
+run away. Correlating that difference against the dry mix gives no dominant
+single lag -- a diffuse `+-0.1` out to 640 ms, with one `+0.18` bump at 320 ms,
+which is the authored slap delay showing through the tail rather than the reverb
+producing an echo of its own.
+
+The simulation is untouched: `--frames 600 --actor-report --scr-report` on
+`s14_e031` is byte-identical to the same report from the build before this
+change, and the `--music-solo` dumps for `s01_e024` and `s01_e012` hash the same
+before and after -- the second of those despite selecting studio large at depth
+30, because not one of its tones asks for the bus.
+
+One edge the shipped data never reaches: a preset selected at depth zero would
+freeze the delay buffer here where the hardware would keep circulating it. No
+record in the game does that.
 
 ### Scene-streamed sound effects live in the music banks
 
@@ -6628,6 +6704,10 @@ wind takes 27 loops in a 13,000-frame run). Confirm with:
 orphen_port --disc-root . --scene s01_e012 --frames 600 --music-solo \
     --sound-dump out/audio/wind.wav
 ```
+
+`--no-reverb` holds the effect bus off whatever the scene's music record asks
+for, so a wet track can be dumped twice and differenced. It is a divergence by
+construction -- diagnostic only.
 
 `--music-solo` mutes the effect pool and the voice line so a dump holds only the
 sequence slots — dialogue is centred and full-scale and buries the music in any

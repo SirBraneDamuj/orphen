@@ -706,7 +706,7 @@ namespace orphen::ported::sound
     }
   }
 
-  void SequencePlayer::render(float *interleavedStereo, std::size_t frames)
+  void SequencePlayer::render(float *dry, float *wet, std::size_t frames)
   {
     std::size_t done = 0;
     while (done < frames)
@@ -742,6 +742,13 @@ namespace orphen::ported::sound
           continue;
         }
         anyVoice = true;
+        // The tone's own routing. A wet tone with no wet bus open falls back to
+        // the dry one rather than vanishing.
+        float *bus = dry;
+        if (wet != nullptr && voice.tone != nullptr && voice.tone->reverb)
+        {
+          bus = wet;
+        }
         const std::vector<std::int16_t> &pcm = voice.pcm->samples;
         for (std::size_t frame = 0; frame < block; ++frame)
         {
@@ -777,8 +784,8 @@ namespace orphen::ported::sound
                                32768.0f;
           const float gain = envelope * blockGain;
           const std::size_t out = (done + frame) * 2;
-          interleavedStereo[out] += sample * voice.gainLeft * gain;
-          interleavedStereo[out + 1] += sample * voice.gainRight * gain;
+          bus[out] += sample * voice.gainLeft * gain;
+          bus[out + 1] += sample * voice.gainRight * gain;
           voice.position += voice.step;
         }
       }

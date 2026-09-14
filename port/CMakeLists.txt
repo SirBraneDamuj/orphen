@@ -83,6 +83,9 @@ target_sources(orphen_port
         src/ported/sound/original_sound_engine.h
         src/ported/sound/original_voice_index.cpp
         src/ported/sound/original_voice_index.h
+        src/ported/sound/spu2_reverb.cpp
+        src/ported/sound/spu2_reverb.h
+        src/ported/sound/spu2_reverb_presets.h
         src/ported/text/original_dialogue_text.cpp
         src/ported/text/original_dialogue_stream.cpp
         src/ported/text/original_dialogue_window.cpp

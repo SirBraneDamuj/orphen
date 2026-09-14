@@ -329,6 +329,7 @@ namespace orphen::ported::sound
         tone.adsr1 = u16At(header, entry + 16);
         tone.adsr2 = u16At(header, entry + 18);
         tone.waveform = static_cast<std::int16_t>(u16At(header, entry + 22));
+        tone.reverb = header[entry + 1] != 0;
         program.tones.push_back(tone);
       }
     }

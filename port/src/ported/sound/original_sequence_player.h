@@ -160,7 +160,13 @@ namespace orphen::ported::sound
 
     // Renders `frames` stereo frames additively at kSpuBaseSampleRate, running
     // the sequence forward as it goes. Called from the mixer thread only.
-    void render(float *interleavedStereo, std::size_t frames);
+    //
+    // Two buses, because routing is per tone: a voice whose VagAtr `mode` is 4
+    // lands in `wet` and one whose mode is 0 lands in `dry`. `wet` may be null,
+    // which sends everything to `dry` -- what a slot with no reverb selected
+    // wants, and what the hardware does too, since a wet voice with the effect
+    // switched off is simply inaudible on that bus.
+    void render(float *dry, float *wet, std::size_t frames);
 
   private:
     void reset();

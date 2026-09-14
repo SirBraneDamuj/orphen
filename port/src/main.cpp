@@ -195,6 +195,11 @@ namespace
         config.musicSolo = true;
         continue;
       }
+      if (argument == "--no-reverb")
+      {
+        config.noReverb = true;
+        continue;
+      }
       if (argument == "--sound-dump")
       {
         if (argumentIndex + 1 >= argc)

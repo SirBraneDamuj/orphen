@@ -199,6 +199,10 @@ namespace orphen::port
     // --music-solo: mute the effect pool and voice line in the mixer, so a
     // --sound-dump holds only the sequence slots. Diagnostic only.
     bool musicSolo = false;
+    // --no-reverb: hold the effect bus off whatever a music record asks for, so
+    // a wet track can be A/B'd against the dry mix the port used to produce.
+    // Diagnostic only; it is a divergence from the original by definition.
+    bool noReverb = false;
     // --no-scr-subproc-disp: clear DAT_003555dd bit 7, which the port otherwise
     // holds set so the subproc lines ride along with the position readout the
     // same overlay already draws. 'P' toggles it at runtime.
