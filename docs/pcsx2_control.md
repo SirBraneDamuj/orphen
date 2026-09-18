@@ -16,7 +16,12 @@ upstream.
 
 ## Setup
 
-1. Build the fork (Visual Studio solution `PCSX2_qt.sln`, Debug or Release x64).
+1. Build the fork (Visual Studio solution `PCSX2_qt.sln`, x64). Use **Release**:
+   it emulates at a full 60fps against Debug's ~12, save and load drop from
+   ~0.4s to ~0.08s, and `Console` output still reaches `emulog.txt` -- only
+   `DevCon`/`DbgCon` are stripped, which makes the log more readable, not less.
+   Emulation is bit-identical between the two: the same state stepped the same
+   number of frames gives the same entity pool either way.
 2. Enable the server. In `PCSX2.ini`, under `[EmuCore]`:
 
    ```ini
@@ -89,7 +94,7 @@ slot rotation cannot clobber it. `savestates/README.md` describes the scene and
 records the determinism check behind it. Launch into it with:
 
 ```bash
-"C:/Users/zptha/projects/pcsx2/bin/pcsx2-qtx64-dbg.exe"   -statefile "C:/Users/zptha/projects/orphen/decompiled/savestates/entry_stable.p2s"   -- "D:/PS2/Orphen - Scion of Sorcery (USA).iso"
+"C:/Users/zptha/projects/pcsx2/bin/pcsx2-qtx64.exe"   -statefile "C:/Users/zptha/projects/orphen/decompiled/savestates/entry_stable.p2s"   -- "D:/PS2/Orphen - Scion of Sorcery (USA).iso"
 ```
 
 Two launches from it, each stepped 30 frames from a pause, gave a byte-identical
@@ -274,7 +279,8 @@ Known gaps:
   rather than being refused.
 - **A timed-out `step` is not cancelled.** The frame advance keeps counting down
   in the background; issue a `pause` if that matters. The default step timeout
-  scales as `15000 + frames × 100` ms, capped at 120s, which is generous enough
-  for a debug build running well under realtime.
+  scales as `15000 + frames × 100` ms, capped at 120s. That was sized for a
+  Debug build at ~12fps; in Release it is generous. Steps beyond ~1200 frames
+  need an explicit `timeout_ms` or to be issued in chunks.
 - **Writes do not invalidate recompiled code**, and `read_many` is not an atomic
   snapshot — see the notes above.
