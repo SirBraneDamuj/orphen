@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pcsx2": {
+      "command": "python",
+      "args": ["-m", "tools.mcp_pcsx2.server"],
+      "cwd": "C:/Users/zptha/projects/orphen/decompiled",
+      "env": {
+        "PCSX2_CONTROL_PORT": "28015"
+      }
+    }
+  }
+}

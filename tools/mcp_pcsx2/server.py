@@ -5,7 +5,7 @@ Requires the control server built into the fork at C:/Users/zptha/projects/pcsx2
 (`pcsx2/ControlServer.cpp`), enabled with `EnableControlServer=true` under
 `[EmuCore]` in `PCSX2.ini`.
 
-    pip install mcp
+    pip install 'mcp>=2'
     python -m tools.mcp_pcsx2.server
 
 The general shape of a session: `pcsx2_pause`, then read/step/read. Reading while
@@ -17,12 +17,12 @@ import base64
 import os
 import tempfile
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from . import orphen
 from .client import ControlError, Pcsx2Control, TransportError
 
-mcp = FastMCP("pcsx2")
+mcp = MCPServer("pcsx2")
 
 _client = None
 
