@@ -49,6 +49,7 @@ out/
 .claude/settings.local.json
 
 SLUS_200.11
+SLPS_250.08
 *.zst
 
 *.iso
@@ -56,3 +57,8 @@ SLUS_200.11
 *.MV3
 *.CNF
 *.IMG
+
+# PCSX2 save states + reference captures for the control harness (game data, keep local)
+/savestates/
+
+bash.exe.stackdump
