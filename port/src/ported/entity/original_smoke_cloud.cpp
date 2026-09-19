@@ -244,4 +244,79 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_00212F38's draw half. The template :92 stages carries one float and
+  // VU1 turns it into the quad; what it does with it was measured off the GS
+  // dump rather than read out of the function, and the header records both the
+  // measurement and the check that it is not a coincidence.
+  orphen::ported::render::SpriteQuad
+  FUN_00212f38_build_smoke_quad(const SmokeQuadInputs &inputs)
+  {
+    orphen::ported::render::SpriteQuad quad;
+
+    const float viewZ = inputs.viewZ;
+    // gsZ = DAT_003555A4 / viewZ, and the half-width is `zoom * scale * gsZ`.
+    const float halfWidth =
+        inputs.zoomTimesScale * kDAT_003555a4_smokeDepthNumerator / viewZ;
+    // Measured at 2.0000 across all 2236 quads: the GS output is 640x224 shown
+    // at 4:3, so a square sprite is twice as wide in pixels as it is tall.
+    const float halfHeight = halfWidth * 0.5f;
+
+    const auto gsX0 = static_cast<int>(static_cast<float>(inputs.gsOriginX) - halfWidth);
+    const auto gsX1 = static_cast<int>(static_cast<float>(inputs.gsOriginX) + halfWidth);
+    const auto gsY0 = static_cast<int>(static_cast<float>(inputs.gsOriginY) - halfHeight);
+    const auto gsY1 = static_cast<int>(static_cast<float>(inputs.gsOriginY) + halfHeight);
+
+    const float perX = inputs.projectionScaleX != 0.0f ? viewZ / inputs.projectionScaleX : 0.0f;
+    const float perY = inputs.projectionScaleY != 0.0f ? viewZ / inputs.projectionScaleY : 0.0f;
+
+    const float x0 = (static_cast<float>(gsX0) - inputs.screenCentreX) * perX;
+    const float x1 = (static_cast<float>(gsX1) - inputs.screenCentreX) * perX;
+    const float y0 = (static_cast<float>(gsY0) - inputs.screenCentreY) * perY;
+    const float y1 = (static_cast<float>(gsY1) - inputs.screenCentreY) * perY;
+
+    // :73-74 walks the four corners of one template variant. The corners
+    // themselves are the rectangle's, in the packet's fan order; only which
+    // texel each one gets moves with the variant, which is what makes the four
+    // of them a rotation of the same puff.
+    static constexpr float cornerX[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    static constexpr float cornerY[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+    const auto texel = [](int n)
+    {
+      return kSmokeTexelCentre + ((n & 2) != 0 ? kSmokeTexelHalfExtent : -kSmokeTexelHalfExtent);
+    };
+
+    quad.oriented = true;
+    for (int corner = 0; corner < 4; ++corner)
+    {
+      quad.cornerX[corner] = cornerX[corner] == 0.0f ? x0 : x1;
+      quad.cornerY[corner] = cornerY[corner] == 0.0f ? y0 : y1;
+      quad.cornerZ[corner] = viewZ;
+      quad.cornerU[corner] = texel(inputs.variant + corner);
+      quad.cornerV[corner] = texel(inputs.variant + 1 + corner);
+    }
+    quad.viewZ = viewZ;
+
+    // The dump reads RGBAQ (48, 48, 48, 0..10) against DAT_00355A44 0x303030
+    // and an alpha ceiling of 10, so nothing is folded on the way here -- this
+    // packet never passes FUN_00207DE8. 0x80 is 1.0 on the GS.
+    //
+    // :63-65 writes RGBAQ's lanes from DAT_00355A46, DAT_00355A45 and
+    // DAT_00355A44 in that order, so the word is 0x00RRGGBB and its *low* byte
+    // is blue. The spray and fountain pools carry 0xBBGGRR and read the low
+    // byte as red; do not copy their line here.
+    const auto channel = [](std::uint32_t component)
+    { return static_cast<float>(component) / 128.0f; };
+    quad.colour[0] = channel((inputs.rgb >> 16) & 0xFFu);
+    quad.colour[1] = channel((inputs.rgb >> 8) & 0xFFu);
+    quad.colour[2] = channel(inputs.rgb & 0xFFu);
+    quad.colour[3] = channel(inputs.alpha);
+
+    quad.blendMode = kSmokeBlendMode;
+    quad.textureSlot = kSmokeTextureSlot;
+    quad.clutBank = kSmokeClutBank;
+    quad.displayListBucket = kSmokeDisplayListBucket;
+    quad.depthTest = true;
+    return quad;
+  }
+
 } // namespace orphen::ported::entity

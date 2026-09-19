@@ -55,28 +55,109 @@
 // A particle that is fading (alpha below the ceiling) has its counter dropped
 // outright rather than decremented.
 //
-// ---- what is deliberately missing ----------------------------------------
+// ---- the draw, and where it had to come from ------------------------------
 //
 // **The draw.** FUN_00212F38's packet is a VU1 program's input, not a GIF
-// stream the port can read a texture out of: it unpacks 40 quadwords of
-// template to VU address 32, then the per-particle stream is 32 positions
-// (V4-32 to address 6) plus 32 four-byte attribute quads (V4-8 to address 47)
-// whose byte 0 is `(i & 3) * 10` and byte 3 the alpha.
+// stream: it unpacks 40 quadwords of template to VU address 32, then the
+// per-particle stream is 32 positions (V4-32 to address 6) plus 32 four-byte
+// attribute quads (V4-8 to address 47) whose byte 0 is `(i & 3) * 10` and byte
+// 3 the alpha. The template is **four** ten-quadword variants, which is what
+// that byte selects: NLOOP 1, EOP, PRE, NREG 9, FLG PACKED, REGS = RGBAQ then
+// four (UV, XYZ2) pairs, PRIM = triangle fan with TME, ABE and FST set and IIP
+// clear. There is no TEX0 and no ALPHA register anywhere in the packet, and the
+// quad's size is applied by the microprogram, so none of the three could be
+// read out of this function. A GS dump settled all of them -- see below.
 //
-// The template's GIFtag reads NLOOP 1, EOP, PRE, NREG 9, FLG PACKED with
-// REGS = RGBAQ then four (UV, XYZ2) pairs, and PRIM = triangle fan with TME,
-// ABE and FST set and IIP clear -- a flat, textured, blended quad addressed in
-// UV, whose four corners are 0x510 and 0x5F0 in 4-bit fixed, i.e. texels 81..95
-// on both axes. **There is no TEX0 anywhere in the packet**, so which sheet
-// those texels belong to is not in this function, and neither is the ALPHA
-// register behind that ABE. Drawing it would mean choosing a page and a blend,
-// which is the guess the fidelity rule exists to stop. A GS dump of the scene
-// (port/attic/gsparse.py) settles both.
+// It does not go through FUN_00207DE8 either. The tail writes the chain
+// straight into `DAT_7000000C + 0xFFF4`, one fixed slot, so the cloud has no
+// display-list bucket: it lands after every 0x1000 effect packet and before the
+// 0x1005 overlay ones, which is where the dump shows it.
 //
-// So the pool is stepped and reported and draws nothing yet. That is stated in
-// --actor-report rather than left to be discovered.
-
+// ---- what the GS dump says, measured 2026-09-18 ---------------------------
+//
+// Captured in PCSX2 at the "Hey! Smoke!" beat of s01_e014 and read with
+// port/attic/gsparse.py. The cloud is one unmistakable group: 2236 quads at
+// PRIM 0x155 -- trifan, TME, ABE, FST, IIP clear, exactly the template's --
+// with UV corners (81,81)..(95,95), exactly the 0x510/0x5F0 this function
+// writes. 2528 were armed; the missing 292 are near-clipped.
+//
+//   TEX0_1   TBP0 0x3828, TBW 4, 256x256, TCC 1, TFX 0 (MODULATE)
+//   TEX2_1   PSM PSMT4, CBP 0x3F00, CSA 0
+//   ALPHA_1  0x44     (Cs - Cd) * As + Cd -- plain src-alpha, no FIX
+//   TEST_1   0x5000d  ATE, ATST GREATER, AREF 0
+//   ZBUF_1   ZMSK 1   depth *test* GEQUAL, depth *write* off
+//   TEX1_1   0x60     bilinear both ways, no mipmaps
+//   RGBAQ    (48, 48, 48, 0..10) -- DAT_00355A44 and the per-particle alpha,
+//            passed through unhalved. FUN_00207DE8's fold is the UI path, and
+//            this packet never goes near it.
+//
+// TBP0 0x3828 solves FUN_002103D0's slot >= 0x18 mapping exactly --
+// `(slot - 0x18) * 0x84 + 12000` -- at **slot 0x2A**, which is texture 0x178,
+// the sheet the book prompt, the HUD quads and the target pips already use. So
+// the cloud needs no asset of its own. PSMT4 and CSA 0 say bank 0 of it.
+//
+// Two things about reading that dump, both of which cost time here:
+//
+// - **gsparse snapshots TEX0 only.** A slot at or above 0x18 is a PSMT4 page
+//   whose real PSM and CLUT arrive in a *TEX2_1* write (A+D register 0x16),
+//   which TEX0 never sees. Read TEX0 alone and this sheet reports PSMT8 at
+//   CBP 0x38A8, which is neither the format nor the palette it draws with.
+// - **A save state's end-of-frame register file is not attribution.** Read
+//   that way first, this came back as TBP0 0x3A38 with CBP 0x3F00 -- the
+//   *next* draw's base against the smoke's own CLUT, a pair that belongs to no
+//   draw at all and refused to solve. Attribute at the batch's first vertex.
+//
+// ---- the size the microprogram applies ------------------------------------
+//
+// :92 stages one template float, `DAT_00355658 * DAT_00355A48` -- the camera
+// zoom times the stored scale -- and VU1 turns it into the quad. What it does
+// with it is not in this function, so it was measured off the same dump, over
+// all 2236 quads:
+//
+//   width / height = 2.0000 exactly       the usual 2:1 GS pixel aspect
+//   gsZ vs half-width: slope 14.998       = 1 / (zoom * scale) = 15.000
+//
+// So the half-width in GS 12.4 units is simply `zoom * scale * gsZ`, with the
+// sprite pass's own `gsZ = DAT_003555A4 / viewZ`. The depths that falls out to
+// run 0.40 .. 3.51, which is the 0.4 near clip at one end and the far corner of
+// the 3x3x3 box at the other -- the cloud is entirely inside its own volume,
+// which is the check that the reading is not a coincidence.
+//
+// The four template variants differ only in which corner gets which texel, so
+// `(i & 3) * 10` is a 90-degree rotation of the puff. Decoded from :73-74,
+// `U[c] = f((m + c) & 2)` and `V[c] = f((m + 1 + c) & 2)` with f picking 81 for
+// a clear bit 1 and 95 for a set one. All 2236 quads in the dump match one of
+// those four, and the variant walks 0,1,2,3 in pool order.
+//
+// ---- it depends on a full 16-bit draw -------------------------------------
+//
+// FUN_00212DB0:49 seeds each axis's phase with a whole `FUN_00216868()`, and
+// the phase is a **torus angle**: the wrap in the step gives it meaning over
+// the full 0..0xFFFF. The port used to answer that call with a 15-bit LCG
+// stand-in, so half of every axis was unreachable -- the box filled 1.8 of its
+// 3 units, the cloud stopped partway across the screen, and the same 2528
+// particles crammed into 60% of the volume read as too dense. Both symptoms,
+// one cause. See original_random.h; this pool is the most sensitive caller
+// the generator has, because it is the only one that uses the raw width.
+//
+// ---- two traps when poking it live ----------------------------------------
+//
+// The arm parameters match this port exactly: DAT_00354C5C 2528, DAT_00355A40
+// 0x0A, DAT_00355A44 0x303030, DAT_00355A48 0.0666667. That it really is this
+// pool was settled by poking the live globals rather than by inference --
+// zeroing DAT_00354C5C clears the corridor completely, and writing a red
+// DAT_00355A44 turns the haze red. Doing that:
+//
+// - **The screen smear lies for about three frames.** FUN_00201A38 keeps
+//   blitting the old smoky framebuffer, so a capture two frames after a change
+//   still shows the grey wash. Step at least four. This made "count = 0" look
+//   like it made the fog *thicker*.
+// - **Density is not evidence.** 32 particles at scale 0.5 fill the screen as
+//   convincingly as 2528 at 0.0667. Read the sprite shape: enlarged, each is a
+//   chunky ~15-texel puff mask with hard alpha-tested edges.
+//
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_sprite_pass.h"
 
 #include <array>
 #include <cstdint>
@@ -125,13 +206,60 @@ namespace orphen::ported::entity
     std::uint16_t packed06 = 0;
   };
 
-  // What one particle would draw as, if the sheet behind it were known.
+  // What one particle draws as. The VU1 stream's two halves: the V4-32
+  // position and the V4-8 attribute quad's two live bytes.
   struct SmokeDrawPoint
   {
     orphen::ported::psm2::Vec3 position{};
-    std::uint8_t sizeIndex = 0; // `(i & 3) * 10`
+    std::uint8_t sizeIndex = 0; // `(i & 3) * 10`, the template variant
     std::uint8_t alpha = 0;
   };
+
+  // Texture slot 0x2A, which FUN_002103D0's `(slot - 0x18) * 0x84 + 12000`
+  // puts at the dump's TBP0 0x3828. Slot 0x2A is texture 0x178, the shared UI
+  // sheet; TEX2_1's PSMT4 and CSA 0 make it bank 0 of it.
+  inline constexpr int kSmokeTextureSlot = 0x2A;
+  inline constexpr int kSmokeClutBank = 0;
+  // ALPHA_1 0x44 -- (Cs - Cd) * As + Cd, the port's mode 1.
+  inline constexpr int kSmokeBlendMode = 1;
+  // No display-list bucket of its own: the packet goes straight into the chain
+  // at DAT_7000000C + 0xFFF4, which the dump shows drawing after every 0x1000
+  // effect and before the 0x1005 overlays.
+  inline constexpr int kSmokeDisplayListBucket = 0x1001;
+  // :73-74. `0x58` is the centre texel and `7` the half-extent, both scaled by
+  // 0x10 into GS 4-bit fixed and undone here.
+  inline constexpr float kSmokeTexelCentre = 88.0f;
+  inline constexpr float kSmokeTexelHalfExtent = 7.0f;
+  // DAT_003555A4, the sprite pass's depth numerator. The half-width in GS 12.4
+  // units is `zoom * scale * gsZ` and `gsZ` is this over the view depth, so the
+  // two fold into one constant here.
+  inline constexpr float kDAT_003555a4_smokeDepthNumerator = 19706.0859f;
+
+  // One particle's quad, in the GS screen units the microprogram works in.
+  struct SmokeQuadInputs
+  {
+    // FUN_0020B600's integer origin for the particle, GS 12.4 units.
+    std::int32_t gsOriginX = 0;
+    std::int32_t gsOriginY = 0;
+    float viewZ = 1.0f;
+    // ViewProjection::projection at (0,0), (1,1), (2,0) and (2,1) -- what the
+    // un-projection back to view space needs, as the other pools take it.
+    float projectionScaleX = 7680.0f;
+    float projectionScaleY = 3456.0f;
+    float screenCentreX = 32768.0f;
+    float screenCentreY = 32768.0f;
+    // DAT_00355658 * DAT_00355A48, the one float :92 stages for VU1.
+    float zoomTimesScale = 0.0666667f;
+    // The template variant, 0..3 -- `sizeIndex / 10`.
+    int variant = 0;
+    // DAT_00355A44 and the particle's own alpha, both raw GS bytes.
+    std::uint32_t rgb = 0;
+    std::uint8_t alpha = 0;
+  };
+
+  // FUN_00212F38's draw half, as VU1 applies it.
+  orphen::ported::render::SpriteQuad
+  FUN_00212f38_build_smoke_quad(const SmokeQuadInputs &inputs);
 
   class SmokeCloud
   {

@@ -1788,7 +1788,7 @@ namespace orphen::port
                     << DAT_0054f080_smoke_.DAT_00354c5c_count() << " particles, colour 0x"
                     << std::hex << cloud.colour << std::dec << ", scale "
                     << DAT_0054f080_smoke_.DAT_00355a48_scale()
-                    << " -- stepped, not drawn; see original_smoke_cloud.h\n";
+                    << "; slot 0x2A bank 0, see original_smoke_cloud.h\n";
         }
       };
 
@@ -4205,6 +4205,61 @@ namespace orphen::port
 
         quads.push_back(
             orphen::ported::entity::FUN_0021f310_build_fountain_quad(inputs));
+      }
+    }
+
+    // FUN_00212F38's draw half. The step rebuilt every particle's world
+    // position relative to the camera; here each one becomes the quad VU1
+    // builds from the single `zoom * scale` float the function stages. The
+    // sheet, the blend and the size all came off a GS dump of s01_e014 --
+    // original_smoke_cloud.h records the measurement.
+    if (!DAT_0054f080_smoke_.drawList().empty())
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+      // :92's template float. DAT_00355658 is the camera zoom the sprite pass
+      // doubles into its own G; the smoke takes it undoubled.
+      const float zoomTimesScale =
+          fieldCamera_.fGpffffb6e8_zoomLog2() * DAT_0054f080_smoke_.DAT_00355a48_scale();
+      const std::uint32_t rgb = DAT_0054f080_smoke_.DAT_00355a44_rgb();
+
+      for (const auto &point : DAT_0054f080_smoke_.drawList())
+      {
+        // TEST_1's ATST GREATER against AREF 0 discards a fully transparent
+        // texel on the GS; a particle at the wrap seam is entirely alpha 0, so
+        // it costs nothing to drop it here instead. The dump has 141 such
+        // quads of 2236 and they contribute no pixels.
+        if (point.alpha == 0)
+        {
+          continue;
+        }
+        const auto viewSpace = viewProjection.toViewSpace(point.position);
+        // The dump's nearest drawn particle sits at view depth 0.4022 and
+        // there is nothing below it, so what culls these is the geometry near
+        // clip and not the sprite pass's 0.3.
+        if (viewSpace.z <= orphen::ported::render::constants::kGeometryNearClip)
+        {
+          continue;
+        }
+
+        orphen::ported::entity::SmokeQuadInputs inputs;
+        inputs.gsOriginX =
+            static_cast<int>(viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        inputs.gsOriginY =
+            static_cast<int>(viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        inputs.viewZ = viewSpace.z;
+        inputs.projectionScaleX = projectionScaleX;
+        inputs.projectionScaleY = projectionScaleY;
+        inputs.screenCentreX = screenCentreX;
+        inputs.screenCentreY = screenCentreY;
+        inputs.zoomTimesScale = zoomTimesScale;
+        inputs.variant = point.sizeIndex / 10;
+        inputs.rgb = rgb;
+        inputs.alpha = point.alpha;
+
+        quads.push_back(orphen::ported::entity::FUN_00212f38_build_smoke_quad(inputs));
       }
     }
 
@@ -6663,7 +6718,7 @@ namespace orphen::port
               << " alphaCeiling=0x" << DAT_0054f080_smoke_.DAT_00355a40_alphaCeiling() << std::dec
               << " scale=" << DAT_0054f080_smoke_.DAT_00355a48_scale()
               << (DAT_0054f080_smoke_.DAT_00354c5c_count() > 0
-                      ? "  (stepped; NOT DRAWN -- FUN_00212F38's packet carries no TEX0)"
+                      ? "  (slot 0x2A bank 0, PSMT4, src-alpha)"
                       : "")
               << '\n';
     std::cout << "spray particles: alive=" << DAT_00355b58_spray_.DAT_00355b54_aliveCount()
