@@ -727,6 +727,13 @@ namespace orphen::port
     // iGpffffb2c8: module 32's camera-move timer, in frame ticks. One global,
     // because only one of its zones can be running at a time.
     int iGpffffb2c8_cameraElapsed_ = 0;
+    // DAT_00355234: module 31's, and a **different word** -- gp base 0x00359F70
+    // puts iGpffffb2c8 at 0x00355238, one word past this. The two modules never
+    // run in the same scene, but they do not share the counter either.
+    int DAT_00355234_cameraElapsed_ = 0;
+    // Not the original's. Reports a work[58] the hook has no destination for,
+    // once, so an unmodelled panel is visible in a run rather than silent.
+    bool DAT_00355234_selectorReported_ = false;
 
   // FUN_0022DC68(selector, enable, 0x800). Shared by opcode 0xA6 and by the
   // crab's swipe, which is why it is a member rather than a lambda body.

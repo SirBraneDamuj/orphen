@@ -2795,10 +2795,90 @@ namespace orphen::port
     // frames at the nominal 0x20. `iGpffffb64c` is that per-frame tick and is
     // only ever assigned 0x20 (FUN_002239C8:27, :102), so frameTicks is it.
     //
-    // Sibling module 31 (FUN_0026D640) is the same handshake with a longer
-    // 0x780 move and a destination chosen by work[58]; no scene the port runs
-    // names it yet, and s01_e014 writes work[16] and work[20] rather than
-    // work[58], so it is deliberately not guessed at here.
+    // FUN_0026D640, module 31 -- s01_e013's forced-camera panels. The same
+    // 718/719/720 handshake module 32 runs, with a longer move and a
+    // destination chosen from the script's own work array rather than computed
+    // off the lead. Nothing in the script blob ever clears 719 or 720, so
+    // without this hook the lead takes control on the panel (0x6D) and sits in
+    // state 10 for the rest of the scene.
+    else if (mode == 4 && DAT_0032536c_sceneModule_ == 31)
+    {
+      auto &state = sceneScript_.state();
+      if (!state.FUN_00266368_eventFlag(0x2CE))
+      {
+        return;
+      }
+      if (state.FUN_00266368_eventFlag(0x2CF))
+      {
+        const auto &lead = entityPool_.leadPlayer();
+        // FUN_0026D640's four destinations, keyed on work[58]. The triple is
+        // written in stack order (x, +0x24, height); DAT_0058BED0 and
+        // DAT_0058BED4 are entity pool slot 0's +0x20 and +0x24, the lead's
+        // position, because the pool base is 0x0058BEB0.
+        //
+        // **Cases 0, 3 and 4 write no destination at all** -- the original
+        // leaves the three stack words holding whatever the last call left
+        // there and builds a move to that. There is nothing to reproduce, so
+        // the move is skipped and the flag still comes down, which keeps the
+        // script's state machine running instead of wedging it.
+        const std::uint32_t selector = state.DAT_00355060_work[58];
+        const bool work63 = state.DAT_00355060_work[63] != 0;
+        std::optional<orphen::ported::psm2::Vec3> destination;
+        switch (selector)
+        {
+        case 1:
+          destination = orphen::ported::psm2::Vec3{8.5f, 6.0f, 9.5f};
+          break;
+        case 2:
+          // DAT_00352D40, 1.7 in the ELF.
+          destination = orphen::ported::psm2::Vec3{1.7f, lead.positionZ24, 4.5f};
+          break;
+        case 5:
+          destination = orphen::ported::psm2::Vec3{lead.positionX20 + 0.5f, 5.5f,
+                                                   work63 ? 5.5f : 3.5f};
+          break;
+        case 6:
+          // The same panel mirrored: only the +0x24 term changes sign.
+          destination = orphen::ported::psm2::Vec3{lead.positionX20 + 0.5f, -5.5f,
+                                                   work63 ? 5.5f : 3.5f};
+          break;
+        default:
+          break;
+        }
+
+        if (destination.has_value())
+        {
+          const std::array<orphen::ported::psm2::Vec3, 2> eyePoints{
+              fieldCamera_.DAT_0058c0a8_eye(), *destination};
+          const std::array<orphen::ported::psm2::Vec3, 1> lookAtPoints{
+              fieldCamera_.DAT_0058be90_lookAt()};
+          fieldCamera_.FUN_00217e18_release_manual_camera(false);
+          fieldCamera_.FUN_00217fe8_set_camera_path(eyePoints, {}, {}, lookAtPoints);
+        }
+        else if (!DAT_00355234_selectorReported_)
+        {
+          DAT_00355234_selectorReported_ = true;
+          std::cout << "[panel] module 31 camera zone with work[58]=" << selector
+                    << ", which FUN_0026D640 builds no destination for\n";
+        }
+        DAT_00355234_cameraElapsed_ = 0;
+        state.FUN_002663d8_clearEventFlag(0x2CF);
+      }
+      else if (state.FUN_00266368_eventFlag(0x2D0))
+      {
+        DAT_00355234_cameraElapsed_ += static_cast<int>(frameTicks);
+        // `< 0x781`, so the sample at exactly the duration is taken and the
+        // flag comes down on the frame after it. Module 32's move is 0x3C0.
+        if (DAT_00355234_cameraElapsed_ < 0x781)
+        {
+          fieldCamera_.FUN_00217f38_step_camera_path(DAT_00355234_cameraElapsed_, 0x780);
+        }
+        else
+        {
+          state.FUN_002663d8_clearEventFlag(0x2D0);
+        }
+      }
+    }
     else if (mode == 4 && DAT_0032536c_sceneModule_ == 32)
     {
       auto &state = sceneScript_.state();
