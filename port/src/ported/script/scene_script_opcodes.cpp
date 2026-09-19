@@ -5106,6 +5106,58 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0x127 / 0x128 (FUN_002613d8): an inline **s16** cue id, then three
+    // expressions giving a world coordinate, and for 0x128 a fourth giving the
+    // volume scale. 0x127 passes a fixed 100. Both divide the coordinate by
+    // 100000.0 -- DAT_00352C38 and DAT_00352C3C are separate globals holding
+    // the same constant, read from the ELF, so the two paths are only
+    // *textually* different.
+    //
+    // The literal token the coordinates arrive in is 0x0F, which is already
+    // "s32 * 100", so a script writes 12000 for x = 12.0.
+    //
+    // This is how a scripted object makes a noise at its own position rather
+    // than at an entity -- s01_e014's door plays cue 0x24C at (12, -1, 5),
+    // which is where the door stands. Leaving it unimplemented halted the
+    // door's body before it could open anything.
+    case 0x127:
+    case 0x128:
+    {
+      const bool hasVolume = (opcode == 0x128);
+      note(OpcodeSupport::Modelled);
+      // :11-12. The inline read happens before the expressions, so the order
+      // cannot be swapped.
+      const std::int32_t cue = static_cast<std::int16_t>(
+          readU8() | (static_cast<std::uint32_t>(readU8()) << 8));
+      const std::int32_t x = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t y = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t z = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      std::int32_t scale = 100;
+      if (hasVolume)
+      {
+        scale = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      }
+      if (halted_)
+      {
+        return 0;
+      }
+      // :14-15. A negative cue is not a cue at all: FUN_00267a80 sends it to
+      // FUN_00206128(-cue), which nudges an already-playing channel's volume
+      // rather than keying anything on. No sequence-channel mixer here, and no
+      // script found using it, so it is skipped rather than played as if it
+      // were a positive id.
+      if (cue >= 0 && environment_.FUN_00267a80_play_at_point)
+      {
+        constexpr float kDAT_00352c38_coordinateScale = 100000.0f;
+        environment_.FUN_00267a80_play_at_point(
+            static_cast<std::uint16_t>(cue),
+            static_cast<float>(x) / kDAT_00352c38_coordinateScale,
+            static_cast<float>(y) / kDAT_00352c38_coordinateScale,
+            static_cast<float>(z) / kDAT_00352c38_coordinateScale, scale);
+      }
+      return 0;
+    }
+
     // 0x13D (FUN_00265410): selector, then an animation id, through
     // FUN_00225bc8 -- the *proper* animation setter, which also resets the
     // state timer, clears +0xA2 and zeroes the timeline cursor. Writing +0xA0

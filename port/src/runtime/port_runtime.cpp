@@ -1682,6 +1682,10 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
     };
 
+    environment.FUN_00267a80_play_at_point =
+        [this](std::uint16_t cue, float x, float y, float z, int scale)
+    { soundEngine_.FUN_00267a80_play_at(cue, x, y, z, scale); };
+
     // Opcodes 0x132..0x137, the script's voice channel. The same DAT_00356480
     // cache and the same FUN_00206F08 read the battle module's spell lines go
     // through, so a script line and a spell line cannot disagree about which

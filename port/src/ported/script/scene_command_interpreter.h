@@ -770,6 +770,11 @@ namespace orphen::ported::script
     // opcodes 0x125 / 0x126.
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
 
+    // FUN_00267a80: play a sound cue at a world coordinate the script names
+    // itself, with its own volume scale. Extended opcodes 0x127 / 0x128.
+    std::function<void(std::uint16_t cue, float x, float y, float z, int scale)>
+        FUN_00267a80_play_at_point;
+
     // == FUN_0025b778's own debug output ==
     //
     // DAT_003555dd, the debug display byte the menu writes. Bit 7 is the

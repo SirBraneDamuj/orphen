@@ -162,6 +162,10 @@ namespace orphen::ported::sound
 
     // FUN_00267d38 with a non-zero entity: FUN_00267a80(x, y, z, cue, 100).
     void FUN_00267d38_play_at(std::uint16_t cue, float x, float y, float z);
+    // FUN_00267a80 itself. Public because opcode 0x128 plays a cue at a
+    // *scripted* coordinate with its own volume scale rather than at an
+    // entity, so it cannot go through FUN_00267d38.
+    void FUN_00267a80_play_at(std::uint16_t cue, float x, float y, float z, int scale);
     // FUN_00267d38 with a null entity, which reaches FUN_002057c8 at full pan.
     void FUN_00267d38_play_flat(std::uint16_t cue);
     // FUN_002057c8 itself. Public because two callers reach it without going

@@ -339,14 +339,29 @@ namespace orphen::ported::sound
 
   void SoundEngine::FUN_00267d38_play_at(std::uint16_t cue, float x, float y, float z)
   {
-    // FUN_00267a80(x, y, z, cue, 100).
-    constexpr int kScale = 100;
+    // FUN_00267d38 passes a fixed 100, which is also what opcode 0x127 uses.
+    FUN_00267a80_play_at(cue, x, y, z, 100);
+  }
+
+  void SoundEngine::FUN_00267a80_play_at(std::uint16_t cue, float x, float y, float z, int scale)
+  {
+    // FUN_00267a80(x, y, z, cue, scale).
+    //
+    // A negative scale takes :12-14: the scale goes back to 100 *and* the
+    // distance term is replaced by the constant fGpffff8d9c, so the cue plays
+    // at a fixed near-field level however far away the coordinates are. Only
+    // the pan still comes from the geometry. Nothing reaches this yet -- the
+    // two scripted callers pass 100 and a script expression -- but it is one
+    // branch and guessing it would be worse than porting it.
+    const bool fixedDistance = scale < 0;
+    const int kScale = fixedDistance ? 100 : scale;
 
     const float toX = x - listener_.x;
     const float toY = y - listener_.y;
     const float toZ = z - listener_.z;
 
-    const float distance = std::sqrt(toX * toX + toY * toY + toZ * toZ);
+    const float distance = fixedDistance ? fGpffff8d9c_flatDistance
+                                         : std::sqrt(toX * toX + toY * toY + toZ * toZ);
     lastDistance_ = distance;
     lastSource_ = {x, y, z};
     lastListener_ = {listener_.x, listener_.y, listener_.z};
