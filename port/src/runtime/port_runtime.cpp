@@ -986,14 +986,8 @@ namespace orphen::port
         [this](std::size_t slot, int speed, int targetFader)
     { soundEngine_.FUN_00206260_ramp_down_slot(slot, speed, targetFader); };
 
-    // FUN_00216868. A plain LCG rather than the original's generator, which has
-    // not been analysed; what matters here is that it is seeded once and stepped
-    // deterministically, so --frames stays reproducible.
-    environment.random = [this]() -> std::uint32_t
-    {
-      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
-      return (actorRandomState_ >> 16) & 0x7FFFu;
-    };
+    // FUN_00216868, the original's own generator -- see original_random.h.
+    environment.random = [this]() -> std::uint32_t { return FUN_00216868_random(); };
 
     if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
     {
@@ -1050,11 +1044,7 @@ namespace orphen::port
       bandana.selfPalette = DAT_00357e00_bonePalettes_[slot];
       bandana.frameCounter003555b4 = DAT_003555b4_frameCounter_;
       bandana.tickCounter003555b8 = DAT_003555b8_tickCounter_;
-      bandana.random = [this]() -> std::uint32_t
-      {
-        actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
-        return (actorRandomState_ >> 16) & 0x7FFFu;
-      };
+      bandana.random = [this]() -> std::uint32_t { return FUN_00216868_random(); };
 
       // FUN_00213720's walk up +0x192 to the root of the attachment chain. The
       // bandana hangs directly off the lead player, so one hop; the loop is
@@ -1684,11 +1674,7 @@ namespace orphen::port
 
     environment.set_uGpffffb6dc_roll = [this](float radians) { fieldCamera_.setRoll(radians); };
 
-    environment.FUN_00216868_random = [this]() -> std::uint32_t
-    {
-      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
-      return (actorRandomState_ >> 16) & 0x7FFFu;
-    };
+    environment.FUN_00216868_random = [this]() -> std::uint32_t { return FUN_00216868_random(); };
 
     environment.FUN_00267d38_play_at_entity = [this](std::uint16_t cue, std::size_t slot)
     {

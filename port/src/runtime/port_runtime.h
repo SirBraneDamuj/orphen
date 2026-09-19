@@ -5,6 +5,7 @@
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
+#include "ported/original_random.h"
 #include "ported/debug/original_debug_text.h"
 #include "ported/debug/original_position_display.h"
 #include "ported/player/original_chest_cutscene.h"
@@ -526,16 +527,13 @@ namespace orphen::port
     };
     std::vector<PendingTrailRibbon> pendingTrailRibbons_;
 
-    // FUN_00216868 stand-in. Seeded to a constant so --frames is reproducible.
-    std::uint32_t actorRandomState_ = 0x12345678u;
-    // FUN_00216868, the one draw the three call sites share. A plain LCG rather
-    // than the original's generator, which has not been analysed; what matters
-    // is that it is seeded once and stepped deterministically.
-    std::uint32_t FUN_00216868_random()
-    {
-      actorRandomState_ = actorRandomState_ * 1103515245u + 12345u;
-      return (actorRandomState_ >> 16) & 0x7FFFu;
-    }
+    // The original generator, seeded at construction with FUN_002000C0's
+    // 0x12345678. This used to be a plain LCG returning 15 bits, which is
+    // fine for a caller wanting a small range and wrong for one seeding a
+    // 16-bit angle -- see original_random.h.
+    orphen::ported::OriginalRandom DAT_0055f0a0_random_;
+    // FUN_00216868, the one draw every call site shares.
+    std::uint32_t FUN_00216868_random() { return DAT_0055f0a0_random_.FUN_00216868_draw(); }
     // Rising-edge state for the live trigger log, so stepping on a panel says
     // so once rather than 60 times a second.
     std::map<std::uint32_t, bool> triggerWasPassing_;
