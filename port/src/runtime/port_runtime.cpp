@@ -2007,6 +2007,16 @@ namespace orphen::port
       }
     };
 
+    // FUN_0022cd88 / FUN_00265200, opcodes 0xE5 and 0xE6: the four background
+    // model descriptors at DAT_00345A18. See
+    // ported/render/original_background_model.h.
+    environment.FUN_0022cd88_load_background_model =
+        [this](std::int16_t resourceId, std::int32_t slot)
+    { FUN_0022cd88_load_background_model(resourceId, slot); };
+    environment.FUN_00265200_set_background_slot =
+        [this](std::int32_t slot, std::uint8_t shade, float angleZ)
+    { FUN_00265200_set_background_slot(slot, shade, angleZ); };
+
     // FUN_002257c0 through opcode 0x117: the map's own UV animation block.
     // The original's index is one-based -- FUN_002257c0 writes
     // `base + index * 10 + 1`, and the records start four bytes past the base
@@ -2990,22 +3000,41 @@ namespace orphen::port
       return;
     }
 
+    FUN_0022cd88_load_background_model(resourceId, 0);
+  }
+
+  void PortRuntime::FUN_0022cd88_load_background_model(std::int16_t resourceId, std::int32_t index)
+  {
+    if (index < 0 || static_cast<std::size_t>(index) >= DAT_00345a18_backgrounds_.size())
+    {
+      return;
+    }
+
+    const auto *resources = mapViewer_.loadedSceneResources();
+    if (resources == nullptr)
+    {
+      return;
+    }
+
     // FUN_0022CD88: FUN_00223268(2, id, arena) -- archive index 2 is the scene
-    // bundle's geometry category, the one the PSM2 map also comes out of.
+    // bundle's geometry category, the one the PSM2 map also comes out of. A
+    // negative return only prints 0x34c1a8; the parse runs on the arena either
+    // way, which is why a missing record here still clears the descriptor.
     const auto *record =
         resources->find(orphen::harness::kMapCategory, static_cast<std::uint16_t>(resourceId));
     if (record == nullptr)
     {
-      std::cout << "[background] scene descriptor names resource 0x" << std::hex << resourceId
-                << std::dec << " but the bundle has no category 2 record for it\n";
+      std::cout << "[background] resource 0x" << std::hex << resourceId << std::dec
+                << " has no category 2 record in this bundle\n";
       return;
     }
 
-    auto &slot = DAT_00345a18_backgrounds_[0];
+    auto &slot = DAT_00345a18_backgrounds_[static_cast<std::size_t>(index)];
     slot.resourceId = static_cast<std::uint16_t>(resourceId);
     slot.model = orphen::ported::render::FUN_0022ce60_parse_psb4(resources->decodeRecord(*record));
-    // FUN_0022CE60:31. Slot 0 alone is seeded visible; 1..3 start at zero and
-    // wait for opcode 0xE6.
+    // FUN_0022CE60:31 seeds *every* install this way: shade 0x80 and angle 0.
+    // The "slots 1..3 start invisible" note belongs to FUN_0022CDE8's clear,
+    // not to the parse -- an 0xE5 into slot 2 draws the moment it lands.
     slot.DAT_00345a38_shade = 0x80;
     slot.DAT_00345a34_angleZ = 0.0f;
 
@@ -3015,10 +3044,23 @@ namespace orphen::port
                 << " did not parse: " << slot.model.diagnostic << "\n";
       return;
     }
-    std::cout << "[background] psb4 0x" << std::hex << resourceId << std::dec << " verts="
-              << slot.model.vertices.size() << " prims=" << slot.model.primitives.size()
-              << " shade=0x" << std::hex << static_cast<int>(slot.DAT_00345a38_shade) << std::dec
-              << "\n";
+    std::cout << "[background] psb4 0x" << std::hex << resourceId << std::dec << " -> slot "
+              << index << " verts=" << slot.model.vertices.size()
+              << " prims=" << slot.model.primitives.size() << " shade=0x" << std::hex
+              << static_cast<int>(slot.DAT_00345a38_shade) << std::dec << "\n";
+  }
+
+  void PortRuntime::FUN_00265200_set_background_slot(std::int32_t index,
+                                                     std::uint8_t shade,
+                                                     float angleZ)
+  {
+    if (index < 0 || static_cast<std::size_t>(index) >= DAT_00345a18_backgrounds_.size())
+    {
+      return;
+    }
+    auto &slot = DAT_00345a18_backgrounds_[static_cast<std::size_t>(index)];
+    slot.DAT_00345a38_shade = shade;
+    slot.DAT_00345a34_angleZ = angleZ;
   }
 
   void PortRuntime::FUN_0020c290_publish_background_quads()

@@ -721,6 +721,10 @@ namespace orphen::port
     // FUN_0022CDE8(sceneDescriptor, 0) at scene load: the PSB4 named by the
     // descriptor's halfword +0x08, into background slot 0.
     void FUN_0022cde8_load_background_models();
+    // FUN_0022CD88 and FUN_00265200, which opcodes 0xE5 and 0xE6 reach through
+    // ScriptEnvironment. The scene load uses the first one too, for slot 0.
+    void FUN_0022cd88_load_background_model(std::int16_t resourceId, std::int32_t index);
+    void FUN_00265200_set_background_slot(std::int32_t index, std::uint8_t shade, float angleZ);
     // FUN_0020C290, once a frame: the four slots, turned into world-space
     // primitives around the camera eye and handed to the viewer.
     void FUN_0020c290_publish_background_quads();

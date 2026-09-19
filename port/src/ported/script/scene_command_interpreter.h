@@ -977,6 +977,21 @@ namespace orphen::ported::script
     // 0x7, 0x5, 0x6 filling 11 through 17 behind the lead player's slot 10.
     std::function<void(std::uint16_t typeId)> FUN_002661a8_preload_model;
 
+    // FUN_0022CD88, opcode 0xE5: load the PSB4 in scene-bundle category 2 with
+    // this resource id into one of the four background descriptors at
+    // DAT_00345A18. The scene's own backdrop arrives at load through
+    // FUN_0022CDE8 instead; this is how a *cutscene* swaps one in mid-scene.
+    // See ported/render/original_background_model.h.
+    std::function<void(std::int16_t resourceId, std::int32_t slot)>
+        FUN_0022cd88_load_background_model;
+
+    // FUN_00265200, opcode 0xE6: that descriptor's +0x20 shade byte and its
+    // +0x1C rotation about Z. Shade 0 is what turns a backdrop off, which is
+    // the only thing that ever hides one -- FUN_0020C2F0 returns on it before
+    // it builds anything.
+    std::function<void(std::int32_t slot, std::uint8_t shade, float angleZ)>
+        FUN_00265200_set_background_slot;
+
     // DAT_003555bc, the per-frame tick count. The fade steps by it.
     std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks;
 
@@ -1135,6 +1150,8 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025f548_find_entity_by_tag();  // 0x62
     std::uint32_t FUN_0025dff0_set_manual_camera();   // 0x46
     std::uint32_t FUN_00265290_get_or_set_gate_mask(); // 0xE7 / 0xE8
+    std::uint32_t FUN_002651a0_load_background_model(); // 0xE5
+    std::uint32_t FUN_00265200_set_background_slot();   // 0xE6
     std::uint32_t FUN_0025dab8_backup_map_coordinates(); // 0x3A
     std::uint32_t FUN_0025da78_map_coordinates();        // 0x3B
     std::uint32_t FUN_0025daf8_set_map_prop_bank();   // 0x3C

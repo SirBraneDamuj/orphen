@@ -720,6 +720,81 @@ namespace orphen::ported::script
     return value & 0xFFFFu;
   }
 
+  // 0xE5 (FUN_002651a0): load a background model into one of the four slots.
+  //
+  //   uVar1 = *DAT_00355cd0; DAT_00355cd0 += 1;   /* an undefined2 * */
+  //   FUN_0025c258(auStack_30);
+  //   FUN_0022cd88(uVar1, auStack_30[0]);
+  //
+  // Ghidra's `+ 1` on a halfword pointer is two stream bytes, and the
+  // disassembly at 0x002651B4 spells it out: `lbu`, `lbu`, `sll 8`, `or`, then
+  // `sll 16` / `sra 16`. So the id is **two inline bytes, little-endian,
+  // sign-extended**, and the slot is the one expression that follows.
+  //
+  // analyzed/ filed this as "emit_audio_pair_with_inline_byte" and it has
+  // nothing to do with audio; see analyzed/ops/0xE5_load_backdrop_model.c.
+  std::uint32_t SceneCommandInterpreter::FUN_002651a0_load_background_model()
+  {
+    if (!canRead(2))
+    {
+      halted_ = true;
+      return 0;
+    }
+    const std::uint8_t low = readU8();
+    const std::uint8_t high = readU8();
+    const std::int16_t resourceId =
+        static_cast<std::int16_t>(static_cast<std::uint16_t>(low | (high << 8)));
+
+    const std::uint32_t slot = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (environment_.FUN_0022cd88_load_background_model)
+    {
+      environment_.FUN_0022cd88_load_background_model(resourceId,
+                                                      static_cast<std::int32_t>(slot));
+    }
+    return 0;
+  }
+
+  // 0xE6 (FUN_00265200): the shade byte and Z rotation of one background slot.
+  //
+  // Three expressions into one stack frame -- `&iStack_20`, `| 4`, `| 8` -- so
+  // slot, shade and angle in that order. The middle one is read back as an
+  // `undefined1`, which on a little-endian store is the **low byte** of the
+  // word the evaluator wrote.
+  //
+  //   if (3 < slot) FUN_0026bfc0(0x34d3d0);      /* diagnose and keep going */
+  //   (&DAT_00345a38)[slot * 0x24] = shade;
+  //   *(float *)(&DAT_00345a34 + slot * 0x24) = (float)angle / DAT_00352cd4;
+  //
+  // Note the original does not *stop* on a bad slot, it only prints -- but it
+  // then indexes with it anyway. The port refuses instead, because a descriptor
+  // array here is a bounded std::array rather than the middle of BSS.
+  //
+  // DAT_00352cd4 is 100000, the same divisor every coordinate operand uses.
+  std::uint32_t SceneCommandInterpreter::FUN_00265200_set_background_slot()
+  {
+    const std::uint32_t slot = FUN_0025c258_evaluate();
+    const std::uint32_t shade = FUN_0025c258_evaluate();
+    const float angleZ = scaledOperand();
+    if (halted_)
+    {
+      return 0;
+    }
+    if (slot > 3)
+    {
+      return 0;
+    }
+    if (environment_.FUN_00265200_set_background_slot)
+    {
+      environment_.FUN_00265200_set_background_slot(
+          static_cast<std::int32_t>(slot), static_cast<std::uint8_t>(shade & 0xFFu), angleZ);
+    }
+    return 0;
+  }
+
   // 0x3C (FUN_0025daf8): `FUN_0025c258(&gp0xffffb298)` and nothing else --
   // evaluate one expression straight into a global.
   //
@@ -4303,6 +4378,14 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025daf8_set_map_prop_bank();
 
+    case 0xE5:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_002651a0_load_background_model();
+
+    case 0xE6:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00265200_set_background_slot();
+
     case 0xE7:
     case 0xE8:
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -5436,6 +5519,20 @@ namespace orphen::ported::script
       }
       return 0;
     }
+
+    // 0x10E (FUN_00262A98): ten expressions into FUN_0021F6E8, which is the
+    // spawn half of a **tenth** particle system -- the one FUN_00220028 steps,
+    // gated by iGpffffad54 (DAT_00354CC4) and holding two pools at once: 100
+    // records of 0x3C at puGpffffbbfc and 1000 of 0x24 at puGpffffbc00.
+    //
+    // Nothing of it is ported yet, so the operands are consumed and the effect
+    // is not. This is the only opcode s01_e013's Zeus sequence reaches that the
+    // port does not model, and it used to halt the whole per-frame tick on it --
+    // which is worse than drawing nothing, because a halted tick also stops the
+    // camera cuts and the beats that follow.
+    case 0x10E:
+      note(OpcodeSupport::OperandsOnly);
+      return consumeOnly(static_cast<std::uint16_t>(0x10E), 10);
 
     // 0x10F (FUN_00262B90): fourteen expressions into FUN_0021ED50, the
     // fountain pool. Read order and call order differ again -- the count is
