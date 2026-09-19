@@ -5758,6 +5758,58 @@ namespace orphen::port
   // out/target_all/<scene>/grp_*.obj, so an agreeing report means the port and
   // a tool written from a different reading of the format independently landed
   // on the same numbers.
+  // The texture-selector histogram a model's passes add up to, in the terms
+  // printEntityModelBindings already uses: `bound`/`bound+N` is the entity's
+  // own slot, `gslotN` is a global cache slot named outright, `none` is 0xF.
+  // On a grp record this is the only way to ask which global page a mesh wants
+  // without first finding an entity to hang it on.
+  std::string texturePassHistogram(const orphen::ported::model::Psc3Model &model)
+  {
+    std::map<std::string, std::size_t> selectors;
+    for (const auto &primitive : model.primitives)
+    {
+      if (primitive.skipped())
+      {
+        continue;
+      }
+      const bool boundSlotForm = (primitive.flags & 0x0800u) != 0;
+      for (const std::int16_t index : primitive.subdrawIndices)
+      {
+        if (index < 0 || static_cast<std::size_t>(index) >= model.subdraws.size())
+        {
+          continue;
+        }
+        const std::uint16_t selector = model.subdraws[index].textureSlot();
+        std::ostringstream key;
+        if (selector == 0)
+        {
+          key << "bound";
+        }
+        else if (selector == 0xF)
+        {
+          key << "none";
+        }
+        else if (boundSlotForm)
+        {
+          key << "bound+" << selector;
+        }
+        else
+        {
+          key << "gslot" << (selector - 1);
+        }
+        ++selectors[key.str()];
+      }
+    }
+    std::ostringstream text;
+    bool first = true;
+    for (const auto &entry : selectors)
+    {
+      text << (first ? "" : " ") << entry.first << ":" << entry.second;
+      first = false;
+    }
+    return text.str();
+  }
+
   void PortRuntime::printModelReport() const
   {
     const auto *resources = mapViewer_.loadedSceneResources();
@@ -5808,7 +5860,8 @@ namespace orphen::port
                 << " orphans=" << model.unreachableBones
                 << " bounds=(" << model.bounds.min.x << "," << model.bounds.min.y << ","
                 << model.bounds.min.z << ")..(" << model.bounds.max.x << "," << model.bounds.max.y
-                << "," << model.bounds.max.z << ")\n";
+                << "," << model.bounds.max.z << ")"
+                << "  passes={" << texturePassHistogram(model) << "}\n";
     }
     std::cout << "[models] parsed=" << parsed << " failed=" << failed << '\n';
 
