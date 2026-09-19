@@ -262,6 +262,9 @@ namespace orphen::ported::entity
                            const std::function<std::optional<float>(float, float, float)> &FUN_00227798_probe);
 
     const std::vector<RainQuad> &drawList() const { return draws_; }
+    // Emptied on a frame FUN_002192C0 never runs, so the pool emits nothing
+    // while its records stand still. See PortRuntime's gate on DAT_00354D2C.
+    void clearFrameDraws() { draws_.clear(); }
     int iGpffffbb30_aliveCount() const { return live_; }
     bool uGpffffad38_gate() const { return uGpffffad38_gate_; }
     int uGpffffbb4c_entityIndex() const { return entityIndex_; }

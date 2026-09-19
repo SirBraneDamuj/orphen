@@ -4204,8 +4204,13 @@ namespace orphen::port
     // collects here instead, which puts the same particles in the same order in
     // the same bucket -- FUN_002d3058's own guard is only FUN_0020b600's clip
     // flags, with no near, far or window test of the kind the sprites get.
-    if (DAT_00355620_particles_.DAT_00355e0c_behaviour() !=
-        orphen::ported::entity::ParticleBehaviour::None)
+    // FUN_002D3218 runs from FUN_002239C8's mode-0 tail and draws in the same
+    // walk that steps it, so a frame that left for FUN_002241E0 emits none of
+    // it. The pool publishes straight from its record array rather than from a
+    // draw list, so the mode has to be asked here. Same for the two below.
+    if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField &&
+        DAT_00355620_particles_.DAT_00355e0c_behaviour() !=
+            orphen::ported::entity::ParticleBehaviour::None)
     {
       const float projectionScaleX = viewProjection.projection.at(0, 0);
       const float projectionScaleY = viewProjection.projection.at(1, 1);
@@ -4252,7 +4257,8 @@ namespace orphen::port
     // original's own -- fGpffff839C, on the projected q rather than on z -- and
     // it rejects a puff that is *too close*, which is the opposite way round
     // from every other sprite in the frame.
-    if (DAT_00355a9c_dust_.aliveCount() > 0)
+    if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField &&
+        DAT_00355a9c_dust_.aliveCount() > 0)
     {
       const float projectionScaleX = viewProjection.projection.at(0, 0);
       const float projectionScaleY = viewProjection.projection.at(1, 1);
@@ -4597,8 +4603,12 @@ namespace orphen::port
     // drawn; stepping the whole pool first and then collecting the survivors
     // leaves the same set in the same order, because the ten groups own
     // contiguous slices in index order.
-    DAT_00355b74_hitSparks_.FUN_00220910_step(frameTicks);
-    if (DAT_00355b74_hitSparks_.DAT_00355b7c_activeGroups() > 0)
+    if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField)
+    {
+      DAT_00355b74_hitSparks_.FUN_00220910_step(frameTicks);
+    }
+    if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField &&
+        DAT_00355b74_hitSparks_.DAT_00355b7c_activeGroups() > 0)
     {
       for (const auto &spark : DAT_00355b74_hitSparks_.sparks())
       {
@@ -7235,6 +7245,154 @@ namespace orphen::port
     resetLeadPlayerForLoadedMap();
   }
 
+  // FUN_002192C0, the effect-pool walk. Its fifteen calls are the systems that
+  // draw themselves in the same pass that steps them; the port keeps that order
+  // and splits each one into a step here and a publish in publishSpriteQuads.
+  void PortRuntime::FUN_002192c0_step_effect_pools(std::uint32_t frameTicks)
+  {
+    // FUN_00212F38, the first call in FUN_002192C0 and so the first of the
+    // effect systems. The camera forward it wants is DAT_0058BEA0, which
+    // FUN_00216AA0:436-449 builds as normalise(lookAt - eye) -- rebuilt here
+    // rather than cached, since the port keeps the pair and not the vector.
+    {
+      const auto &eye = fieldCamera_.DAT_0058c0a8_eye();
+      const auto &lookAt = fieldCamera_.DAT_0058be90_lookAt();
+      orphen::ported::psm2::Vec3 forward{lookAt.x - eye.x, lookAt.y - eye.y, lookAt.z - eye.z};
+      const float lengthSquared =
+          forward.x * forward.x + forward.y * forward.y + forward.z * forward.z;
+      if (lengthSquared > 0.0f)
+      {
+        const float scale = 1.0f / std::sqrt(lengthSquared);
+        forward.x *= scale;
+        forward.y *= scale;
+        forward.z *= scale;
+      }
+      const auto &lead = entityPool_.leadPlayer();
+      DAT_0054f080_smoke_.FUN_00212f38_step(
+          eye, forward, {lead.positionX20, lead.positionZ24, lead.positionY28},
+          lead.height58, static_cast<std::int16_t>(lead.animationA0),
+          DAT_003555b4_frameCounter_);
+    }
+    // FUN_0021A760 runs in the same half of the frame: it is walked from
+    // the simulation and its quads are collected at publish time.
+    DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
+    // FUN_0021AD98, the rain. FUN_002192C0 walks it before the haze field,
+    // and like the haze field it cannot reach the entity pool or the terrain
+    // on its own -- but unlike it, it needs the ground query *per record*
+    // rather than once, so the probe goes in as a callback.
+    {
+      orphen::ported::entity::RainCameraFrame rainCamera;
+      rainCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+      const auto &rainEye = fieldCamera_.pose().eye;
+      rainCamera.DAT_0058c0a8_eyeX = rainEye.x;
+      rainCamera.DAT_0058c0ac_eyeY = rainEye.y;
+      rainCamera.DAT_0058c0b0_eyeZ = rainEye.z;
+
+      std::optional<orphen::ported::entity::RainEntityAnchor> rainAnchor;
+      const int rainEntity = DAT_00355ac0_rain_.uGpffffbb4c_entityIndex();
+      if (rainEntity >= 0 && static_cast<std::size_t>(rainEntity) < entityPool_.slotCount())
+      {
+        const auto &host = entityPool_.slot(static_cast<std::size_t>(rainEntity));
+        rainAnchor = orphen::ported::entity::RainEntityAnchor{
+            host.positionX20, host.positionZ24, host.positionY28};
+      }
+
+      auto *rainMap = mapViewer_.loadedMap();
+      DAT_00355ac0_rain_.FUN_0021ad98_step(
+          frameTicks, rainCamera, rainAnchor, [this] { return FUN_00216868_random(); },
+          [rainMap](float x, float y, float z) -> std::optional<float>
+          {
+            if (rainMap == nullptr)
+            {
+              return std::nullopt;
+            }
+            // FUN_00227798: the single-point ground query, asked from the
+            // height the drop is currently at. A miss is what the original's
+            // "no ground" answer stands for, and the caller treats it the
+            // same way -- above the 64.0 sentinel, so no splash.
+            const auto hit = FUN_00227070_sample_ground(*rainMap, x, y, z, 0.0f, 0.0f, 2u, 0u);
+            if (!hit.found)
+            {
+              return std::nullopt;
+            }
+            return hit.height;
+          });
+    }
+    // FUN_0021BEF0, in the slot FUN_002192C0 gives it: after FUN_0021A760 and
+    // before FUN_0021E5E0. The four pools between them in that list are not
+    // ported. The entity branch is resolved here because the pool cannot
+    // reach either the entity pool or the terrain.
+    {
+      orphen::ported::entity::HazeCameraFrame hazeCamera;
+      hazeCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+      hazeCamera.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
+      const auto &eye = fieldCamera_.pose().eye;
+      hazeCamera.DAT_0058c0a8_eyeX = eye.x;
+      hazeCamera.DAT_0058c0ac_eyeY = eye.y;
+      hazeCamera.DAT_0058c0b0_eyeZ = eye.z;
+
+      std::optional<orphen::ported::entity::HazeEntityAnchor> anchor;
+      const int hazeEntity = DAT_00355b50_haze_.DAT_00355b4c_entityIndex();
+      if (hazeEntity >= 0 && static_cast<std::size_t>(hazeEntity) < entityPool_.slotCount())
+      {
+        const auto &host = entityPool_.slot(static_cast<std::size_t>(hazeEntity));
+        orphen::ported::entity::HazeEntityAnchor resolved;
+        resolved.positionX20 = host.positionX20;
+        resolved.positionY24 = host.positionZ24;
+        // FUN_00227798(+0x20, +0x24, +0x4C): the single-point ground query,
+        // sampled from the height the entity last stood on.
+        resolved.FUN_00227798_groundHeight = host.groundHeight4c;
+        if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
+        {
+          resolved.FUN_00227798_groundHeight =
+              FUN_00227070_sample_ground(*loadedMap, host.positionX20, host.positionZ24,
+                                         host.groundHeight4c, 0.0f, 0.0f, 2u, 0u)
+                  .height;
+        }
+        anchor = resolved;
+      }
+      DAT_00355b50_haze_.FUN_0021bef0_step(frameTicks, hazeCamera, anchor,
+                                           [this] { return FUN_00216868_random(); });
+    }
+    // FUN_0021E5E0, in the slot FUN_002192C0 gives it: after FUN_0021A760
+    // and before FUN_00220910. It steps and draws in one walk, so the step
+    // records which particles survived and the publish pass turns that list
+    // into quads -- the same split the two pools either side of it use.
+    DAT_00355b58_spray_.FUN_0021e5e0_step(
+        frameTicks, [this] { return FUN_00216868_random(); });
+    // FUN_0021F1A8, immediately after it in FUN_002192C0. The camera frame is
+    // only read on a restart, by the +0x42 particles FUN_0021EBE8 places.
+    {
+      orphen::ported::entity::FountainCameraFrame cameraFrame;
+      cameraFrame.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+      cameraFrame.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
+      const auto &eye = fieldCamera_.pose().eye;
+      cameraFrame.DAT_0058c0a8_eyeX = eye.x;
+      cameraFrame.DAT_0058c0ac_eyeY = eye.y;
+      cameraFrame.DAT_0058c0b0_eyeZ = eye.z;
+      DAT_00355b60_fountain_.FUN_0021f1a8_step(frameTicks, cameraFrame);
+    }
+    // FUN_00221398, the last effect pool FUN_002192C0 walks before the
+    // screen passes.
+    DAT_00355b80_gather_.FUN_00221398_step(frameTicks);
+  }
+
+  // The other half of the gate above. Six of the pools publish from a draw list
+  // the step fills, so a frame that never steps them has to empty it by hand --
+  // the original has no such list, it simply writes no packets. The three that
+  // publish straight from their record arrays (FUN_002D3218's particles,
+  // FUN_0021A760's dust and FUN_00220910's sparks) are gated in
+  // publishSpriteQuads instead. No pool's records are touched either way.
+  void PortRuntime::FUN_002192c0_clear_effect_pool_draws()
+  {
+    DAT_0054f080_smoke_.clearFrameDraws();
+    DAT_00355ac0_rain_.clearFrameDraws();
+    DAT_00355b50_haze_.clearFrameDraws();
+    DAT_00355b58_spray_.clearFrameDraws();
+    DAT_00355b60_fountain_.clearFrameDraws();
+    DAT_00355b80_gather_.clearFrameDraws();
+  }
+
   bool PortRuntime::update(const InputSnapshot &input, std::uint32_t frameTicks)
   {
     ++frameCount_;
@@ -7453,135 +7611,30 @@ namespace orphen::port
 
       orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
 
-      // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
-      // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
-      // its first step on the next one rather than on the frame it was seeded.
-      DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
-      // FUN_00212F38, the first call in FUN_002192C0 and so the first of the
-      // effect systems. The camera forward it wants is DAT_0058BEA0, which
-      // FUN_00216AA0:436-449 builds as normalise(lookAt - eye) -- rebuilt here
-      // rather than cached, since the port keeps the pair and not the vector.
+      // FUN_002239C8:126 -- `if (iGpffffadbc != 0) { FUN_002241E0(); goto ... }`.
+      // A non-zero DAT_00354D2C hands the frame to the mode table, and mode 6,
+      // the one FUN_00254DB0 installs for the chest cutscene, is FUN_002245D8:
+      // the same draw tail as FUN_00224218 with FUN_002192C0 -- and FUN_002D3218
+      // above it -- left out. Nothing in the effect group is stepped and nothing
+      // emits a packet for the length of the cutscene, which is why the retail
+      // game's chest sits in a black room with no rain and no haze.
+      //
+      // Confirmed on hardware: with the chest open DAT_00354D2C reads 6, and the
+      // rain pool's live count and gate at 0x00355AA0 are unchanged across the
+      // whole cutscene. The records are frozen, not freed, so the rain comes
+      // back exactly where it was the frame the mode goes home.
+      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField)
       {
-        const auto &eye = fieldCamera_.DAT_0058c0a8_eye();
-        const auto &lookAt = fieldCamera_.DAT_0058be90_lookAt();
-        orphen::ported::psm2::Vec3 forward{lookAt.x - eye.x, lookAt.y - eye.y, lookAt.z - eye.z};
-        const float lengthSquared =
-            forward.x * forward.x + forward.y * forward.y + forward.z * forward.z;
-        if (lengthSquared > 0.0f)
-        {
-          const float scale = 1.0f / std::sqrt(lengthSquared);
-          forward.x *= scale;
-          forward.y *= scale;
-          forward.z *= scale;
-        }
-        const auto &lead = entityPool_.leadPlayer();
-        DAT_0054f080_smoke_.FUN_00212f38_step(
-            eye, forward, {lead.positionX20, lead.positionZ24, lead.positionY28},
-            lead.height58, static_cast<std::int16_t>(lead.animationA0),
-            DAT_003555b4_frameCounter_);
+        // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
+        // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
+        // its first step on the next one rather than on the frame it was seeded.
+        DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+        FUN_002192c0_step_effect_pools(frameTicks);
       }
-      // FUN_0021A760 runs in the same half of the frame: it is walked from
-      // the simulation and its quads are collected at publish time.
-      DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
-      // FUN_0021AD98, the rain. FUN_002192C0 walks it before the haze field,
-      // and like the haze field it cannot reach the entity pool or the terrain
-      // on its own -- but unlike it, it needs the ground query *per record*
-      // rather than once, so the probe goes in as a callback.
+      else
       {
-        orphen::ported::entity::RainCameraFrame rainCamera;
-        rainCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
-        const auto &rainEye = fieldCamera_.pose().eye;
-        rainCamera.DAT_0058c0a8_eyeX = rainEye.x;
-        rainCamera.DAT_0058c0ac_eyeY = rainEye.y;
-        rainCamera.DAT_0058c0b0_eyeZ = rainEye.z;
-
-        std::optional<orphen::ported::entity::RainEntityAnchor> rainAnchor;
-        const int rainEntity = DAT_00355ac0_rain_.uGpffffbb4c_entityIndex();
-        if (rainEntity >= 0 && static_cast<std::size_t>(rainEntity) < entityPool_.slotCount())
-        {
-          const auto &host = entityPool_.slot(static_cast<std::size_t>(rainEntity));
-          rainAnchor = orphen::ported::entity::RainEntityAnchor{
-              host.positionX20, host.positionZ24, host.positionY28};
-        }
-
-        auto *rainMap = mapViewer_.loadedMap();
-        DAT_00355ac0_rain_.FUN_0021ad98_step(
-            frameTicks, rainCamera, rainAnchor, [this] { return FUN_00216868_random(); },
-            [rainMap](float x, float y, float z) -> std::optional<float>
-            {
-              if (rainMap == nullptr)
-              {
-                return std::nullopt;
-              }
-              // FUN_00227798: the single-point ground query, asked from the
-              // height the drop is currently at. A miss is what the original's
-              // "no ground" answer stands for, and the caller treats it the
-              // same way -- above the 64.0 sentinel, so no splash.
-              const auto hit = FUN_00227070_sample_ground(*rainMap, x, y, z, 0.0f, 0.0f, 2u, 0u);
-              if (!hit.found)
-              {
-                return std::nullopt;
-              }
-              return hit.height;
-            });
+        FUN_002192c0_clear_effect_pool_draws();
       }
-      // FUN_0021BEF0, in the slot FUN_002192C0 gives it: after FUN_0021A760 and
-      // before FUN_0021E5E0. The four pools between them in that list are not
-      // ported. The entity branch is resolved here because the pool cannot
-      // reach either the entity pool or the terrain.
-      {
-        orphen::ported::entity::HazeCameraFrame hazeCamera;
-        hazeCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
-        hazeCamera.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
-        const auto &eye = fieldCamera_.pose().eye;
-        hazeCamera.DAT_0058c0a8_eyeX = eye.x;
-        hazeCamera.DAT_0058c0ac_eyeY = eye.y;
-        hazeCamera.DAT_0058c0b0_eyeZ = eye.z;
-
-        std::optional<orphen::ported::entity::HazeEntityAnchor> anchor;
-        const int hazeEntity = DAT_00355b50_haze_.DAT_00355b4c_entityIndex();
-        if (hazeEntity >= 0 && static_cast<std::size_t>(hazeEntity) < entityPool_.slotCount())
-        {
-          const auto &host = entityPool_.slot(static_cast<std::size_t>(hazeEntity));
-          orphen::ported::entity::HazeEntityAnchor resolved;
-          resolved.positionX20 = host.positionX20;
-          resolved.positionY24 = host.positionZ24;
-          // FUN_00227798(+0x20, +0x24, +0x4C): the single-point ground query,
-          // sampled from the height the entity last stood on.
-          resolved.FUN_00227798_groundHeight = host.groundHeight4c;
-          if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
-          {
-            resolved.FUN_00227798_groundHeight =
-                FUN_00227070_sample_ground(*loadedMap, host.positionX20, host.positionZ24,
-                                           host.groundHeight4c, 0.0f, 0.0f, 2u, 0u)
-                    .height;
-          }
-          anchor = resolved;
-        }
-        DAT_00355b50_haze_.FUN_0021bef0_step(frameTicks, hazeCamera, anchor,
-                                             [this] { return FUN_00216868_random(); });
-      }
-      // FUN_0021E5E0, in the slot FUN_002192C0 gives it: after FUN_0021A760
-      // and before FUN_00220910. It steps and draws in one walk, so the step
-      // records which particles survived and the publish pass turns that list
-      // into quads -- the same split the two pools either side of it use.
-      DAT_00355b58_spray_.FUN_0021e5e0_step(
-          frameTicks, [this] { return FUN_00216868_random(); });
-      // FUN_0021F1A8, immediately after it in FUN_002192C0. The camera frame is
-      // only read on a restart, by the +0x42 particles FUN_0021EBE8 places.
-      {
-        orphen::ported::entity::FountainCameraFrame cameraFrame;
-        cameraFrame.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
-        cameraFrame.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
-        const auto &eye = fieldCamera_.pose().eye;
-        cameraFrame.DAT_0058c0a8_eyeX = eye.x;
-        cameraFrame.DAT_0058c0ac_eyeY = eye.y;
-        cameraFrame.DAT_0058c0b0_eyeZ = eye.z;
-        DAT_00355b60_fountain_.FUN_0021f1a8_step(frameTicks, cameraFrame);
-      }
-      // FUN_00221398, the last effect pool FUN_002192C0 walks before the
-      // screen passes.
-      DAT_00355b80_gather_.FUN_00221398_step(frameTicks);
 
       // FUN_002239c8:129 -> FUN_0023fd30 -> FUN_002462c8. The command input
       // runs *after* the actor loop, not before it, so a press is read against

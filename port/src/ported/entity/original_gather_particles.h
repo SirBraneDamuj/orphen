@@ -144,6 +144,9 @@ namespace orphen::ported::entity
     void FUN_00221398_step(std::uint32_t frameTicks);
 
     const std::vector<GatherStreakDraw> &drawList() const { return draws_; }
+    // Emptied on a frame FUN_002192C0 never runs, so the pool emits nothing
+    // while its records stand still. See PortRuntime's gate on DAT_00354D2C.
+    void clearFrameDraws() { draws_.clear(); }
     int DAT_00355b88_activeGroups() const { return activeGroups_; }
     bool DAT_00354cc8_gate() const { return gate_; }
 

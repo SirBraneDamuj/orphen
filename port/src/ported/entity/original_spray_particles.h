@@ -132,6 +132,9 @@ namespace orphen::ported::entity
                            const std::function<std::uint32_t()> &random);
 
     const std::vector<SprayParticleDraw> &drawList() const { return draws_; }
+    // Emptied on a frame FUN_002192C0 never runs, so the pool emits nothing
+    // while its records stand still. See PortRuntime's gate on DAT_00354D2C.
+    void clearFrameDraws() { draws_.clear(); }
     const std::array<SprayParticle, kCount> &particles() const { return particles_; }
     int DAT_00355b54_aliveCount() const { return live_; }
     bool DAT_00354cbc_gate() const { return gate_; }

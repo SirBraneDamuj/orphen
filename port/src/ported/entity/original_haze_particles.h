@@ -226,6 +226,9 @@ namespace orphen::ported::entity
                            const std::function<std::uint32_t()> &random);
 
     const std::vector<HazeParticleDraw> &drawList() const { return draws_; }
+    // Emptied on a frame FUN_002192C0 never runs, so the pool emits nothing
+    // while its records stand still. See PortRuntime's gate on DAT_00354D2C.
+    void clearFrameDraws() { draws_.clear(); }
     const std::array<HazeParticle, kCount> &particles() const { return particles_; }
     int iGpffffbbc4_aliveCount() const { return live_; }
     bool DAT_00354cb8_gate() const { return DAT_00354cb8_gate_; }

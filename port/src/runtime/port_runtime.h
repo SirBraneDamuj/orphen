@@ -704,6 +704,10 @@ namespace orphen::port
     // controller. Returns true when it owned the frame.
     bool stepScriptedPlayerState(std::uint32_t frameTicks);
 
+    // FUN_002192c0 and the port-side tidy-up for the frames it does not run on.
+    void FUN_002192c0_step_effect_pools(std::uint32_t frameTicks);
+    void FUN_002192c0_clear_effect_pool_draws();
+
     // DAT_00354d2c / iGpffffadbc. 0 is the field frame (FUN_00224218 plus the
     // rest of FUN_002239c8); 6 is the cutscene frame (FUN_002245d8), which
     // runs the player and the actors but neither the scene script nor the

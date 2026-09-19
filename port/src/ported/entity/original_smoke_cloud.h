@@ -296,6 +296,9 @@ namespace orphen::ported::entity
     float DAT_00355a48_scale() const { return DAT_00355a48_scale_; }
     // Rebuilt by every step, in pool order.
     const std::vector<SmokeDrawPoint> &drawList() const { return drawList_; }
+    // Emptied on a frame FUN_002192C0 never runs, so the pool emits nothing
+    // while its records stand still. See PortRuntime's gate on DAT_00354D2C.
+    void clearFrameDraws() { drawList_.clear(); }
     // How many of the step's points came out with any alpha at all.
     int visibleCount() const { return visibleCount_; }
 

@@ -4914,6 +4914,30 @@ of `FUN_002239c8`, so that frame still finishes as a field frame — and
 overwrites the look-at with the player's. The port now takes the same early
 exit.
 
+**And mode 6 is what turns the weather off.** Put `FUN_002245d8` next to
+`FUN_00224218`, the mode-0 tail, and they are the same list of calls with one
+name missing: `FUN_002192c0`. That one call is every effect pool in the game --
+the smoke cloud, the dust, the rain, the haze field, the spray, the fountain,
+the gather streaks, the hit sparks and six more the port has not reached -- and
+each of them steps and emits its packets in a single walk. Skip the call and
+the whole group stops existing for the length of the cutscene. `FUN_002d3218`'s
+particles go with it, since they sit below the mode test in `FUN_002239c8` too.
+
+That is why the retail chest sits in a black room with nothing falling past it,
+and why the port's chest sat in the rain until this was ported. It is a
+one-line difference in the original and a two-part one here, because the port
+splits each pool's single walk into a step that fills a draw list and a publish
+that spends it: the step is gated, and the six pools that publish from a draw
+list have that list emptied, since "emitted nothing this frame" has to be said
+out loud when the list persists between frames. The three that publish straight
+from their record arrays are gated in `publishSpriteQuads` instead.
+
+Nothing is freed. Pausing the retail game inside the cutscene and reading the
+rain pool's header at `0x00355AA0` gives the same `live = 500`, gate up, that it
+gives outside — the records are frozen where they were, so the rain picks up
+mid-fall on the frame the mode goes home. `DAT_00354D2C` reads `6` there, which
+is the other half of the confirmation.
+
 `src/ported/render/original_screen_fade.*` is `FUN_0025d1c0` / `FUN_0025d238` /
 `FUN_0025d2f8`: two blocks, a 0..0x1FE0 ramp whose top five bits are the
 overlay alpha, and a 0xA0-tick hold on the out block once it is fully covered.
