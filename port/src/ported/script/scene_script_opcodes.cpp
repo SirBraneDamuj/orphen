@@ -3893,14 +3893,25 @@ namespace orphen::ported::script
 
     // 0x95 (FUN_00261890): no operands. |FUN_00216868()|, the engine RNG.
     //
-    // The port's generator is a stand-in -- FUN_00216868 is a lagged xor over a
-    // 0x209-entry ring whose seed table is filled at boot and is not ported --
-    // so the *sequence* differs from the original even though the shape does
-    // not. It is seeded once and stepped deterministically, which is what
-    // --frames reproducibility needs.
+    // **The absolute value is the whole of FUN_00261890 and it is not optional.**
+    // FUN_00216868 returns a full 32-bit word, so half its results are negative,
+    // and every arithmetic operator the expression evaluator applies to one --
+    // 0x22 divide, 0x24 modulo, 0x14..0x17 compare -- is signed. s01_e013's
+    // light flicker is `work[12] = 4 + (rng % 8)` counted down one per frame and
+    // ended when it reaches zero: a negative seed counts away from zero and the
+    // flicker never stops, which is the whole-screen strobe the room opened with.
+    // The port dropped the abs back when the generator was a 15-bit stand-in
+    // that could not go negative.
     case 0x95:
+    {
       noteOpcode(opcode, OpcodeSupport::Modelled);
-      return environment_.FUN_00216868_random ? environment_.FUN_00216868_random() : 0u;
+      const std::int32_t sample = static_cast<std::int32_t>(
+          environment_.FUN_00216868_random ? environment_.FUN_00216868_random() : 0u);
+      // `iVar1 = -iVar1` leaves INT_MIN negative in the original too; the cast
+      // through the unsigned type is how that wraps without UB here.
+      return sample < 0 ? static_cast<std::uint32_t>(0u - static_cast<std::uint32_t>(sample))
+                        : static_cast<std::uint32_t>(sample);
+    }
 
     // 0x6C (FUN_0025fca0): two expressions. The first becomes the camera's
     // zoom through FUN_00218230's log2(2x); the second is the rate a later
