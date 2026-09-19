@@ -5085,6 +5085,28 @@ namespace orphen::ported::script
       note(OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 8);
 
+    // 0x109 (FUN_002625b8): six expressions and no inline bytes -- the count,
+    // three coordinates, a signed magnitude and an entity index -- which arm
+    // the **ninth** particle pool, 100 records of 0x18 at uGpffffbbe0
+    // (FUN_0021BD30 sets the count, FUN_0021BE58 allocates, FUN_0021BEF0 draws
+    // and FUN_0021C288 steps one record).
+    //
+    // A negative entity index means "no entity", and the pool is then placed
+    // relative to the camera; anything under 0x100 indexes the pool at
+    // 0x0058BEB0. Note Ghidra prints the stride as 0xEC only because the
+    // pointer it scales is an undefined2 * -- it is the usual 0x1D8 in bytes.
+    //
+    // **The halt this replaces cost s01_e013 its whole per-frame script.** A
+    // per-frame entry that halts halts again on every later frame, so from
+    // frame 331 header word 2's body stopped executing past this opcode for the
+    // rest of the scene -- everything after it in the frame body, not just the
+    // effect. The scene reaches the opcode once; the hit count the report used
+    // to show was one failed retry per frame. The effect is still not
+    // reproduced, only its operands consumed.
+    case 0x109:
+      note(OpcodeSupport::OperandsOnly);
+      return consumeOnly(opcode, 6);
+
     // 0x125 / 0x126 (FUN_00261330): an inline **u16** cue id first, then the
     // expression selecting the entity to play it on. The inline read comes
     // before the expression, so the order cannot be swapped. 0x126 takes one
