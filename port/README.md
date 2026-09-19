@@ -1091,6 +1091,83 @@ A scene loaded straight off the command line has no departure, so
 `--from-scene sNN_eMMM` seeds the pair. Without it a direct load takes the
 default arm.
 
+### Which door you came in by: `DAT_00325340`
+
+Two doors lead from `s01_e014` into `s01_e013` and two lead back, and the port
+put the player through the same one every time. The doorway a scene drops you
+at is carried by the **warp**, not looked up by the destination:
+
+- Opcode `0x8C` (`FUN_00260F78`) reads six expressions — section, entry, flags,
+  then an x/y/z scaled by 100000 — and hands them to `FUN_0022B2C0`, which
+  stores the coordinates in `DAT_00325340/44/48` and publishes
+  `DAT_003551EC = flags | 1`.
+- `FUN_0022A418:212-218` spends them, in this order:
+
+      if (DAT_003551EC & 0x2000) DAT_00325340 = DAT_003253B4;   // the scene's own
+      if (DAT_003551EC & 1)      pool slot 0 position = DAT_00325340;
+
+  `DAT_003253B4` is the spawn `FUN_0025B600` reads out of the scene's own
+  defaults block. Bit `0x2000` means "nothing sent me here", and only
+  `FUN_002000C0`'s boot request (`0x2001`), `FUN_0022B300`'s map-walk and the
+  debug map menu raise it. A door warp leaves it clear, so **the warp's own
+  coordinates survive the load**.
+
+The port read `FUN_0025B600`'s spawn unconditionally and never looked at
+`DAT_00325340` at all — the comment on it said "written and held rather than
+read", which was accurate and was the bug. Both bits are honoured now, and the
+command line's `--scene` seeds `0x2001` the way the boot path does, so a cold
+load is unchanged.
+
+The four warps, for reference:
+
+| from | trigger | to | spawn |
+| --- | --- | --- | --- |
+| `s01_e013` @`0x57C2` | `0x61` mask `0x2`, stand at `(8.50, 2.50, 3.00)` | `s01_e014` | `(9, 2.5, 5)` |
+| `s01_e013` @`0x57EC` | `0x61` mask `0x8`, stand at `(8.50, -2.50, 3.00)` | `s01_e014` | `(9, -2.5, 5)` |
+| `s01_e014` @`0x0B0C` | `work[0] == 1` (`0x61` mask `0x4` @`0x141B`) | `s01_e013` | `(7.75, -2.5, 2.75)` |
+| `s01_e014` @`0x0B49` | `work[0] == 2` (`0x61` mask `0x8` @`0x1435`) | `s01_e013` | `(7.75, 2.5, 2.75)` |
+
+`s01_e013`'s defaults block happens to hold `(7.75, -2.5, 2.75)`, which is why
+one of the four doors always looked right.
+
+**The facing is not carried with it.** `FUN_0022A418:188` saves
+`DAT_0058BF0C` — slot 0's `+0x5C` — before `FUN_00229C40` rebuilds the entity,
+and `:220` puts it back **only** when the request has bit `0x80000`. These
+warps send flags `0`, so the player really does arrive on the entity record's
+default heading, and it is the destination that turns them: `s01_e013` does it
+from an object script at `0x5ADE`, one `0x77` on object register `0x0D` with
+180 degrees. Ported as written, bit and all.
+
+### What a scene already did: it was always the flag bank
+
+The other half of "two doors" is that the room should not replay its opening
+when you come back through one. That needed no new code — the game-wide flag
+array at `DAT_00342B70` is not part of the scene script's memory and
+`SceneScript::load` already carries it across a load — but it is worth writing
+down which flags, because the gate is one `0x3D` in the start entry:
+
+- `s01_e013` tests **flag 1319** at `0x3744` and arms the arrival cutscene's
+  event stream at `0x375C` only when it reads 0. The cutscene sets it at
+  `0x5F12`, at the end of the fight with the five type-`0x62` enemies it spawns
+  — so the flag stands only once the fight is actually won.
+- `s01_e014` tests **flag 1306** at `0x144E` and sets it at `0x2409`, and gates
+  a second sequence on **flag 30** at `0x1477`.
+- The two doors also leave a trail of their own: `s01_e014`'s exit sets flag
+  1327 the first time either door is used and records *which* in flag 1328.
+
+Verified with a single run that makes the whole loop:
+
+```
+orphen_port --disc-root disc --scene s01_e013 --no-audio --frames 6000   --from-scene s01_e014 --press-attack 400,420,...,980 --spell-power-scale 20   --place-slot 0,8.5,-2.5,3.0:1100-1300 --place-slot 0,7.25,2.5,5.15:1500-5800
+```
+
+which wins the fight (flag 1319 set at frame 640), leaves by the `-2.5` door
+and arrives at `(9, -2.5, 5)`, comes back through the other one and arrives at
+`(7.75, 2.5, 2.75)` — with `event streams armed: 0` on that second visit, where
+the first armed one and dispatched thirteen records. `--place-slot` grew the
+`:<first>-<last>` window for this; without it one run can only ever stand on
+one door.
+
 ### Terrain triggers now print where to stand
 
 The panel-code list under `--scr-report` groups by the terrain word's **low

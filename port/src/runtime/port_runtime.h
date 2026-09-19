@@ -283,6 +283,12 @@ namespace orphen::port
     {
       int slot = -1;
       orphen::ported::psm2::Vec3 position;
+      // Inclusive 1-based frame window, the same shape --hold-cross takes.
+      // Defaults to the whole run. A window is what lets one run visit two
+      // doors: pin the lead on the first scene's, let go, pin it on the
+      // second's.
+      std::uint32_t firstFrame = 1;
+      std::uint32_t lastFrame = 0xFFFFFFFFu;
     };
     std::vector<PlacedSlot> placedSlots;
     // Retail executable, read for static tables such as the entity descriptors.
@@ -382,12 +388,21 @@ namespace orphen::port
     // spawn point DAT_00325340. Neither is reached yet, so this is written and
     // held rather than read.
     orphen::ported::psm2::Vec3 DAT_0031e668_departurePosition_{};
-    // DAT_00325340/44/48, the spawn point FUN_0022B2C0 stores for the scene it
-    // is asking for. The port's loader takes its spawn from the incoming
-    // scene's own defaults block (FUN_0025B600), so like the departure position
-    // above this is written and held rather than read -- recorded so the value
-    // a script asks for is visible rather than silently dropped.
-    orphen::ported::psm2::Vec3 DAT_00325340_requestedSpawn_{};
+    // DAT_00325340/44/48, the spawn point the scene being entered stands the
+    // lead on. FUN_0022B2C0 writes it from opcode 0x8C's own coordinates, and
+    // FUN_0022a418:212-218 spends it: request bit 0x2000 first overwrites it
+    // with the incoming scene's *own* spawn (DAT_003253B4, what FUN_0025B600
+    // just read), then request bit 1 applies whichever of the two survived.
+    //
+    // That ordering is the whole two-doors-into-one-scene mechanism. A warp
+    // leaves 0x2000 clear so its coordinates stand; only the boot path
+    // (FUN_002000c0's 0x2001) sets it, because nothing sent the player there.
+    // Optional because "nothing has ever staged a spawn" is a real state on a
+    // scene whose script has no defaults block.
+    std::optional<orphen::ported::psm2::Vec3> DAT_00325340_requestedSpawn_;
+    // Port-side bookkeeping only: which of the two writers last filled it, so
+    // the `[player] spawn=` line can name the real source.
+    bool requestedSpawnFromSceneDefaults_ = false;
     orphen::ported::entity::MapPropDescriptorTable mapPropTable_;
     // Opcode 0xBD's path-follow slots. Ticked just before the actor loop.
     //
@@ -649,6 +664,8 @@ namespace orphen::port
                      orphen::ported::entity::OriginalEntity &entity,
                      std::uint32_t frameTicks);
     void applySceneMarkerSpawn();
+    void standLeadAt(const orphen::ported::psm2::Psm2RuntimeState &map,
+                     const orphen::ported::psm2::Vec3 &position);
     void printScriptReport() const;
     void printActorReport() const;
     void printRenderReport() const;

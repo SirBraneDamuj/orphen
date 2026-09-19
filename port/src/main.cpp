@@ -611,7 +611,7 @@ namespace
       {
         if (argumentIndex + 1 >= argc)
         {
-          throw std::runtime_error("--place-slot requires slot,x,y,z");
+          throw std::runtime_error("--place-slot requires slot,x,y,z[:first-last]");
         }
         const std::string value = argv[++argumentIndex];
         std::vector<std::string> fields;
@@ -628,13 +628,27 @@ namespace
         }
         if (fields.size() != 4)
         {
-          throw std::runtime_error("--place-slot expects slot,x,y,z");
+          throw std::runtime_error("--place-slot expects slot,x,y,z[:first-last]");
         }
         orphen::port::PortRuntimeConfig::PlacedSlot placed;
         placed.slot = std::stoi(fields[0]);
         placed.position.x = std::stof(fields[1]);
         placed.position.y = std::stof(fields[2]);
-        placed.position.z = std::stof(fields[3]);
+        // The last field may carry an inclusive frame window, so one run can
+        // pin the lead on a door, let go, and pin it on the next scene's.
+        const std::size_t colon = fields[3].find(':');
+        placed.position.z = std::stof(fields[3].substr(0, colon));
+        if (colon != std::string::npos)
+        {
+          const std::string window = fields[3].substr(colon + 1);
+          const std::size_t dash = window.find('-');
+          if (dash == std::string::npos)
+          {
+            throw std::runtime_error("--place-slot's frame window is <first>-<last>");
+          }
+          placed.firstFrame = static_cast<std::uint32_t>(std::stoul(window.substr(0, dash)));
+          placed.lastFrame = static_cast<std::uint32_t>(std::stoul(window.substr(dash + 1)));
+        }
         config.placedSlots.push_back(placed);
         continue;
       }

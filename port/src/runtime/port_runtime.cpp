@@ -307,7 +307,15 @@ namespace orphen::port
 
     if (mapViewer_.loadedMap() != nullptr)
     {
+      // FUN_002000c0:165-167. The boot path names its scene and publishes
+      // request 0x2001, and FUN_0022a418 reads those two bits to place the
+      // lead: 0x2000 takes the scene's own defaults block, bit 1 stands the
+      // player on it. Naming a scene on the command line is that same cold
+      // boot, so the request has to stand before the load and be spent after
+      // it -- FUN_002239c8 does the clearing for every later load.
+      DAT_003551ec_sceneRequest_ = 0x2001;
       loadSceneForCurrentMap();
+      DAT_003551ec_sceneRequest_ = 0;
       if (config.printScriptReport)
       {
         printScriptReport();
@@ -1547,6 +1555,7 @@ namespace orphen::port
       DAT_00354d80_backupSection_ = DAT_003551f4_sceneSection_;
       DAT_00354d84_backupEntry_ = DAT_003551f0_sceneEntry_;
       DAT_00325340_requestedSpawn_ = spawn;
+      requestedSpawnFromSceneDefaults_ = false;
       DAT_003551f4_sceneSection_ = section;
       DAT_003551f0_sceneEntry_ = entry;
       DAT_003551ec_sceneRequest_ = flags | 1u;
@@ -3337,36 +3346,71 @@ namespace orphen::port
       return;
     }
 
-    // The scene's own spawn, out of the SCR header block FUN_0025b600 reads.
-    // This is what the game itself uses when you arrive without a warp target,
-    // so it beats every guess below it.
-    if (const auto &scriptSpawn = sceneScript_.sceneSpawn(); scriptSpawn.has_value())
+    // FUN_0022a418:212-214. Bit 0x2000 says "nothing staged a spawn for me",
+    // and the answer is the incoming scene's own defaults block -- DAT_003253B4,
+    // which FUN_0025b600 filled a few lines earlier. Only FUN_002000c0's boot
+    // request and the debug map menu raise it.
+    if ((DAT_003551ec_sceneRequest_ & 0x2000u) != 0 && sceneScript_.sceneSpawn().has_value())
     {
-      leadPlayer_.resetToMap(*loadedMap, *scriptSpawn);
-      FUN_0022a418_stamp_lead_player_flags();
-      fieldCamera_.FUN_00216930_install_normal_field_defaults();
-      fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
-      mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
-      mapViewer_.setFollowCameraPose(fieldCamera_.pose());
-      spawnSourceLabel_ = "scene script (FUN_0025b600)";
+      DAT_00325340_requestedSpawn_ = sceneScript_.sceneSpawn();
+      requestedSpawnFromSceneDefaults_ = true;
+    }
+
+    // FUN_0022a418:215-218. The staged spawn, whatever put it there.
+    //
+    // **This is how two doors lead into one scene.** Opcode 0x8C carries its own
+    // coordinates and FUN_0022b2c0 forces bit 1 on with 0x2000 left clear, so
+    // the warp's point survives the load. s01_e014's two doors ask for
+    // (7.75, -2.5, 2.75) and (7.75, 2.5, 2.75); s01_e013's ask for
+    // (9, 2.5, 5) and (9, -2.5, 5). The port used to ignore the staged point
+    // entirely and take the scene's default every time, so both doors put the
+    // player through the same one.
+    if ((DAT_003551ec_sceneRequest_ & 1u) != 0 && DAT_00325340_requestedSpawn_.has_value())
+    {
+      standLeadAt(*loadedMap, *DAT_00325340_requestedSpawn_);
+      spawnSourceLabel_ = requestedSpawnFromSceneDefaults_
+                              ? "scene script (FUN_0025b600)"
+                              : "the warp that sent us here (DAT_00325340)";
       return;
     }
 
+    // No staged spawn and no defaults block. Not something the original has to
+    // cope with -- it always arrives through one of the two bits above -- so
+    // this is the port's own guess, and the console says so.
     for (const auto &record : loadedMap->DAT_003556e8_objectPlacements)
     {
       if (record.group != 2)
       {
         continue;
       }
-      leadPlayer_.resetToMap(*loadedMap, record.position);
-      FUN_0022a418_stamp_lead_player_flags();
-      fieldCamera_.FUN_00216930_install_normal_field_defaults();
-      fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
-      mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
-      mapViewer_.setFollowCameraPose(fieldCamera_.pose());
+      standLeadAt(*loadedMap, record.position);
       spawnSourceLabel_ = "group 2 placement record (a guess; see --spawn)";
       return;
     }
+  }
+
+  // The placement half of FUN_0022a418:215-224, shared by both arms above.
+  //
+  // The facing is the part that is easy to miss: :188 saves DAT_0058BF0C (pool
+  // slot 0's +0x5C) before FUN_00229c40 rebuilds the entity, and :220 puts it
+  // back **only** when the request carries bit 0x80000. A door warp sends
+  // flags 0, so the player really does arrive facing the entity record's
+  // default and it is the destination's own script that turns them -- s01_e013
+  // does it from an object script, one 0x77 on register 0x0D with 180 degrees.
+  void PortRuntime::standLeadAt(const orphen::ported::psm2::Psm2RuntimeState &map,
+                                const orphen::ported::psm2::Vec3 &position)
+  {
+    const float departingFacing = entityPool_.leadPlayer().facingRadians5c;
+    leadPlayer_.resetToMap(map, position);
+    if ((DAT_003551ec_sceneRequest_ & 0x80000u) != 0)
+    {
+      entityPool_.leadPlayer().facingRadians5c = departingFacing;
+    }
+    FUN_0022a418_stamp_lead_player_flags();
+    fieldCamera_.FUN_00216930_install_normal_field_defaults();
+    fieldCamera_.snapToTarget(leadPlayer_.viewState().position);
+    mapViewer_.setLeadPlayerView(leadPlayer_.viewState());
+    mapViewer_.setFollowCameraPose(fieldCamera_.pose());
   }
 
   // Resolves an entity's model and builds its bone palette for this frame.
@@ -7156,7 +7200,13 @@ namespace orphen::port
       // group-0xE handoff would keep the sticky flag up and go on reporting the
       // sending stage's prop bank for every scene after it.
       DAT_003555d3_groupEScene_ = false;
+      // ...and 0x2001 is the rest of that word: bit 0x2000 puts the incoming
+      // scene's own spawn into DAT_00325340 and bit 1 stands the lead on it,
+      // which is what "walked here from the menu" means. Without it the cycle
+      // would inherit whichever door warp staged a spawn last.
+      DAT_003551ec_sceneRequest_ = 0x2001;
       loadSceneForCurrentMap();
+      DAT_003551ec_sceneRequest_ = 0;
     }
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
@@ -7299,6 +7349,10 @@ namespace orphen::port
       {
         if (placed.slot < 0 ||
             static_cast<std::size_t>(placed.slot) >= orphen::ported::entity::kEntitySlotCount)
+        {
+          continue;
+        }
+        if (frameCount_ < placed.firstFrame || frameCount_ > placed.lastFrame)
         {
           continue;
         }
