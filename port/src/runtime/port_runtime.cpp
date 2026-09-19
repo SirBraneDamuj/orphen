@@ -200,6 +200,7 @@ namespace orphen::port
     printGleamReport_ = config.printGleamReport;
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
+    drawBackgroundModels_ = config.drawBackgroundModels;
     suppressPointLights_ = config.suppressPointLights;
     poseReportSlot_ = config.poseReportSlot;
     scrDumpPath_ = config.scrDumpPath;
@@ -323,6 +324,12 @@ namespace orphen::port
       if (config.printSceneTree)
       {
         mapViewer_.printLoadedSceneTree(std::cout);
+      }
+      if (!config.dumpSceneResourcesPath.empty())
+      {
+        const std::size_t written = mapViewer_.dumpSceneResources(config.dumpSceneResourcesPath);
+        std::cout << "[scene-dump] wrote " << written << " decoded records to "
+                  << config.dumpSceneResourcesPath << '\n';
       }
       if (config.printModelReport)
       {
@@ -2956,6 +2963,104 @@ namespace orphen::port
     }
   }
 
+  void PortRuntime::FUN_0022cde8_load_background_models()
+  {
+    // FUN_0022CDE8's `param_2 == 0` arm clears all four descriptors before
+    // installs anything, so a scene that names no backdrop leaves none behind.
+    for (auto &slot : DAT_00345a18_backgrounds_)
+    {
+      slot = orphen::ported::render::BackgroundSlot{};
+    }
+
+    const auto loadedScene = mapViewer_.loadedDiscScene();
+    const auto *resources = mapViewer_.loadedSceneResources();
+    if (!loadedScene.has_value() || resources == nullptr)
+    {
+      return;
+    }
+
+    const std::int16_t resourceId = itemDatabase_.FUN_0022cde8_backgroundResource(
+        static_cast<std::int32_t>(loadedScene->section),
+        static_cast<std::int32_t>(DAT_003555d3_groupEScene_
+                                      ? static_cast<std::uint32_t>(DAT_003551f8_groupEntry_)
+                                      : loadedScene->entry),
+        DAT_003555d3_groupEScene_);
+    if (resourceId == 0)
+    {
+      return;
+    }
+
+    // FUN_0022CD88: FUN_00223268(2, id, arena) -- archive index 2 is the scene
+    // bundle's geometry category, the one the PSM2 map also comes out of.
+    const auto *record =
+        resources->find(orphen::harness::kMapCategory, static_cast<std::uint16_t>(resourceId));
+    if (record == nullptr)
+    {
+      std::cout << "[background] scene descriptor names resource 0x" << std::hex << resourceId
+                << std::dec << " but the bundle has no category 2 record for it\n";
+      return;
+    }
+
+    auto &slot = DAT_00345a18_backgrounds_[0];
+    slot.resourceId = static_cast<std::uint16_t>(resourceId);
+    slot.model = orphen::ported::render::FUN_0022ce60_parse_psb4(resources->decodeRecord(*record));
+    // FUN_0022CE60:31. Slot 0 alone is seeded visible; 1..3 start at zero and
+    // wait for opcode 0xE6.
+    slot.DAT_00345a38_shade = 0x80;
+    slot.DAT_00345a34_angleZ = 0.0f;
+
+    if (!slot.model.valid)
+    {
+      std::cout << "[background] resource 0x" << std::hex << resourceId << std::dec
+                << " did not parse: " << slot.model.diagnostic << "\n";
+      return;
+    }
+    std::cout << "[background] psb4 0x" << std::hex << resourceId << std::dec << " verts="
+              << slot.model.vertices.size() << " prims=" << slot.model.primitives.size()
+              << " shade=0x" << std::hex << static_cast<int>(slot.DAT_00345a38_shade) << std::dec
+              << "\n";
+  }
+
+  void PortRuntime::FUN_0020c290_publish_background_quads()
+  {
+    std::vector<orphen::ported::render::BackgroundQuad> quads;
+    if (!drawBackgroundModels_)
+    {
+      mapViewer_.setBackgroundQuads(std::move(quads));
+      return;
+    }
+    // FUN_0020BEC8:43-45. The model rides the camera in x and y, and sits a
+    // fixed 0.4 above the eye.
+    const auto &eye = fieldCamera_.pose().eye;
+    const orphen::ported::psm2::Vec3 origin{
+        eye.x, eye.y, eye.z + orphen::ported::render::kfGpffff808c_backgroundLift};
+
+    // FUN_0020C290 counts *down* from DAT_00345A84, so slot 3 is drawn first
+    // and slot 0 last. Only s01_e013's slot 0 is ever filled in this slice,
+    // but the order is free to keep and would matter the moment it is not.
+    for (std::size_t index = DAT_00345a18_backgrounds_.size(); index-- > 0;)
+    {
+      orphen::ported::render::FUN_0020c2f0_build_background_quads(
+          DAT_00345a18_backgrounds_[index], origin, quads);
+    }
+    if (printRenderReport_ && !backgroundReported_ && !quads.empty())
+    {
+      backgroundReported_ = true;
+      std::cout << "[background] " << quads.size() << " quads at origin (" << origin.x << ", "
+                << origin.y << ", " << origin.z << ")";
+      if (!quads.empty())
+      {
+        std::cout << " first corner (" << quads.front().corner[0].x << ", "
+                  << quads.front().corner[0].y << ", " << quads.front().corner[0].z
+                  << ") slot " << quads.front().textureSlot << " mode "
+                  << quads.front().blendMode << " alpha "
+                  << static_cast<int>(quads.front().colour[3]);
+      }
+      std::cout << "\n";
+    }
+    mapViewer_.setBackgroundQuads(std::move(quads));
+  }
+
   void PortRuntime::loadSceneForCurrentMap()
   {
     // FUN_0022a418:49 sets DAT_003555d3 from bit 0x20000 of the scene request,
@@ -2999,6 +3104,9 @@ namespace orphen::port
       DAT_0032536c_sceneModule_ = -1;
     }
     sceneModuleReported_ = false;
+    // FUN_0022A418:134, immediately after FUN_0025B600 and before the module's
+    // mode 0 hook -- the backdrop is in place before any script can run.
+    FUN_0022cde8_load_background_models();
     // FUN_002D86B0 and FUN_00265EC0, bound before the module's mode 1 can ask
     // for a cursor.
     battleParty_.bindTargetMarkers(battleEnvironment(), [this](std::int32_t slot) {
@@ -4012,6 +4120,11 @@ namespace orphen::port
     // FUN_0020f3e0, the second pass. It runs off the same poses this one just
     // published, so it belongs here rather than beside the draw.
     publishSpriteQuads(frameTicks);
+
+    // FUN_0020C290, the last call in the same draw block. It is published here
+    // rather than stepped with the effect pools because it reads nothing but
+    // the camera, and the camera is not final until FUN_00216AA0 has run.
+    FUN_0020c290_publish_background_quads();
   }
 
   // FUN_0020f3e0: the *other* pass over the pool, for the entities

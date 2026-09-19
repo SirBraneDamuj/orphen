@@ -326,6 +326,20 @@ namespace
         config.scrDumpPath = argv[++argumentIndex];
         continue;
       }
+      if (argument == "--no-background")
+      {
+        config.drawBackgroundModels = false;
+        continue;
+      }
+      if (argument == "--dump-scene-resources")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--dump-scene-resources needs a directory");
+        }
+        config.dumpSceneResourcesPath = argv[++argumentIndex];
+        continue;
+      }
       if (argument == "--dump-map-textures")
       {
         if (argumentIndex + 1 >= argc)

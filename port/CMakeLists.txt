@@ -200,6 +200,8 @@ target_sources(orphen_port
     src/runtime/entity_model_store.h
     src/ported/render/original_view_projection.cpp
     src/ported/render/original_view_projection.h
+    src/ported/render/original_background_model.cpp
+    src/ported/render/original_background_model.h
     src/ported/render/original_map_visibility.cpp
     src/ported/render/original_map_visibility.h
     src/ported/render/original_entity_draw.cpp

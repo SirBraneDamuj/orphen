@@ -177,34 +177,26 @@ namespace orphen::ported::resource
     return stringAt(descriptionTableOffset_, itemId);
   }
 
-  std::int16_t ItemDatabase::FUN_0022a360_sceneModule(std::int32_t section,
-                                                      std::int32_t entry,
-                                                      bool groupE) const
+  // The byte offset of one scene's descriptor in the blob, or 0 when the scene
+  // has none. FUN_0022A238 picks the per-section list, FUN_0022A288 walks it.
+  std::uint32_t ItemDatabase::sceneDescriptorOffset(std::int32_t section,
+                                                    std::int32_t entry,
+                                                    bool groupE) const
   {
-    const auto s16At = [this](std::size_t offset) -> std::int16_t {
-      if (offset + 2 > blob_.size())
-      {
-        return 0;
-      }
-      std::int16_t value = 0;
-      std::memcpy(&value, blob_.data() + offset, sizeof(value));
-      return value;
-    };
-
     if (blob_.size() < 0x40)
     {
-      return -1;
+      return 0;
     }
     const std::uint32_t table = u32At(blob_, kSceneTableDword * 4);
     const std::int32_t which = groupE ? kGroupEScene : section;
     if (which < 0 || which >= 16 || table + static_cast<std::uint32_t>(which) * 4 + 4 > blob_.size())
     {
-      return -1;
+      return 0;
     }
     const std::uint32_t list = u32At(blob_, table + static_cast<std::uint32_t>(which) * 4);
     if (list == 0)
     {
-      return -1;
+      return 0;
     }
     if (groupE)
     {
@@ -212,29 +204,43 @@ namespace orphen::ported::resource
       // ignored. Entry 0 of section 14 is id 99; entry 1 is s14_e001.
       if (entry < 0)
       {
-        return -1;
+        return 0;
       }
       const std::uint32_t at = list + static_cast<std::uint32_t>(entry) * kSceneDescriptorStride;
-      if (at + kSceneDescriptorStride > blob_.size())
-      {
-        return -1;
-      }
-      return s16At(at + 2);
+      return at + kSceneDescriptorStride > blob_.size() ? 0u : at;
     }
     for (std::uint32_t at = list; at + kSceneDescriptorStride <= blob_.size();
          at += kSceneDescriptorStride)
     {
-      const std::int16_t id = s16At(at);
+      const std::int16_t id = static_cast<std::int16_t>(u16At(blob_, at));
       if (id == 0)
       {
         break;
       }
       if (id == static_cast<std::int16_t>(entry))
       {
-        return s16At(at + 2);
+        return at;
       }
     }
-    return -1;
+    return 0;
+  }
+
+  std::int16_t ItemDatabase::FUN_0022a360_sceneModule(std::int32_t section,
+                                                      std::int32_t entry,
+                                                      bool groupE) const
+  {
+    const std::uint32_t at = sceneDescriptorOffset(section, entry, groupE);
+    return at == 0 ? static_cast<std::int16_t>(-1)
+                   : static_cast<std::int16_t>(u16At(blob_, at + 2));
+  }
+
+  std::int16_t ItemDatabase::FUN_0022cde8_backgroundResource(std::int32_t section,
+                                                             std::int32_t entry,
+                                                             bool groupE) const
+  {
+    const std::uint32_t at = sceneDescriptorOffset(section, entry, groupE);
+    return at == 0 ? static_cast<std::int16_t>(0)
+                   : static_cast<std::int16_t>(u16At(blob_, at + 8));
   }
 
 } // namespace orphen::ported::resource

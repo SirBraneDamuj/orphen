@@ -1157,6 +1157,99 @@ where the difference is. `FUN_00218EE0`'s near test **is** modelled.
 Splash counts line up where it can be checked: parked at the dump's own player
 position, `--actor-report` prints `splashes=7` against the dump's 9.
 
+### The backdrop is a model, and `FUN_0020C290` draws it
+
+`src/ported/render/original_background_model.*` is `FUN_0022CE60` and
+`FUN_0020C2F0`: the fog sphere `s01_e013`'s boat deck stands inside.
+
+`FUN_0020C290` reads like a display-list kick sitting next to `FUN_0020C5A8`
+and `FUN_0020F3E0` in `FUN_002239C8`'s draw block. It is not. It walks four
+descriptors at `DAT_00345A18` -- stride `0x24`, counted *down* from
+`DAT_00345A84` -- and hands each to `FUN_0020C2F0`, which draws a whole model.
+It was the last call in that block the port did not have, and it is why the
+deck sat in a black void where the retail game has weather.
+
+It was found by patching `jr ra; nop` over one candidate function at a time in
+PCSX2 and screenshotting. **EE code patches through the debugger interface do
+take effect**, despite the MCP tool's warning about recompiled blocks, which
+made the search cheap. The fog survived the map, the entity models, the sprite
+pass, `FUN_002192C0`, the actor loop, the scene script and `FUN_00207DE8`
+before `FUN_0020C2F0` turned out to be the last thing standing.
+
+#### Where the model comes from
+
+A **PSB4** record in the scene bundle's **category 2** -- the same category the
+PSM2 map lives in. `s01_e013`'s is id `0x009E`, and it is the *first* category-2
+record, which is why `loadFirstPsm2FromSceneResources` walked straight past it
+looking for PSM2 magic. `s14_e001`'s pier uses the same one.
+
+No script installs it. `FUN_0022A418:134` calls `FUN_0022CDE8(descriptor, 0)`,
+which reads the **halfword at scene descriptor +0x08** and loads that id into
+slot 0 with its shade byte seeded to `0x80`. Opcode `0xE5` is the other way in,
+and `0xE6` sets a slot's shade and Z rotation -- see
+`analyzed/ops/0xE5_load_backdrop_model.c`, which used to be filed as an audio
+opcode.
+
+The file is a 16-byte header and three sections: vertices (`s16` count, then
+xyz floats at a stride of 12), primitives (22 bytes each), and a UV animation
+script in the format the map's section G already uses. A primitive is a flags
+halfword, four vertex indices and four three-byte groups, and `flags & 0x800`
+picks how those three bytes read -- the same bit the map and PSC3 builders
+test. Set, they are `(u, v, textureSlot)`; clear, a flat RGB.
+
+Everything else is in the flags word, and every bit of it is confirmed against
+a GS dump of the live frame: `0x7000` the blend mode, `0x0700` a CLUT bank
+(dead for an 8-bit page), `0x00FE` **the vertex alpha, halved**, and `0x8000`
+the UV animation selector. The colour is not in the file at all: `FUN_00211B80`
+hands VU1 the literal `DAT_00808080`, which is why every backdrop vertex in the
+dump reads `(128, 128, 128)`.
+
+`s01_e013`'s model is a sphere: 312 vertices, 391 quads, 24 segments around and
+13 rings, radius 35 at the equator closing to 10 at the poles. Its cloud band
+is above the equator and its teal mist below, which is the order the dump's
+quads land on screen. Every primitive names **global texture slot 8** -- the
+map's ninth and last texture page, which no map primitive uses. That page being
+referenced by nothing was the first hard evidence the backdrop existed.
+
+#### Camera-locked, and never in front of anything
+
+`FUN_0020BEC8:43-45` puts the model at **the camera eye's x and y**, with
+`z = eye z + fGpffff808c` = 0.4. It rides the camera exactly, so a mesh 35 units
+across reads as a cylinder wrapped around the whole scene however far you walk.
+
+Its packets end in `MSCAL 0x228`, a different VU1 program from the map's
+`0x13B`/`0x14B`, and the dump shows what that program does differently: every
+backdrop vertex reaches the GS at **Z = 2** -- the far end of that frame's
+2..1108 range, whatever the geometry's real depth -- with `PRIM.FGE` clear where
+every map primitive has it set, and `ZBUF.ZMSK` set where the map clears it.
+Fog off, depth write off, always behind.
+
+The port draws it before the map with the depth test and the depth mask both
+off, which is the same picture by the only means GL offers. **It needs its own
+projection.** The world is drawn with a far plane of `drawDistance + 8` -- 28
+units in `s01_e013` -- and this model reaches 50 units from the eye, so the
+frustum the map uses clips every one of its primitives away. The first build
+loaded, parsed, transformed and submitted all 391 quads and drew nothing at
+all. The backdrop pass pushes the far plane to 4096 instead, which costs
+nothing because it neither tests nor writes depth.
+
+#### What is checked, and what is not
+
+`--render-report` prints the model and the quads it builds; `--no-background`
+turns it off for an A/B. `--dump-scene-resources <dir>` writes every decoded
+record of a scene bundle, which is how the PSB4 was read in the first place.
+
+Brightness lines up: a backdrop-only frame measures `(27, 36, 37)` mean RGB in
+the port against `(23, 32, 33)` in a retail frame with everything else patched
+away. `s01_e024`, `s01_e012` and `s14_e001` reports are unchanged but for the
+new load line.
+
+Not checked: a pixel-for-pixel frame against retail. The one player position
+where the port's camera lands exactly on the retail camera -- `(14.112, 2.5,
+5.5)`, where `s01_e013`'s forced-camera zone engages -- renders a near-white
+frame in the port, and `--no-background` shows the backdrop is not what causes
+it. That white-out is its own bug and is not chased here.
+
 ### Which door you came in by: `DAT_00325340`
 
 Two doors lead from `s01_e014` into `s01_e013` and two lead back, and the port

@@ -7,6 +7,7 @@
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/render/original_background_model.h"
 #include "ported/render/original_hud_quads.h"
 #include "ported/render/original_sprite_pass.h"
 #include "ported/render/original_frame_feedback.h"
@@ -168,6 +169,11 @@ namespace orphen::harness
     bool hasLeadPlayerView() const { return leadPlayerView_.has_value(); }
     float freeViewerYawDegrees() const { return cameraYawDegrees_; }
     void printLoadedSceneTree(std::ostream &output) const;
+    // --dump-scene-resources <dir>: every decoded record of the loaded scene
+    // bundle, written as cat<NN>_id<HHHH>.bin. The tree print already decodes
+    // each one to sniff its magic; this keeps the bytes instead of the name,
+    // which is the only way to read a format the runtime does not parse yet.
+    std::size_t dumpSceneResources(const std::filesystem::path &directory) const;
     void resetCamera();
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
     void render(int framebufferWidth, int framebufferHeight) const;
@@ -209,6 +215,16 @@ namespace orphen::harness
       spriteQuads_ = std::move(quads);
     }
     std::size_t spriteQuadCount() const { return spriteQuads_.size(); }
+
+    // FUN_0020C290's four background models, already turned into world-space
+    // primitives. Drawn *before* the map, with the depth test and the depth
+    // mask both off -- see ported/render/original_background_model.h for why
+    // that is what the GS does with them.
+    void setBackgroundQuads(std::vector<orphen::ported::render::BackgroundQuad> quads)
+    {
+      backgroundQuads_ = std::move(quads);
+    }
+    std::size_t backgroundQuadCount() const { return backgroundQuads_.size(); }
 
     // FUN_0025cfb8's cinematic bars: the height of each one, in units of the
     // original's 640x448 virtual screen, 0..60. Drawn under the fade, which is
@@ -318,6 +334,7 @@ namespace orphen::harness
     // textures, because it is the same sheet read a different way.
     mutable std::map<unsigned int, unsigned int> clutBankTextureIds_;
     std::vector<orphen::ported::render::SpriteQuad> spriteQuads_;
+    std::vector<orphen::ported::render::BackgroundQuad> backgroundQuads_;
     // FUN_0025cfb8's `iGpffffbd8c >> 5`, 0..60.
     int letterboxBarHeight_ = 0;
     std::optional<orphen::ported::render::FeedbackQuad> frameFeedbackQuad_;

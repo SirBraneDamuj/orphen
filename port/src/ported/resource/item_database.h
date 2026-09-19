@@ -106,6 +106,14 @@ namespace orphen::ported::resource
                                           std::int32_t entry,
                                           bool groupE) const;
 
+    // The same descriptor's **halfword +0x08**: the scene's background model.
+    // FUN_0022A418:134 hands it to FUN_0022CDE8, which loads it as a PSB4 into
+    // background slot 0. Zero means the scene has no backdrop. See
+    // ported/render/original_background_model.h.
+    std::int16_t FUN_0022cde8_backgroundResource(std::int32_t section,
+                                                 std::int32_t entry,
+                                                 bool groupE) const;
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t recordTableOffset_ = 0;
@@ -114,6 +122,7 @@ namespace orphen::ported::resource
     std::uint32_t messageTableOffset_ = 0;
 
     std::string stringAt(std::uint32_t tableOffset, std::int32_t itemId) const;
+    std::uint32_t sceneDescriptorOffset(std::int32_t section, std::int32_t entry, bool groupE) const;
   };
 
 } // namespace orphen::ported::resource

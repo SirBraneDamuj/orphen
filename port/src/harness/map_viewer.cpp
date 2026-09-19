@@ -59,6 +59,10 @@ namespace orphen::harness
     // primitives whose centre is inside the draw distance but whose far
     // corners are not from being clipped by GL.
     constexpr float kFarPlaneMargin = 8.0f;
+    // Far enough that no background model can reach it. The backdrop pass
+    // neither tests nor writes depth, so the depth precision this costs is
+    // precision nothing reads.
+    constexpr float kBackgroundFarPlane = 4096.0f;
 
     // **There are two distance effects and they are not the same one.**
     //
@@ -1984,6 +1988,142 @@ namespace orphen::harness
       }
     }
 
+    // FUN_0020C290 -> FUN_0020C2F0, the four background models. The quads are
+    // already in world space; everything left is the state the backdrop's own
+    // VU1 program (MSCAL 0x228) applies and the map's does not.
+    //
+    // Depth: its vertices reach the GS at Z = 2 with ZBUF.ZMSK set, which is
+    // "behind everything, and never write". Drawn first with the test and the
+    // mask both off, which is the same picture.
+    //
+    // Fog: PRIM.FGE is clear on every backdrop draw and set on every map one,
+    // so the cylinder does not fade into the fog colour the way the world does.
+    //
+    // Culling: the model is a closed shell seen from inside, and its winding is
+    // whatever the authoring tool left. The original has no culling hardware
+    // and its VU1 backface test is in the map program, not this one, so nothing
+    // here is ever dropped for facing away.
+    void drawBackgroundQuads(const std::vector<orphen::ported::render::BackgroundQuad> &quads,
+                             const std::vector<unsigned int> &textureIds,
+                             const std::array<float, 16> &projection)
+    {
+      if (quads.empty())
+      {
+        return;
+      }
+
+      // **Its own projection.** The world is drawn with a far plane of
+      // `drawDistance + 8` -- 28 units in s01_e013 -- and this model is 35
+      // across and reaches 50 from the eye, so the frustum the map uses clips
+      // every one of its primitives away. The original has no such plane in
+      // reach of it: the backdrop's VU1 program hands the GS a fixed Z and the
+      // map's draw-distance test never sees the model at all. The caller passes
+      // the same camera with the far plane pushed out instead, which costs
+      // nothing here because this pass neither tests nor writes depth.
+      glMatrixMode(GL_PROJECTION);
+      glPushMatrix();
+      glLoadMatrixf(projection.data());
+      glMatrixMode(GL_MODELVIEW);
+
+      const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+      const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+      const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+      glDisable(GL_CULL_FACE);
+      glDisable(GL_FOG);
+      glDisable(GL_DEPTH_TEST);
+      glDepthMask(GL_FALSE);
+      glEnable(GL_TEXTURE_2D);
+
+      unsigned int boundTexture = 0;
+      int currentMode = -1;
+      bool texturingOn = true;
+      applyGsTextureEnv(true);
+
+      for (const auto &quad : quads)
+      {
+        const bool textured = quad.textureSlot >= 0;
+        if (textured)
+        {
+          const auto page = static_cast<std::size_t>(quad.textureSlot);
+          if (page >= textureIds.size() || textureIds[page] == 0)
+          {
+            continue;
+          }
+          if (textureIds[page] != boundTexture)
+          {
+            boundTexture = textureIds[page];
+            glBindTexture(GL_TEXTURE_2D, boundTexture);
+          }
+        }
+        if (textured != texturingOn)
+        {
+          texturingOn = textured;
+          if (texturingOn)
+          {
+            glEnable(GL_TEXTURE_2D);
+          }
+          else
+          {
+            glDisable(GL_TEXTURE_2D);
+          }
+          applyGsTextureEnv(texturingOn);
+        }
+        if (quad.blendMode != currentMode)
+        {
+          currentMode = quad.blendMode;
+          if (currentMode == 0)
+          {
+            glDisable(GL_BLEND);
+          }
+          else
+          {
+            setMapBlendState(currentMode, true);
+          }
+          // setMapBlendState restores the depth mask; this pass never writes.
+          glDepthMask(GL_FALSE);
+        }
+
+        // rgb divided by 256 against GL_RGB_SCALE 2, the same split the map
+        // vertices take so a channel above 0x80 can still brighten the texel.
+        // Alpha is a plain 0..1 where the GS's 0x80 is opaque.
+        glColor4f(static_cast<float>(quad.colour[0]) / 256.0f,
+                  static_cast<float>(quad.colour[1]) / 256.0f,
+                  static_cast<float>(quad.colour[2]) / 256.0f,
+                  static_cast<float>(quad.colour[3]) / 128.0f);
+        glBegin(GL_TRIANGLE_FAN);
+        for (std::size_t corner = 0; corner < quad.cornerCount; ++corner)
+        {
+          if (texturingOn)
+          {
+            glTexCoord2f(quad.u[corner] / 256.0f, quad.v[corner] / 256.0f);
+          }
+          const auto position = toViewerSpace(quad.corner[corner]);
+          glVertex3f(position.x, position.y, position.z);
+        }
+        glEnd();
+      }
+
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+      glDisable(GL_BLEND);
+      glDepthMask(GL_TRUE);
+      applyGsTextureEnv(false);
+      glMatrixMode(GL_PROJECTION);
+      glPopMatrix();
+      glMatrixMode(GL_MODELVIEW);
+      if (depthWasEnabled)
+      {
+        glEnable(GL_DEPTH_TEST);
+      }
+      if (fogWasEnabled)
+      {
+        glEnable(GL_FOG);
+      }
+      if (cullWasEnabled)
+      {
+        glEnable(GL_CULL_FACE);
+      }
+    }
+
     // Back to front over the depth buckets the visibility pass produced.
     // Both lists are ordered far to near by bucket, so this walks them
     // together the way the original walks its one shared bucket table: an
@@ -2747,6 +2887,33 @@ namespace orphen::harness
     printSceneResourceTree(buildSceneResourceTree(*sceneResources_), output);
   }
 
+  std::size_t MapViewer::dumpSceneResources(const std::filesystem::path &directory) const
+  {
+    if (!sceneResources_.has_value())
+    {
+      return 0;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    std::size_t written = 0;
+    for (const SceneResourceRecord &record : sceneResources_->records())
+    {
+      std::ostringstream name;
+      name << "cat" << std::setw(2) << std::setfill('0') << record.category << "_id"
+           << std::hex << std::setw(4) << std::setfill('0') << record.resourceId << ".bin";
+      const std::vector<std::uint8_t> decoded = sceneResources_->decodeRecord(record);
+      std::ofstream file(directory / name.str(), std::ios::binary);
+      if (!file)
+      {
+        continue;
+      }
+      file.write(reinterpret_cast<const char *>(decoded.data()),
+                 static_cast<std::streamsize>(decoded.size()));
+      ++written;
+    }
+    return written;
+  }
+
   void MapViewer::setTexturePages(std::vector<LoadedDiscTexturePage> texturePages)
   {
     releaseUploadedTextures();
@@ -3469,6 +3636,7 @@ namespace orphen::harness
     }
 
     float renderCameraDistance = cameraDistance_;
+    std::array<float, 16> backgroundProjection{};
     if (useOriginalCamera)
     {
       renderCameraDistance = viewerDistance(toViewerSpace(followCameraPose_.eye),
@@ -3482,6 +3650,14 @@ namespace orphen::harness
       glLoadMatrixf(camera.projection.data());
       glMatrixMode(GL_MODELVIEW);
       glLoadMatrixf(camera.modelView.data());
+
+      // The same camera with the far plane pushed past any background model.
+      // See drawBackgroundQuads.
+      backgroundProjection = orphen::ported::render::glCameraFor(
+                                 *renderCamera_, framebufferWidth, framebufferHeight,
+                                 orphen::ported::render::constants::kGeometryNearClip,
+                                 kBackgroundFarPlane)
+                                 .projection;
 
       // Keep the copies we just uploaded rather than reading them back. A
       // glGetFloatv is a sync point -- the driver has to finish everything
@@ -3565,6 +3741,11 @@ namespace orphen::harness
         const std::uint64_t entityBefore =
             g_renderStats != nullptr ? g_renderStats->entityDrawMicros : 0;
         const auto spanStart = std::chrono::steady_clock::now();
+
+        // FUN_002239C8's draw block ends with FUN_0020C290, but its packets go
+        // into a bucket at the far end of the display list, so the GS sees the
+        // backdrop before anything else. Here that is simply "draw it first".
+        drawBackgroundQuads(backgroundQuads_, uploadedTextureIds_, backgroundProjection);
 
         drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_,
                 sceneObjectViews_, entityDrawList, slotTextureIds_);

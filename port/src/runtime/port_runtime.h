@@ -36,6 +36,7 @@
 #include "ported/entity/original_fountain_particles.h"
 #include "ported/entity/original_haze_particles.h"
 #include "ported/entity/original_rain_pool.h"
+#include "ported/render/original_background_model.h"
 #include "ported/entity/original_gather_particles.h"
 #include "ported/entity/original_smoke_cloud.h"
 #include "ported/entity/original_spray_particles.h"
@@ -181,6 +182,11 @@ namespace orphen::port
     // --dump-map-textures <dir>: write the decoded map texture pages out as PAM
     // and stop caring about them. Empty means no dump.
     std::string dumpMapTexturesPath;
+    // --dump-scene-resources <dir>: every record of the scene bundle, decoded.
+    // Empty means no dump.
+    std::string dumpSceneResourcesPath;
+    // --no-background: skip FUN_0020C290's models, to see what is underneath.
+    bool drawBackgroundModels = true;
     // --pose-report <slot>: dump one entity's bone palette next to an
     // unfiltered rebuild of it, bone by bone, and name the first divergence.
     int poseReportSlot = -1;
@@ -627,6 +633,10 @@ namespace orphen::port
     std::uint32_t armStreamFrame_ = 1;
     std::vector<int> hideSlots_;
     bool printRenderReport_ = false;
+    bool drawBackgroundModels_ = true;
+    // --render-report prints the background models once, on the first frame
+    // that builds any.
+    bool backgroundReported_ = false;
     bool printGleamReport_ = false;
     std::vector<orphen::harness::GleamProbe> gleamProbes_;
     bool printFrameStats_ = false;
@@ -707,6 +717,16 @@ namespace orphen::port
     // FUN_002192c0 and the port-side tidy-up for the frames it does not run on.
     void FUN_002192c0_step_effect_pools(std::uint32_t frameTicks);
     void FUN_002192c0_clear_effect_pool_draws();
+
+    // FUN_0022CDE8(sceneDescriptor, 0) at scene load: the PSB4 named by the
+    // descriptor's halfword +0x08, into background slot 0.
+    void FUN_0022cde8_load_background_models();
+    // FUN_0020C290, once a frame: the four slots, turned into world-space
+    // primitives around the camera eye and handed to the viewer.
+    void FUN_0020c290_publish_background_quads();
+
+    // DAT_00345A18, the four background model descriptors.
+    std::array<orphen::ported::render::BackgroundSlot, 4> DAT_00345a18_backgrounds_;
 
     // DAT_00354d2c / iGpffffadbc. 0 is the field frame (FUN_00224218 plus the
     // rest of FUN_002239c8); 6 is the cutscene frame (FUN_002245d8), which
