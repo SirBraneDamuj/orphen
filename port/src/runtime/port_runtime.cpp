@@ -1843,6 +1843,22 @@ namespace orphen::port
       };
       environment.FUN_00262d88_set_fountain_gate = [this](std::uint32_t value)
       { DAT_00355b60_fountain_.FUN_00262d88_set_gate(value != 0); };
+
+      // Opcode 0x109 into the DAT_00355B50 haze field.
+      environment.FUN_0021bd30_arm_haze =
+          [this](const orphen::ported::script::ScriptHazeField &field)
+      {
+        DAT_00355b50_haze_.FUN_0021bd30_arm(field.size, field.speed, field.angle, field.count,
+                                            field.magnitude, field.entityIndex);
+      };
+      // Opcode 0x100. Only selector 5 names a pool this port has.
+      environment.FUN_002620a8_clear_pool_gate = [this](std::uint8_t selector)
+      {
+        if (selector == 5)
+        {
+          DAT_00355b50_haze_.FUN_002620a8_clear_gate();
+        }
+      };
       // Opcode 0x67. The look-at needs an ActorEnvironment, which only the
       // runtime can build, so it arrives as a callback like the path-follow
       // pair beside it.
@@ -4139,6 +4155,54 @@ namespace orphen::port
 
         quads.push_back(orphen::ported::entity::FUN_0021a820_build_dust_quad(inputs));
       }
+    }
+
+    // FUN_0021C288's draw half, in the place FUN_002192C0 gives FUN_0021BEF0:
+    // after the dust and before the spray. The near cutoff and the fade that
+    // goes with it are the original's own, and they are applied here because
+    // both read the projected q -- which is 1/viewZ, so a *large* q is a record
+    // that has come close to the eye, and this pool rejects those rather than
+    // the far ones.
+    for (const auto &particle : DAT_00355b50_haze_.drawList())
+    {
+      const auto viewSpace = viewProjection.toViewSpace(particle.world);
+      if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+      {
+        continue;
+      }
+      const float q = 1.0f / viewSpace.z;
+      if (q > orphen::ported::entity::kDAT_00352350_hazeNearCutoff)
+      {
+        continue;
+      }
+
+      int alpha = particle.alpha;
+      if (q >= orphen::ported::entity::kDAT_00352354_hazeFadeStart)
+      {
+        alpha = static_cast<int>(
+            static_cast<float>(alpha) *
+            ((orphen::ported::entity::kDAT_00352350_hazeNearCutoff - q) /
+             orphen::ported::entity::kDAT_00352358_hazeFadeSpan));
+      }
+
+      orphen::ported::entity::HazeQuadInputs inputs;
+      inputs.gsOriginX = static_cast<int>(
+          viewSpace.x * viewProjection.projection.at(0, 0) / viewSpace.z +
+          viewProjection.projection.at(2, 0));
+      inputs.gsOriginY = static_cast<int>(
+          viewSpace.y * viewProjection.projection.at(1, 1) / viewSpace.z +
+          viewProjection.projection.at(2, 1));
+      inputs.viewZ = viewSpace.z;
+      inputs.projectionScaleX = viewProjection.projection.at(0, 0);
+      inputs.projectionScaleY = viewProjection.projection.at(1, 1);
+      inputs.screenCentreX = viewProjection.projection.at(2, 0);
+      inputs.screenCentreY = viewProjection.projection.at(2, 1);
+      inputs.cornerScale = DAT_00355b50_haze_.DAT_00355b38_cornerScale();
+      inputs.corners = DAT_00355b50_haze_.DAT_00315638_corners();
+      inputs.alpha = alpha;
+      inputs.front = particle.front;
+
+      quads.push_back(orphen::ported::entity::FUN_0021c288_build_haze_quad(inputs));
     }
 
     // FUN_0021E808's draw half, collected by the step above. The corners are
@@ -6766,6 +6830,10 @@ namespace orphen::port
     std::cout << "spray particles: alive=" << DAT_00355b58_spray_.DAT_00355b54_aliveCount()
               << " gate=" << (DAT_00355b58_spray_.DAT_00354cbc_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b58_spray_.drawList().size() << "\n";
+    std::cout << "haze field: alive=" << DAT_00355b50_haze_.iGpffffbbc4_aliveCount()
+              << " gate=" << (DAT_00355b50_haze_.DAT_00354cb8_gate() ? 1 : 0)
+              << " entity=" << DAT_00355b50_haze_.DAT_00355b4c_entityIndex()
+              << " drawn=" << DAT_00355b50_haze_.drawList().size() << '\n';
     std::cout << "fountain particles: alive=" << DAT_00355b60_fountain_.DAT_00355b5c_aliveCount()
               << " gate=" << (DAT_00355b60_fountain_.DAT_00354cc0_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b60_fountain_.drawList().size() << "\n";
@@ -7192,6 +7260,42 @@ namespace orphen::port
       // FUN_0021A760 runs in the same half of the frame: it is walked from
       // the simulation and its quads are collected at publish time.
       DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
+      // FUN_0021BEF0, in the slot FUN_002192C0 gives it: after FUN_0021A760 and
+      // before FUN_0021E5E0. The four pools between them in that list are not
+      // ported. The entity branch is resolved here because the pool cannot
+      // reach either the entity pool or the terrain.
+      {
+        orphen::ported::entity::HazeCameraFrame hazeCamera;
+        hazeCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+        hazeCamera.fGpffffb6d8_pitch = fieldCamera_.pitchRadians();
+        const auto &eye = fieldCamera_.pose().eye;
+        hazeCamera.DAT_0058c0a8_eyeX = eye.x;
+        hazeCamera.DAT_0058c0ac_eyeY = eye.y;
+        hazeCamera.DAT_0058c0b0_eyeZ = eye.z;
+
+        std::optional<orphen::ported::entity::HazeEntityAnchor> anchor;
+        const int hazeEntity = DAT_00355b50_haze_.DAT_00355b4c_entityIndex();
+        if (hazeEntity >= 0 && static_cast<std::size_t>(hazeEntity) < entityPool_.slotCount())
+        {
+          const auto &host = entityPool_.slot(static_cast<std::size_t>(hazeEntity));
+          orphen::ported::entity::HazeEntityAnchor resolved;
+          resolved.positionX20 = host.positionX20;
+          resolved.positionY24 = host.positionZ24;
+          // FUN_00227798(+0x20, +0x24, +0x4C): the single-point ground query,
+          // sampled from the height the entity last stood on.
+          resolved.FUN_00227798_groundHeight = host.groundHeight4c;
+          if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
+          {
+            resolved.FUN_00227798_groundHeight =
+                FUN_00227070_sample_ground(*loadedMap, host.positionX20, host.positionZ24,
+                                           host.groundHeight4c, 0.0f, 0.0f, 2u, 0u)
+                    .height;
+          }
+          anchor = resolved;
+        }
+        DAT_00355b50_haze_.FUN_0021bef0_step(frameTicks, hazeCamera, anchor,
+                                             [this] { return FUN_00216868_random(); });
+      }
       // FUN_0021E5E0, in the slot FUN_002192C0 gives it: after FUN_0021A760
       // and before FUN_00220910. It steps and draws in one walk, so the step
       // records which particles survived and the publish pass turns that list
@@ -7610,6 +7714,7 @@ namespace orphen::port
     // not follow the player into the next scene.
     DAT_0054f080_smoke_.FUN_0022f020_clear();
     DAT_00355b58_spray_.FUN_0021e540_reset();
+    DAT_00355b50_haze_.FUN_0021be58_reset();
     DAT_00355b60_fountain_.FUN_0021f108_reset();
     DAT_00355b80_gather_.reset();
     // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two

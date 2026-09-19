@@ -482,6 +482,22 @@ namespace orphen::ported::script
     std::uint32_t colour = 0;
   };
 
+  // The haze field opcode 0x109 arms, as FUN_002625B8 spells it. Six
+  // expressions, read count-first and then in an order that is not the order
+  // FUN_0021BD30 takes them: three of them are scaled by 100000 (DAT_00352C6C)
+  // and the magnitude and the entity index go through raw.
+  struct ScriptHazeField
+  {
+    int count = 0;
+    float size = 0.0f;
+    float speed = 0.0f;
+    // Its sign is meaningful: negative puts the field in display list 0x1005.
+    std::int32_t magnitude = 0;
+    float angle = 0.0f;
+    // Negative, or 0x100 and above, means the field is camera-locked instead.
+    int entityIndex = -1;
+  };
+
   // One burst of the DAT_00355B80 pool, as opcode 0x114 spells it. Eleven
   // expressions: the count first, then nine scaled by 100000 (fGpffff8d20),
   // then the colour raw. The ninth scaled one is the sprite size, and it is the
@@ -655,6 +671,17 @@ namespace orphen::ported::script
     // writing zero here rather than by releasing the particles, so they stay
     // allocated and come straight back when it writes one again.
     std::function<void(std::uint32_t value)> FUN_00262d88_set_fountain_gate;
+
+    // FUN_002625B8 -> FUN_0021BD30, opcode 0x109: the haze field at
+    // DAT_00355B50. Unlike every other pool here this one has no spawn call --
+    // the opcode sets a target count and the pool grows or shrinks toward it,
+    // and the records that are already live keep their positions.
+    std::function<void(const ScriptHazeField &)> FUN_0021bd30_arm_haze;
+
+    // FUN_002620A8, opcode 0x100: one inline byte clearing one of the six pool
+    // gates at uGpffffad38..ad4c. Byte 5 is uGpffffad48, the haze field's;
+    // the other five belong to pools this port does not have.
+    std::function<void(std::uint8_t selector)> FUN_002620a8_clear_pool_gate;
 
     // FUN_0025FA40 -> FUN_00257C78, opcode 0x67: turn the selected entity's
     // head and bust toward a world point without moving its body. The follower

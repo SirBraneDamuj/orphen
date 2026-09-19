@@ -5071,10 +5071,24 @@ namespace orphen::ported::script
     }
 
     // 0x100 (FUN_002620a8): no expressions, one inline byte selecting which of
-    // six globals at uGpffffad38..ad4c to zero.
+    // six globals at uGpffffad38..ad4c to zero. Byte 5 is uGpffffad48, the gate
+    // FUN_0021BEF0 checks -- so this is how a scene turns its haze field off
+    // without releasing a record. The other five name pools the port does not
+    // have; the handler is given the raw byte so it can say so.
     case 0x100:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 0, 1);
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint8_t selector = readU8();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_002620a8_clear_pool_gate)
+      {
+        environment_.FUN_002620a8_clear_pool_gate(selector);
+      }
+      return 0;
+    }
 
     // 0x102 / 0x106 / 0x108 (FUN_00262250): eight expressions -- four
     // coordinates, three values and an entity selector -- into one of the
@@ -5085,27 +5099,52 @@ namespace orphen::ported::script
       note(OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 8);
 
-    // 0x109 (FUN_002625b8): six expressions and no inline bytes -- the count,
-    // three coordinates, a signed magnitude and an entity index -- which arm
-    // the **ninth** particle pool, 100 records of 0x18 at uGpffffbbe0
-    // (FUN_0021BD30 sets the count, FUN_0021BE58 allocates, FUN_0021BEF0 draws
-    // and FUN_0021C288 steps one record).
+    // 0x109 (FUN_002625b8): six expressions and no inline bytes, arming the
+    // **ninth** particle pool -- 100 records of 0x18 at DAT_00355B50, which
+    // FUN_0021BE58 allocates, FUN_0021BD30 sets the live count of, FUN_0021BEF0
+    // places and walks, and FUN_0021C288 steps one record of.
     //
-    // A negative entity index means "no entity", and the pool is then placed
-    // relative to the camera; anything under 0x100 indexes the pool at
-    // 0x0058BEB0. Note Ghidra prints the stride as 0xEC only because the
-    // pointer it scales is an undefined2 * -- it is the usual 0x1D8 in bytes.
+    // The read order is not the call order. FUN_002625B8 reads
+    //
+    //     count, size, speed, magnitude, angle, entityIndex
+    //
+    // and calls `FUN_0021BD30(size, speed, angle, count, magnitude, entity)`,
+    // with size, speed and angle divided by DAT_00352C6C and the other three
+    // passed through in general registers. See original_haze_particles.h for
+    // what each of them does.
+    //
+    // A negative entity index, or one at 0x100 and above, means "no entity",
+    // and the field is then hung in front of the camera instead; anything under
+    // 0x100 indexes the entity pool at 0x0058BEB0. Note Ghidra prints that
+    // stride as 0xEC only because the pointer it scales is an `undefined2 *` --
+    // it is the usual 0x1D8 in bytes.
     //
     // **The halt this replaces cost s01_e013 its whole per-frame script.** A
     // per-frame entry that halts halts again on every later frame, so from
     // frame 331 header word 2's body stopped executing past this opcode for the
     // rest of the scene -- everything after it in the frame body, not just the
     // effect. The scene reaches the opcode once; the hit count the report used
-    // to show was one failed retry per frame. The effect is still not
-    // reproduced, only its operands consumed.
+    // to show was one failed retry per frame.
     case 0x109:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 6);
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptHazeField field;
+      field.count = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      field.size = scaledOperand();
+      field.speed = scaledOperand();
+      field.magnitude = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      field.angle = scaledOperand();
+      field.entityIndex = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0021bd30_arm_haze)
+      {
+        environment_.FUN_0021bd30_arm_haze(field);
+      }
+      return 0;
+    }
 
     // 0x125 / 0x126 (FUN_00261330): an inline **u16** cue id first, then the
     // expression selecting the entity to play it on. The inline read comes

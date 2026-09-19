@@ -34,6 +34,7 @@
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_hit_sparks.h"
 #include "ported/entity/original_fountain_particles.h"
+#include "ported/entity/original_haze_particles.h"
 #include "ported/entity/original_gather_particles.h"
 #include "ported/entity/original_smoke_cloud.h"
 #include "ported/entity/original_spray_particles.h"
@@ -506,6 +507,11 @@ namespace orphen::port
     // carved by FUN_0021F108 and walked by FUN_0021F1A8. Adjacent in RAM to
     // the spray pool and unrelated to it in every other way.
     orphen::ported::entity::FountainParticlePool DAT_00355b60_fountain_;
+    // DAT_00355B50, the haze field opcode 0x109 arms -- 100 records of 0x18,
+    // carved by FUN_0021BE58 and walked by FUN_0021BEF0. The only pool here
+    // whose records respawn in place instead of dying, and the only one whose
+    // opcode sets a target count rather than throwing a burst.
+    orphen::ported::entity::HazeParticlePool DAT_00355b50_haze_;
     // DAT_00355B80, the converging streaks opcodes 0x114 and 0x115 drive.
     orphen::ported::entity::GatherParticlePool DAT_00355b80_gather_;
 
