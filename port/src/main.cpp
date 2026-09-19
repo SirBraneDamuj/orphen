@@ -3,6 +3,7 @@
 #include "harness/audio_device.h"
 #include "runtime/port_runtime.h"
 #include "ported/entity/actor_frame_update.h"
+#include "ported/input/original_analog_stick.h"
 #include "ported/psm2/psm2_collision_groups.h"
 
 #include <algorithm>
@@ -39,6 +40,11 @@ namespace
                  "                  it, and without it a direct load takes that\n"
                  "                  switch's default arm.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
+                 "  --glyph-report  print the dialogue window's 300 glyph slots read\n"
+                 "                  back as text whenever they change, next to what\n"
+                 "                  the renderer submitted. A letter missing from the\n"
+                 "                  slots is a dialogue bug; one present there but not\n"
+                 "                  drawn is a renderer bug.\n"
                  "  --scr-dump <p>  write the decoded scene script blob out, exactly as\n"
                  "                  the interpreter sees it.\n"
                  "  --no-scr-tick   stop running the scene script's per-frame entry\n"
@@ -561,6 +567,11 @@ namespace
         config.drawDistanceOverride = std::stof(argv[++argumentIndex]);
         continue;
       }
+      if (argument == "--glyph-report")
+      {
+        config.printGlyphReport = true;
+        continue;
+      }
       if (argument == "--scr-report")
       {
         config.printScriptReport = true;
@@ -976,6 +987,17 @@ int main(int argc, char **argv)
           input.stickMagnitude = config.holdStick->second;
           input.moveX = std::cos(input.stickAngle);
           input.moveY = std::sin(input.stickAngle);
+          // DAT_003555FE and DAT_00355600, which FUN_0023B5D8 keeps beside the
+          // pad word every frame. The windowed path already derives them; a
+          // headless run did not, so anything that reads the stick as a
+          // direction -- a dialogue menu, battle target cycling -- was
+          // unreachable from the command line even with --hold-stick.
+          const std::uint16_t stickDirection =
+              orphen::ported::input::FUN_0023b4e8_stick_direction_bits(input.stickMagnitude,
+                                                                      input.stickAngle);
+          input.rawPressedStickDirection =
+              static_cast<std::uint16_t>(stickDirection & ~input.rawStickDirection);
+          input.rawStickDirection = stickDirection;
         }
 
         // Edge-triggered the same way the window path delivers it, so the

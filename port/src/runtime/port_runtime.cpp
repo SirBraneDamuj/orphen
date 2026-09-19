@@ -39,6 +39,17 @@ namespace orphen::port
     // opcode 0xB8 both override it; a scene carrying neither runs at this.
     constexpr float kDAT_0032538c_defaultDrawDistance = 32.0f;
 
+    // FUN_00237fc0:65-68, the caption a control-code 0x15 menu keeps in the
+    // corner. Message 0x28 of SCR.BIN resource 1 is "Press <Cross> to Select";
+    // the 0xFE in it is the button-icon escape FUN_00231DA0 resolves. It is
+    // right-aligned to entry x 0x130 -- screen 624 -- at entry y -0xA4, which
+    // is screen 388, and measured and drawn on a 0x14 by 0x16 cell.
+    constexpr std::size_t kChoiceCaptionMessage = 0x28;
+    constexpr int kChoiceCaptionRightEdge = 0x130;
+    constexpr int kChoiceCaptionY = -0xA4;
+    constexpr int kChoiceCaptionCell = 0x14;
+    constexpr int kChoiceCaptionCellHeight = 0x16;
+
     std::string formatNumber(float value, int precision = 2)
     {
       std::ostringstream stream;
@@ -211,6 +222,7 @@ namespace orphen::port
       drawDistanceOverridden_ = true;
     }
     printScriptReport_ = config.printScriptReport;
+    printGlyphReport_ = config.printGlyphReport;
     printModelReport_ = config.printModelReport;
     hideSlots_ = config.hideSlots;
     snapshotFrame_ = config.snapshotFrame;
@@ -1638,8 +1650,20 @@ namespace orphen::port
       const auto &entry = dialogueStream_.log().back();
       std::cout << "[dialogue] " << dialogueStream_.speaker() << ": \"" << dialogueStream_.line()
                 << "\"  (voice " << entry.voiceId << ", " << entry.holdFrames << 'f'
-                << (entry.measured ? "" : (entry.holdFrames == 0 ? ", empty" : ", estimated"))
+                << (entry.measured ? ""
+                    : !entry.options.empty()
+                        ? ", menu"
+                        : (entry.holdFrames == 0 ? ", empty" : ", estimated"))
                 << ")\n";
+      if (!entry.options.empty())
+      {
+        std::cout << "[dialogue] choice -> work[" << entry.choiceWorkIndex << "]:";
+        for (std::size_t option = 0; option < entry.options.size(); ++option)
+        {
+          std::cout << ' ' << (option + 1) << '=' << entry.options[option];
+        }
+        std::cout << "  (waiting for Cross)\n";
+      }
 
       // What the record's 0x18 started. Only worth reading when something is
       // going to mix it -- decoding is otherwise a megabyte of work per line
@@ -3614,6 +3638,10 @@ namespace orphen::port
       std::cout << "[voice] lengths only; VOICE.BIN itself is needed to hear a line\n";
     }
     dialogueStream_.setVoiceIndex(&voiceIndex_);
+    // FUN_00267D38(cue, 0): a null entity is the non-positional path, so a menu
+    // cue plays flat at full pan rather than at the player.
+    dialogueStream_.setCueSink([this](int cue)
+                               { soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(cue)); });
     voiceAudioEnabled_ = config.audio || !config.soundDumpPath.empty();
     soundEngine_.setMusicSolo(config.musicSolo);
     soundEngine_.setReverbDisabled(config.noReverb);
@@ -4599,6 +4627,11 @@ namespace orphen::port
     // scene that reports any is a scene whose cutscene timing is not faithful.
     {
       const auto &lines = dialogueStream_.log();
+      if (dialogueStream_.choiceLines() != 0)
+      {
+        std::cout << "dialogue choices: " << dialogueStream_.choiceLines()
+                  << " (control code 0x15; each waits on Cross)\n";
+      }
       std::cout << "dialogue lines: " << lines.size() << "  (" << dialogueStream_.measuredLines()
                 << " timed by their voice clip, " << dialogueStream_.estimatedLines()
                 << " estimated, " << dialogueStream_.emptyLines() << " empty)\n";
@@ -4608,6 +4641,11 @@ namespace orphen::port
                   << " held open past the clip until the walk reached the terminator, "
                   << dialogueStream_.typewriterHeldFrames() << " frames in total\n";
       }
+      std::cout << "dialogue glyphs: " << dialogueStream_.window().glyphsEnqueued()
+                << " enqueued, " << dialogueStream_.window().glyphsDropped()
+                << " dropped for want of a slot, peak "
+                << dialogueStream_.window().peakActiveSlots() << " of "
+                << orphen::ported::text::DialogueWindow::kSlotCount << " slots live\n";
       const auto &unhandled = dialogueStream_.window().unhandledCodes();
       if (!unhandled.empty())
       {
@@ -7382,8 +7420,45 @@ namespace orphen::port
     // here is this frame's -- a line typed on the frame the bars are armed is
     // already clear of them.
     dialogueStream_.setMovieMode(DAT_00355054_letterbox_.DAT_00355054_mode());
-    dialogueStream_.FUN_00237fc0_update(frameTicks);
-    mapViewer_.setDialogueSprites(buildDialogueSprites());
+    // A record sitting on a control-code 0x15 choice reads the pad here, and
+    // writes its answer into the script work array when Cross closes it.
+    orphen::ported::text::DialogueWindow::PadState dialoguePad;
+    dialoguePad.uGpffffb684_held = input.rawHeldPad;
+    dialoguePad.uGpffffb686_pressed = input.rawPressedPad;
+    dialoguePad.uGpffffb68e_stickDirection = input.rawStickDirection;
+    dialogueStream_.FUN_00237fc0_update(frameTicks, dialoguePad, sceneScript_.state());
+    // --glyph-report. Two numbers that separate a dialogue bug from a renderer
+    // one: what is in the 300 glyph slots, read back as text, and what the last
+    // draw pass actually submitted. If the text is right and the submitted
+    // count matches the sprite count, the letters reached the framebuffer and
+    // whatever is hiding them is downstream of this file.
+    if (printGlyphReport_)
+    {
+      const std::string screenText = dialogueStream_.window().debugScreenText();
+      const auto &tally = mapViewer_.dialogueDrawTally();
+      const bool skipped = tally.noSlotTexture != 0 || tally.emptyTexture != 0 ||
+                           tally.noBankTexture != 0 || tally.degenerate != 0;
+      if (screenText != lastGlyphScreenText_ || skipped)
+      {
+        lastGlyphScreenText_ = screenText;
+        std::cout << "[glyphs] f=" << frameCount_ << " slots=\"" << screenText << "\"";
+        std::cout << "  slots=" << dialogueStream_.window().activeSlotCount()
+                  << " sprites=" << lastDialogueSpriteCount_ << " drawn=" << tally.submitted;
+        if (skipped)
+        {
+          std::cout << "  SKIPPED noSlotTexture=" << tally.noSlotTexture
+                    << " emptyTexture=" << tally.emptyTexture
+                    << " noBankTexture=" << tally.noBankTexture
+                    << " degenerate=" << tally.degenerate;
+        }
+        std::cout << '\n';
+      }
+    }
+    {
+      auto builtSprites = buildDialogueSprites();
+      lastDialogueSpriteCount_ = builtSprites.size();
+      mapViewer_.setDialogueSprites(std::move(builtSprites));
+    }
     // FUN_00233818's pentagon. Its captions ride the dialogue list, which is
     // the same FUN_00239020 path they take in the original.
     mapViewer_.setHudQuads(battleParty_.targetDisplayQuads());
@@ -7717,6 +7792,35 @@ namespace orphen::port
     // here.
     const auto &target = battleParty_.targetDisplaySprites();
     sprites.insert(sprites.end(), target.begin(), target.end());
+
+    // FUN_00237fc0:65-68, the caption a control-code 0x15 menu holds in the
+    // corner while it waits: message 0x28 of SCR.BIN resource 1, which is
+    // "Press <Cross> to Select", right-aligned to entry x 0x130 at y -0xA4. It
+    // is rebuilt here rather than in the window because the message table
+    // belongs to the item database, not to the dialogue system.
+    if (dialogueStream_.choiceActive())
+    {
+      const std::span<const std::uint8_t> message =
+          itemDatabase_.FUN_0025b9e8_message(kChoiceCaptionMessage);
+      std::string caption;
+      for (const std::uint8_t byte : message)
+      {
+        if (byte == 0)
+        {
+          break;
+        }
+        caption.push_back(static_cast<char>(byte));
+      }
+      if (!caption.empty())
+      {
+        const int width = text::FUN_00238e68_measure(caption, dialogueFont_, kChoiceCaptionCell);
+        const std::vector<text::DialogueSprite> row =
+            text::FUN_00238608_layout(kChoiceCaptionRightEdge - width, kChoiceCaptionY, caption,
+                                      text::kColorDefault, kChoiceCaptionCell,
+                                      kChoiceCaptionCellHeight, dialogueFont_);
+        sprites.insert(sprites.end(), row.begin(), row.end());
+      }
+    }
 
     if (!itemWindow_.FUN_00237c60_isOpen())
     {

@@ -51,6 +51,35 @@
 // record closes on its clip: a cutscene that stopped for input at every fourth
 // line would not be the same scene, and the port has no such input model.
 //
+// == Control code 0x15, the selectable choice ==
+//
+// `FUN_00239848` is the branch a conversation offers the player, and s01_e013's
+// two party-member invitations are built out of it:
+//
+//   1B 09 05  1B 09 05  "Allow Zeus to join your group?"  07
+//   15 10 01 02  "Yes" 00  "No" 00  00
+//
+// The operand is `[workIndex][initialSelection][optionCount]`, then that many
+// NUL-terminated option strings. The handler indents the pen by 0x14 and emits
+// each option as ordinary glyphs with a newline between them, exactly the way
+// 0x13 emits a speaker name, and parks the count in DAT_005716C0.
+//
+// A non-zero count is what makes `FUN_00237fc0` a menu: it draws the cursor
+// sprite, walks the selection on Up/Down through the auto-repeat in
+// FUN_0023B9F8, and **returns before the glyph walk**, so the record is frozen
+// where it stands until Cross. On Cross it writes `selection + 1` into
+// `iGpffffb0f0[workIndex]` -- and `iGpffffb0f0` is gp-0x4F10, which is
+// `DAT_00355060`, *the script work array*. That is the whole answer channel:
+// the scene script reads work[0x10] back with opcode 0x36 and branches on 1 or
+// 2. There is no separate dialogue result register.
+//
+// **The port skipped the code entirely.** It was in the width table as a
+// four-byte control, so the header was consumed and the option strings were
+// then walked as ordinary glyphs: "Allow Zeus to join your group? Yes", with
+// the 0x00 after "Yes" read as the end of the record, which swallowed "No" and
+// closed the line on a timer. The work slot stayed zero, so every script that
+// asked took the same arm.
+//
 // == Layout ==
 //
 // `FUN_00237b38` opens a window at entry (-0x130, -0x78) -- screen (16, 344) --
@@ -68,7 +97,10 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace orphen::ported::text
@@ -106,7 +138,8 @@ namespace orphen::ported::text
   {
     bool active = false;              // +0x3A
     std::uint8_t layer = 0;           // +0x3B, cGpffffaec4 at the time
-    int textureSlot = kFontSlotLow;   // [0x00]
+    int textureSlot = kFontSlotLow;   // [0x00], low byte
+    int clutBank = -1;                // [0x00], high byte; -1 for the 8-bit page
     int x = 0;                        // [2]
     int y = 0;                        // [3], negated by FUN_00239020
     int width = 0;                    // [4]
@@ -143,6 +176,38 @@ namespace orphen::ported::text
     // what is left of the clip's length here instead.
     void setVoiceBusy(bool busy) { voiceBusy_ = busy; }
 
+    // The three pad words FUN_00237fc0's choice block reads. They are globals
+    // in the original; the port passes this frame's snapshot in, because the
+    // `FUN_0023B5D8(0)` the repeat helper opens with is a re-read of a pad the
+    // port has already sampled for the frame.
+    struct PadState
+    {
+      std::uint16_t uGpffffb684_held = 0;          // DAT_003555F4
+      std::uint16_t uGpffffb686_pressed = 0;       // DAT_003555F6
+      std::uint16_t uGpffffb68e_stickDirection = 0; // DAT_003555FE
+    };
+
+    // FUN_00267D38's cue ids, through FUN_00237A78 / FUN_002256C0 / FUN_002256B0.
+    static constexpr int kCueChoiceOpen = 0x0E;
+    static constexpr int kCueMenuMove = 0x01;
+    static constexpr int kCueMenuConfirm = 0x02;
+    void setCueSink(std::function<void(int)> sink) { cueSink_ = std::move(sink); }
+
+    // DAT_005716C0 != 0: a choice is on screen and the walk is frozen behind it.
+    bool choiceActive() const { return DAT_005716c0_choiceCount_ != 0; }
+    std::int32_t choiceSelection() const { return DAT_005716c4_choiceIndex_; }
+    std::int32_t choiceCount() const { return DAT_005716c0_choiceCount_; }
+
+    // FUN_00237fc0:70. `work[workIndex] = value`, where value is the 1-based
+    // option number. Handed out once, on the frame Cross closed the menu, so
+    // whoever owns the work array can apply it.
+    struct ChoiceAnswer
+    {
+      std::uint32_t workIndex = 0;
+      std::uint32_t value = 0;
+    };
+    std::optional<ChoiceAnswer> takeChoiceAnswer();
+
     // FUN_00237b38 with a non-zero pointer, taking the branch where the window
     // was closed. `end` bounds the record -- the next dialogue pointer-table
     // entry -- and stands in for the terminator the original trusts.
@@ -174,8 +239,9 @@ namespace orphen::ported::text
     bool windowUp() const { return pcGpffffaec0_windowUp_; }
 
     // FUN_00237fc0's tail: age the budget, burn the two wait counters, and step
-    // the walk once per 0x20 of budget.
-    void FUN_00237fc0_update(std::uint32_t frameTicks);
+    // the walk once per 0x20 of budget -- with the choice block ahead of it,
+    // which returns early while a menu is up.
+    void FUN_00237fc0_update(std::uint32_t frameTicks, PadState pad);
 
     // The walk has reached a 0x00 or a 0x02 -- everything the record had to say
     // is on the screen. A record whose clip is shorter than its text is still
@@ -195,6 +261,20 @@ namespace orphen::ported::text
     // same line.
     void setMovieMode(int mode) { movieMode_ = mode; }
 
+    // Diagnostic counters for glyphs that never reached the screen. A glyph
+    // dropped for want of a slot still advances the pen, so it leaves a gap
+    // exactly the width of the missing letter -- which is what a dropped letter
+    // looks like on screen.
+    // TEMPORARY DIAGNOSTIC: the glyph slots read back as text, row by row, by
+    // inverting FUN_00238a08's cell arithmetic. What is actually on screen.
+    std::string debugScreenText() const;
+
+    std::size_t activeSlotCount() const;
+
+    std::uint32_t glyphsEnqueued() const { return glyphsEnqueued_; }
+    std::uint32_t glyphsDropped() const { return glyphsDropped_; }
+    std::size_t peakActiveSlots() const { return peakActiveSlots_; }
+
     // Control codes the walk skipped by width without acting on them, for the
     // report. The audio codes are excluded -- DialogueStream runs those.
     const std::vector<std::uint8_t> &unhandledCodes() const { return unhandledCodes_; }
@@ -202,6 +282,13 @@ namespace orphen::ported::text
   private:
     void FUN_00237de8_advance();          // one step of the walk
     void dispatchControl(std::uint8_t code);
+    void FUN_00239848_choice();           // control code 0x15
+    // FUN_0023B9F8(mask, 1). Fires on the frame a direction is first seen and
+    // then every fourth step once it has been held for twelve, and ORs the
+    // movement stick's quantised direction bits into the held word on the way
+    // -- which is why the stick walks a menu exactly as the D-pad does.
+    bool FUN_0023b9f8_autoRepeat(std::uint16_t mask, PadState &pad, std::uint32_t frameTicks);
+    void playCue(int cue) const;
     void FUN_00238a08_enqueue(std::uint8_t character);
     void FUN_00238f98_newLine();
     void FUN_00238f18_clearSlots();
@@ -281,6 +368,29 @@ namespace orphen::ported::text
     static constexpr std::size_t kNoSlot = kSlotCount;
     std::int32_t promptTicks_ = 0;
     std::size_t promptSlot_ = kNoSlot;
+
+    // FUN_00239848's five globals at DAT_005716C0. The cursor position is kept
+    // rather than recomputed because FUN_00237fc0 walks it by 0x16 a step and
+    // jumps it by the whole list on a wrap, which is not the same as deriving
+    // it from the index once the window has scrolled.
+    std::int32_t DAT_005716c0_choiceCount_ = 0;
+    std::int32_t DAT_005716c4_choiceIndex_ = 0;
+    std::uint32_t DAT_005716c8_choiceWorkIndex_ = 0;
+    int DAT_005716cc_choiceCursorX_ = 0;
+    int DAT_005716d0_choiceCursorY_ = 0;
+    std::optional<ChoiceAnswer> choiceAnswer_;
+
+    // FUN_0023B9F8's two counters: iGpffffaf00, the tick budget it spends one
+    // step of the repeat ladder at a time, and sGpffffaefe, how many steps the
+    // direction has been held for.
+    std::int32_t iGpffffaf00_repeatBudget_ = 0;
+    std::int16_t sGpffffaefe_repeatSteps_ = 0;
+
+    std::function<void(int)> cueSink_;
+
+    std::uint32_t glyphsEnqueued_ = 0;
+    std::uint32_t glyphsDropped_ = 0;
+    std::size_t peakActiveSlots_ = 0;
 
     std::vector<std::uint8_t> unhandledCodes_;
   };

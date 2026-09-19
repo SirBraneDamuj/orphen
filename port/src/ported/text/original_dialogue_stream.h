@@ -88,6 +88,9 @@ namespace orphen::ported::text
     // The measured width table, needed before a glyph can be placed. Borrowed.
     void setFont(const DialogueFont *font) { window_.setFont(font); }
 
+    // FUN_00267D38, for the three cues a control-code 0x15 menu plays.
+    void setCueSink(std::function<void(int)> sink) { window_.setCueSink(std::move(sink)); }
+
     // FUN_00237b38 with a non-zero pointer. `recordEnd` is the next
     // pointer-table entry, or the blob end for the last record.
     void FUN_00237b38_start(std::span<const std::uint8_t> blob,
@@ -121,7 +124,20 @@ namespace orphen::ported::text
     // original runs it *after* the script, so a record the script opened this
     // frame gets its first character this frame -- which is why it is not
     // folded into `update` above.
-    void FUN_00237fc0_update(std::uint32_t frameTicks) { window_.FUN_00237fc0_update(frameTicks); }
+    // `pad` is the frame's raw pad words; a record sitting on a 0x15 choice
+    // reads them here and nowhere else. The state is passed because confirming
+    // a choice writes the answer straight into the script work array -- see the
+    // choice section of DialogueWindow's header.
+    void FUN_00237fc0_update(std::uint32_t frameTicks,
+                             DialogueWindow::PadState pad,
+                             orphen::ported::script::SceneScriptState &state);
+
+    // DAT_005716C0 != 0. While this holds, the record is waiting on the player
+    // rather than on a clip or the typewriter.
+    bool choiceActive() const { return window_.choiceActive(); }
+    std::int32_t choiceSelection() const { return window_.choiceSelection(); }
+    // The option strings of the record currently up, empty when it has none.
+    const std::vector<std::string> &choiceOptions() const { return options_; }
 
     // iGpffffb0e4, published from the shared `Letterbox` before the walk runs.
     // FUN_00238a08 reads the global as it enqueues, so this has to be current
@@ -148,6 +164,10 @@ namespace orphen::ported::text
       bool measured = false;       // false when the hold is the estimate
       std::string speaker;
       std::string line;
+      // A control-code 0x15 menu's options, and the work slot its answer lands
+      // in. Empty and zero for an ordinary record.
+      std::vector<std::string> options;
+      std::uint32_t choiceWorkIndex = 0;
     };
     const std::vector<LoggedLine> &log() const { return log_; }
     void setFrame(std::uint32_t frame) { frame_ = frame; }
@@ -159,6 +179,9 @@ namespace orphen::ported::text
     // Records with neither a clip nor any text -- a bare terminate. They hold
     // for nothing, which is not the same as being invented.
     std::uint32_t emptyLines() const { return emptyLines_; }
+    // Records that put a menu up. Their hold is neither measured nor estimated:
+    // they wait for Cross.
+    std::uint32_t choiceLines() const { return choiceLines_; }
     // Records that stayed up after their clip had finished, because the walk
     // had not reached the terminator yet, and what that cost in frames. Every
     // texted record does this by at least the two steps the walk needs to
@@ -194,10 +217,15 @@ namespace orphen::ported::text
     std::uint32_t voiceCache_[3] = {0, 0, 0};
     // Event flags the record's 0x1B codes ask for, applied when it closes.
     std::vector<std::uint32_t> pendingFlags_;
+    // The 0x15 block's options and the work slot its answer goes to, for the
+    // log and the report. The window owns the live selection.
+    std::vector<std::string> options_;
+    std::uint32_t choiceWorkIndex_ = 0;
     std::vector<LoggedLine> log_;
     std::uint32_t measuredLines_ = 0;
     std::uint32_t estimatedLines_ = 0;
     std::uint32_t emptyLines_ = 0;
+    std::uint32_t choiceLines_ = 0;
     std::uint32_t typewriterHeldLines_ = 0;
     std::uint32_t typewriterHeldTicks_ = 0;
     // Set while a record is past its clip and waiting on the walk, so the

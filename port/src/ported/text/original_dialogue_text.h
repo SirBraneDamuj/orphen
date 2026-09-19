@@ -81,6 +81,48 @@ namespace orphen::ported::text
   inline constexpr int kPromptOriginBias = 0x10; // FUN_002391d0:37
   inline constexpr int kLineStep = -kCellSize;
 
+  // == The texture argument is a slot and a CLUT bank ==
+  //
+  // FUN_00207938 takes one integer for the texture and splits it at
+  // 0x00207bd0: the low byte of `value + 1` is the packet's slot byte -- so the
+  // caller's own low byte is the slot the port indexes -- and, for a slot at or
+  // above 0x18, the high byte becomes the 4-bit CLUT window. Those slots are
+  // PSMT4 pages whose 256-entry palette is sixteen independent 16-colour ramps,
+  // so the bank is the only thing separating two sprites that share pixels.
+  //
+  //   0x02E  FUN_00238a08:32   the glyph sheet, bank 0
+  //   0x42A  FUN_002391d0:49   the book prompt, slot 0x2A bank 4
+  //   0x22A  FUN_00239110      the choice cursor, slot 0x2A bank 2
+  //   0x82C  FUN_00238608:56   a button icon, slot 0x2C bank 8
+  inline constexpr int kPromptTextureWord = 0x42A;
+  inline constexpr int kChoiceCursorTextureWord = 0x22A;
+  inline constexpr int kButtonIconTextureWord = 0x82C;
+  constexpr int textureWordSlot(int word) { return word & 0xFF; }
+  constexpr int textureWordBank(int word) { return word >> 8; }
+
+  // FUN_00239110, the sprite that marks the selected option of a control-code
+  // 0x15 choice. One cell of the prompt's own sheet, read through a different
+  // CLUT bank, sampled 15x15 and drawn at the glyph cell's 20x22.
+  inline constexpr int kChoiceCursorU = 0x20;
+  inline constexpr int kChoiceCursorV = 0x50;
+  inline constexpr int kChoiceCursorSourceSize = 0x0F;
+  inline constexpr int kChoiceCursorDrawWidth = 0x14;
+  inline constexpr int kChoiceCursorDrawHeight = 0x16;
+
+  // FUN_00231da0's table at 0x0031C220, dumped from SLUS_200.11: the texel
+  // origin of the face-button icon a caption escapes to, indexed by
+  // `character - 0xF8`. The first four entries are zero -- only 0xFC..0xFF are
+  // real -- and every icon is 32x32 on slot 0x2C.
+  inline constexpr int kFirstButtonIcon = 0xFC;
+  inline constexpr int kButtonIconSourceSize = 0x20;
+  struct ButtonIconCell
+  {
+    int u = 0;
+    int v = 0;
+  };
+  inline constexpr std::array<ButtonIconCell, 4> kButtonIconCells{
+      {{192, 120}, {192, 152}, {224, 152}, {224, 120}}};
+
   // FUN_002391d0:51-56 and the table at 0x0031C630. Four cells in a 2x2 block
   // of texture 0x178, sampled 15x15 out of 16 and drawn at 20x22. The frames
   // run round the block rather than across it: top-left, bottom-left,
@@ -114,6 +156,9 @@ namespace orphen::ported::text
   struct DialogueSprite
   {
     int textureSlot = kFontSlotLow;
+    // The 4-bit CLUT window the slot is read through, or -1 for the plain
+    // 8-bit page. See "The texture argument is a slot and a CLUT bank" above.
+    int clutBank = -1;
     int x = 0;
     int y = 0;
     int width = 0;

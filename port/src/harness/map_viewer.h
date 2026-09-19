@@ -181,6 +181,20 @@ namespace orphen::harness
     // fade, out of the texture slots, in the order given. Empty hides it.
     void setDialogueSprites(std::vector<orphen::ported::text::DialogueSprite> sprites);
 
+    // What the last drawDialogueSprites pass actually put on the screen. A
+    // glyph that reaches the sprite list but not the framebuffer is invisible
+    // for a reason this tally names, which is the difference between a
+    // dialogue-system bug and a renderer one.
+    struct DialogueDrawTally
+    {
+      int submitted = 0;
+      int noSlotTexture = 0;  // the slot has no decoded page
+      int emptyTexture = 0;   // the page decoded to nothing
+      int noBankTexture = 0;  // the 4-bit CLUT window could not be built
+      int degenerate = 0;     // the quad collapsed to zero pixels
+    };
+    const DialogueDrawTally &dialogueDrawTally() const { return dialogueDrawTally_; }
+
     // FUN_00207de8's screen-space UI quads for this frame -- the battle target
     // pentagon so far. Four free corners each, so they cannot go through the
     // dialogue path, and a CLUT bank that picks one of a 4-bit sheet's sixteen
@@ -384,6 +398,7 @@ namespace orphen::harness
     // The 4-bit read of a slot's sheet through one CLUT bank; 0 when the slot
     // is empty. See BmpaTexture::clutBankPixels.
     unsigned int clutBankTexture(int slot, int bank) const;
+    mutable DialogueDrawTally dialogueDrawTally_;
     void applyFogState(bool enabled) const;
   };
 

@@ -82,6 +82,9 @@ namespace orphen::port
     bool loadOnly = false;
     bool printSceneTree = false;
     bool printScriptReport = false;
+    // --glyph-report. Prints the dialogue window's glyph slots read back as
+    // text every time they change, next to what the renderer actually drew.
+    bool printGlyphReport = false;
     bool printActorReport = false;
     // --battle-report: the loadout -> button -> mask binding, the party the
     // scene built, and every frame the player's action byte or state changed.
@@ -545,6 +548,9 @@ namespace orphen::port
     bool printBattleReport_ = false;
     orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;
+    bool printGlyphReport_ = false;
+    mutable std::string lastGlyphScreenText_;
+    std::size_t lastDialogueSpriteCount_ = 0;
     bool printModelReport_ = false;
     std::uint32_t snapshotFrame_ = 0;
     // DAT_003555d0, republished into ActorEnvironment each frame.

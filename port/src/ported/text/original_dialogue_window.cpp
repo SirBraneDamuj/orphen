@@ -1,6 +1,7 @@
 #include "ported/text/original_dialogue_window.h"
 
 #include <algorithm>
+#include <sstream>
 
 namespace orphen::ported::text
 {
@@ -20,6 +21,20 @@ namespace orphen::ported::text
     // unbounded in the original, guarded only by data that is known good. The
     // port bounds them so a malformed record cannot hang the frame.
     constexpr int kMaxSpeakerSteps = 256;
+
+    // FUN_00239848:24. Each option line is indented by this before its glyphs.
+    constexpr int kChoiceIndent = 0x14;
+
+    // The raw pad bits FUN_00237fc0's choice block tests, post-CONCAT11.
+    constexpr std::uint16_t kPadCross = 0x0040;
+    constexpr std::uint16_t kPadUp = 0x1000;
+    constexpr std::uint16_t kPadDown = 0x4000;
+
+    // FUN_0023B9F8's ladder. The budget saturates at 0x200, a step is only
+    // considered once 0x20 has accumulated, and each step that does not fire
+    // spends another 0x20.
+    constexpr std::int32_t kRepeatBudgetCap = 0x200;
+    constexpr std::int32_t kRepeatStepTicks = 0x20;
   } // namespace
 
   std::size_t FUN_00237de8_controlWidth(std::uint8_t code)
@@ -31,6 +46,9 @@ namespace orphen::ported::text
       return 2;
     case 0x19: case 0x1B: case 0x1C: case 0x1E:
       return 3;
+    // 0x15's four is its **header only**: the option strings after it are
+    // payload the handler renders, so both walks special-case the code and
+    // neither may fall back on this width. See FUN_00239848_choice.
     case 0x0F: case 0x15:
       return 4;
     case 0x11: case 0x16:
@@ -112,11 +130,75 @@ namespace orphen::ported::text
   void DialogueWindow::reset()
   {
     const DialogueFont *font = font_;
+    std::function<void(int)> cueSink = cueSink_;
     *this = DialogueWindow{};
     font_ = font; // the measured widths belong to the scene load, not the scene
+    cueSink_ = std::move(cueSink); // and so does the sound engine behind the cues
   }
 
-  void DialogueWindow::FUN_00237fc0_update(std::uint32_t frameTicks)
+  void DialogueWindow::playCue(int cue) const
+  {
+    if (cueSink_)
+    {
+      cueSink_(cue);
+    }
+  }
+
+  std::optional<DialogueWindow::ChoiceAnswer> DialogueWindow::takeChoiceAnswer()
+  {
+    std::optional<ChoiceAnswer> answer = choiceAnswer_;
+    choiceAnswer_.reset();
+    return answer;
+  }
+
+  // FUN_0023B9F8(param_1 = mask, param_2 = 1), at 0x0023b9f8.
+  //
+  // The `FUN_0023B5D8(0)` it opens with is a mid-frame re-read of the pad; the
+  // port has already sampled this frame's, so the snapshot is used as given.
+  // The OR of the stick's direction bits into the *held* word is the original's
+  // own write into the global, reproduced here on the caller's copy -- it is
+  // what lets the movement stick walk a menu.
+  bool DialogueWindow::FUN_0023b9f8_autoRepeat(std::uint16_t mask,
+                                               PadState &pad,
+                                               std::uint32_t frameTicks)
+  {
+    iGpffffaf00_repeatBudget_ += static_cast<std::int32_t>(frameTicks);
+    if (iGpffffaf00_repeatBudget_ > kRepeatBudgetCap)
+    {
+      iGpffffaf00_repeatBudget_ = kRepeatBudgetCap;
+    }
+    if (iGpffffaf00_repeatBudget_ < kRepeatStepTicks)
+    {
+      return false;
+    }
+
+    pad.uGpffffb684_held =
+        static_cast<std::uint16_t>(pad.uGpffffb684_held | (pad.uGpffffb68e_stickDirection & mask));
+
+    if ((pad.uGpffffb684_held & mask) == 0)
+    {
+      sGpffffaefe_repeatSteps_ = 0;
+      return false;
+    }
+
+    // :24-36. Step 1 fires, then nothing until step 13, and every fourth after
+    // that -- so a held direction repeats at a quarter of the step rate once it
+    // has been down for twelve steps.
+    while (iGpffffaf00_repeatBudget_ > 0)
+    {
+      ++sGpffffaefe_repeatSteps_;
+      const std::int32_t step = sGpffffaefe_repeatSteps_;
+      if (step == 1 || (step > 0x0C && ((step - 0x0D) & 3) == 0))
+      {
+        iGpffffaf00_repeatBudget_ = 0;
+        return true;
+      }
+      iGpffffaf00_repeatBudget_ -= kRepeatStepTicks;
+    }
+    return false;
+  }
+
+  void DialogueWindow::FUN_00237fc0_update(std::uint32_t frameTicks, PadState pad)
   {
     if (!open_)
     {
@@ -137,6 +219,64 @@ namespace orphen::ported::text
       const int frame = (promptTicks_ / kPromptTicksPerFrame) % static_cast<int>(kPromptFrames.size());
       slots_[promptSlot_].u = kPromptFrames[static_cast<std::size_t>(frame)].u;
       slots_[promptSlot_].v = kPromptFrames[static_cast<std::size_t>(frame)].v;
+    }
+
+    // FUN_00237fc0:41-75, the choice block. It sits between the sprite walk and
+    // the glyph walk, and while a menu is up it **returns before the walk** --
+    // which is the entire waiting mechanism: the record is frozen on the byte
+    // after its last option until Cross, with no timer involved.
+    if (DAT_005716c0_choiceCount_ != 0)
+    {
+      if (FUN_0023b9f8_autoRepeat(kPadUp | kPadDown, pad, frameTicks))
+      {
+        // :45-62. Up is tested first and wins a diagonal, and the cursor is
+        // walked rather than recomputed -- one cell a step, the whole list on a
+        // wrap.
+        if ((pad.uGpffffb684_held & kPadUp) == 0)
+        {
+          if ((pad.uGpffffb684_held & kPadDown) != 0)
+          {
+            ++DAT_005716c4_choiceIndex_;
+            DAT_005716d0_choiceCursorY_ -= kCellSize;
+            if (DAT_005716c0_choiceCount_ <= DAT_005716c4_choiceIndex_)
+            {
+              DAT_005716c4_choiceIndex_ = 0;
+              DAT_005716d0_choiceCursorY_ += DAT_005716c0_choiceCount_ * kCellSize;
+            }
+          }
+        }
+        else
+        {
+          --DAT_005716c4_choiceIndex_;
+          DAT_005716d0_choiceCursorY_ += kCellSize;
+          if (DAT_005716c4_choiceIndex_ < 0)
+          {
+            DAT_005716c4_choiceIndex_ = DAT_005716c0_choiceCount_ - 1;
+            DAT_005716d0_choiceCursorY_ -= DAT_005716c0_choiceCount_ * kCellSize;
+          }
+        }
+        // FUN_002256C0. The original plays it on every fired step, including
+        // the ones a single-option menu cannot move on.
+        playCue(kCueMenuMove);
+      }
+
+      // :64. uGpffffb686 is the *raw* newly-pressed word here, not the mapped
+      // one the 0x01 prompt below waits on, so a choice answers to Cross itself
+      // rather than to whatever Cross is bound to.
+      if ((pad.uGpffffb686_pressed & kPadCross) == 0)
+      {
+        return;
+      }
+
+      // :69-73. FUN_002256B0, then the answer, then the window is wiped and the
+      // walk is let go. `selection + 1`, so option 0 reads back as 1 and a work
+      // slot that was never answered stays distinguishable at 0.
+      playCue(kCueMenuConfirm);
+      choiceAnswer_ = ChoiceAnswer{DAT_005716c8_choiceWorkIndex_,
+                                   static_cast<std::uint32_t>(DAT_005716c4_choiceIndex_ + 1)};
+      FUN_00238f18_clearSlots();
+      DAT_005716c0_choiceCount_ = 0;
+      budget_ = 0;
     }
 
     // FUN_00237fc0:119-137. One step per 0x20 of budget; the two wait counters
@@ -379,6 +519,11 @@ namespace orphen::ported::text
       FUN_00239760_speaker();
       return;
 
+    case 0x15:
+      // FUN_00239848, the choice. See the file header.
+      FUN_00239848_choice();
+      return;
+
     // The audio codes. DialogueStream ran all four when it scanned the record;
     // stepping over them keeps the two walks on the same bytes.
     case 0x16:
@@ -459,6 +604,81 @@ namespace orphen::ported::text
     FUN_00238f98_newLine();
   }
 
+  // FUN_00239848, at 0x00239848.
+  //
+  //   [0x15][workIndex][initialSelection][optionCount] then optionCount
+  //   NUL-terminated strings.
+  //
+  // `initialSelection` is 1-based on the wire and the handler stores it minus
+  // one, so the `01` both of s01_e013's menus carry starts on the first option.
+  // Like FUN_00239760 this renders its whole payload in the call rather than
+  // one glyph a step, so a menu appears complete on the frame it is reached.
+  void DialogueWindow::FUN_00239848_choice()
+  {
+    if (cursor_ + 4 > end_)
+    {
+      noteUnhandled(0x15);
+      ++cursor_;
+      return;
+    }
+
+    DAT_005716c8_choiceWorkIndex_ = blob_[cursor_ + 1];
+    DAT_005716c4_choiceIndex_ = static_cast<std::int32_t>(blob_[cursor_ + 2]) - 1;
+    DAT_005716c0_choiceCount_ = blob_[cursor_ + 3];
+
+    // :6 and :10. The cursor rides the pen and the row the options start on,
+    // offset by the initial selection -- so it lands on that option's line.
+    DAT_005716cc_choiceCursorX_ = originX_ + pen_;
+    DAT_005716d0_choiceCursorY_ =
+        originY_ + (line_ + DAT_005716c4_choiceIndex_) * -kCellSize;
+    // :14-21, the same cinematic-bar nudge FUN_00238a08 applies to a glyph.
+    if (movieMode_ > 0)
+    {
+      if (originY_ == 0xD0)
+      {
+        DAT_005716d0_choiceCursorY_ -= 0x2D;
+      }
+      else if (originY_ == kWindowOriginY)
+      {
+        DAT_005716d0_choiceCursorY_ += 0x1E;
+      }
+    }
+
+    cursor_ += 4;
+
+    // :23-33. Indent, emit until the NUL, step past it, and newline between
+    // options but not after the last. FUN_00238f98 puts the pen back to zero,
+    // so the indent is per line rather than cumulative.
+    for (std::int32_t remaining = DAT_005716c0_choiceCount_; remaining > 0; --remaining)
+    {
+      pen_ = static_cast<std::int16_t>(pen_ + kChoiceIndent);
+      for (int step = 0; step < kMaxSpeakerSteps; ++step)
+      {
+        if (cursor_ >= end_ || blob_[cursor_] == 0x00)
+        {
+          break;
+        }
+        const std::size_t before = cursor_;
+        FUN_00237de8_advance();
+        if (cursor_ == before)
+        {
+          break; // a blocking code inside an option; nothing advances, so stop
+        }
+      }
+      ++cursor_; // past the 0x00
+      if (remaining != 1)
+      {
+        FUN_00238f98_newLine();
+      }
+    }
+
+    // The NULs inside the block end options, not the record -- the same thing
+    // FUN_00239760 has to undo after a speaker name.
+    complete_ = false;
+    // FUN_00237A78 -> FUN_00267D38(0x0E, 0).
+    playCue(kCueChoiceOpen);
+  }
+
   std::size_t DialogueWindow::findFreeSlot()
   {
     for (std::size_t index = 0; index < slots_.size(); ++index)
@@ -477,10 +697,20 @@ namespace orphen::ported::text
     {
       return;
     }
+    ++glyphsEnqueued_;
     const std::size_t index = findFreeSlot();
     if (index == kNoSlot)
     {
+      ++glyphsDropped_;
       return;
+    }
+    {
+      std::size_t live = 0;
+      for (const GlyphSlot &entry : slots_)
+      {
+        live += entry.active ? 1 : 0;
+      }
+      peakActiveSlots_ = std::max(peakActiveSlots_, live + 1);
     }
     GlyphSlot *slot = &slots_[index];
 
@@ -492,7 +722,18 @@ namespace orphen::ported::text
       slot->pen = static_cast<std::int16_t>(pen_ + 10);
     }
 
+    // FUN_00238a08:32 writes the whole texture word, `*piVar4 = 0x2e` -- so it
+    // sets the bank as well as the slot, and a glyph is a plain page read.
+    //
+    // **Writing only the slot here is a bug**, because a slot is recycled: the
+    // book prompt (FUN_002391d0) parks bank 4 in one of the 300, and the next
+    // glyph to land in that slot inherited it and was then sampled through the
+    // prompt's CLUT window, which is transparent over the font page. One letter
+    // per recycled prompt vanished while still advancing the pen, leaving a gap
+    // exactly its own width -- "We're in a bad  ituation here." Every field the
+    // original writes has to be written, not inherited.
     slot->textureSlot = kFontSlotLow;
+    slot->clutBank = -1;
     slot->x = originX_ + slot->pen + kGlyphOriginBias;
     slot->y = originY_ + slot->line * -kCellSize;
     if (movieMode_ > 0)
@@ -602,7 +843,8 @@ namespace orphen::ported::text
       }
     }
     slot->layer = layer_;
-    slot->textureSlot = kPromptSlot;
+    slot->textureSlot = textureWordSlot(kPromptTextureWord);
+    slot->clutBank = textureWordBank(kPromptTextureWord);
     slot->u = kPromptFrames[0].u;
     slot->v = kPromptFrames[0].v;
     slot->width = kPromptDrawWidth;
@@ -613,6 +855,59 @@ namespace orphen::ported::text
     // sitting on a 0x01 gets the plain one.
     slot->color = blob_[cursor_] != 0x01 ? 0x80608060u : kColorDefault;
     promptSlot_ = index;
+  }
+
+  std::size_t DialogueWindow::activeSlotCount() const
+  {
+    std::size_t live = 0;
+    for (const GlyphSlot &slot : slots_)
+    {
+      live += slot.active ? 1 : 0;
+    }
+    return live;
+  }
+
+  std::string DialogueWindow::debugScreenText() const
+  {
+    struct Placed
+    {
+      int line;
+      int x;
+      char character;
+    };
+    std::vector<Placed> placed;
+    for (const GlyphSlot &slot : slots_)
+    {
+      if (!slot.active)
+      {
+        continue;
+      }
+      // Invert FUN_00238a08's cell arithmetic.
+      int cell = (slot.v / kCellSize) * kColumns + (slot.u / kCellSize);
+      if (slot.textureSlot != kFontSlotLow)
+      {
+        continue; // prompt / icon sprites are not glyphs
+      }
+      placed.push_back(Placed{slot.line, slot.x, static_cast<char>(cell + kFirstCharacter)});
+    }
+    std::sort(placed.begin(), placed.end(), [](const Placed &a, const Placed &b) {
+      return a.line != b.line ? a.line < b.line : a.x < b.x;
+    });
+    std::ostringstream out;
+    int currentLine = -1;
+    for (const Placed &entry : placed)
+    {
+      if (entry.line != currentLine)
+      {
+        if (currentLine != -1)
+        {
+          out << " | ";
+        }
+        currentLine = entry.line;
+      }
+      out << entry.character;
+    }
+    return out.str();
   }
 
   std::vector<DialogueSprite> DialogueWindow::sprites() const
@@ -637,6 +932,7 @@ namespace orphen::ported::text
         }
         DialogueSprite sprite;
         sprite.textureSlot = slot.textureSlot;
+        sprite.clutBank = slot.clutBank;
         sprite.x = slot.x + kScreenHalfWidth;
         sprite.y = kScreenHalfHeight - slot.y;
         sprite.width = slot.width;
@@ -648,6 +944,28 @@ namespace orphen::ported::text
         sprite.color = slot.color;
         out.push_back(sprite);
       }
+    }
+
+    // FUN_00239110, which FUN_00237fc0:19 calls ahead of the layer walk when a
+    // choice is armed. It is not a glyph slot -- it goes straight to
+    // FUN_00207938 -- so it is appended here rather than occupying one of the
+    // 300. Drawing it last puts it over the option text, which is what the
+    // original's ordering does too.
+    if (DAT_005716c0_choiceCount_ != 0)
+    {
+      DialogueSprite cursor;
+      cursor.textureSlot = textureWordSlot(kChoiceCursorTextureWord);
+      cursor.clutBank = textureWordBank(kChoiceCursorTextureWord);
+      cursor.x = DAT_005716cc_choiceCursorX_ + kScreenHalfWidth;
+      cursor.y = kScreenHalfHeight - DAT_005716d0_choiceCursorY_;
+      cursor.width = kChoiceCursorDrawWidth;
+      cursor.height = kChoiceCursorDrawHeight;
+      cursor.u = kChoiceCursorU;
+      cursor.v = kChoiceCursorV;
+      cursor.sourceWidth = kChoiceCursorSourceSize;
+      cursor.sourceHeight = kChoiceCursorSourceSize;
+      cursor.color = kColorDefault;
+      out.push_back(cursor);
     }
     return out;
   }

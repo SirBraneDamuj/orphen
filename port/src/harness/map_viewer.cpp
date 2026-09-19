@@ -2635,22 +2635,39 @@ namespace orphen::harness
 
     unsigned int boundTexture = 0;
     std::uint32_t submittedColor = 0;
+    dialogueDrawTally_ = DialogueDrawTally{};
     for (const auto &sprite : dialogueSprites_)
     {
       const auto slot = static_cast<std::size_t>(sprite.textureSlot);
       if (slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
       {
+        ++dialogueDrawTally_.noSlotTexture;
         continue;
       }
       const auto &texture = textureSlots_->slot(slot).texture;
       if (texture.width == 0 || texture.height == 0)
       {
+        ++dialogueDrawTally_.emptyTexture;
         continue;
       }
 
-      if (slotTextureIds_[slot] != boundTexture)
+      // FUN_00207938 splits its texture argument into a slot and a 4-bit CLUT
+      // window; the prompt, the choice cursor and the button icons all live on
+      // the same PSMT4 sheets as other sprites and are told apart only by the
+      // bank. A sprite that asks for one gets the banked page, the rest keep
+      // the plain 8-bit read.
+      const unsigned int spriteTexture =
+          sprite.clutBank >= 0 ? clutBankTexture(sprite.textureSlot, sprite.clutBank)
+                               : slotTextureIds_[slot];
+      if (spriteTexture == 0)
       {
-        boundTexture = slotTextureIds_[slot];
+        ++dialogueDrawTally_.noBankTexture;
+        continue;
+      }
+
+      if (spriteTexture != boundTexture)
+      {
+        boundTexture = spriteTexture;
         glBindTexture(GL_TEXTURE_2D, boundTexture);
       }
       if (sprite.color != submittedColor)
@@ -2668,6 +2685,12 @@ namespace orphen::harness
       const float top = offsetY + sprite.y * fit.scaleY;
       const float right = left + sprite.width * fit.scaleX;
       const float bottom = top + sprite.height * fit.scaleY;
+      if (right - left < 0.5f || bottom - top < 0.5f)
+      {
+        // Sub-pixel: the quad is submitted but rasterises to nothing.
+        ++dialogueDrawTally_.degenerate;
+      }
+      ++dialogueDrawTally_.submitted;
 
       glBegin(GL_QUADS);
       glTexCoord2f(u0, v0);

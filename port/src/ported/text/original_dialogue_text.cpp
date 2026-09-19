@@ -132,7 +132,8 @@ namespace orphen::ported::text
     const int frame = (animationTicks / kPromptTicksPerFrame) % static_cast<int>(kPromptFrames.size());
 
     DialogueSprite sprite;
-    sprite.textureSlot = kPromptSlot;
+    sprite.textureSlot = textureWordSlot(kPromptTextureWord);
+    sprite.clutBank = textureWordBank(kPromptTextureWord);
     sprite.u = kPromptFrames[static_cast<std::size_t>(frame)].u;
     sprite.v = kPromptFrames[static_cast<std::size_t>(frame)].v;
     sprite.sourceWidth = kPromptSourceSize;
@@ -179,7 +180,33 @@ namespace orphen::ported::text
     for (const char raw : text)
     {
       const auto character = static_cast<unsigned char>(raw);
-      if (character >= 0xFC || character < kFirstCharacter)
+
+      // FUN_00238608:55-71, the button-icon escape. It is a square of the
+      // *icon* sheet rather than a glyph: 32 texels of slot 0x2C read through
+      // CLUT bank 8, drawn at the caption's own cell height on both axes, at a
+      // fixed white regardless of the caption colour, and the pen advances by
+      // what was drawn. "Press <Cross> to Select" -- the caption a dialogue
+      // choice puts in the corner -- is the one this scene needs.
+      if (character >= kFirstButtonIcon)
+      {
+        const ButtonIconCell &cell = kButtonIconCells[character - kFirstButtonIcon];
+        DialogueSprite icon;
+        icon.textureSlot = textureWordSlot(kButtonIconTextureWord);
+        icon.clutBank = textureWordBank(kButtonIconTextureWord);
+        icon.u = cell.u;
+        icon.v = cell.v;
+        icon.sourceWidth = kButtonIconSourceSize;
+        icon.sourceHeight = kButtonIconSourceSize;
+        icon.width = drawnHeight;
+        icon.height = drawnHeight;
+        icon.x = screenX(penX);
+        icon.y = screenY(y);
+        icon.color = kColorDefault;
+        penX += icon.width;
+        sprites.push_back(icon);
+        continue;
+      }
+      if (character < kFirstCharacter)
       {
         continue;
       }

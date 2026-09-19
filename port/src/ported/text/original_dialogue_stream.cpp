@@ -34,6 +34,7 @@ namespace orphen::ported::text
     constexpr std::uint8_t kControlPlayVoice = 0x18;   // LAB_00239a30
     constexpr std::uint8_t kControlPlayVoiceExtra = 0x19;
     constexpr std::uint8_t kControlSetFlag = 0x1B;     // LAB_00239aa0
+    constexpr std::uint8_t kControlChoice = 0x15;      // FUN_00239848
     constexpr std::uint8_t kFirstTextByte = 0x1F;      // FUN_00237de8's own test
 
     bool printable(std::uint8_t byte) { return byte >= 0x20 && byte < 0x7F; }
@@ -54,6 +55,8 @@ namespace orphen::ported::text
     speaker_.clear();
     line_.clear();
     pendingFlags_.clear();
+    options_.clear();
+    choiceWorkIndex_ = 0;
     heldByTypewriter_ = false;
 
     std::uint32_t playedVoice = 0;
@@ -231,6 +234,46 @@ namespace orphen::ported::text
           }
           break;
 
+        case kControlChoice:
+        {
+          // FUN_00239848. The width table calls this a flat 4, which is only
+          // the header: `[workIndex][initialSelection][optionCount]` is
+          // followed by that many NUL-terminated option strings, and the
+          // handler *renders* them rather than skipping them -- the same shape
+          // 0x13's speaker name has. Walking them as ordinary bytes is what
+          // glued "Yes" onto the end of the question and then read its NUL as
+          // the end of the record, which is where "No" went.
+          if (at + 4 > end)
+          {
+            at = end;
+            continue;
+          }
+          choiceWorkIndex_ = blob[at + 1];
+          const std::uint32_t count = blob[at + 3];
+          at += 4;
+          for (std::uint32_t option = 0; option < count && at < end; ++option)
+          {
+            std::string text;
+            while (at < end && blob[at] != kControlReturn)
+            {
+              const std::uint8_t glyph = blob[at];
+              if (glyph >= kFirstTextByte)
+              {
+                if (printable(glyph))
+                {
+                  text.push_back(static_cast<char>(glyph));
+                }
+                ++at;
+                continue;
+              }
+              at += controlWidth(glyph);
+            }
+            ++at; // past the NUL
+            options_.push_back(text);
+          }
+          continue;
+        }
+
         case kControlSetFlag:
           // 0x1B is the one control code that has to actually *run*: it sets an
           // event flag, and the cutscene scheduler gates on those. s01_e012's
@@ -255,7 +298,16 @@ namespace orphen::ported::text
     // 0x1A holds the record open for exactly as long as the clip 0x18 started.
     const std::uint32_t measured =
         voiceIndex_ != nullptr ? voiceIndex_->holdTicks(playedVoice) : 0;
-    if (measured != 0)
+    if (!options_.empty())
+    {
+      // A menu waits for the player. FUN_00237fc0's choice block returns before
+      // the glyph walk, so `window_.complete()` stays false until Cross and
+      // `update` below holds the record with no hold of its own -- neither a
+      // measured clip nor an invented timer.
+      holdTicks_ = 0;
+      ++choiceLines_;
+    }
+    else if (measured != 0)
     {
       holdTicks_ = measured;
       ++measuredLines_;
@@ -293,7 +345,7 @@ namespace orphen::ported::text
 
     log_.push_back(LoggedLine{frame_, recordBegin, playedVoice,
                               holdTicks_ / orphen::ported::kNominalFrameTicks, measured != 0,
-                              speaker_, line_});
+                              speaker_, line_, options_, choiceWorkIndex_});
   }
 
   void DialogueStream::FUN_00237b38_terminate(orphen::ported::script::SceneScriptState &state)
@@ -361,7 +413,9 @@ namespace orphen::ported::text
     // audio has stopped. Closing on the clip alone dropped that second.
     if (!window_.complete())
     {
-      if (holdTicks_ == 0)
+      // A menu is not the typewriter running long; it is the record waiting for
+      // an answer, and it can wait indefinitely.
+      if (holdTicks_ == 0 && !window_.choiceActive())
       {
         if (!heldByTypewriter_)
         {
@@ -387,6 +441,24 @@ namespace orphen::ported::text
     }
   }
 
+  // FUN_00237fc0's glyph walk, plus the answer a choice hands back on the frame
+  // Cross closed it. The original writes that straight into iGpffffb0f0 --
+  // DAT_00355060, the script work array -- from inside the walk; the port hands
+  // it out here because the window has no reference to the script state.
+  void DialogueStream::FUN_00237fc0_update(std::uint32_t frameTicks,
+                                           DialogueWindow::PadState pad,
+                                           orphen::ported::script::SceneScriptState &state)
+  {
+    window_.FUN_00237fc0_update(frameTicks, pad);
+    if (const auto answer = window_.takeChoiceAnswer())
+    {
+      if (answer->workIndex < orphen::ported::script::SceneScriptState::kWorkWordCount)
+      {
+        state.DAT_00355060_work[answer->workIndex] = answer->value;
+      }
+    }
+  }
+
   void DialogueStream::reset()
   {
     active_ = false;
@@ -394,12 +466,15 @@ namespace orphen::ported::text
     frame_ = 0;
     speaker_.clear();
     line_.clear();
+    options_.clear();
+    choiceWorkIndex_ = 0;
     voiceCache_[0] = voiceCache_[1] = voiceCache_[2] = 0;
     pendingFlags_.clear();
     log_.clear();
     measuredLines_ = 0;
     estimatedLines_ = 0;
     emptyLines_ = 0;
+    choiceLines_ = 0;
     typewriterHeldLines_ = 0;
     typewriterHeldTicks_ = 0;
     heldByTypewriter_ = false;
