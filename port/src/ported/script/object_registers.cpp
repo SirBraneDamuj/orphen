@@ -176,6 +176,15 @@ namespace orphen::ported::script
     case 0x28: value = fromField(entity.radius54); return true;
     case 0x29: value = fromField(entity.height58); return true;
 
+    // 0x2C..0x2F, the combat stat block. FUN_0025C548 reads these off
+    // DAT_00355044, which FUN_0025D6C0 types `undefined2 *`, so its subscripts
+    // are halfwords: [0x95] is +0x12A, [0x94] is +0x128, [0x96] is +0x12C and
+    // [0x97] is +0x12E. All four come back unsigned.
+    case 0x2C: value = entity.staggerTimer12a; return true;
+    case 0x2D: value = entity.maxHitPoints128; return true;
+    case 0x2E: value = entity.attackPower12c; return true;
+    case 0x2F: value = entity.defence12e; return true;
+
     case 0x38: value = entity.eventFlagId198; return true;
 
     // Read back unsigned, unlike the 0x10 and 0x11 byte cases above.
