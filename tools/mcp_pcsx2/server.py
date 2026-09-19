@@ -20,7 +20,7 @@ import tempfile
 from mcp.server.mcpserver import MCPServer
 
 from . import orphen
-from .client import ControlError, Pcsx2Control, TransportError
+from .client import ControlError, Pcsx2Control, TransportError, read_gs_dump
 
 mcp = MCPServer("pcsx2")
 
@@ -153,6 +153,42 @@ def pcsx2_screenshot(save_to: str = "") -> str:
     with open(path, "wb") as stream:
         stream.write(png)
     return "%s\n%dx%d PNG written to %s" % (_state_line(reply), reply["width"], reply["height"], path)
+
+
+@mcp.tool()
+def pcsx2_gs_dump(path: str, decompress: bool = True) -> str:
+    """Capture a single-frame GS dump: every draw the GS sees for one frame.
+
+    This is what a screenshot cannot give you -- the register writes and vertex batches
+    behind the image, which port/attic/gsparse.py walks to attribute a draw to its TEX0,
+    CLUT and blend state. Reach for it when a question is "which sheet is this drawn
+    from" rather than "what is on screen".
+
+    Recording starts at the *next* frame, so step to the frame before the one you want.
+    While paused the emulator advances a handful of frames to let the dump close and then
+    pauses again, so load_state -> step -> gs_dump reproduces exactly.
+
+    The draws are deterministic across runs from the same state; the GS memory snapshot
+    embedded in the header is not quite, because the hardware renderer does not flush its
+    texture cache back before freezing. That affects replaying the dump, not parsing it.
+
+    With decompress, a .gs.zst or .gs.xz is also written out as a plain .gs so gsparse can
+    be pointed straight at it.
+    """
+    reply = _connect().gs_dump(path)
+    written = reply["path"]
+    lines = ["GS dump: %s (%d bytes, %d frames advanced)"
+             % (written, reply["size"], reply["frames_advanced"])]
+
+    if decompress and not written.lower().endswith(".gs"):
+        raw = read_gs_dump(written)
+        plain = written[:written.lower().rindex(".gs") + 3]
+        with open(plain, "wb") as stream:
+            stream.write(raw)
+        lines.append("uncompressed copy for gsparse: %s (%d bytes)" % (plain, len(raw)))
+
+    lines.append(_state_line(reply))
+    return chr(10).join(lines)
 
 
 @mcp.tool()

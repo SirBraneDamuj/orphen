@@ -150,6 +150,50 @@ lands before the game's next read, so it costs no emulated frame.
 **Injection only moves while the VM runs.** The queue drains one entry per frame,
 so nothing happens while paused. `step` is what plays the script.
 
+## Capturing a frame's draws
+
+`gs_dump` writes a single-frame GS dump: the register writes and vertex batches
+the GS actually saw, which is what `port/attic/gsparse.py` walks. Use it when the
+question is "which sheet is this drawn from" rather than "what is on screen" — a
+screenshot cannot answer the first.
+
+```python
+c.load_state("savestates/entry_stable.p2s")
+c.pause()
+c.step(20)                       # land on the frame before the one you want
+r = c.gs_dump("dumps/smoke")     # -> dumps/smoke.gs (and dumps/smoke.png)
+draws = gsparse.GS()
+```
+
+Three things about the timing:
+
+- **Recording starts at the next vsync**, not this one. Step to the frame
+  *before* the interesting one.
+- **A "single frame" dump is not one vsync long.** `GSDumpBase` closes the file
+  only after an even number of fields have gone by with its last-frame flag set,
+  and it starts with two extra frames in hand — about five vsyncs in practice.
+  The server polls the renderer rather than guessing, and reports how many frames
+  it burned as `frames_advanced` (6 in the common case).
+- **A paused VM emits no vsyncs**, so the op advances frames itself and leaves
+  the machine paused again. When the VM is already running it just waits, and
+  `frames_advanced` comes back 0.
+
+### Compression, and what is actually deterministic
+
+The extension follows the emulator's `GSDumpCompression` setting — `.gs`,
+`.gs.zst` or `.gs.xz` — so the reply carries the real path rather than assuming.
+`client.read_gs_dump()` handles all three (`zstandard` is imported lazily, and is
+the one third-party package the client can want). Setting `GSDumpCompression = 0`
+in `PCSX2.ini` writes plain `.gs` and skips the question.
+
+Two dumps taken from the same save state at the same frame have a
+**byte-identical packet stream** — that is the guarantee the harness rests on.
+Their headers differ slightly: the frozen copy of GS local memory carries
+framebuffer residue that the hardware renderer never flushed back, so a few
+hundred bytes wobble between runs. It does not affect parsing the draws. If it
+ever matters for *replaying* a dump, `UserHacks_ReadTCOnClose = true` makes the
+renderer read its texture cache back before freezing.
+
 ## Wire protocol
 
 TCP on `127.0.0.1`, one JSON object per line, `\n`-terminated. Requests are
@@ -192,6 +236,7 @@ Every reply, successful or not, carries the frame and state block:
 | `screenshot` | `width`, `height`, `aspect`, `crop`, `quality`, `path`? | `width`, `height`, `format`, `data_b64` or `path` |
 | `save_state` | `path` (absolute), `backup` (default false), `timeout_ms` (60000) | `path` |
 | `load_state` | `path` (absolute), `timeout_ms` (60000) | `path` |
+| `gs_dump` | `path` (absolute, extension optional), `timeout_ms` (30000) | `path`, `size`, `frames_advanced` |
 | `send_input` | `frames[]` (each `buttons[]`, `analog{lx,ly,rx,ry}`, `repeat`), `port` | `queued` |
 | `clear_input` | — | `dropped` |
 
@@ -267,8 +312,8 @@ return torn data; you get a clean `bad_state` instead.
 
 ## Current limits
 
-All of it — memory and VM control, screenshots, save states by path, and
-per-frame input injection — is built and verified against the running game.
+All of it — memory and VM control, screenshots, save states by path,
+per-frame input injection and single-frame GS dumps — is built and verified against the running game.
 
 Known gaps:
 
@@ -282,5 +327,8 @@ Known gaps:
   scales as `15000 + frames × 100` ms, capped at 120s. That was sized for a
   Debug build at ~12fps; in Release it is generous. Steps beyond ~1200 frames
   need an explicit `timeout_ms` or to be issued in chunks.
+- **Multi-frame GS dumps are not exposed.** `GSQueueSnapshot` takes a frame
+  count and the op always passes 1. Multi-frame is a couple of lines away if a
+  question ever needs it, but the files get large quickly.
 - **Writes do not invalidate recompiled code**, and `read_many` is not an atomic
   snapshot — see the notes above.

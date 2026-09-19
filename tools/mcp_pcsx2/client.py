@@ -84,6 +84,25 @@ def format_address(address):
     return "0x%08X" % address
 
 
+def read_gs_dump(path):
+    """Returns the uncompressed .gs packet stream from a dump at `path`.
+
+    Handles .gs, .gs.zst and .gs.xz. zstandard is a third-party package; it is only
+    imported when a .zst is actually opened, so importing this module never requires it.
+    """
+    lowered = path.lower()
+    if lowered.endswith(".gs.zst"):
+        import zstandard
+        with open(path, "rb") as handle:
+            return zstandard.ZstdDecompressor().stream_reader(handle).read()
+    if lowered.endswith(".gs.xz"):
+        import lzma
+        with open(path, "rb") as handle:
+            return lzma.decompress(handle.read())
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
 class Pcsx2Control:
     """A synchronous client. One request, one reply, in order."""
 
@@ -314,6 +333,34 @@ class Pcsx2Control:
         `frame` jumps to whatever the state recorded; `vsync` keeps counting monotonically.
         """
         return self.request("load_state", path=os.path.abspath(path), timeout_ms=timeout_ms)
+
+    def gs_dump(self, path, timeout_ms=None):
+        """Captures a single-frame GS dump -- every draw the GS sees for one frame.
+
+        This is the thing a screenshot cannot give you: the actual register writes and
+        vertex batches, which `port/attic/gsparse.py` walks to attribute a draw to its
+        texture and blend state.
+
+        Frame-accurate in the way that matters. The capture arms now and the renderer
+        starts recording at its *next* vsync, so pause on the frame before the one you
+        want. When the VM is paused the server advances frames itself until the dump
+        closes and leaves it paused again, so the sequence is load_state -> step to the
+        frame -> gs_dump, and it reproduces exactly.
+
+        `path` may be given with or without an extension; the reply carries the real one,
+        which depends on the emulator's GSDumpCompression setting. A screenshot lands
+        next to it as a side effect -- that is the renderer's doing, not ours.
+        """
+        return self.request("gs_dump", path=os.path.abspath(path), timeout_ms=timeout_ms)
+
+    def read_gs_dump(self, path):
+        """Reads a dump written by gs_dump() and returns the raw packet stream.
+
+        gsparse.py walks bytes and does no decompression of its own, and the emulator
+        defaults to Zstandard. Both decompressors are imported lazily so the transport
+        above stays dependency-free for callers that never touch a dump.
+        """
+        return read_gs_dump(path)
 
     def send_input(self, frames, port=0):
         """Queues per-frame pad states, drained one per emulated frame.
