@@ -5090,14 +5090,43 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0x102 / 0x106 / 0x108 (FUN_00262250): eight expressions -- four
-    // coordinates, three values and an entity selector -- into one of the
-    // particle emitters. No emitters in the port.
+    // 0x102 / 0x106 / 0x108 (FUN_00262250): eight expressions into one of three
+    // pools, chosen by the opcode -- FUN_0021AC00's rain, FUN_0021D448's and
+    // FUN_0021C748's. Only the rain is ported, and only it is armed by anything
+    // in the scenes reached so far.
+    //
+    // The read order is not the call order. FUN_00262250 reads
+    //
+    //     count, length, fall, magnitude, height, rotateX, rotateZ, entity
+    //
+    // and calls `FUN_0021AC00(length, fall, rotateX, rotateZ, count, magnitude,
+    // height, entity)`, with length, fall and the two angles divided by
+    // DAT_00352C58 (100000) and the rest passed through in general registers.
+    // s01_e013's start entry arms it with (1000, 1.5, 0.5, 6, 10, 0, 0, -1).
     case 0x102:
     case 0x106:
     case 0x108:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 8);
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptRainField field;
+      field.count = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      field.length = scaledOperand();
+      field.fall = scaledOperand();
+      field.magnitude = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      field.height = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      field.rotateX = scaledOperand();
+      field.rotateZ = scaledOperand();
+      field.entityIndex = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
+      if (halted_ || opcode != 0x102)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0021ac00_arm_rain)
+      {
+        environment_.FUN_0021ac00_arm_rain(field);
+      }
+      return 0;
+    }
 
     // 0x109 (FUN_002625b8): six expressions and no inline bytes, arming the
     // **ninth** particle pool -- 100 records of 0x18 at DAT_00355B50, which

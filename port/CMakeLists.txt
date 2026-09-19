@@ -153,6 +153,7 @@ target_sources(orphen_port
     src/ported/entity/original_spray_particles.cpp
     src/ported/entity/original_fountain_particles.cpp
     src/ported/entity/original_haze_particles.cpp
+    src/ported/entity/original_rain_pool.cpp
     src/ported/entity/original_gather_particles.cpp
     src/ported/entity/original_water_splash.cpp
     src/ported/entity/original_enemy_attack.cpp

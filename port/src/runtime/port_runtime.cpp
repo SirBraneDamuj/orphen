@@ -1860,9 +1860,24 @@ namespace orphen::port
         DAT_00355b50_haze_.FUN_0021bd30_arm(field.size, field.speed, field.angle, field.count,
                                             field.magnitude, field.entityIndex);
       };
-      // Opcode 0x100. Only selector 5 names a pool this port has.
+      // Opcode 0x102 into the uGpffffbb50 rain.
+      environment.FUN_0021ac00_arm_rain =
+          [this](const orphen::ported::script::ScriptRainField &field)
+      {
+        DAT_00355ac0_rain_.FUN_0021ac00_arm(field.length, field.fall, field.rotateX,
+                                            field.rotateZ, field.count, field.magnitude,
+                                            field.height, field.entityIndex);
+      };
+      // Opcode 0x100. **The inline byte is 1-based**: FUN_002620A8 does
+      // `index = byte - 1` and rejects anything outside 1..6, so byte 1 is the
+      // rain's uGpffffad38 and byte 5 the haze field's uGpffffad48. Selectors 1
+      // and 5 name pools this port has.
       environment.FUN_002620a8_clear_pool_gate = [this](std::uint8_t selector)
       {
+        if (selector == 1)
+        {
+          DAT_00355ac0_rain_.FUN_002620a8_clear_gate();
+        }
         if (selector == 5)
         {
           DAT_00355b50_haze_.FUN_002620a8_clear_gate();
@@ -4281,6 +4296,65 @@ namespace orphen::port
       }
     }
 
+    // FUN_0021AFA0's and FUN_0021B398's draw halves, in the place FUN_002192C0
+    // gives FUN_0021AD98 -- before the haze field's. Both go through
+    // FUN_002190F8, so they are world-space quads with four independent depths,
+    // shaped like the hit sparks rather than like the other pools' screen-space
+    // sprites.
+    for (const auto &drop : DAT_00355ac0_rain_.drawList())
+    {
+      orphen::ported::render::SpriteQuad quad;
+      quad.oriented = true;
+      bool visible = true;
+      for (int corner = 0; corner < 4; ++corner)
+      {
+        const auto view = viewProjection.toViewSpace(drop.corners[corner]);
+        // FUN_00218EE0, the same guard the hit sparks take: one corner too near
+        // the eye drops the whole quad.
+        if (!(view.z >= orphen::ported::entity::kHitSparkMinViewDepth))
+        {
+          visible = false;
+          break;
+        }
+        quad.cornerX[corner] = view.x;
+        quad.cornerY[corner] = view.y;
+        quad.cornerZ[corner] = view.z;
+        const auto &texels = drop.splash ? orphen::ported::entity::kRainSplashTexels
+                                         : orphen::ported::entity::kRainStreakTexels;
+        quad.cornerU[corner] = texels[corner][0];
+        quad.cornerV[corner] = texels[corner][1];
+      }
+      if (!visible)
+      {
+        continue;
+      }
+
+      // 0xF0808080 on a streak; a splash keeps 0xF0F0F0 and replaces the top
+      // byte with its fade.
+      //
+      // **FUN_00207DE8:130-141 halves all four channels on the way in**, the
+      // same fold the dust pool takes, because the packet's texture halfword is
+      // non-zero. 0x80 is 1.0 on the GS, so a streak reaches it at 0.5 grey and
+      // alpha 0.9375 -- not the 1.0 white and clamped 1.875 alpha the raw
+      // packet word reads as. Confirmed against a GS dump of s01_e013 at frame
+      // 11524: every one of the 411 streak draws carries vertex colour
+      // (64, 64, 64, 120), which is exactly 0xF0808080 folded.
+      const std::uint32_t base = drop.splash ? orphen::ported::entity::kRainSplashColour
+                                             : orphen::ported::entity::kRainStreakColour;
+      const std::uint32_t colour =
+          (base & 0x00FFFFFFu) | (static_cast<std::uint32_t>(drop.alpha & 0xFF) << 24);
+      for (int channel = 0; channel < 4; ++channel)
+      {
+        quad.colour[channel] =
+            static_cast<float>(((colour >> (channel * 8)) & 0xFEu) >> 1) / 128.0f;
+      }
+      quad.blendMode = orphen::ported::entity::kRainBlendMode;
+      quad.textureSlot = orphen::ported::entity::kRainTextureSlot;
+      quad.displayListBucket = orphen::ported::entity::kRainDisplayListBucket;
+      quad.depthTest = true;
+      quads.push_back(quad);
+    }
+
     // FUN_0021C288's draw half, in the place FUN_002192C0 gives FUN_0021BEF0:
     // after the dust and before the spray. The near cutoff and the fade that
     // goes with it are the original's own, and they are applied here because
@@ -4562,11 +4636,17 @@ namespace orphen::port
           continue;
         }
 
-        // FUN_002190f8's param_4, the same 0xF0F0F0F0 on all four vertices.
+        // FUN_002190f8's param_4, the same 0xF0F0F0F0 on all four vertices --
+        // and then FUN_00207DE8:130-141 halves all four, because the packet is
+        // textured. The fold was left out here while no capturable scene had a
+        // FUN_002190F8 pool alive; s01_e013's rain is one, and its GS dump
+        // shows the fold applied to every streak. 0xF0 reaches the GS as 120,
+        // so a spark is 0.9375x white, not 1.875x.
         for (int channel = 0; channel < 4; ++channel)
         {
           quad.colour[channel] =
-              static_cast<float>((orphen::ported::entity::kHitSparkColour >> (channel * 8)) & 0xFFu) /
+              static_cast<float>(
+                  ((orphen::ported::entity::kHitSparkColour >> (channel * 8)) & 0xFEu) >> 1) /
               128.0f;
         }
         quad.blendMode = orphen::ported::entity::kHitSparkBlendMode;
@@ -6954,6 +7034,15 @@ namespace orphen::port
     std::cout << "spray particles: alive=" << DAT_00355b58_spray_.DAT_00355b54_aliveCount()
               << " gate=" << (DAT_00355b58_spray_.DAT_00354cbc_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b58_spray_.drawList().size() << "\n";
+    std::cout << "rain: alive=" << DAT_00355ac0_rain_.iGpffffbb30_aliveCount()
+              << " gate=" << (DAT_00355ac0_rain_.uGpffffad38_gate() ? 1 : 0)
+              << " entity=" << DAT_00355ac0_rain_.uGpffffbb4c_entityIndex()
+              << " drawn=" << DAT_00355ac0_rain_.drawList().size() << " splashes="
+              << std::count_if(DAT_00355ac0_rain_.drawList().begin(),
+                               DAT_00355ac0_rain_.drawList().end(),
+                               [](const orphen::ported::entity::RainQuad &drop)
+                               { return drop.splash; })
+              << "\n";
     std::cout << "haze field: alive=" << DAT_00355b50_haze_.iGpffffbbc4_aliveCount()
               << " gate=" << (DAT_00355b50_haze_.DAT_00354cb8_gate() ? 1 : 0)
               << " entity=" << DAT_00355b50_haze_.DAT_00355b4c_entityIndex()
@@ -7394,6 +7483,48 @@ namespace orphen::port
       // FUN_0021A760 runs in the same half of the frame: it is walked from
       // the simulation and its quads are collected at publish time.
       DAT_00355a9c_dust_.FUN_0021a760_step(frameTicks);
+      // FUN_0021AD98, the rain. FUN_002192C0 walks it before the haze field,
+      // and like the haze field it cannot reach the entity pool or the terrain
+      // on its own -- but unlike it, it needs the ground query *per record*
+      // rather than once, so the probe goes in as a callback.
+      {
+        orphen::ported::entity::RainCameraFrame rainCamera;
+        rainCamera.fGpffffb6d4_yaw = fieldCamera_.yawRadians();
+        const auto &rainEye = fieldCamera_.pose().eye;
+        rainCamera.DAT_0058c0a8_eyeX = rainEye.x;
+        rainCamera.DAT_0058c0ac_eyeY = rainEye.y;
+        rainCamera.DAT_0058c0b0_eyeZ = rainEye.z;
+
+        std::optional<orphen::ported::entity::RainEntityAnchor> rainAnchor;
+        const int rainEntity = DAT_00355ac0_rain_.uGpffffbb4c_entityIndex();
+        if (rainEntity >= 0 && static_cast<std::size_t>(rainEntity) < entityPool_.slotCount())
+        {
+          const auto &host = entityPool_.slot(static_cast<std::size_t>(rainEntity));
+          rainAnchor = orphen::ported::entity::RainEntityAnchor{
+              host.positionX20, host.positionZ24, host.positionY28};
+        }
+
+        auto *rainMap = mapViewer_.loadedMap();
+        DAT_00355ac0_rain_.FUN_0021ad98_step(
+            frameTicks, rainCamera, rainAnchor, [this] { return FUN_00216868_random(); },
+            [rainMap](float x, float y, float z) -> std::optional<float>
+            {
+              if (rainMap == nullptr)
+              {
+                return std::nullopt;
+              }
+              // FUN_00227798: the single-point ground query, asked from the
+              // height the drop is currently at. A miss is what the original's
+              // "no ground" answer stands for, and the caller treats it the
+              // same way -- above the 64.0 sentinel, so no splash.
+              const auto hit = FUN_00227070_sample_ground(*rainMap, x, y, z, 0.0f, 0.0f, 2u, 0u);
+              if (!hit.found)
+              {
+                return std::nullopt;
+              }
+              return hit.height;
+            });
+      }
       // FUN_0021BEF0, in the slot FUN_002192C0 gives it: after FUN_0021A760 and
       // before FUN_0021E5E0. The four pools between them in that list are not
       // ported. The entity branch is resolved here because the pool cannot
@@ -7849,6 +7980,11 @@ namespace orphen::port
     DAT_0054f080_smoke_.FUN_0022f020_clear();
     DAT_00355b58_spray_.FUN_0021e540_reset();
     DAT_00355b50_haze_.FUN_0021be58_reset();
+    // FUN_0021AD00. The pool is carved once at boot in the original, but its
+    // gate and its live count are scene state, so the port clears it with the
+    // rest -- a scene that does not arm the rain must not inherit the last
+    // one's.
+    DAT_00355ac0_rain_.FUN_0021ad00_reset();
     DAT_00355b60_fountain_.FUN_0021f108_reset();
     DAT_00355b80_gather_.reset();
     // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two

@@ -498,6 +498,27 @@ namespace orphen::ported::script
     int entityIndex = -1;
   };
 
+  // The rain, as opcode 0x102 spells it. FUN_00262250 reads eight expressions
+  // in stream order -- count, length, fall, magnitude, height, rotateX,
+  // rotateZ, entity -- and hands FUN_0021AC00 a different order, so the two are
+  // kept apart here. The four scaled by 100000 are length, fall and the two
+  // angles; magnitude, height and the count arrive raw.
+  struct ScriptRainField
+  {
+    int count = 0;
+    float length = 0.0f;
+    float fall = 0.0f;
+    // The spawn cylinder's radius, and with no entity also how far in front of
+    // the camera the whole volume sits.
+    int magnitude = 0;
+    // How high a drop spawns, and how far below zero it falls before respawning.
+    int height = 0;
+    float rotateX = 0.0f;
+    float rotateZ = 0.0f;
+    // Negative, or 0x100 and above, means the volume is camera-locked instead.
+    int entityIndex = -1;
+  };
+
   // One burst of the DAT_00355B80 pool, as opcode 0x114 spells it. Eleven
   // expressions: the count first, then nine scaled by 100000 (fGpffff8d20),
   // then the colour raw. The ninth scaled one is the sprite size, and it is the
@@ -678,9 +699,16 @@ namespace orphen::ported::script
     // and the records that are already live keep their positions.
     std::function<void(const ScriptHazeField &)> FUN_0021bd30_arm_haze;
 
+    // FUN_00262250 -> FUN_0021AC00, opcode 0x102: the rain. 0x106 and 0x108
+    // share the opcode's operand shape but go to FUN_0021D448 and FUN_0021C748,
+    // two pools this port does not have, so only 0x102 reaches a pool.
+    std::function<void(const ScriptRainField &)> FUN_0021ac00_arm_rain;
+
     // FUN_002620A8, opcode 0x100: one inline byte clearing one of the six pool
-    // gates at uGpffffad38..ad4c. Byte 5 is uGpffffad48, the haze field's;
-    // the other five belong to pools this port does not have.
+    // gates at uGpffffad38..ad4c. **The byte is 1-based** -- the handler does
+    // `index = byte - 1` and takes 1..6 -- so byte 1 is uGpffffad38, the rain's,
+    // and byte 5 is uGpffffad48, the haze field's; the other four belong to
+    // pools this port does not have, and byte 0 selects nothing at all.
     std::function<void(std::uint8_t selector)> FUN_002620a8_clear_pool_gate;
 
     // FUN_0025FA40 -> FUN_00257C78, opcode 0x67: turn the selected entity's

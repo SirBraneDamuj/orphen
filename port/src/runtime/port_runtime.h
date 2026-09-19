@@ -35,6 +35,7 @@
 #include "ported/entity/original_hit_sparks.h"
 #include "ported/entity/original_fountain_particles.h"
 #include "ported/entity/original_haze_particles.h"
+#include "ported/entity/original_rain_pool.h"
 #include "ported/entity/original_gather_particles.h"
 #include "ported/entity/original_smoke_cloud.h"
 #include "ported/entity/original_spray_particles.h"
@@ -527,6 +528,12 @@ namespace orphen::port
     // whose records respawn in place instead of dying, and the only one whose
     // opcode sets a target count rather than throwing a burst.
     orphen::ported::entity::HazeParticlePool DAT_00355b50_haze_;
+    // uGpffffbb50, the rain opcode 0x102 arms -- 3000 records of 0x14, carved
+    // by FUN_0021AD00 and walked by FUN_0021AD98. The largest pool in the
+    // executable and the only one whose particles land: a drop that reaches the
+    // ground becomes a splash rather than dying. s01_e013's deck is the scene
+    // that wants it.
+    orphen::ported::entity::RainParticlePool DAT_00355ac0_rain_;
     // DAT_00355B80, the converging streaks opcodes 0x114 and 0x115 drive.
     orphen::ported::entity::GatherParticlePool DAT_00355b80_gather_;
 

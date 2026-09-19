@@ -1091,6 +1091,72 @@ A scene loaded straight off the command line has no departure, so
 `--from-scene sNN_eMMM` seeds the pair. Without it a direct load takes the
 default arm.
 
+### The rain, and the fold that was hiding in it
+
+`s01_e013`'s deck is in a downpour on hardware and was dry in the port. The rain
+is opcode `0x102`, which the port was consuming the operands of and dropping:
+
+    0x102(1000, 150000, 50000, 6, 10, 0deg, 0deg, -1)
+
+`FUN_00262250` divides four of those by 100000 and calls
+`FUN_0021AC00(length, fall, rotateX, rotateZ, count, magnitude, height,
+entity)` -- note the read order is not the call order. That is a 3000-record
+pool at `uGpffffbb50`, 60000 bytes of `0x14`, walked by `FUN_0021AD98` with a
+three-state machine per record in `FUN_0021AFA0`:
+
+- **spawn** into a cylinder of radius `magnitude` and height `height`;
+- **fall** at `fall * frameTicks / 32`, drawing a camera-facing sliver
+  `0.012 x length` in world space -- four world corners each projected on their
+  own, the way a hit spark's streak is, not a screen-space sprite like every
+  other pool here;
+- **splash** when a periodic `FUN_00227798` under the bottom of the streak says
+  the ground has arrived: a flat ring on the ground that grows and fades over
+  960 ticks and then respawns the drop.
+
+With no entity the whole volume is anchored `magnitude` units down the camera's
+line of sight at eye height, so it travels with you.
+
+Three things worth keeping:
+
+- **The live count only reaches half the target.** `FUN_0021AC00`'s growth loop
+  is `added < target - liveCount` with both sides moving, exactly like
+  `FUN_0021BD30`'s. Asking for 1000 gets 500, and the hardware reads 500 at
+  `0x355AA0`.
+- **Opcode `0x100`'s pool selector is 1-based.** `FUN_002620A8` computes
+  `index = byte - 1` and takes 1..6, so the rain's gate is byte **1** and the
+  haze field's byte 5. Byte 0 selects nothing.
+- **The two `if`s that reschedule the ground probe overlap.** `height > 5`
+  writes 100 and `height > 1` then writes 50 over it, so the 100 is unreachable.
+  Checked in the disassembly at `0x0021B26C` before reproducing it.
+
+#### FUN_00207DE8's colour fold, finally verifiable
+
+The first build of this drew bright white bars instead of drizzle. A GS dump of
+`s01_e013` settles why. Every one of the frame's 411 streak draws carries vertex
+colour **(64, 64, 64, 120)** -- and `FUN_0021AFA0` passes `0xF0808080`. That is
+`FUN_00207DE8:130-141`'s fold, `(c & 0xFEFEFEFE) >> 1`, applied because the
+packet is textured: the streak reaches the GS at half grey and alpha 0.9375, not
+white at a clamped 1.875.
+
+The dump pins the rest of the state too: `ALPHA = 0x44`, i.e. `(Cs-Cd)*As+Cd`,
+the ordinary source-alpha blend that `+0x0C`'s bit `0x4000` selects;
+`TEST = 0x5000d`; `TEX1 = 0x60`; texture page `0x3300` at `256x256` PSMT8 with
+the streak's UV box landing on `(251.4, 8.4)..(252.4, 39.4)`, a one-texel column
+of sheet `0x19C`.
+
+**This also fixes the hit sparks.** They go through the same `FUN_002190F8` and
+were skipping the fold, which was recorded as unverified because no capturable
+scene had a `FUN_002190F8` pool alive. The rain is one, and it says the fold is
+real, so a spark is `0.9375x` white rather than `1.875x`.
+
+Not reproduced, as everywhere else: `FUN_0020B6A0`'s `& 0xE0` clip reject, which
+drops a quad whose corners have slid off the screen rect. The port draws a few
+more streaks per frame than the dump does (470-ish against 411) and that is
+where the difference is. `FUN_00218EE0`'s near test **is** modelled.
+
+Splash counts line up where it can be checked: parked at the dump's own player
+position, `--actor-report` prints `splashes=7` against the dump's 9.
+
 ### Which door you came in by: `DAT_00325340`
 
 Two doors lead from `s01_e014` into `s01_e013` and two lead back, and the port
