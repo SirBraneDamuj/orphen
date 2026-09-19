@@ -28,7 +28,7 @@ Opcode entries (hex):
 - 0F: LAB_002394f8 — TODO
 - 10: LAB_00239548 — TODO
 - 11: FUN_002395c0 — TODO
-- 12: LAB_00239750 — TODO
+- 12: LAB_00239750 — Consume one operand byte and nothing else (`cursor += 2`). Read off the ELF at 0x00239750: `lw $v0,-0x5140($gp); addiu $v0,$v0,2; jr $ra; sw $v0,-0x5140($gp)`
 - 13: FUN_00239760 — render speaker in subtitle
 - 14: FUN_002397f0 — TODO
 - 15: FUN_00239848 — TODO
@@ -50,8 +50,8 @@ partial advances on the way there), the advance *including* the opcode byte is:
 
 | advance | opcodes |
 |---|---|
-| 1 | 00, 02, 06, 07, 08, 09, 10, 12, 13 |
-| 2 | 0A, 0B, 0C, 0D, 0E, 14, **18**, 1D |
+| 1 | 00, 02, 06, 07, 08, 09, 10, 13 |
+| 2 | 0A, 0B, 0C, 0D, 0E, **12**, 14, **18**, 1D |
 | 3 | **19**, 1B, 1C, 1E |
 | 4 | 0F, 15 |
 | 7 | 11, **16** |

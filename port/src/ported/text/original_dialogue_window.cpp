@@ -27,7 +27,7 @@ namespace orphen::ported::text
     switch (code)
     {
     case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
-    case 0x14: case 0x18: case 0x1D:
+    case 0x12: case 0x14: case 0x18: case 0x1D:
       return 2;
     case 0x19: case 0x1B: case 0x1C: case 0x1E:
       return 3;
@@ -359,6 +359,18 @@ namespace orphen::ported::text
       {
         waitB_ = static_cast<std::int32_t>(blob_[cursor_ + 1]) << 5;
       }
+      cursor_ += 2;
+      return;
+
+    case 0x12:
+      // LAB_00239750, read out of the ELF at 0x00239750 -- four instructions,
+      // `lw $v0, -0x5140($gp); addiu $v0, $v0, 2; jr $ra; sw $v0, -0x5140($gp)`.
+      // It consumes its operand byte and does nothing else. Giving it a width of
+      // 1 left the walk standing on that operand: in s01_e014 Magnus's
+      // `Look... Which way do we go?` is `... 11 01 00 04 00 06 00 12 01 13
+      // "Magnus" ...`, so the walk read the `01` as the book prompt, closed the
+      // window and ended the record before a single glyph was placed. The line
+      // never drew and Cleo's answer followed immediately.
       cursor_ += 2;
       return;
 
