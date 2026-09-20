@@ -9504,6 +9504,92 @@ Over a 30000-frame run the director reaches shots 1, 2, 5, 6, 7, 8, 9 and 11.
 Shots 3, 4, 10 and 12 belong to states 10 and 12, which the move rotation never
 picks -- see "Nothing picks state 10" above.
 
+#### The strafing run fired nothing, and left a slick on the water
+
+Reported as: the creature swims out, charges, is supposed to shoot something,
+nothing happens, and it leaves an effect in the water that never goes away.
+Both halves are one missing function.
+
+State 8's animation 0xC calls `FUN_0029D168` on the release frame, which stands
+up a type `0x1AE` on the creature's bone 9 and hands it attack record 0 out of
+the work block. The port had that much. What it did not have is type `0x1AE`'s
+own behaviour, **`FUN_002EDC40`** -- the dispatch word at `0x0031CDD4`, which is
+`PTR_LAB_0031CAB0[0x1AE - 0xFC]`. There is no `src/` file for it; it was
+recovered from the ELF disassembly and cross-read against Ghidra's decompile.
+
+That function is the whole attack. It lays down a three-point Bezier per axis,
+once, latched on `+0x94`:
+
+```
+p0 = where the wash stands
+p2 = the player, one unit further along the bearing, at waist height
+     (player +0x28 + player +0x58 * 0.5)
+p1 = half way there, three units up
+```
+
+and then walks it, spending the curve through the movement request at
+`+0x30/+0x34/+0x38` rather than writing the position, so the wash still
+collides on the way. Every frame it hit-tests through `FUN_002EF510` with the
+record it is carrying, switches to animation 2 on contact, and expires three
+ways: `+0x62` past `+0x1C0`, `+0x0C & 6`, or the burst animation finishing.
+
+Without it the entity just sat where it was stood up, for ever. Over a
+12000-frame fight, before and after:
+
+| | live `0x1AE` at the end | slots used | dispatch frames |
+|---|---|---|---|
+| before | **6** | 6 | 27195 |
+| after | **0** | 1, reused | 606 |
+
+Six shots go out, at frames 3105, 4264, 5021, 9782, 10941 and 11698 (cue
+`0x134` marks each release). Sampled across one flight the wash leaves the
+creature at `(-3.04, 20.24, 6.75)`, arcs up over the deck and comes down on
+`(-6.11, -0.85, 13.02)` -- the player was standing at `(-6.10, -0.80, 12.40)`.
+
+Two details the decompile alone would have got wrong. `FUN_0021ED50`'s ninth
+float, `baseZ`, arrives **on the stack** (`float in_stack_00000000` in its own
+body), so Ghidra renders the call with thirteen arguments and no Z;
+`swc1 f2,0x0(sp)` at `0x002EDF80` is the wash's `+0x28`. And the two spray
+constants are gp-relative: `uGpffffab54` at `0x00354AC4` is 0.001 and
+`uGpffffab58` at `0x00354AC8` is 0.05, both read off hardware.
+
+**It does not damage the player yet, and that is a different bug.** See the
+next section.
+
+#### Nothing can hit the lead, because its +0x02 is zero
+
+Found while checking whether the wash connects. Instrumented at the closest
+frame of a pass, every geometric test in `FUN_00215AC8` passes:
+
+```
+wash box   x[-6.86,-5.36]  z[-1.60,-0.10]  y[13.02,14.52]
+player     centre(-6.10,-0.80) r=0.15  foot 12.40  head 13.20
+           12.40 < 14.52  and  13.02 < 13.20        -- overlaps
+```
+
+and the contact is thrown out before the shape is ever measured, by
+`candidateAccepted`:
+
+```
+if ((victim.descriptorFlags02 & candidateMask) == 0) return false;
+```
+
+The port's lead has `+0x02 == 0x0000`, so it fails every mask. **Hardware has
+`0x0001`**, in both EE dumps of this scene. `+0x04` is wrong too: `0x3024` in
+the port against `0x30A4` on hardware.
+
+The cause is that `OriginalPlayerController::resetAt` hand-builds the lead out
+of `OriginalEntity{}` defaults and sets only `typeId00 = 1`. It never seeds
+`+0x02` or `+0x04` from type 1's descriptor the way
+`FUN_00265E28`/`entity_pool.cpp:99` does for everything else. The radius, height
+and slope limit next to it are hardcoded copies of that descriptor's values
+rather than reads of it, which is the same shortcut one field further along.
+
+The consequence is not limited to the wash: outside a battle that retypes the
+lead to `0x5C` (which does `+0x02 |= 1` at `battle_party.cpp:667`), **no attack
+in the game can land on the player at all.** `s14_e002` is such a scene --
+hardware keeps the lead at type 1 through the whole fight.
+
 #### The disintegration sparkle ended up on Orphen
 
 After the fight, the victory close-up had nine white starbursts stuck to

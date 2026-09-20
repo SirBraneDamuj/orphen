@@ -756,6 +756,20 @@ namespace orphen::ported::entity
 
     std::uint16_t puffLife198 = 0; // +0x198: type 0x10F, the lifetime its scale ramps against
 
+    // Type 0x1AE, the wash the s14_e002 creature's strafing run fires -- the
+    // same three-point Bezier again, four bytes earlier than the crab's rock.
+    // FUN_002EDC40 lays the three control points down once, aimed at wherever
+    // the player is standing at the moment the run releases, and then walks
+    // them: +0x19C..+0x1A4 from +0x20, +0x1A8..+0x1B0 from +0x24 and
+    // +0x1B4..+0x1BC from +0x28. It reads its attack record out of
+    // hitParameters198, the same field the sword blade uses.
+    std::array<float, 3> washArcX19c{};
+    std::array<float, 3> washArcZ1a8{};
+    std::array<float, 3> washArcY1b4{};
+    // +0x1C0: the tick total the ratio is taken against -- 0xC80 when the wash
+    // is stood up in state 0, which is the only way FUN_0029D168 makes one.
+    std::int16_t washDuration1c0 = 0;
+
     // Type 0x112. The same three-point Bezier the enemies fly, sixteen bytes
     // earlier in the struct.
     std::array<float, 3> seedArcX198{};

@@ -158,6 +158,14 @@ namespace orphen::ported::entity
   std::uint32_t FUN_0029c468_unported_move_frames();
   std::uint16_t FUN_0029c468_unported_move_state();
 
+  // FUN_002EDC40, type 0x1AE -- the wash the strafing run fires. It has no
+  // src/ file; the dispatch word is at 0x0031CDD4. Dispatched from
+  // actor_frame_update rather than from the boss, because the wash outlives
+  // the pass that made it.
+  void FUN_002edc40_mast_wash_entry(OriginalEntity &entity,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment);
+
   // FUN_00299390.
   void FUN_00299390_mast_boss(OriginalEntity &entity,
                               std::size_t slot,

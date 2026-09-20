@@ -7011,6 +7011,7 @@ namespace orphen::ported::entity
     case 0x002ED3E0u: // FUN_002ed3e0, type 0x1AA, the burning ship
     case 0x002ED980u: // 0x002ED980,   type 0x1AB, one puff of its smoke
     case 0x002ED9A0u: // FUN_002ed9a0, type 0x1AC, one link of its fire ring
+    case 0x002EDC40u: // FUN_002edc40, type 0x1AE, the mast creature's wash
     case 0x002D8CE0u: // FUN_002d8ce0, type 0x118, the status aura
       return true;
     default:
@@ -7068,6 +7069,8 @@ namespace orphen::ported::entity
       return "LAB_002ed980 (ship smoke puff)";
     case 0x002ED9A0u:
       return "FUN_002ed9a0 (ship fire ring)";
+    case 0x002EDC40u:
+      return "FUN_002edc40 (mast wash)";
     case 0x002D8CE0u:
       return "FUN_002d8ce0 (status aura)";
     case 0x002D9C88u:
@@ -7313,6 +7316,9 @@ namespace orphen::ported::entity
         break;
       case 0x002ED9A0u:
         FUN_002ed9a0_ship_fire_ring(entity, slot, environment);
+        break;
+      case 0x002EDC40u:
+        FUN_002edc40_mast_wash_entry(entity, slot, environment);
         break;
       case 0x002D8CE0u:
         FUN_002d8ce0_status_aura(entity, slot, environment);

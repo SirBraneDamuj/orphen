@@ -918,6 +918,10 @@ namespace orphen::ported::entity
     // and FUN_0029E878 share.
     inline constexpr std::int32_t kMastWingtipTypeId = 0x1AD;
     inline constexpr std::int32_t kMastWashTypeId = 0x1AE;
+    // uGpffffab54 at 0x00354AC4 and uGpffffab58 at 0x00354AC8, read off
+    // hardware: the wash spray's rise/fall/drift and its particle size.
+    inline constexpr float kUGpffffab54_washDrift = 0.001f;
+    inline constexpr float kUGpffffab58_washSize = 0.05f;
     inline constexpr std::int32_t kMastTrailTypeId = 0x1B0;
 
     inline constexpr std::uint16_t kMastStrafeCue = 0x133;
@@ -2016,6 +2020,135 @@ namespace orphen::ported::entity
       // +0x198 is a *pointer* to work +0x250 in the original. The port's hit
       // path takes its parameters by value, so the record travels packed.
       wash.hitParameters198 = work.attacks.record[0].packed();
+    }
+
+    // FUN_002EDC40, type 0x1AE's own behaviour -- the dispatch word at
+    // 0x0031CDD4, which is PTR_LAB_0031CAB0[0x1AE - 0xFC]. It has no src/ file;
+    // this is off the disassembly, cross-read against Ghidra's decompile.
+    //
+    // **This is the strafing run's shot, not scenery.** The port stood the wash
+    // up in FUN_0029D168 and then never ran it, so it never moved, never hit
+    // anything and never expired -- the creature appeared to charge and then
+    // give up, and each pass left one more slick sitting on the water for the
+    // rest of the fight.
+    //
+    // The init arm runs once, latched on +0x94, and lays down a three-point
+    // Bezier per axis aimed at wherever the player stands right now: the start
+    // is the wash's own position, the end is one unit past the player along the
+    // bearing to them, and the middle is half way there and three units up. The
+    // `state != 0` arm is the flat version with a longer fuse; FUN_0029D168
+    // only ever makes state 0, so retail never takes it, but it costs two lines.
+    void FUN_002edc40_mast_wash(OriginalEntity &entity,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+    {
+      if (environment.entityPool == nullptr)
+      {
+        return;
+      }
+      EntityPool &pool = *environment.entityPool;
+      const OriginalEntity &player = pool.slot(0);
+
+      if (entity.spawnParam94 == 0)
+      {
+        entity.washArcX19c[0] = entity.positionX20;
+        entity.washArcY1b4[0] = entity.positionY28;
+        entity.washArcZ1a8[0] = entity.positionZ24;
+        entity.fadeRamp62 = 0;
+
+        const float deltaX = player.positionX20 - entity.positionX20;
+        const float deltaZ = player.positionZ24 - entity.positionZ24;
+        // FUN_00305408 is atan2(dz, dx); FUN_00305130/FUN_00305218 are cos/sin.
+        const float bearing = std::atan2(deltaZ, deltaX);
+        // The player's +0x58 is their height, and half of it puts the wash at
+        // the waist rather than the feet.
+        const float endY = player.positionY28 + player.height58 * 0.5f;
+
+        if (entity.state60 == 0)
+        {
+          entity.washDuration1c0 = 0x0C80;
+          // FUN_00216608, the two-component length.
+          const float half = std::sqrt(deltaX * deltaX + deltaZ * deltaZ) * 0.5f;
+          entity.washArcX19c[2] = player.positionX20 + std::cos(bearing);
+          entity.washArcZ1a8[2] = player.positionZ24 + std::sin(bearing);
+          entity.washArcY1b4[2] = endY;
+          entity.washArcX19c[1] = entity.washArcX19c[0] + half * std::cos(bearing);
+          entity.washArcZ1a8[1] = entity.washArcZ1a8[0] + half * std::sin(bearing);
+          entity.washArcY1b4[1] = entity.washArcY1b4[2] + 3.0f;
+        }
+        else
+        {
+          entity.washDuration1c0 = 0x1040;
+          entity.washArcX19c[2] = player.positionX20 + std::cos(bearing);
+          entity.washArcZ1a8[2] = player.positionZ24 + std::sin(bearing);
+          entity.washArcY1b4[2] = endY;
+          entity.washArcX19c[1] = entity.washArcX19c[2];
+          entity.washArcZ1a8[1] = entity.washArcZ1a8[2];
+          entity.washArcY1b4[1] = endY;
+        }
+        entity.spawnParam94 = static_cast<std::uint8_t>(entity.spawnParam94 + 1);
+      }
+
+      // Animations 0 and 1 are the wash travelling; 2 is the burst it plays on
+      // contact, and it lives only until that one finishes.
+      if (entity.animationA0 >= 2)
+      {
+        if ((entity.flags06 & 0x0001u) != 0)
+        {
+          FUN_00265ec0_destroy_entity(slot, environment);
+        }
+        return;
+      }
+
+      if ((entity.flags06 & 0x0001u) != 0)
+      {
+        FUN_00225bc8_set_animation(entity, 0);
+      }
+
+      const std::int32_t elapsed = static_cast<std::int32_t>(entity.fadeRamp62) +
+                                   static_cast<std::int32_t>(environment.frameTicks);
+      entity.fadeRamp62 = static_cast<std::uint16_t>(elapsed);
+      if (static_cast<std::int32_t>(entity.washDuration1c0) <
+          static_cast<std::int32_t>(static_cast<std::int16_t>(elapsed)))
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+        return;
+      }
+
+      const float through = static_cast<float>(static_cast<std::int16_t>(entity.fadeRamp62)) /
+                            static_cast<float>(entity.washDuration1c0);
+      // FUN_002EF510 with the record FUN_0029D168 packed into +0x198. A contact
+      // switches it to the burst animation but does **not** end it here -- the
+      // arm above does, when that animation runs out.
+      if (FUN_002ef510_effect_hit_test(
+              entity, slot,
+              orphen::ported::resource::HitParameters::unpack(entity.hitParameters198),
+              environment) != 0)
+      {
+        FUN_00225bc8_set_animation(entity, 2);
+      }
+      if ((entity.collisionFlags0c & 0x00000006u) != 0)
+      {
+        FUN_00265ec0_destroy_entity(slot, environment);
+        return;
+      }
+
+      // The curve is spent through the movement request at +0x30/+0x34/+0x38,
+      // not written onto the position -- so the wash still collides on its way.
+      entity.desiredDeltaX30 += FUN_0023a990_bezier(through, entity.washArcX19c) - entity.positionX20;
+      entity.desiredDeltaZ34 += FUN_0023a990_bezier(through, entity.washArcZ1a8) - entity.positionZ24;
+      entity.desiredDeltaY38 += FUN_0023a990_bezier(through, entity.washArcY1b4) - entity.positionY28;
+
+      // The spray it drags. The ninth float -- baseZ -- rides the stack in the
+      // original, which is why Ghidra's decompile shows only thirteen
+      // arguments; `swc1 f2,0x0(sp)` at 0x002EDF80 is the creature's +0x28.
+      if (environment.FUN_0021ed50_spawn_fountain)
+      {
+        environment.FUN_0021ed50_spawn_fountain(
+            kUGpffffab54_washDrift, kUGpffffab54_washDrift, kUGpffffab54_washDrift, 2.0f, 1.0f,
+            kUGpffffab58_washSize, entity.positionX20, entity.positionZ24, entity.positionY28, 3,
+            100, 0, 0, 0x0017BF79u);
+      }
     }
 
     // FUN_0029E9B0. The trail a shed streak drags: a type 0x1B0 parked at the
@@ -3865,6 +3998,13 @@ namespace orphen::ported::entity
 
   std::uint32_t FUN_0029c468_unported_move_frames() { return unportedMoveFrames(); }
   std::uint16_t FUN_0029c468_unported_move_state() { return unportedMoveState(); }
+
+  void FUN_002edc40_mast_wash_entry(OriginalEntity &entity,
+                                    std::size_t slot,
+                                    const ActorEnvironment &environment)
+  {
+    FUN_002edc40_mast_wash(entity, slot, environment);
+  }
 
   void FUN_00299390_mast_boss(OriginalEntity &entity,
                               std::size_t slot,
