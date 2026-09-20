@@ -9530,14 +9530,63 @@ id, an expression for the entity, and -- for 0x126 only -- a second expression
 that is the **volume**, which it hands to `FUN_00267D88`. The port evaluated
 that expression and threw it away, which made 0x126 identical to 0x125.
 
+#### Orphen hopped on the spot, and it was not the boss
+
+Reported from play: idle in the fight he lands, stands for a second or so, hops
+again, and cannot cast while hopping. It is a 120 -> 108 -> 120 loop.
+
+Battle state **120** (the idle) arms a timer and on expiry measures the
+character against control block `+0x14/+0x16`, the mark `FUN_00243F80` recorded
+when the battle started. Drift past `fGpffff8844` and it hands off to **108**,
+the walk home, which walks back and returns to 120. Every pass this boss makes
+calls `FUN_0029C538`, which teleports the player onto one of the six lane spots
+-- about three tenths from where the battle recorded him -- so 120 fires, 108
+starts a return walk, and the player **did not move**, so 108 "arrived" three
+frames later at the same spot and 120 sent him straight back. `FUN_002462C8`
+returns on current action `0x87` before it reads a button, which is why the pad
+is dead for those three frames.
+
+The reason he did not move is one line in the frame:
+
+```
+FUN_002239C8:118   FUN_00251ED8(...)    the field controller      -- or --
+FUN_002239C8:121   FUN_00249610(...)    the battle module
+FUN_002239C8:129   FUN_0023FD30()       -> FUN_002446E8, the path followers
+FUN_002239C8:136   FUN_002261E0()       physics for ALL 0x100 slots, slot 0 too
+```
+
+**Battle replaces the controller and nothing else.** `FUN_002261E0` loops the
+whole pool from `0x58BEB0`, so the lead keeps its physics, spends `+0x30/+0x34`
+and follows the ground whatever is driving it. The port had slot 0's physics
+only inside `OriginalPlayerController::update`, which the battle branch skips,
+so in battle nothing spent the request `FUN_002446E8` had just written.
+`PortRuntime::update` now runs `leadPlayer_.FUN_002261e0_step_physics` after the
+path followers whenever the battle is active.
+
+With that in, state 108 walks him from where the pass dropped him to exactly the
+recorded mark and stops -- ten short corrective steps over 6000 frames, one per
+pass, instead of seventy-six.
+
+Two smaller things came out of the same read:
+
+- `fGpffff8844` at `0x003527B4` is **0.2**, not the 0.3 the port carried.
+  `FUN_0024CF20:0x24D0E4` loads it into a `c.olt.s threshold, distance`.
+- `FUN_0029D658` mode 9's two missing calls went in: `FUN_00249388` points the
+  player's record back at target-marker row 0, and `FUN_00245978` re-records his
+  home spot at wherever the carry left him. Neither is what was causing the hop
+  -- mode 9's `+0x94 == 0x0E` arm is not reached by the intro handback -- but
+  both are part of the handback and both were missing.
+
+`s14_e012` is the one regression-guard scene whose report moves, and only in the
+lead's ground bookkeeping: `triangle=690 -> 691` and `terrainWord=0x0 ->
+0x20000001`. The position is identical. That is the physics doing its job in a
+battle where previously it did nothing at all.
+
 #### What is still out
 
 - **Type `0x1AE`, the wash a strafing run leaves.** Its dispatch entry is
   `FUN_002EDC40`, which the port does not have, so the entity spawns and never
   expires; fifteen accumulate over 30000 frames.
-- `FUN_00249388` and `FUN_00245978`, the two calls mode 9 makes alongside the
-  action byte: retarget the player's record at marker row 0, and re-record his
-  home spot.
 - `FUN_0023BBD8`, the pad rumble, everywhere. No rumble path in the port.
 
 The fight's own numbers were taken out of `SLUS_200.11` rather than out of a

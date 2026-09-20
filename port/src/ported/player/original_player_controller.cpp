@@ -690,6 +690,22 @@ namespace orphen::ported::player
     entity().desiredDeltaZ34 += entity().velocityZ40;
   }
 
+  void OriginalPlayerController::FUN_002261e0_step_physics(std::uint32_t frameTicks,
+                                                           const OriginalTerrainSampler &terrainSampler)
+  {
+    // FUN_002261E0:16-19 gates each slot on three things before it calls
+    // FUN_002262C0: the descriptor byte being positive, +0x02 bit 0x800 clear,
+    // and FUN_00225C90 leaving +0x192 negative. Slot 0 is the lead, so the
+    // first is always true and the third is "not parented to anything" -- which
+    // it is not while the battle module owns it. The pause bit is the one that
+    // matters and it is checked here.
+    if ((entity().descriptorFlags02 & 0x0800u) != 0)
+    {
+      return;
+    }
+    FUN_002262c0_integrate_physics(frameTicks, terrainSampler);
+  }
+
   OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity(float bodyBaseHeight) const
   {
     // FUN_00227390 computes the body extent once per call and hands the same

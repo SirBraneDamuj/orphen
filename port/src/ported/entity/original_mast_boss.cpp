@@ -315,6 +315,63 @@ namespace orphen::ported::entity
       player.groundPrimitive0a = -1;
     }
 
+    // FUN_00249388(record, 0x4000, DAT_003253C2). The "record" it is handed is
+    // the control block's +0x08, which is the entity, and the store lands at
+    // DAT_0031D7A0 + entity[0x95] * 0x3C -- the control block's own +0x2C, the
+    // target field. DAT_003253C2 is target-marker **row 0**'s pool slot, and in
+    // this fight that is the boss's first body segment, because FUN_0029DE10 is
+    // the only thing that ever writes that row.
+    //
+    // So the handback does not clear the player's target the way the crab's
+    // does; it points him back at the creature.
+    void FUN_00249388_retarget(const ActorEnvironment &environment)
+    {
+      if (!environment.DAT_0031d7b0_writePlayerControl || environment.DAT_003253c0_markers == nullptr)
+      {
+        return;
+      }
+      const std::int16_t target = environment.DAT_003253c0_markers->entry(0).slot02;
+      environment.DAT_0031d7b0_writePlayerControl(
+          orphen::ported::battle::control::kTarget2c, 2,
+          static_cast<std::uint32_t>(static_cast<std::uint16_t>(target)));
+    }
+
+    // FUN_00245978(entity, control): re-record where the player is standing,
+    // in tenths, into both copies the control block keeps.
+    //
+    // **This is what stops him hopping.** Battle state 120, the idle, arms a
+    // timer and on expiry measures the character against +0x14/+0x16; more than
+    // three tenths of drift and it hands off to state 108, the walk home, which
+    // walks back and returns to 120. Every one of this boss's moves teleports
+    // the player -- state 8 to DAT_003538DC, state 9 to uGpffff9978, and every
+    // carry along a spline -- so without the re-record the recorded mark is
+    // wherever FUN_00243F80 first saw him and the pair bounces
+    // 120 -> 108 -> 120 for ever, on the spot, with the pad locked out for the
+    // three frames of 108 each time round.
+    //
+    // The same omission produced the same symptom in s14_e001; see
+    // FUN_00245978_record_home in original_crab_boss.cpp.
+    void FUN_00245978_record_home(const OriginalEntity &player,
+                                  const ActorEnvironment &environment)
+    {
+      if (!environment.DAT_0031d7b0_writePlayerControl)
+      {
+        return;
+      }
+      // FUN_0030BD20 truncates toward zero; it is not a round.
+      const auto tenths = [](float value) {
+        return static_cast<std::uint32_t>(
+            static_cast<std::uint16_t>(static_cast<std::int16_t>(static_cast<std::int32_t>(value * 10.0f))));
+      };
+      namespace control = orphen::ported::battle::control;
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosX14, 2, tenths(player.positionX20));
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosY16, 2, tenths(player.positionZ24));
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosZ18, 2, tenths(player.positionY28));
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosX26, 2, tenths(player.positionX20));
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosY28, 2, tenths(player.positionZ24));
+      environment.DAT_0031d7b0_writePlayerControl(control::kPosZ2a, 2, tenths(player.positionY28));
+    }
+
     // FUN_0029D658. The in-fight version of the carry, driven by the work
     // block's mode byte rather than by the boss's state, plus the mode-9 tail
     // that hands the player back -- which is the only way either carry ends.
@@ -342,16 +399,17 @@ namespace orphen::ported::entity
         FUN_00298160_mast_camera(-1, 0, 0, &boss, environment);
         if (boss.spawnParam94 == 0x0E)
         {
-          // The fight's own release: the pending action goes back to 6, and
-          // then FUN_00249388 retargets the player's record at marker row 0 and
-          // FUN_00245978 re-records his home spot. The port has neither call,
-          // so the two are named rather than invented -- but the action byte
-          // matters on its own, because it is what hands the player back.
+          // The fight's own release, and all three lines matter: the pending
+          // action goes back to 6, FUN_00249388 points the player's record back
+          // at marker row 0, and FUN_00245978 re-records his home spot at
+          // wherever the carry left him.
           if (environment.DAT_0031d7b0_writePlayerControl)
           {
             environment.DAT_0031d7b0_writePlayerControl(
                 orphen::ported::battle::control::kPendingAction0e, 1, 6);
           }
+          FUN_00249388_retarget(environment);
+          FUN_00245978_record_home(player, environment);
         }
         else
         {

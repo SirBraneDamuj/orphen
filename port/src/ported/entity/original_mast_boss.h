@@ -117,9 +117,6 @@
 //   * **type 0x1AE, the wash a strafing run leaves.** Its own dispatch entry is
 //     FUN_002EDC40, which the port does not have, so the entity is spawned and
 //     then never expires -- fifteen of them accumulate over a long fight.
-//   * FUN_00249388 and FUN_00245978, the two calls FUN_0029D658's mode 9 makes
-//     alongside the action byte: retarget the player's record at marker row 0,
-//     and re-record his home spot.
 //   * FUN_0023BBD8 everywhere, the pad rumble. The port has no rumble path.
 //
 // Two blocks are ported but unreachable in the retail build, and are marked as

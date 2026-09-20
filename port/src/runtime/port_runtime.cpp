@@ -7997,9 +7997,12 @@ namespace orphen::port
       // FUN_002239c8:117. The battle module replaces the field controller
       // outright -- FUN_00249610 instead of FUN_00251ed8 -- once the scene has
       // raised DAT_003555d3 (a section-14 scene) and opcode 0xBD method 2 has
-      // set bit 0 of sGpffffb052. Nothing about the field path runs while it
-      // does, which is why the player stands still in battle: the movement
-      // request above is simply never spent.
+      // set bit 0 of sGpffffb052, so the pad's movement request above is never
+      // spent and the player does not walk on the stick.
+      //
+      // It replaces the *controller* and nothing else. FUN_002261E0 still runs
+      // slot 0's physics, from a loop over the whole pool further down the
+      // frame -- see the call after the path followers below.
       if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
@@ -8021,6 +8024,23 @@ namespace orphen::port
       // it. Run the other way round and every path-driven step is a frame late
       // and gets cleared before it is applied.
       pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
+
+      // **FUN_002261E0 walks every pool slot, slot 0 included**, and it sits
+      // after both the controller branch and FUN_0023FD30 (which is what steps
+      // the path followers). Outside battle the lead's half of it runs inside
+      // leadPlayer_.update above; in battle nothing was running it at all, so
+      // the request FUN_002446E8 had just written was never spent.
+      //
+      // That is what made Orphen hop on the spot in s14_e002. Battle state 120
+      // measures him against the recorded mark, hands off to 108 when he has
+      // drifted, and 108 starts a return walk -- which moved nobody, so it
+      // "arrived" three frames later at the same spot and 120 sent him straight
+      // back. The visible result is the walk animation firing for three frames
+      // once a second with the pad locked out for each of them.
+      if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
+      {
+        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
+      }
 
       // --place-slot. Debug scaffolding, applied just before the actor loop so
       // a behaviour sees the entity where the flag put it. Nothing in the

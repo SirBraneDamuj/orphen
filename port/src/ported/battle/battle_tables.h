@@ -220,6 +220,9 @@ namespace orphen::ported::battle
   // are kept apart because they are three different questions: is it worth
   // walking home at all, is the walk long enough to make footstep noise, and is
   // it long enough to owe the idle a settle timer.
+  // fGpffff8844, at 0x003527B4. State 120's own threshold, and the test is
+  // `c.olt.s threshold, distance` -- strictly greater than 0.2 goes to 108.
+  inline constexpr float kFGpffff8844_driftThreshold = 0.2f;
   inline constexpr float kDAT_00352780_returnDistance = 0.2f;
   inline constexpr float kDAT_00352784_audibleDistance = 0.2f;
   inline constexpr float kDAT_00352788_settleDistance = 0.2f;

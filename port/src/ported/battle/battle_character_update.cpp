@@ -475,10 +475,11 @@ namespace orphen::ported::battle
       const float homeZ =
           static_cast<float>(tables.read<std::int16_t>(context.control + control::kPosY16)) / 10.0f;
       const float distance = std::hypot(homeZ - entity.positionZ24, homeX - entity.positionX20);
-      // fGpffff8844. The original's threshold; anything closer than this counts
-      // as "already home".
-      constexpr float kReturnDistance = 0.3f;
-      if (distance <= kReturnDistance)
+      // fGpffff8844 at 0x003527B4, read out of SLUS_200.11: **0.2**, not the
+      // 0.3 this used to carry. FUN_0024CF20:0x24D0E4 loads it and runs
+      // `c.olt.s threshold, distance`, so anything at or inside 0.2 counts as
+      // already home.
+      if (distance <= kFGpffff8844_driftThreshold)
       {
         return 0;
       }

@@ -52,6 +52,12 @@ namespace orphen::port
                 const orphen::ported::psm2::Psm2RuntimeState *map,
                 const orphen::ported::player::OriginalInteractionProbe &interactionProbe = {});
 
+    // FUN_002261E0's pass over slot 0, for the frames the battle module owns
+    // the player: the field controller is replaced but the physics loop is not,
+    // so +0x30/+0x34 still has to be spent and the ground still followed.
+    void FUN_002261e0_step_physics(std::uint32_t frameTicks,
+                                   const orphen::ported::psm2::Psm2RuntimeState *map);
+
     const PlayerViewState &viewState() const { return viewState_; }
     const orphen::ported::player::OriginalPlayerSnapshot &originalState() const { return originalState_; }
 

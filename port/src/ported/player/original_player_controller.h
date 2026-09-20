@@ -193,6 +193,22 @@ namespace orphen::ported::player
                 const OriginalTerrainSampler &terrainSampler,
                 const OriginalInteractionProbe &interactionProbe = {});
 
+    // FUN_002261E0's body for slot 0, without FUN_00251ED8 in front of it.
+    //
+    // The original runs the state machine and the physics from two different
+    // places: FUN_00251ED8 (or FUN_00249610 in battle) decides what the player
+    // is doing, and FUN_002261E0 then walks **all 0x100 pool slots** -- slot 0
+    // included -- handing each to FUN_002262C0. So the lead's physics is not
+    // part of the field controller and does not stop when battle replaces it.
+    //
+    // `update()` above runs both halves because outside battle they are always
+    // wanted together. This is the second half on its own, for the frames where
+    // something else is driving the player: the battle module's own controller,
+    // which still needs +0x30/+0x34 spent, the ground followed and the entity
+    // settled.
+    void FUN_002261e0_step_physics(std::uint32_t frameTicks,
+                                   const OriginalTerrainSampler &terrainSampler);
+
     OriginalPlayerSnapshot snapshot() const;
 
     // The lead player is entity pool slot 0. Bind the controller to that slot so

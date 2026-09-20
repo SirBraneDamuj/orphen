@@ -198,6 +198,30 @@ namespace orphen::port
     refreshViewState(*map);
   }
 
+  void OriginalLeadPlayer::FUN_002261e0_step_physics(std::uint32_t frameTicks,
+                                                     const orphen::ported::psm2::Psm2RuntimeState *map)
+  {
+    if (map == nullptr)
+    {
+      return;
+    }
+    const auto terrainSampler = [map](float originalX, float originalZ, float referenceY,
+                                      const orphen::ported::player::OriginalTerrainQuery &query)
+    {
+      const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY,
+                                               toPsm2TerrainQueryOptions(query));
+      if (!groundHit.has_value())
+      {
+        return std::optional<orphen::ported::player::OriginalTerrainSample>{};
+      }
+      return std::optional<orphen::ported::player::OriginalTerrainSample>{
+          toOriginalTerrainSample(*groundHit)};
+    };
+    controller_.FUN_002261e0_step_physics(frameTicks, terrainSampler);
+    originalState_ = controller_.snapshot();
+    refreshViewState(*map);
+  }
+
   void OriginalLeadPlayer::refreshViewState(const orphen::ported::psm2::Psm2RuntimeState &map)
   {
     originalState_ = controller_.snapshot();
