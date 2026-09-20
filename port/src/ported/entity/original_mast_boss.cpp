@@ -1413,7 +1413,7 @@ namespace orphen::ported::entity
       EntityPool &pool = *environment.entityPool;
       if (entity.mastChild1c4 >= 0)
       {
-        pool.releaseSlot(static_cast<std::size_t>(entity.mastChild1c4));
+        FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entity.mastChild1c4), environment);
         entity.mastChild1c4 = -1;
       }
       const std::size_t child =
@@ -1851,7 +1851,7 @@ namespace orphen::ported::entity
       {
         if (entity.mastChild1c4 >= 0 && environment.entityPool != nullptr)
         {
-          environment.entityPool->releaseSlot(static_cast<std::size_t>(entity.mastChild1c4));
+          FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entity.mastChild1c4), environment);
           entity.mastChild1c4 = -1;
         }
         FUN_0029c468_next_move(entity, environment);
@@ -1898,7 +1898,7 @@ namespace orphen::ported::entity
           FUN_00295a60_cue(kMastShedCue, &entity, environment);
           if (entity.mastChild1c4 >= 0)
           {
-            pool.releaseSlot(static_cast<std::size_t>(entity.mastChild1c4));
+            FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entity.mastChild1c4), environment);
             entity.mastChild1c4 = -1;
           }
         }
@@ -2134,7 +2134,7 @@ namespace orphen::ported::entity
       if (static_cast<std::int16_t>(left) < 0)
       {
         FUN_0029e878_spawn_impact(part, environment);
-        pool.releaseSlot(static_cast<std::size_t>(entry));
+        FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entry), environment);
         entry = -1;
         return;
       }
@@ -2213,7 +2213,7 @@ namespace orphen::ported::entity
       OriginalEntity &trail = pool.slot(slot);
       if ((trail.flags06 & 0x0001u) != 0)
       {
-        pool.releaseSlot(slot);
+        FUN_00265ec0_destroy_entity(slot, environment);
         entry = 0;
         return;
       }
@@ -2267,7 +2267,7 @@ namespace orphen::ported::entity
       if (static_cast<std::int16_t>(left) < 0 || (shard.collisionFlags0c & 0x4006u) != 0 ||
           (shard.collisionFlags0c & 0x00E0u) != 0)
       {
-        pool.releaseSlot(slot);
+        FUN_00265ec0_destroy_entity(slot, environment);
         entry = 0;
         return;
       }
@@ -2483,7 +2483,7 @@ namespace orphen::ported::entity
             if (entity.mastChild1c4 >= 0 &&
                 static_cast<std::size_t>(entity.mastChild1c4) < pool.slotCount())
             {
-              pool.releaseSlot(static_cast<std::size_t>(entity.mastChild1c4));
+              FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entity.mastChild1c4), environment);
             }
             entity.mastChild1c4 = -1;
             entity.fadeRamp62 = 0x1900;
@@ -3335,11 +3335,11 @@ namespace orphen::ported::entity
         }
         return &pool.slot(static_cast<std::size_t>(entry - 1));
       };
-      const auto release = [&pool](std::int32_t &entry)
+      const auto release = [&pool, &environment](std::int32_t &entry)
       {
         if (entry > 0 && static_cast<std::size_t>(entry - 1) < pool.slotCount())
         {
-          pool.releaseSlot(static_cast<std::size_t>(entry - 1));
+          FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entry - 1), environment);
         }
         entry = 0;
       };
@@ -3476,7 +3476,7 @@ namespace orphen::ported::entity
           if (entity.mastChild1c4 >= 0 &&
               static_cast<std::size_t>(entity.mastChild1c4) < pool.slotCount())
           {
-            pool.releaseSlot(static_cast<std::size_t>(entity.mastChild1c4));
+            FUN_00265ec0_destroy_entity(static_cast<std::size_t>(entity.mastChild1c4), environment);
           }
           entity.mastChild1c4 = -1;
           entity.mastPhase1b0 = 2;

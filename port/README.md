@@ -9549,10 +9549,12 @@ Verified by killing the creature headlessly (`--enemy-hp 25=1:2450` with
 segments unchanged, and the victory pose captures clean. Seven-scene guard
 byte-identical.
 
-Every other release in `original_mast_boss.cpp` is still a bare
-`pool.releaseSlot`, and every one of them is `FUN_00265EC0` in the original.
-They are invisible today because those entities have no children, but they are
-the same divergence and should be swept when something touches them.
+The other nine releases in `original_mast_boss.cpp` were the same divergence --
+every one of them is `FUN_00265EC0` in the original -- and are now the cascading
+form too. They change nothing observable, because those entities have no
+children: the death run is byte-identical with and without them. That is the
+point. The port matching the original's shape is not conditional on the
+difference being visible yet.
 
 #### Hitting the creature did nothing visible or audible
 
