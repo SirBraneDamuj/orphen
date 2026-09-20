@@ -82,6 +82,54 @@ namespace orphen::ported::render
   inline constexpr int kSpriteCullMinY = 0x7500;
   inline constexpr int kSpriteCullMaxY = 0x8B00;
 
+  // == FUN_0020B6A0 / FUN_0020B600's reject, and the box it tests against ==
+  //
+  // Every effect pool drops a record on `FUN_0020B6A0(...) & 0xE0`:
+  // FUN_0021C288 (haze), FUN_0021F310 (fountain), FUN_0021A820 (dust),
+  // FUN_002190F8 (rain) and the rest. The port had none of it, on the grounds
+  // that the VU0 register state was not recoverable from the decompilation.
+  // It is: there is exactly one `lqc2 vf7` in the whole executable, at
+  // 0x0020B45C inside FUN_0020B430, and FUN_00208EE8 -- the only caller --
+  // passes it **0x00314F90**. The six quadwords there are
+  //
+  //   vf1  (-131072, -131072,     0,   0.01)   the running max's seed
+  //   vf2  ( 131072,  131072, 65536, 0.0039)   the running min's seed
+  //   vf7  (  27648,   30976,     1,    0.5)   the box's low corner
+  //   vf8  (  37888,   34560, 65534,      0)   its high corner
+  //   vf9  (    255,     255,   255, 0.0039)
+  //   vf14 (   8192,    4096,     0,      0)   how far it is widened
+  //
+  // 27648 and 37888 are 32768 -/+ 5120, which is screen x 0 and 640 in GS 1/16
+  // units; 30976 and 34560 are 32768 -/+ 1792, screen y 0 and 448 at the 8
+  // units per line the sprite path also uses.
+  //
+  // **The two `cfc2` reads are the MAC flag, not the clip flag.** Control
+  // register 17 is MACflag, and the instruction ahead of each read is a
+  // `vsub.xyz vf0, ...` -- a subtract whose result is thrown away and whose
+  // sign flags are the answer. `0xE0` is bits 5, 6 and 7, which are the sign
+  // bits of z, y and x. The first read subtracts the low corner from the
+  // running max and the second the running min from the high corner, so the
+  // pair is an ordinary "do these two boxes overlap" test and the reject is
+  // "the point is outside the widened screen rect on some axis".
+  //
+  // The earlier note that bits 6 and 7 are stale is wrong: the destination
+  // mask is xyz, so w's flags are cleared and all three bits belong to this
+  // subtract.
+  inline constexpr float kFUN_0020b6a0_clipLoX = 27648.0f - 8192.0f;
+  inline constexpr float kFUN_0020b6a0_clipHiX = 37888.0f + 8192.0f;
+  inline constexpr float kFUN_0020b6a0_clipLoY = 30976.0f - 4096.0f;
+  inline constexpr float kFUN_0020b6a0_clipHiY = 34560.0f + 4096.0f;
+
+  // The x and y arms of that test, for a single projected point. The z arm --
+  // 1.0 to 65534 on the projected depth -- is the same range the near clip and
+  // each pool's own q cutoff already enforce, and the port's pools do not carry
+  // a GS z this far, so it is not re-derived here.
+  inline constexpr bool FUN_0020b6a0_clip_rejects(float gsX, float gsY)
+  {
+    return gsX < kFUN_0020b6a0_clipLoX || gsX > kFUN_0020b6a0_clipHiX ||
+           gsY < kFUN_0020b6a0_clipLoY || gsY > kFUN_0020b6a0_clipHiY;
+  }
+
   // One 16-byte sprite record. Offsets are the record's own.
   struct SpriteRecord
   {

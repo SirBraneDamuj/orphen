@@ -331,6 +331,11 @@ namespace
         config.drawBackgroundModels = false;
         continue;
       }
+      if (argument == "--no-haze")
+      {
+        config.drawHazeField = false;
+        continue;
+      }
       if (argument == "--dump-scene-resources")
       {
         if (argumentIndex + 1 >= argc)

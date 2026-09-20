@@ -187,6 +187,11 @@ namespace orphen::port
     std::string dumpSceneResourcesPath;
     // --no-background: skip FUN_0020C290's models, to see what is underneath.
     bool drawBackgroundModels = true;
+    // --no-haze: skip the 0x109 field's draw half. The pool still steps, so
+    // the records keep their positions and the gate keeps its value -- this
+    // only takes the layer off the screen, which is how to tell a scene that
+    // is too hazy from one that is wrong underneath.
+    bool drawHazeField = true;
     // --pose-report <slot>: dump one entity's bone palette next to an
     // unfiltered rebuild of it, bone by bone, and name the first divergence.
     int poseReportSlot = -1;
@@ -634,6 +639,7 @@ namespace orphen::port
     std::vector<int> hideSlots_;
     bool printRenderReport_ = false;
     bool drawBackgroundModels_ = true;
+    bool drawHazeField_ = true;
     // --render-report prints the background models once, on the first frame
     // that builds any.
     bool backgroundReported_ = false;

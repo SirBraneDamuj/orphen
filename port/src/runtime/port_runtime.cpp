@@ -201,6 +201,7 @@ namespace orphen::port
     mapViewer_.mutableSceneLighting().applyLightFloor = config.applyLightFloor;
     mapViewer_.mutableSceneLighting().applyUnlitFlag = config.applyUnlitFlag;
     drawBackgroundModels_ = config.drawBackgroundModels;
+    drawHazeField_ = config.drawHazeField;
     suppressPointLights_ = config.suppressPointLights;
     poseReportSlot_ = config.poseReportSlot;
     scrDumpPath_ = config.scrDumpPath;
@@ -4528,6 +4529,10 @@ namespace orphen::port
     // the far ones.
     for (const auto &particle : DAT_00355b50_haze_.drawList())
     {
+      if (!drawHazeField_)
+      {
+        break;
+      }
       const auto viewSpace = viewProjection.toViewSpace(particle.world);
       if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
       {
@@ -4555,6 +4560,18 @@ namespace orphen::port
       inputs.gsOriginY = static_cast<int>(
           viewSpace.y * viewProjection.projection.at(1, 1) / viewSpace.z +
           viewProjection.projection.at(2, 1));
+
+      // FUN_0021C288:130. The record is dropped when FUN_0020B6A0's projection
+      // comes back with a sign bit set on x, y or z -- the widened screen rect,
+      // whose constants are in ported/render/original_sprite_pass.h. Every
+      // other pool in this file applies the same test in the original and none
+      // of them do here yet; the haze is where it shows, because its sprite is
+      // wider than the screen.
+      if (orphen::ported::render::FUN_0020b6a0_clip_rejects(
+              static_cast<float>(inputs.gsOriginX), static_cast<float>(inputs.gsOriginY)))
+      {
+        continue;
+      }
       inputs.viewZ = viewSpace.z;
       inputs.projectionScaleX = viewProjection.projection.at(0, 0);
       inputs.projectionScaleY = viewProjection.projection.at(1, 1);
