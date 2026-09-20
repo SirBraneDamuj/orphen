@@ -872,6 +872,28 @@ namespace orphen::harness
         entityLightsPointer = &entityLights;
       }
 
+      // FUN_0020eec0:53-61. The entity's +0x138 is added onto that same byte
+      // triple, one channel at a time, clamped at 255 -- it is not a separate
+      // pass and not a modulator. **This is the hit flash**, and it had no
+      // reader at all: six places in the port write +0x138 (both bosses, the
+      // swarm crab, the fade ramp, object register 0x23) and the draw never
+      // looked at it, so nothing in the game has ever flashed.
+      //
+      // The add runs whether or not the scene has dynamic point lights, so it
+      // has to be able to raise the pointer on its own. The original always
+      // writes ctx+0x1BC from VU0 first and then tests +0x138 separately.
+      if (object.fadeColor138 != 0)
+      {
+        for (int channel = 0; channel < 3; ++channel)
+        {
+          const float byte =
+              static_cast<float>((object.fadeColor138 >> (channel * 8)) & 0xFFu);
+          entityLights.additive[channel] =
+              std::min(255.0f, entityLights.additive[channel] + byte);
+        }
+        entityLightsPointer = &entityLights;
+      }
+
       // FUN_0020c810:140. A zero +0x134 is "not fading" and becomes 0x80.
       g_entityFadeAlpha = object.fadeLevel == 0
                               ? 1.0f

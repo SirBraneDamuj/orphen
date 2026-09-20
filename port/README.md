@@ -9504,6 +9504,78 @@ Over a 30000-frame run the director reaches shots 1, 2, 5, 6, 7, 8, 9 and 11.
 Shots 3, 4, 10 and 12 belong to states 10 and 12, which the move rotation never
 picks -- see "Nothing picks state 10" above.
 
+#### Hitting the creature did nothing visible or audible
+
+Reported as "it's supposed to flash red and make a noise -- I don't think we
+have either in place". Both were real, and they were two unrelated bugs that
+happened to land on the same event. `FUN_00299390`, the boss wrapper, does
+three things when `+0xBE` -- the damage mailbox -- comes back non-zero:
+
+```
+FUN_00295A60(0x131, entity);       // the noise
+*(entity + 0x1BC) = 0xC80;         // the flash timer
+FUN_002D5630(...); *(entity + 0x12A) -= *(entity + 0xBE);
+```
+
+**The noise went through the wrong wrapper.** The port called
+`FUN_00267D38` here -- volume 100, real distance -- where the original calls
+`FUN_00295A60`, the boss's own `-1` wrapper described in the section below.
+This is not the same bug as that one: that one was about the cues being faint,
+and `0x131` was not faint, it was *gone*. The creature orbits twenty-odd units
+out, `FUN_00267A80`'s cutoff is fourteen, and the hit cue is emitted from the
+creature. Twelve hits landed over a 6400-frame run with the sword swinging on
+a timer; `--sound-report` on the old build shows all twelve as
+
+```
+frame 2608 cue 305 ... dist 21.311993 ... vol 0/0 -> waveform 0, 0 samples  out of range
+```
+
+and on the new one all twelve as `dist 0.300000 ... vol 58/58 ... played`.
+
+**The flash was written and never read.** `+0x1BC` is only a timer;
+`FUN_0029CCB8` counts it down and, while it runs, holds entity **`+0x138` at
+`0x14C8`**. `+0x138` is the general additive tint, and `FUN_0020EEC0:53-61` is
+the only thing that consumes it:
+
+```
+if (*(int *)(entity + 0x138) != 0)
+  for (i = 0; i < 3; i++)
+    ctx[0x1BC + i] = min(255, ctx[0x1BC + i] + entity[0x138 + i]);
+```
+
+`ctx+0x1BC` is the byte triple VU0 has just written from the dynamic point
+lights, so the tint is added in the same place and on the same scale, then VU1
+divides the lot by 128. The port had the whole simulation side right --
+`fadeColor138` is written in six places, both bosses, the swarm crab, the fade
+ramp and object register 0x23 -- and **the draw path never looked at the field
+once**, so nothing in the game has ever flashed when hit.
+
+`0x14C8` is R+200, G+20, B+0. The fix adds the three bytes into
+`DynamicContribution::additive` before the modulator runs, and has to be able
+to raise the contribution pointer on its own, because the original writes
+`ctx+0x1BC` from VU0 unconditionally and then tests `+0x138` separately --
+gating the tint on the scene having point lights would have dropped it.
+
+Hardware settled the two things that could have made this wrong. Paused on a
+damage frame, boss in slot 25: `+0x1B2` is 1 (the gate), `+0x1BC` is `0x0A00`
+(decayed from `0xC80`), `+0x128`/`+0x12A` are 66/63, and `+0x138` is exactly
+`0x000014C8`. The player in slot 0 and the body segments in slots 26+ are all
+`+0x138 = 0`, which is what makes an additive read safe: zero is the resting
+value, and the segments do not flash -- only the main body does.
+
+The one value that looked alarming is `FUN_0023A568`, which ramps `+0x138` up
+to `0xFFFFFF` and leaves it there. Added, that is pure white. It is *meant* to
+be: the function only runs for entities carrying `+0x04` bit `0x800`, it
+brightens them to white over about eight frames, then fades `+0x134` down and
+releases the slot. It is a dissolve, and the port was not drawing that either.
+
+Verified: the seven-scene guard is byte-identical, and so are fourteen
+screenshots across those scenes on both builds -- nothing else in the game
+currently carries a non-zero `+0x138` on screen. At `s14_e002` frame 2612, four
+frames after a hit, the two builds differ by `R+181, G+74, B+0` over the
+creature: red up, green up a little, blue untouched to the bit, which is the
+`0x14C8` signature.
+
 #### The creature was too quiet, and that is a real bug
 
 `FUN_00295A60`, the wrapper every one of the boss's own cues goes through, is

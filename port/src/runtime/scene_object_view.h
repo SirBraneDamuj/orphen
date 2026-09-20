@@ -43,6 +43,13 @@ namespace orphen::port
     // 0x80 = x1.0 scale and **zero means fully opaque**, not invisible. The
     // chest cutscene's cross-fade is the only thing that drives it so far.
     std::uint8_t fadeLevel = 0;
+    // Entity +0x138, the additive tint. FUN_0020eec0:53-61 adds its low three
+    // bytes -- R, G, B in that order -- onto the byte triple VU0 just wrote to
+    // the draw context at ctx+0x1BC, clamping each at 255, which is the same
+    // register the dynamic point lights sum into. It is how every enemy in the
+    // game flashes when it is hit: the mast boss and the crab both hold
+    // 0x14C8 (R+200, G+20) for the length of their hit timer.
+    std::uint32_t fadeColor138 = 0;
     // Entity +0x133. FUN_0020c810:216 scales it by fGpffff80c4 into the draw
     // context's ctx+0x140, and FUN_0020eec0:181 adds that to the view depth
     // before keying the sort bucket -- so a negative byte pulls the whole model

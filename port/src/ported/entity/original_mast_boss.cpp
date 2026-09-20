@@ -3922,10 +3922,12 @@ namespace orphen::ported::entity
       {
         if (entity.mastFlag1b2 != 0)
         {
-          if (environment.FUN_00267d38_playSound)
-          {
-            environment.FUN_00267d38_playSound(kMastHitCue, entity);
-          }
+          // FUN_00299390:38 calls FUN_00295A60, not FUN_00267D38 -- so the hit
+          // cue is unattenuated like every other noise the creature makes. It
+          // orbits well past the fourteen-unit cutoff, so routed through the
+          // fixed-100 wrapper this one was dropped outright rather than merely
+          // being quiet, which is why hitting it was silent.
+          FUN_00295a60_cue(kMastHitCue, &entity, environment);
           entity.mastFlashTimer1bc = kMastFlashTicks;
           if (environment.FUN_002d5630_damage_bar)
           {

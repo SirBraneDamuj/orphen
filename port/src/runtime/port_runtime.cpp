@@ -4151,6 +4151,7 @@ namespace orphen::port
       view.groundHeight = lead.groundHeight4c;
       view.descriptorResolved = lead.modelIndex >= 0;
       view.fadeLevel = lead.fadeLevel134;
+      view.fadeColor138 = lead.fadeColor138;
       view.depthBias133 = lead.depthBias133;
       view.scale = lead.scale14c;
       view.scaleZ150 = lead.scaleZ150;
@@ -5111,6 +5112,7 @@ namespace orphen::port
           view.groundHeight = entity.groundHeight4c;
           view.descriptorResolved = entity.modelIndex >= 0;
           view.fadeLevel = entity.fadeLevel134;
+          view.fadeColor138 = entity.fadeColor138;
           view.depthBias133 = entity.depthBias133;
           view.scale = entity.scale14c;
           view.scaleZ150 = entity.scaleZ150;
