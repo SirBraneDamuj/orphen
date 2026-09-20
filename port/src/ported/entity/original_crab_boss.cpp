@@ -805,12 +805,12 @@ namespace orphen::ported::entity
         FUN_002eb398_splash_ring(0.0f, 3.0f, 5.0f, victim, 1, 100, environment);
         FUN_002eb398_splash_ring(kUGpffff9284_splashRadius, 2.0f, 3.0f, victim, 10, 0x32,
                                  environment);
-        if (environment.FUN_00267d38_playSound)
+        // FUN_00267D88(0x7C, victim, -1): the negative volume means
+        // FUN_00267A80 substitutes fGpffff8D9C for the distance, so the splash
+        // keys on at full level wherever the crab dropped the thing.
+        if (environment.FUN_00267d88_playSoundScaled)
         {
-          // FUN_00267D88(0x7C, victim, -1). The port's sound path takes no
-          // attenuation argument, so the -1 the original passes -- against
-          // FUN_00267D38's 100 -- has nowhere to go.
-          environment.FUN_00267d38_playSound(kFUN_0027cfe0_splashCue, victim);
+          environment.FUN_00267d88_playSoundScaled(kFUN_0027cfe0_splashCue, victim, -1);
         }
         FUN_00265ec0_destroy_entity(victimSlot, environment);
         entity.crabPartner1c0 = -1;
@@ -4205,9 +4205,11 @@ namespace orphen::ported::entity
             partner.positionY28 = point.z;
           }
           partner.state60 = 1;
-          if (environment.FUN_00267d38_playSound)
+          // FUN_00267D88(0x114, crab, -1): unattenuated, so the hurl is at full
+          // level however far out the crab is standing.
+          if (environment.FUN_00267d88_playSoundScaled)
           {
-            environment.FUN_00267d38_playSound(kFUN_0027bbe0_hurlCue, entity);
+            environment.FUN_00267d88_playSoundScaled(kFUN_0027bbe0_hurlCue, entity, -1);
           }
         }
         if ((entity.flags06 & 1u) != 0)

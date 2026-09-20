@@ -517,6 +517,44 @@ namespace orphen::ported::entity
     // state 6 zeroes it on the way in, so it is always the player.
     std::int8_t swarmVictim1c8 = 0;
 
+    // Type 0x95's block, the s14_e002 mast boss (original_mast_boss.h). It
+    // overlaps the crab's and the swarm's the same way those overlap each
+    // other; an entity is never two of them at once. Everything the boss needs
+    // beyond these five bytes lives in its own 0x5B8 work block rather than on
+    // the entity, because the original allocates one from the script arena in
+    // state 0 and reaches it through DAT_00355DB8.
+    float mastSpawnFacing19c = 0.0f;     // +0x19C: +0x5C as state 0 found it.
+    float mastTurnRate1a0 = 0.0f;        // +0x1A0: orbit rate, per 32000 ticks.
+    float mastOrbitAngle1a4 = 0.0f;      // +0x1A4: where it is round the mast.
+    float mastOrbitRadius1a8 = 0.0f;     // +0x1A8: how far out.
+    std::uint16_t mastMoveTicks1ac = 0;  // +0x1AC: the move's full length.
+    std::uint8_t mastPhase1b0 = 0;       // +0x1B0: sub-phase inside a move.
+    std::uint8_t mastMoveCursor1ae = 0;  // +0x1AE: cursor into DAT_00325E28.
+    std::uint8_t mastByte1af = 0;        // +0x1AF: cleared by state 0.
+    std::uint8_t mastFlag1b1 = 0;        // +0x1B1: FUN_0029DED8 picks its arm on it.
+    std::uint8_t mastFlag1b2 = 0;        // +0x1B2: gates the damage-bar arm.
+    float mastBonePitch1b4 = 0.0f;       // +0x1B4: the body's pitch lag.
+    float mastBoneYaw1b8 = 0.0f;         // +0x1B8: the body's yaw lag.
+    std::uint16_t mastFlashTimer1bc = 0; // +0x1BC: the hit tint, stepped by FUN_0029CCB8.
+    std::uint8_t mastSmashStage1be = 0;  // +0x1BE: which mast section state 10 has taken.
+    std::uint8_t mastSwoopStage1bf = 0;  // +0x1BF: how many of states 8/9 have run.
+    std::uint8_t mastInWater1c0 = 0;     // +0x1C0: below the water line last frame.
+    std::uint8_t mastMirror1c1 = 0;      // +0x1C1: 0 = state 3's turn, 1 = state 4's.
+    std::uint8_t mastCueLatch1c2 = 0;    // +0x1C2: one-shot for the pass's cue.
+    std::int32_t mastChild1c4 = -1;      // +0x1C4: the effect entity a move owns.
+    std::uint16_t mastSubTimer1c8 = 0;   // +0x1C8: the pass's own sub-timer.
+
+    // Type 0x1E6, the streak a pass sheds -- the same overlay again, on a
+    // different entity. FUN_0029E4F8 stamps the three; FUN_0029E668 is the only
+    // thing that ever moves one, because 0x1E6's own dispatch entry is the
+    // shared no-op. +0x198 is *a byte* in the original and +0x1A0 is a pointer,
+    // which is the pool slot here.
+    std::uint8_t mastShedBone198 = 0;    // +0x198: the parent bone it rides.
+    std::int32_t mastShedTrail1a4 = -1;  // +0x1A4: its type 0x1B0 trail, or -1.
+    // Type 400, the debris FUN_0029E078 throws. Its +0x198 is a plain speed,
+    // rolled 20..39, and FUN_0029E3B8 divides it by 32000 ticks.
+    std::int16_t mastShardSpeed198 = 0;  // +0x198: units per 32000 ticks.
+
     // Type 0x28's block. FUN_002d2f40 builds a three-entity rig the first time
     // it runs -- FUN_00265e28(0x27), (0x26) and (0x19) -- parks the three pool
     // slots at +0x198 / +0x19C / +0x1A0 and latches +0x94 so it never runs

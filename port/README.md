@@ -9253,3 +9253,299 @@ Without it there is no headless route. The player never walks, the crab drifts
 out of sword range, and its HP plateaus at exactly **84 of 120** however long the
 run -- 9,500 frames and 26,500 frames both end there. `--spell-power-scale` does
 not help: it scales power, and the problem is hits not landing.
+
+## s14_e002: the boss *is* the scene
+
+`s01_e013` hands off to `s14_e002`, the fight in the ship's rigging. The port
+dropped Orphen into empty air and stopped dead.
+
+Neither half of that was collision or spawn. The scene's object script is a
+`work[0]` state machine in beats of ten, and beat 0 places the lead at
+`(-5.2, -2.3, 2.25)` -- a spot with **no floor under it**, on hardware too: the
+ground query there answers `-45`, the no-ground sentinel. Hardware does not fall
+because two frames later the boss picks the player up.
+
+The handshake is three beats:
+
+| beat | what it does |
+|---|---|
+| 10 | wait until the boss's `+0x60` is non-zero -- state 0 has run |
+| 20 | opcode `0xBD` method `0x6F`: request action 12 on the entity in `work[2]` |
+| 30 | wait on script work word 1, which only `FUN_0029C510` writes |
+
+Type `0x95`'s `FUN_00299390` was unported, so its `+0x60` never left 0, beat 10
+never passed, and the lead fell until the sentinel caught it. Everything else --
+the map, the 16 spawns, the placement table, the script -- already matched the
+save state exactly.
+
+### The intro flies the player, not the boss
+
+`FUN_0029C198` is state 13, and it is a **camera path applied to pool slot 0**.
+It takes two natural cubic splines out of `DAT_0034EB60` -- six blocks of three
+points, taken in pairs, with the player's own position substituted for the first
+control point -- and for 2 x 4800 ticks writes slot 0's `+0x20/+0x24/+0x28`
+straight off the curve, its `+0x5C` from the tangent one frame ahead, and swaps
+its animation from 12 to 13 at the halfway mark. That is the leap up the
+shrouds. `FUN_0029D658` is the same move again for the fight proper, selected by
+the work block's mode byte instead of by the state.
+
+Checked against a save state of the real transition, aligned on the first frame
+the curve moves the player:
+
+|  | hardware (frame 15201) | port (frame 31) |
+|---|---|---|
+| slot 0 | (-5.5451, -2.5466, 6.9092) | (-5.55, -2.55, 6.93) |
+| camera eye | (-5.9802, -3.9707, 8.257) | (-5.98, -3.97, 8.27) |
+| camera look-at | (-5.533, -2.5389, 7.757) | (-5.53, -2.54, 7.77) |
+
+and the curve's last control point, `(-6.175, -0.894, 12.599)`, is where slot 0
+is standing when the carry ends -- grounded onto the crow's nest at 12.4, which
+is what hardware reads too.
+
+### Bit 3 of `+0x04` turns gravity off, and the lead's copy did not have it
+
+`FUN_002262C0:99` reads the entity's `+0x04` into its workspace and gates the
+whole velocity integration on bit 3:
+
+```c
+if ((*(ushort *)(puVar11 + 0x58) & 8) == 0) {   /* +0x160 is a copy of +0x04 */
+  ... +0x38 += v*dt - (g*dt)*dt*0.5;  v -= g*dt;
+}
+```
+
+The non-player path in `actor_frame_update.cpp` has had that gate since the
+crates; the **lead player's copy never did**. Both carries raise the bit for
+their whole run, so in the port the lead accrued about a third of a unit of fall
+per frame under a spline that teleported it back. The position came out right
+because the curve overwrote it, but the camera reads the player *before* the
+curve write, so the look-at trailed 0.34 low the entire leap.
+
+Fixing it changed nothing in `s01_e024`, `s01_e012`, `s01_e014`, `s14_e012` or
+`s14_e031` over 1800 frames. In `s14_e001` it removed twelve `[player]
+primitive=` lines and nothing else: the crab's own Bezier carry raises the same
+bit, and the lead's ground query had been flickering between primitives
+underneath it.
+
+### State 4 had no `src/` file, and it is state 3 mirrored
+
+Ghidra produced no function at `0x00299C98`, which is the fourth entry of
+`PTR_FUN_00325E50` -- and the *first* move the rotation picks, so nothing could
+be checked without it. Disassembled out of `SLUS_200.11` (capstone in MIPS64
+mode; MIPS32 chokes on the EE's `daddu` and stops after one instruction), it
+turns out to be `FUN_002999B0` with three differences: `+0x1C1` is 1 rather than
+0, the orbit turns the other way, and the close shot comes in on camera sub-shot
+1 rather than 2. Its five tuning constants at `0x003538B4` hold the same values
+as state 3's at `0x0035389C`.
+
+Three more entries are bare `jr ra` -- `0x00299868` (1), `0x0029A4E0` (7) and
+`0x0029C190` (11), two instructions each. Real no-ops, not gaps.
+
+### The move rotation, and the geometry it flies
+
+`DAT_00325E28` is eighteen entries cycling: 4, 5, 6, 5, 3, 5, 6, 8, 6, 4, 5, 8,
+5, 8, 3, 5, 6, 9. `FUN_0029C468` walks it, and it is also where "the player is
+down" (state 2) and "I am dead" (state 12) override the pick.
+
+States 3, 4 and 6 are one orbit: twenty units out, five below the water, twelve
+of turn per 32000 ticks, for `0x1900` ticks -- and the radius pulls in by up to
+six as the pass comes abeam, `r = 20 - 6·|cos(angle)|`. Checked both ways: the
+save state at PS2 frame 15896 has the boss in state 4 at `(10.8966, 11.5569,
+-5.0)`, which is radius 15.884 against the formula's 15.888, and the port's own
+state-4 samples sit on the same curve to three decimals with the height at
+exactly -5.00.
+
+State 5, the dive, is seven of the eighteen: a three-point curve down one of
+three lanes in `DAT_00325D38`, the player dropped on the spot that lane and
+direction call for, a splash each time the body crosses the water line, and a
+wake that sheds three parts when its clip ends.
+
+**The body is nine bones, and they all get the same pair of angles.**
+`FUN_0029C7A8` measures the lag between where the head is actually pointing and
+where the entity says it is facing, and writes yaw × 8 and pitch × 10 into every
+one of `DAT_0034EB40`'s nine. The rotation compounds down the chain, which is
+what makes the body arc rather than kink. That is a different nine from the
+segments': those ride `DAT_0034EB30`.
+
+### The rest of the fight: states 8, 9, 10 and 12
+
+All fourteen state handlers are ported now, along with the four helpers the
+wrapper runs once the mode byte reaches 14. Over 30000 frames the rotation
+cycles all eighteen entries of `DAT_00325E28` and wraps, and `--actor-report`
+finds nothing left:
+
+```
+type=0x95 state=0 -> 0x2995e0 ticks=1      implemented
+type=0x95 state=1 -> 0x299868 ticks=360    implemented
+type=0x95 state=3 -> 0x2999b0 ticks=2010   implemented
+type=0x95 state=4 -> 0x299c98 ticks=2010   implemented
+type=0x95 state=5 -> 0x299f80 ticks=15030  implemented
+type=0x95 state=6 -> 0x29a2c0 ticks=3855   implemented
+type=0x95 state=8 -> 0x29a4e8 ticks=3840   implemented
+type=0x95 state=9 -> 0x29a838 ticks=2592   implemented
+type=0x95 state=13 -> 0x29c198 ticks=302   implemented
+unimplemented state handlers: 0
+```
+
+#### `FUN_0029DED8` is what makes the fight a fight
+
+The boss was not targetable at all before this pass. `FUN_0029DED8` has two
+arms and neither registers the boss: while `+0x1B1` is clear it **empties**
+`DAT_003253C0` outright, and while it is set it registers exactly one entity --
+the *first body segment*, work `+0x4B0`. The other eight segments are never in
+the table. `+0x1B1` is raised by the states that hold still long enough to be
+hit (8 and 10) and dropped by the ones that do not, which is the whole of the
+fight's "you can aim at it now". A type `0x192` cursor now appears in the pool
+for 17340 of 30000 ticks.
+
+#### One write in `FUN_0029D658` decides whether the fight finishes
+
+State 9's phase 11 waits on the work block's carry byte going back to zero, and
+the carry is `FUN_0029D658` mode 1: two 4800-tick curve legs counted on the
+*player's* `+0x62`. The port had `(&DAT_0031D7BE)[(DAT_00354EBE - 1) * 0x3C] =
+0x0B` written down as a comment rather than a call, on the grounds that nothing
+outside the battle module writes that byte and the mode was unreachable anyway.
+
+It is not cosmetic. That byte parks the player's own state machine, and the
+first thing the machine does when it runs is reset `+0x62`. With it left out the
+carry's timer sat at 32 or 33 for ever, the curve never advanced, and the boss
+waited at phase 11 for the remaining 12000 frames of the run. The trace was
+
+```
+[mast9] phase=11 frame=7339
+carryMode=1 carryPhase=1 route=2 ramp=32 frame=7339
+carryMode=1 carryPhase=1 route=2 ramp=33 frame=7346   <- 7 frames, 1 tick
+```
+
+With the write in place the same run reads `carryMode=0 carryPhase=0 route=3`
+one frame before phase 12.
+
+#### Nothing picks state 10
+
+`DAT_00325E28` tops out at 9, `FUN_0029C468` only ever overrides with 2 or 12,
+and the action map handles 12, 13 and 14. The only writer of `+0x60 = 10` in
+`src/` is `FUN_0029B628` itself. It is ported because it is in the table and
+because `+0x1BE`, the mast-section counter it owns, is read nowhere else -- but
+a fight that runs off the rotation alone never breaks a plank, and the water
+line never rises.
+
+#### Two blocks in the retail build are dead
+
+Ported as written, marked where they sit:
+
+- **State 12 phase 1 dereferences null.** `0x0029BF50` branches to the
+  sub-timer when work `+0x48C` is non-zero; the other arm loads `+0x06` *off
+  that null pointer* and gates cue `0x13D` on bit 0 of whatever the EE has at
+  address 6. Phase 0 always fills `+0x48C` before handing over, so the arm is
+  unreachable.
+- **State 9 phase 12's `+0x1BF > 2` arm**, which stands the player at the origin
+  and puts 999 in his `+0xBE`. The guard at the top of state 9 gives the turn
+  back from `+0x1BF == 2`, so the counter never reaches 3 with the block in
+  reach.
+
+#### `FUN_0025D0E0` is per-frame in the original and sticky here
+
+Both of state 9's white flashes paint the screen through `FUN_0025D0E0`. In the
+original that pushes one screen-sized sprite into *this frame's* draw list, so a
+caller that stops calling it stops covering the screen. The port's `ScreenFade`
+holds the last value it was handed and `PortRuntime` pushes that to the renderer
+every frame, so the first build of state 9 whited the screen out at phase 5 and
+never took it back -- a `--screenshot` of the frames after phase 5 came out
+solid 0xFFFFFF.
+
+Anything in the port that paints the overlay directly has to release it. Both of
+the boss's users now do -- phase 5 on its way to phase 6, and `FUN_0023ABD0` on
+the frame it reports done.
+
+#### The rest of the director: shots 3, 4, 6, 7, 8, 10 and 12
+
+`FUN_00298160` has twelve numbered shots and all twelve are in now. Six of them
+are more poses off the boss or the player and read like the ones already there.
+Three are not:
+
+**Shots 6 and 8 are camera paths, not poses.** Each drops the manual camera,
+installs a spline through `FUN_00217E88` -- an eye curve and a one-point look-at
+curve, and *no* roll/zoom curve, which is the whole difference between
+`FUN_00217E88` and `FUN_00217FE8` -- and walks it on its own `DAT_0035532E`
+counter. Shot 6, the transformation, authors four points in the boss's **bone 8
+space**, turns them by the boss's facing less 97.93 degrees and drops them on
+wherever bone 8 was when the shot started, while aiming at bone 8 live every
+frame; shot 8, the beam, authors three points as a plain offset from a row of
+`DAT_00325DD8` picked by the boss's `+0x1BF`, and does not rotate at all. Both
+hold the curve's last point once the counter runs out, and both of those "last
+points" are `DAT_00325DCC` and `DAT_00325E18` -- which are not separate
+constants, they are the final entry of each curve.
+
+`FUN_0020BAE0`, which builds shot 6's rotation, writes **four** of the sixteen
+floats in `DAT_00342828` and leaves the rest alone; every other caller in the
+engine hands it a matrix `FUN_0020BC38` has just made identity, so identity is
+what the standing contents are. The port builds one fresh rather than relying on
+that.
+
+**Shots 4, 7 and 10 roll their own framing.** The orbit angle is
+`FUN_0029CC28(0, boss)` -- which memsets its own scratch to zero and never fills
+it, so it is the bearing from the **world origin**, not from anything nearby --
+plus fifteen to forty-four degrees off `FUN_00216868`. Two runs of the same move
+are never framed identically.
+
+Two details are reproduced rather than corrected, and marked where they happen:
+shot 5's limit tests read `DAT_00355324`, which shot 5 never writes, and shot
+8's look-at adds `DAT_003556FC` twice -- once inside the anchor and once again
+on the way out, which is why it sits over the creature rather than level with
+it.
+
+`DAT_0058B190` also stopped being a synonym for the eye. It is the **anchor**:
+eight of the twelve shots stamp a point there on the frame their sub-shot
+changes and build every later frame off it, which is what makes a shot a fixed
+frame the creature flies through rather than a follow cam. Shots 1 and 2 were
+writing their eye into it, which would have moved shot 4 sub 2's and shot 11's
+framing under them.
+
+Over a 30000-frame run the director reaches shots 1, 2, 5, 6, 7, 8, 9 and 11.
+Shots 3, 4, 10 and 12 belong to states 10 and 12, which the move rotation never
+picks -- see "Nothing picks state 10" above.
+
+#### The creature was too quiet, and that is a real bug
+
+`FUN_00295A60`, the wrapper every one of the boss's own cues goes through, is
+`FUN_00267D88(cue, entity, -1)`. The port routed it through
+`FUN_00267D38(cue, entity)` instead, which is the same call with the volume
+nailed to **100**.
+
+That is not a small difference. `FUN_00267A80` reads a negative volume as *do
+not attenuate*: it puts the scale back to 100 **and** replaces the measured
+distance with `fGpffff8D9C`, which is 0.3. So the cue keys on at 125 of 128
+wherever the source is, and the fourteen-unit cutoff at the top of the function
+-- which makes a `FUN_00267D38` cue **silent**, not quiet -- cannot fire. The
+fight orbits twenty units out, so on the port half the creature's roars were
+being dropped on the floor and the rest were faint.
+
+The sound engine has had that branch since it was written; nothing in the actor
+layer could reach it, because `ActorEnvironment` only carried the fixed-100
+wrapper. It now carries `FUN_00267D88` as well, and three places use it: the
+mast boss's cue wrapper, and the crab's `FUN_0027BBE0` hurl and `FUN_0027CFE0`
+splash, both of which had the divergence written down in a comment.
+
+The same hook fixed script opcode **0x126**. `FUN_00261330` reads an inline cue
+id, an expression for the entity, and -- for 0x126 only -- a second expression
+that is the **volume**, which it hands to `FUN_00267D88`. The port evaluated
+that expression and threw it away, which made 0x126 identical to 0x125.
+
+#### What is still out
+
+- **Type `0x1AE`, the wash a strafing run leaves.** Its dispatch entry is
+  `FUN_002EDC40`, which the port does not have, so the entity spawns and never
+  expires; fifteen accumulate over 30000 frames.
+- `FUN_00249388` and `FUN_00245978`, the two calls mode 9 makes alongside the
+  action byte: retarget the player's record at marker row 0, and re-record his
+  home spot.
+- `FUN_0023BBD8`, the pad rumble, everywhere. No rumble path in the port.
+
+The fight's own numbers were taken out of `SLUS_200.11` rather than out of a
+note: `DAT_00325CF0` (the three smash runs), `DAT_00325D80` (the three beam-head
+spots), `DAT_0034EB50` (the four collision groups each mast section is made of),
+`DAT_00355340`/`DAT_00355348`/`DAT_00355338` (the plank tags and group bits) and
+the `gp`-relative float run at `0x003538D8..0x003539FC`. The states themselves
+are verified structurally against the disassembly and by running the rotation to
+a full wrap; they are **not** frame-checked against hardware, because reaching
+state 9 on the PS2 means playing the fight for several minutes rather than
+loading a save state.

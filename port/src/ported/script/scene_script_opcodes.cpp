@@ -5275,19 +5275,25 @@ namespace orphen::ported::script
 
     // 0x125 / 0x126 (FUN_00261330): an inline **u16** cue id first, then the
     // expression selecting the entity to play it on. The inline read comes
-    // before the expression, so the order cannot be swapped. 0x126 takes one
-    // more expression and goes to a different player; the port plays both the
-    // same way.
+    // before the expression, so the order cannot be swapped.
+    //
+    // 0x126's extra expression is the **volume**, not a second selector:
+    // 0x125 ends at FUN_00267D38, which nails the scale to 100, and 0x126 goes
+    // to FUN_00267D88 carrying the evaluated value. A negative one is the
+    // engine's "do not attenuate" -- FUN_00267A80 swaps the measured distance
+    // for fGpffff8D9C. Evaluating it and throwing it away, which is what the
+    // port did, made the two opcodes the same opcode.
     case 0x125:
     case 0x126:
     {
-      const bool twoArgs = (opcode == 0x126);
+      const bool scaled = (opcode == 0x126);
       note(OpcodeSupport::Modelled);
       const std::uint32_t cue = readU8() | (static_cast<std::uint32_t>(readU8()) << 8);
       const std::uint32_t selector = FUN_0025c258_evaluate();
-      if (twoArgs)
+      int volume = 100;
+      if (scaled)
       {
-        FUN_0025c258_evaluate();
+        volume = static_cast<int>(static_cast<std::int32_t>(FUN_0025c258_evaluate()));
       }
       if (halted_)
       {
@@ -5297,8 +5303,19 @@ namespace orphen::ported::script
       {
         resolveEntity(selector);
       }
-      if (environment_.FUN_00267d38_play_at_entity &&
-          currentEntity_ < orphen::ported::entity::kEntitySlotCount)
+      if (currentEntity_ >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return 0;
+      }
+      if (scaled)
+      {
+        if (environment_.FUN_00267d88_play_at_entity)
+        {
+          environment_.FUN_00267d88_play_at_entity(static_cast<std::uint16_t>(cue), currentEntity_,
+                                                   volume);
+        }
+      }
+      else if (environment_.FUN_00267d38_play_at_entity)
       {
         environment_.FUN_00267d38_play_at_entity(static_cast<std::uint16_t>(cue), currentEntity_);
       }

@@ -851,8 +851,14 @@ namespace orphen::ported::script
     std::function<std::uint32_t()> FUN_00216868_random;
 
     // FUN_00267d38: play a sound cue positioned on a pool entity. Extended
-    // opcodes 0x125 / 0x126.
+    // opcode 0x125.
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
+
+    // FUN_00267d88: the same with the volume left to the caller, which is what
+    // extended opcode 0x126 is -- its second expression *is* the volume, and a
+    // negative one means FUN_00267A80 drops the distance term entirely.
+    std::function<void(std::uint16_t cue, std::size_t slot, int volume)>
+        FUN_00267d88_play_at_entity;
 
     // FUN_00267a80: play a sound cue at a world coordinate the script names
     // itself, with its own volume scale. Extended opcodes 0x127 / 0x128.

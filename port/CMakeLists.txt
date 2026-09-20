@@ -146,6 +146,10 @@ target_sources(orphen_port
     src/ported/entity/original_summon_stage.cpp
     src/ported/entity/original_boss_camera.cpp
     src/ported/entity/original_crab_boss.cpp
+    src/ported/entity/original_mast_boss.cpp
+    src/ported/entity/original_mast_boss.h
+    src/ported/entity/original_mast_camera.cpp
+    src/ported/entity/original_mast_camera.h
     src/ported/entity/original_swarm_crab.cpp
     src/ported/entity/original_bubble_effect.cpp
     src/ported/entity/original_dust_pool.cpp

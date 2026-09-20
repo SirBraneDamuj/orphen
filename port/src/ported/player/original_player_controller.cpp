@@ -920,6 +920,18 @@ namespace orphen::ported::player
     {
       entity().desiredDeltaY38 = 0.0f;
     }
+    else if ((entity().halfword04 & 0x0008u) != 0)
+    {
+      // FUN_002262c0:99. **Bit 3 of +0x04 turns gravity off**, and the test is
+      // ahead of everything else in the block: neither +0x38 nor +0x44 is
+      // touched, so the velocity keeps whatever it had rather than being reset.
+      // The non-player path in actor_frame_update.cpp has had this gate all
+      // along; the lead's copy did not, and the s14_e002 intro is what found
+      // it -- FUN_0029C198 raises the bit for the whole carry, and without the
+      // gate the lead accrued a third of a unit of fall per frame under a
+      // spline that teleported it back, which dragged the camera's look-at down
+      // with it.
+    }
     else if (airborneState || !wasGrounded)
     {
       // FUN_002262c0: dt = (float)DAT_003555bc * 0.125, then

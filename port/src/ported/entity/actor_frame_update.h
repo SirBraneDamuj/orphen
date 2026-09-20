@@ -9,12 +9,14 @@
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_dust_pool.h"
 #include "ported/entity/original_hit_test.h"
+#include "ported/entity/original_plume_pool.h"
 #include "ported/entity/player_bandana.h"
 #include "ported/resource/character_stats.h"
 #include "ported/resource/hit_parameter_table.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_light_table.h"
+#include "ported/render/original_screen_fade.h"
 
 #include <array>
 #include <cstdint>
@@ -183,6 +185,36 @@ namespace orphen::ported::entity
     // burning-ship effects sit on; see original_ship_fire.h.
     float DAT_003556fc_effectGroundZ = 0.0f;
 
+    // The same value, written back. **The mast boss raises it**: each mast
+    // section it breaks puts the water line up by 1.5, and every effect in the
+    // scene stands on it, so the write has to reach the script state rather
+    // than the per-frame copy above.
+    std::function<void(float)> set_DAT_003556fc_effectGroundZ;
+
+    // FUN_00260738's two writes, the same call opcodes 0x7D and 0x7E make. The
+    // mast boss moves collision group 0 -- the sea -- up with the water line,
+    // and turns the four mast sections it snaps.
+    std::function<void(std::uint32_t group, std::uint8_t channel, float value, bool rotation)>
+        FUN_00260738_move_collision_group;
+
+    // DAT_0035567C / DAT_00355680, the fog band, and the write back. The mast
+    // boss's transformation pulls the band in to 63..64 for its whole length
+    // and puts the scene's own pair back when it is done.
+    float DAT_0035567c_fogNear = 0.0f;
+    float DAT_00355680_fogFar = 0.0f;
+    std::function<void(float nearDistance, float farDistance)> set_DAT_0035567c_fogBand;
+
+    // The *player's* battle control block, DAT_0031D7B0 + (DAT_00354EBE-1)*0x3C,
+    // read and written by field code rather than by the battle module. Two
+    // users, both in the mast boss: FUN_0029D658 parks the player's own state
+    // machine under a carry by writing 0x0B into +0x0E, and FUN_00246290 raises
+    // bit 4 of +0x38 when the boss dies. Without the first the player keeps
+    // running his own state every frame and resets the carry's timer at +0x62.
+    std::function<std::uint32_t(std::uint32_t offset, std::uint32_t width)>
+        DAT_0031d7b0_readPlayerControl;
+    std::function<void(std::uint32_t offset, std::uint32_t width, std::uint32_t value)>
+        DAT_0031d7b0_writePlayerControl;
+
     // uGpffffb052. Bit 0 is "a battle is running"; type 0x8A's wrapper reads
     // bit 3, the broadcast that sends every enemy to its stand-down state.
     std::uint16_t sGpffffb052_battleFlags = 0;
@@ -263,6 +295,15 @@ namespace orphen::ported::entity
 
     // FUN_0022dcf0, the camera shake -- magnitude and a duration in ticks.
     std::function<void(float magnitude, std::int16_t durationTicks)> FUN_0022dcf0_shake_camera;
+
+    // FUN_0021ED50 into the DAT_00355B60 fountain pool, which script opcode
+    // 0x10F also fills. The s14_e002 boss is the only *actor* that spawns into
+    // it: the spray a close pass throws off its wingtip and the burst a splash
+    // puts up. Null in a harness with no pool, which simply spawns nothing.
+    std::function<void(float rise, float fall, float drift, float speedRange, float zJitterRange,
+                       float size, float x, float y, float z, int count, std::int16_t lifeUnit,
+                       std::uint8_t loop, std::int8_t cameraRelative, std::uint32_t colour)>
+        FUN_0021ed50_spawn_fountain;
 
     // The other half of the battle module: the *actor* record an enemy is bound
     // to. DAT_0031d7b0_battleMember above is the party side; this is
@@ -466,10 +507,35 @@ namespace orphen::ported::entity
     // every impact in the game kicks up. Null in harnesses with no renderer.
     DustPool *DAT_00355a9c_dust = nullptr;
 
+    // DAT_00355B6C, the plume/fire pool. FUN_0029B628 opens three emitters over
+    // the mast section it has just broken -- the same call opcode 0x10E makes.
+    PlumePool *DAT_00355b6c_plumes = nullptr;
+
+    // FUN_0025D0E0's full-screen overlay quad. FUN_0023ABB0 arms a six-phase
+    // white-out with it and FUN_0023ABD0 steps it; the mast boss's death waits
+    // on the second to report done.
+    orphen::ported::render::ScreenFade *DAT_0025d0e0_screenFade = nullptr;
+
     // FUN_00267d38(cue, entity). Behaviours reach the sound engine through
     // small wrappers -- FUN_002d59e0 is the chest's -- so this is the shape
     // they all have: a cue number and the entity to place it at.
     std::function<void(std::uint16_t cue, const OriginalEntity &at)> FUN_00267d38_playSound;
+
+    // FUN_00267d88(cue, entity, volume), the general form FUN_00267d38 is a
+    // wrapper over with the volume nailed to 100.
+    //
+    // **A negative volume is not "quiet", it is "do not attenuate".**
+    // FUN_00267A80 reads it as: put the scale back to 100 *and* replace the
+    // measured distance with the constant fGpffff8D9C, which is 0.3 -- so the
+    // cue keys on at level 125 of 128 however far the source is, and the
+    // fourteen-unit cutoff that silences a distant FUN_00267d38 cue cannot
+    // fire. Only the pan still comes off the geometry.
+    //
+    // That is what a boss's own cue wrapper passes, and it is why the creature
+    // is audible from across the ship on hardware while the same cue routed
+    // through FUN_00267d38 is faint or missing.
+    std::function<void(std::uint16_t cue, const OriginalEntity &at, int volume)>
+        FUN_00267d88_playSoundScaled;
 
     // FUN_002057c8(cue, left, right), the layer under that one. The target
     // cursor is the only behaviour that skips FUN_00267d38 and keys a cue on
@@ -575,6 +641,15 @@ namespace orphen::ported::entity
 
   // FUN_00225bc8: the shared animation-state setter.
   void FUN_00225bc8_set_animation(OriginalEntity &entity, std::uint16_t animation);
+
+  // DAT_003555D1. FUN_002262C0:111 skips the embedded-corner push-out entirely
+  // while this is set -- not just for the actor that raised it, for every one.
+  // A global in the original and a global here; FUN_0022A418 and FUN_002536A8
+  // clear it, and the two cutscenes that carry the player through geometry
+  // (FUN_0029C198, the s14_e002 intro, and FUN_002B1568) raise it for the
+  // length of the carry. Without it the push-out ejects the player off the
+  // spline the moment a collision group moves under them.
+  bool &DAT_003555d1_suspendPushOut();
 
   // FUN_00225bf0: the same, plus the movement state at +0x60. Script opcode 0xA8
   // uses it to put the lead player into the state that runs its object script.

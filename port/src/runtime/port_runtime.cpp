@@ -9,6 +9,7 @@
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/original_health_bar.h"
 #include "ported/entity/entity_path_follow.h"
+#include "ported/entity/original_mast_boss.h"
 #include "ported/model/psc3_model.h"
 #include "ported/psm2/psm2_collision_groups.h"
 #include "ported/psm2/psm2_uv_animation.h"
@@ -704,6 +705,18 @@ namespace orphen::port
     environment.FUN_0022dcf0_shake_camera = [this](float magnitude, std::int16_t durationTicks)
     { DAT_00355664_cameraShake_.FUN_0022dcf0_request(magnitude, durationTicks); };
 
+    // FUN_0021ED50 into the DAT_00355B60 pool, the same one script opcode 0x10F
+    // fills. The s14_e002 boss is the only actor that spawns into it.
+    environment.FUN_0021ed50_spawn_fountain =
+        [this](float rise, float fall, float drift, float speedRange, float zJitterRange,
+               float size, float x, float y, float z, int count, std::int16_t lifeUnit,
+               std::uint8_t loop, std::int8_t cameraRelative, std::uint32_t colour)
+    {
+      DAT_00355b60_fountain_.FUN_0021ed50_spawn(rise, fall, drift, speedRange, zJitterRange, size,
+                                                x, y, z, count, lifeUnit, loop, cameraRelative,
+                                                colour, [this]() { return FUN_00216868_random(); });
+    };
+
     // The enemy side. `record` is the entity's +0x198 as the port spells it:
     // the actor record's offset in the encounter blob, or -1 for the scratch
     // FUN_0023f8b8 hands back when no group names the entity's id.
@@ -831,6 +844,67 @@ namespace orphen::port
     // DAT_00343880 directly, the way FUN_00277d30 does.
     environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
     environment.DAT_00355a9c_dust = &DAT_00355a9c_dust_;
+    environment.DAT_00355b6c_plumes = &DAT_00355b6c_plumes_;
+    environment.DAT_0025d0e0_screenFade = &DAT_00571dc0_screenFade_;
+    environment.set_DAT_003556fc_effectGroundZ = [this](float value)
+    { sceneScript_.state().DAT_003556fc_effectGroundZ = value; };
+    environment.FUN_00260738_move_collision_group =
+        [this](std::uint32_t group, std::uint8_t channel, float value, bool rotation)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      if (rotation)
+      {
+        orphen::ported::psm2::FUN_00260738_set_group_rotation(*map, group, channel, value);
+        return;
+      }
+      orphen::ported::psm2::FUN_00260738_set_group_translation(*map, group, channel, value);
+    };
+    environment.DAT_0035567c_fogNear = mapViewer_.fogNear();
+    environment.DAT_00355680_fogFar = mapViewer_.fogFar();
+    environment.set_DAT_0035567c_fogBand = [this](float nearDistance, float farDistance)
+    { mapViewer_.setFogBand(nearDistance, farDistance); };
+    environment.DAT_0031d7b0_readPlayerControl =
+        [this](std::uint32_t offset, std::uint32_t width) -> std::uint32_t
+    {
+      const std::uint32_t address =
+          orphen::ported::battle::BattleTables::controlBlock(
+              static_cast<std::uint32_t>(battleParty_.DAT_00354ebe_playerSlot() - 1)) +
+          offset;
+      auto &tables = battleParty_.tables();
+      if (width == 1)
+      {
+        return tables.read<std::uint8_t>(address);
+      }
+      if (width == 2)
+      {
+        return tables.read<std::uint16_t>(address);
+      }
+      return tables.read<std::uint32_t>(address);
+    };
+    environment.DAT_0031d7b0_writePlayerControl =
+        [this](std::uint32_t offset, std::uint32_t width, std::uint32_t value)
+    {
+      const std::uint32_t address =
+          orphen::ported::battle::BattleTables::controlBlock(
+              static_cast<std::uint32_t>(battleParty_.DAT_00354ebe_playerSlot() - 1)) +
+          offset;
+      auto &tables = battleParty_.tables();
+      if (width == 1)
+      {
+        tables.write<std::uint8_t>(address, static_cast<std::uint8_t>(value));
+        return;
+      }
+      if (width == 2)
+      {
+        tables.write<std::uint16_t>(address, static_cast<std::uint16_t>(value));
+        return;
+      }
+      tables.write<std::uint32_t>(address, value);
+    };
     environment.DAT_003555b4_frameCounter = DAT_003555b4_frameCounter_;
     environment.DAT_003555e8_stickMagnitude = DAT_003555e8_stickMagnitude_;
     environment.DAT_00343692_partySlots = sceneScript_.state().DAT_00343692_partySlots;
@@ -1008,6 +1082,16 @@ namespace orphen::port
     environment.FUN_00267d38_playSound =
         [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at)
     { soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28); };
+    // FUN_00267d88: the same play with the volume left to the caller. The
+    // sound engine has always had FUN_00267A80's negative-volume branch; until
+    // now nothing in the actor layer could reach it, so every boss cue that
+    // asks for -1 was attenuated as though it had asked for 100.
+    environment.FUN_00267d88_playSoundScaled =
+        [this](std::uint16_t cue, const orphen::ported::entity::OriginalEntity &at, int volume)
+    {
+      soundEngine_.FUN_00267a80_play_at(cue, at.positionX20, at.positionZ24, at.positionY28,
+                                        volume);
+    };
     environment.FUN_002057c8_keyOn = [this](std::uint16_t cue, int volumeLeft, int volumeRight)
     { soundEngine_.FUN_002057c8_key_on(cue, volumeLeft, volumeRight); };
     environment.FUN_00205d90_play_music_slot = [this](std::size_t slot, int fader)
@@ -1725,6 +1809,14 @@ namespace orphen::port
     {
       const auto &entity = entityPool_.slot(slot);
       soundEngine_.FUN_00267d38_play_at(cue, entity.positionX20, entity.positionZ24, entity.positionY28);
+    };
+
+    environment.FUN_00267d88_play_at_entity =
+        [this](std::uint16_t cue, std::size_t slot, int volume)
+    {
+      const auto &entity = entityPool_.slot(slot);
+      soundEngine_.FUN_00267a80_play_at(cue, entity.positionX20, entity.positionZ24,
+                                        entity.positionY28, volume);
     };
 
     environment.FUN_00267a80_play_at_point =
@@ -7325,6 +7417,13 @@ namespace orphen::port
                 << " fading=" << actorTrace_.fadingCount() << '\n';
       std::cout << "unimplemented behaviors: " << actorTrace_.unimplementedTypeCount()
                 << " distinct types, " << actorTrace_.unimplementedEntityCount() << " entities\n";
+      if (const std::uint32_t held = orphen::ported::entity::FUN_0029c468_unported_move_frames();
+          held != 0)
+      {
+        std::cout << "mast boss (0x95): " << held << " frames in state "
+                  << orphen::ported::entity::FUN_0029c468_unported_move_state()
+                  << ", which DAT_00325E28 picked and this port has no handler for\n";
+      }
     }
     {
       const auto &collision = orphen::ported::entity::entityCollisionStats();

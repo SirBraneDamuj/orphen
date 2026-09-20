@@ -2,6 +2,7 @@
 
 #include "ported/entity/original_battle_enemy.h"
 #include "ported/entity/original_crab_boss.h"
+#include "ported/entity/original_mast_boss.h"
 #include "ported/entity/original_swarm_crab.h"
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_water_splash.h"
@@ -156,6 +157,12 @@ namespace orphen::ported::entity
     }
     // The last frozen frame still runs the behavior.
     return frozen && remaining != 1;
+  }
+
+  bool &DAT_003555d1_suspendPushOut()
+  {
+    static bool value = false;
+    return value;
   }
 
   void FUN_00225bc8_set_animation(OriginalEntity &entity, std::uint16_t animation)
@@ -915,8 +922,10 @@ namespace orphen::ported::entity
     // corners are all at or below the feet.
     // (This function is the non-player path, so the lead's every-64-frames leg
     // of the same branch is not reachable here -- slot 0 runs its own copy.)
-    if (environment.FUN_00227390_corner_sample && environment.DAT_003555d0_collisionGroupMoved &&
-        (entity.halfword08 & 0x0020u) != 0)
+    // :111. DAT_003555D1 is the outer gate on the whole push-out, ahead of the
+    // collision-group test.
+    if (!DAT_003555d1_suspendPushOut() && environment.FUN_00227390_corner_sample &&
+        environment.DAT_003555d0_collisionGroupMoved && (entity.halfword08 & 0x0020u) != 0)
     {
       const auto cornersAt = [&entity, &environment](float x, float z) {
         return environment.FUN_00227390_corner_sample(x, z, entity.positionY28, entity.height58,
@@ -6986,6 +6995,7 @@ namespace orphen::ported::entity
     case 0x002E4C00u: // FUN_002e4c00, type 0x178, its one-shot flash
     case 0x002DB230u: // FUN_002db230, type 0x173, the fireball's impact burst
     case 0x00279298u: // FUN_00279298, type 0x7F, the giant crab
+    case 0x00299390u: // FUN_00299390, type 0x95, the s14_e002 mast boss
     case 0x002EB180u: // FUN_002eb180, type 0x10D, the water splash
     case 0x002EA7F0u: // FUN_002ea7f0, type 0x10C, the stamp's bubbles
     case 0x002EA238u: // FUN_002ea238, type 0x10B, the crab's boulder
@@ -7127,6 +7137,8 @@ namespace orphen::ported::entity
       return "FUN_002db230 (fireball burst)";
     case 0x00279298u:
       return "FUN_00279298 (crab boss 0x7f)";
+    case 0x00299390u:
+      return "FUN_00299390 (mast boss 0x95)";
     case 0x002EB180u:
       return "FUN_002eb180 (water splash 0x10d)";
     case 0x002EA7F0u:
@@ -7392,6 +7404,9 @@ namespace orphen::ported::entity
         break;
       case 0x00279298u:
         FUN_00279298_crab_boss(entity, slot, slotEnvironment, trace);
+        break;
+      case 0x00299390u:
+        FUN_00299390_mast_boss(entity, slot, slotEnvironment, trace);
         break;
       case 0x002EB180u:
         FUN_002eb180_water_splash(entity, slot, slotEnvironment);
