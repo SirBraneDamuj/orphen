@@ -29,7 +29,7 @@
 // A type 0x1AA is one of three things, told apart by +0x60:
 //
 //   0  the root the script spawned. Every time its animation comes round it
-//      showers six type 0x1AB puffs into a 2..6 unit disc about itself, and on
+//      showers five type 0x1AB puffs into a 2..6 unit disc about itself, and on
 //      that same beat it spawns the other two halves of itself -- a state 1 on
 //      animation 2 and a state 2 on animation 3, both at seven tenths its own
 //      scale. It never fades; it goes when its own animation ends.

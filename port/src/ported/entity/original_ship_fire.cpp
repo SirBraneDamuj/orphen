@@ -22,12 +22,15 @@ namespace orphen::ported::entity
     // Three copies of 2*pi and two of 0.2 is what the original ships; they are
     // kept apart here because they are separate words and a later slice may
     // find one of them is not what it looks like.
-    inline constexpr float kFGpffffab48_rootRingTurn = 6.28318548f;
+    // All three "2*pi" words hold **0x40C90FD8**, which is 6.283184 -- three
+    // ULP short of float(2*pi). It is an authored six-digit constant, and
+    // writing the mathematical one walks every ring here by a different step.
+    inline constexpr float kFGpffffab48_rootRingTurn = 6.283184051513672f;
     inline constexpr float kFGpffffab4c_ringLift = 0.200000003f;
-    inline constexpr float kFGpffffab50_showerTurn = 6.28318548f;
+    inline constexpr float kFGpffffab50_showerTurn = 6.283184051513672f;
     inline constexpr float kFGpffffab54_smokeScale = 0.699999988f;
     inline constexpr float kFGpffffab58_flameScale = 0.699999988f;
-    inline constexpr float kFUN_002ed9a0_ringTurn = 6.28318548f;
+    inline constexpr float kFUN_002ed9a0_ringTurn = 6.283184051513672f;
     inline constexpr float kFUN_002ed9a0_ringLift = 0.200000003f;
 
     // The literals in the instruction stream.

@@ -35,6 +35,7 @@
 #include "ported/entity/original_hit_sparks.h"
 #include "ported/entity/original_fountain_particles.h"
 #include "ported/entity/original_haze_particles.h"
+#include "ported/entity/original_plume_pool.h"
 #include "ported/entity/original_rain_pool.h"
 #include "ported/render/original_background_model.h"
 #include "ported/entity/original_gather_particles.h"
@@ -539,6 +540,12 @@ namespace orphen::port
     // whose records respawn in place instead of dying, and the only one whose
     // opcode sets a target count rather than throwing a burst.
     orphen::ported::entity::HazeParticlePool DAT_00355b50_haze_;
+    // puGpffffbbfc and puGpffffbc00, the plume emitters opcode 0x10E opens --
+    // 100 emitters of 0x3C and the 1000 puffs of 0x24 they shed, carved
+    // together by FUN_0021FA88 and walked together by FUN_00220028. The only
+    // pool here that is two arrays behind one gate, and the only one whose
+    // sprite animation advances in the *draw* rather than the step.
+    orphen::ported::entity::PlumePool DAT_00355b6c_plumes_;
     // uGpffffbb50, the rain opcode 0x102 arms -- 3000 records of 0x14, carved
     // by FUN_0021AD00 and walked by FUN_0021AD98. The largest pool in the
     // executable and the only one whose particles land: a drop that reaches the

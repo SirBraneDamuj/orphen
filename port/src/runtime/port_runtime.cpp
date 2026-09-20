@@ -1872,6 +1872,26 @@ namespace orphen::port
         DAT_00355b50_haze_.FUN_0021bd30_arm(field.size, field.speed, field.angle, field.count,
                                             field.magnitude, field.entityIndex);
       };
+      // Opcode 0x10E into the puGpffffbbfc plume emitters. FUN_00262A98 hands
+      // FUN_0021F6E8 nine of its ten operands; the tenth, the drift, only
+      // exists on FUN_0021F7A8, which nothing in the script reaches.
+      environment.FUN_0021f6e8_open_plume =
+          [this](const orphen::ported::script::ScriptPlumeEmitter &plume)
+      {
+        orphen::ported::entity::PlumeEmitterSpawn spawn;
+        spawn.riseSpeed = plume.riseSpeed;
+        spawn.size = plume.size;
+        spawn.writeDrift = false;
+        spawn.x = plume.x;
+        spawn.y = plume.y;
+        spawn.z = plume.z;
+        spawn.burstCount = plume.burstCount;
+        spawn.lifeUnits = plume.lifeUnits;
+        spawn.cycles = plume.cycles;
+        spawn.mode = plume.mode;
+        spawn.colour = plume.colour;
+        DAT_00355b6c_plumes_.FUN_0021f6e8_open_emitter(spawn);
+      };
       // Opcode 0x102 into the uGpffffbb50 rain.
       environment.FUN_0021ac00_arm_rain =
           [this](const orphen::ported::script::ScriptRainField &field)
@@ -4684,6 +4704,71 @@ namespace orphen::port
       }
     }
 
+    // FUN_00220210's draw half, in the place FUN_002192C0 gives FUN_00220028:
+    // straight after the fountain. The rejects run in the original's order --
+    // the VU0 box first, then the near cutoff -- because the flame strip only
+    // advances on a record that survives both, and taking them the other way
+    // round would step it on a frame the GS never saw.
+    if (!DAT_00355b6c_plumes_.drawList().empty())
+    {
+      const float projectionScaleX = viewProjection.projection.at(0, 0);
+      const float projectionScaleY = viewProjection.projection.at(1, 1);
+      const float screenCentreX = viewProjection.projection.at(2, 0);
+      const float screenCentreY = viewProjection.projection.at(2, 1);
+
+      for (const auto &puff : DAT_00355b6c_plumes_.drawList())
+      {
+        const auto viewSpace = viewProjection.toViewSpace(puff.world);
+        if (viewSpace.z <= orphen::ported::render::kDAT_0035209c_spriteNearClip)
+        {
+          continue;
+        }
+
+        orphen::ported::entity::PlumeQuadInputs inputs;
+        inputs.gsOriginX =
+            static_cast<int>(viewSpace.x * projectionScaleX / viewSpace.z + screenCentreX);
+        inputs.gsOriginY =
+            static_cast<int>(viewSpace.y * projectionScaleY / viewSpace.z + screenCentreY);
+        // FUN_00220210:0x00220374, the `& 0xE0` every pool takes.
+        if (orphen::ported::render::FUN_0020b6a0_clip_rejects(
+                static_cast<float>(inputs.gsOriginX), static_cast<float>(inputs.gsOriginY)))
+        {
+          continue;
+        }
+
+        // q is 1/viewZ, so a *large* q is a record that has come close to the
+        // eye, and this is the pool rejecting those rather than the far ones.
+        const float q = 1.0f / viewSpace.z;
+        if (q > orphen::ported::entity::kDAT_003523ec_plumeNearCutoff)
+        {
+          continue;
+        }
+        int alpha = puff.alpha;
+        if (q >= orphen::ported::entity::kDAT_003523f0_plumeFadeStart)
+        {
+          alpha = static_cast<int>(
+              static_cast<float>(alpha) *
+              ((orphen::ported::entity::kDAT_003523ec_plumeNearCutoff - q) /
+               orphen::ported::entity::kDAT_003523f4_plumeFadeSpan));
+        }
+
+        inputs.viewZ = viewSpace.z;
+        inputs.projectionScaleX = projectionScaleX;
+        inputs.projectionScaleY = projectionScaleY;
+        inputs.screenCentreX = screenCentreX;
+        inputs.screenCentreY = screenCentreY;
+        inputs.size = puff.size;
+        inputs.colour = puff.colour;
+        inputs.alpha = alpha;
+        inputs.clutBank = DAT_00355b6c_plumes_.clutBankOf(puff.index);
+        // The one call that mutates: a flame's strip steps by one here, and
+        // only here.
+        inputs.texels = DAT_00355b6c_plumes_.FUN_00220210_take_texels(puff.index);
+
+        quads.push_back(orphen::ported::entity::FUN_00220210_build_plume_quad(inputs));
+      }
+    }
+
     // FUN_00212F38's draw half. The step rebuilt every particle's world
     // position relative to the camera; here each one becomes the quad VU1
     // builds from the single `zoom * scale` float the function stages. The
@@ -7289,6 +7374,22 @@ namespace orphen::port
     std::cout << "fountain particles: alive=" << DAT_00355b60_fountain_.DAT_00355b5c_aliveCount()
               << " gate=" << (DAT_00355b60_fountain_.DAT_00354cc0_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b60_fountain_.drawList().size() << "\n";
+    std::cout << "plumes: emitters=" << DAT_00355b6c_plumes_.iGpffffbbf8_emitterCount()
+              << " puffs=" << DAT_00355b6c_plumes_.iGpffffbbf4_puffCount()
+              << " gate=" << (DAT_00355b6c_plumes_.DAT_00354cc4_gate() ? 1 : 0)
+              << " drawn=" << DAT_00355b6c_plumes_.drawList().size() << "\n";
+    for (const auto &emitter : DAT_00355b6c_plumes_.emitters())
+    {
+      if (!emitter.alive())
+      {
+        continue;
+      }
+      std::cout << "  emitter at (" << emitter.x00 << ", " << emitter.y04 << ", " << emitter.z08
+                << ") size=" << emitter.size30 << " rise=" << emitter.riseSpeed18
+                << " burst=" << emitter.burstCount26 << " life=" << emitter.total2c
+                << " cycles=" << static_cast<int>(emitter.cycles38)
+                << " flame=" << static_cast<int>(emitter.flameFlag24) << "\n";
+    }
     std::cout << "gather streaks: groups=" << DAT_00355b80_gather_.DAT_00355b88_activeGroups()
               << " gate=" << (DAT_00355b80_gather_.DAT_00354cc8_gate() ? 1 : 0)
               << " drawn=" << DAT_00355b80_gather_.drawList().size() << "\n";
@@ -7601,6 +7702,10 @@ namespace orphen::port
       cameraFrame.DAT_0058c0b0_eyeZ = eye.z;
       DAT_00355b60_fountain_.FUN_0021f1a8_step(frameTicks, cameraFrame);
     }
+    // FUN_00220028, immediately after the fountain. It walks the emitters
+    // first and the puffs second, and drops the gate once both counts are out.
+    DAT_00355b6c_plumes_.FUN_00220028_step(frameTicks,
+                                           [this] { return FUN_00216868_random(); });
     // FUN_00221398, the last effect pool FUN_002192C0 walks before the
     // screen passes.
     DAT_00355b80_gather_.FUN_00221398_step(frameTicks);
@@ -7619,6 +7724,7 @@ namespace orphen::port
     DAT_00355b50_haze_.clearFrameDraws();
     DAT_00355b58_spray_.clearFrameDraws();
     DAT_00355b60_fountain_.clearFrameDraws();
+    DAT_00355b6c_plumes_.clearFrameDraws();
     DAT_00355b80_gather_.clearFrameDraws();
   }
 
@@ -8268,6 +8374,10 @@ namespace orphen::port
     // one's.
     DAT_00355ac0_rain_.FUN_0021ad00_reset();
     DAT_00355b60_fountain_.FUN_0021f108_reset();
+    // FUN_0021FA88. Carved once at boot in the original, but the gate, both
+    // counts and every record are scene state, so a scene that does not arm a
+    // plume must not inherit the last one's.
+    DAT_00355b6c_plumes_.FUN_0021fa88_reset();
     DAT_00355b80_gather_.reset();
     // FUN_0022a418:377-383, immediately after that same FUN_002d3290: the two
     // type 0x68 health bars, pool slots 2 and 3. Built on every scene load, not

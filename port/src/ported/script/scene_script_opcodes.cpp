@@ -5535,19 +5535,40 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0x10E (FUN_00262A98): ten expressions into FUN_0021F6E8, which is the
-    // spawn half of a **tenth** particle system -- the one FUN_00220028 steps,
-    // gated by iGpffffad54 (DAT_00354CC4) and holding two pools at once: 100
-    // records of 0x3C at puGpffffbbfc and 1000 of 0x24 at puGpffffbc00.
+    // 0x10E (FUN_00262A98): ten expressions into FUN_0021F6E8, the spawn half
+    // of the **tenth** particle system -- the one FUN_00220028 steps, gated by
+    // iGpffffad54 (DAT_00354CC4) and holding two pools at once: 100 emitters of
+    // 0x3C at puGpffffbbfc and 1000 puffs of 0x24 at puGpffffbc00. It is the
+    // fire and the smoke on the burning ship in s01_e013's monster animatic.
     //
-    // Nothing of it is ported yet, so the operands are consumed and the effect
-    // is not. This is the only opcode s01_e013's Zeus sequence reaches that the
-    // port does not model, and it used to halt the whole per-frame tick on it --
-    // which is worse than drawing nothing, because a halted tick also stops the
-    // camera cuts and the beats that follow.
+    // Read order is not call order: the burst count is read first and passed
+    // sixth, and the life is read fourth and passed seventh. Five of the ten
+    // are divided by 100000 and the rest go through raw -- the count and the
+    // life as halfwords, the cycles and the mode as bytes, the colour whole.
     case 0x10E:
-      note(OpcodeSupport::OperandsOnly);
-      return consumeOnly(static_cast<std::uint16_t>(0x10E), 10);
+    {
+      note(OpcodeSupport::Modelled);
+      orphen::ported::script::ScriptPlumeEmitter plume;
+      plume.burstCount = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      plume.riseSpeed = scaledOperand();
+      plume.size = scaledOperand();
+      plume.lifeUnits = static_cast<std::int16_t>(FUN_0025c258_evaluate() & 0xFFFFu);
+      plume.x = scaledOperand();
+      plume.y = scaledOperand();
+      plume.z = scaledOperand();
+      plume.cycles = static_cast<std::uint8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      plume.mode = static_cast<std::int8_t>(FUN_0025c258_evaluate() & 0xFFu);
+      plume.colour = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0021f6e8_open_plume)
+      {
+        environment_.FUN_0021f6e8_open_plume(plume);
+      }
+      return 0;
+    }
 
     // 0x10F (FUN_00262B90): fourteen expressions into FUN_0021ED50, the
     // fountain pool. Read order and call order differ again -- the count is

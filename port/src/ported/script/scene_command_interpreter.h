@@ -489,6 +489,27 @@ namespace orphen::ported::script
     std::uint32_t colour = 0;
   };
 
+  // The plume emitter opcode 0x10E arms, as FUN_00262A98 spells it. Ten
+  // expressions in stream order, five of them divided by 100000; FUN_0021F6E8
+  // takes them in a different order again, which is why the two shapes are kept
+  // apart. `cycles` of 99 means "restart for ever" -- see original_plume_pool.h.
+  struct ScriptPlumeEmitter
+  {
+    std::int16_t burstCount = 0;
+    float riseSpeed = 0.0f;
+    float size = 0.0f;
+    // Before the times 32 FUN_0021F6E8 applies. Zero is read as one.
+    std::int16_t lifeUnits = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    std::uint8_t cycles = 0;
+    // 0 plain, 1 adds the flame, 2 is the one-shot.
+    std::int8_t mode = 0;
+    // A packed RGB, or zero for the sheet's own palette.
+    std::uint32_t colour = 0;
+  };
+
   // The haze field opcode 0x109 arms, as FUN_002625B8 spells it. Six
   // expressions, read count-first and then in an order that is not the order
   // FUN_0021BD30 takes them: three of them are scaled by 100000 (DAT_00352C6C)
@@ -705,6 +726,7 @@ namespace orphen::ported::script
     // the opcode sets a target count and the pool grows or shrinks toward it,
     // and the records that are already live keep their positions.
     std::function<void(const ScriptHazeField &)> FUN_0021bd30_arm_haze;
+    std::function<void(const ScriptPlumeEmitter &)> FUN_0021f6e8_open_plume;
 
     // FUN_00262250 -> FUN_0021AC00, opcode 0x102: the rain. 0x106 and 0x108
     // share the opcode's operand shape but go to FUN_0021D448 and FUN_0021C748,
