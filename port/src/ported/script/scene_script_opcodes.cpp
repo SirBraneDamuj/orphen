@@ -5871,6 +5871,28 @@ namespace orphen::ported::script
                  ? 1u
                  : 0u;
 
+    // 0x13A (FUN_00265378): one expression into DAT_003555D2, the movie
+    // request. The opcode does nothing else with it -- FUN_0022A418 is what
+    // spends the byte, calling FUN_002F1808 on it once the fade is down and
+    // before the next scene loads.
+    //
+    // It is the first statement of s14_e002's hand-off at 0x0F45, `0x13A 0x11`,
+    // which is why this halted the port exactly where the chapter ends.
+    case 0x13A:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t movieId = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00265378_request_movie)
+      {
+        environment_.FUN_00265378_request_movie(static_cast<std::int32_t>(movieId));
+      }
+      return 0;
+    }
+
     case 0x149:
       note(OpcodeSupport::Modelled);
       return FUN_00265790_set_global_byte();

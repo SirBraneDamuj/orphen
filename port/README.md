@@ -9794,10 +9794,11 @@ battle where previously it did nothing at all.
 
 #### What is still out
 
-- **Type `0x1AE`, the wash a strafing run leaves.** Its dispatch entry is
-  `FUN_002EDC40`, which the port does not have, so the entity spawns and never
-  expires; fifteen accumulate over 30000 frames.
 - `FUN_0023BBD8`, the pad rumble, everywhere. No rumble path in the port.
+
+(Type `0x1AE`, the strafing run's wash, used to be listed here. It is ported
+now -- see *The strafing run fired nothing, and left a slick on the water*
+above.)
 
 The fight's own numbers were taken out of `SLUS_200.11` rather than out of a
 note: `DAT_00325CF0` (the three smash runs), `DAT_00325D80` (the three beam-head
@@ -9808,3 +9809,79 @@ are verified structurally against the disassembly and by running the rotation to
 a full wrap; they are **not** frame-checked against hardware, because reaching
 state 9 on the PS2 means playing the fight for several minutes rather than
 loading a save state.
+
+#### The chapter ends here, and it ends three different ways
+
+The boss dying is not the end of `s14_e002`. The scene hands off to `s14_e031`
+for the Bolt of Thunder reward, `s14_e031` hands back, and then `s14_e002`'s own
+script runs the chapter's exit: **two FMVs and one of three destination maps**.
+
+The port used to stop dead at the first statement of that exit, because it is
+opcode **`0x13A`** and the extended dispatch had no case for it. `FUN_00265378`
+is one line -- `DAT_003555D2 = expr` -- and the byte is spent later, by
+`FUN_0022A418`, which calls `FUN_002F1808` on it once the fade is down and
+before the next map loads. Both halves are in now: the opcode, and the block in
+`FUN_002239c8_service_scene_change` that spends it.
+
+**The movies are stubbed, and the chain is not.** `\MV3\M01.MV3;1` through
+`M19.MV3` are on the disc and the port has no MV3 decoder, so
+`PortRuntime::FUN_002f1808_play_movie` logs a line per leg. It keeps
+`FUN_002F1808`'s do/while, though, because that loop is what decides how many
+films a request is worth:
+
+```
+movie 2                       -> then movie 13
+movie 17, flag 0x55A clear    -> then movie 1, or movie 3 if flag 0x55B is set
+```
+
+`s14_e002` asks for 17, and neither `0x55A` nor `0x55B` is set here, so the
+chapter ends on **M17 then M01** -- two films, from one opcode.
+
+**The three-way route is the script's, not the engine's.** At blob `0x0B1E`,
+just after the boss goes down, `s14_e002` converts "who is with me" into a route
+flag, three symmetric arms:
+
+| condition | sets | destination | spawn |
+| --- | --- | --- | --- |
+| flag 1377 and not 1881 | 801 | `s03_e001` | (0, -22.000, 2.000) |
+| flag 1378 and not 1891 | 802 | `s05_e051` | (4.655, 3.539, 0) |
+| flag 1379 and not 1901 | 803 | -- | -- |
+
+and then at `0x0F51`, after the `0x13A`, an if/else-if/else on the route flag:
+801 goes to `s03_e001`, 802 goes to `s05_e051`, and **anything else falls
+through to `s07_e011`**. Flag 803 is written and never read -- the third
+companion is the default arm, not a tested one.
+
+`s01_e013` is where the three companion flags are set, at `0x670F`, `0x6CAA` and
+`0x7530`, each next to its own `0x524`/`0x525`/`0x526` join flag and its own
+dialogue stream. The `188x/189x/190x` flags the exit ANDs against are read all
+over `s01_e013` as well, so they are the "this one did not make it" override.
+
+Verified against a PCSX2 save state parked at the end of the reward cutscene.
+Hardware has flag 1378 set and 1891 clear, sets 802, requests movie 17 and lands
+on section 5 entry 51 with `DAT_003551EC = 1` -- which is the Cleo route. All
+three arms run in the port:
+
+```
+--scene s14_e002 --enemy-hp 25=0:3000 --frames 7000 --set-event-flag <flag>:0
+  1377 -> [movie] M17, M01 -> [scene] s14_e002 -> s03_e001   (frame 6546)
+  1378 -> [movie] M17, M01 -> [scene] s14_e002 -> s05_e051   (frame 6546)
+  1379 -> [movie] M17, M01 -> [scene] s14_e002 -> s07_e011   (frame 6546)
+```
+
+With no flag at all it is `s07_e011`, the fall-through, which is what a port run
+that never played the ship chapter should get.
+
+**Which arm is Magnus and which is Mar is not pinned yet.** Cleo is: the save
+state proves 1378, and 1378 is the `s05_e051` arm. The other two are identified
+by flag and destination only.
+
+One piece of `FUN_0022A418`'s movie block is deliberately not here. Lines 58-63
+arm movie `0x12` when the game arrives at the **title screen** -- section 12,
+entry 10 -- and clear flag `0x511`; the port has no title screen and no
+`DAT_003555D8`, so the condition can never be true and there would be nothing to
+test the code with. The sound teardown around the playback
+(`FUN_00206680`, `FUN_00203AA0(4)`, `FUN_0022A1F8`, and the eight halfwords at
+`DAT_0031E686`) is left out for the same reason -- there is no MPEG decoder to
+hand the display to. The unconditional `DAT_003555D2 = 0` after the block is
+*not* left out.

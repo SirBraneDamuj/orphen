@@ -1657,6 +1657,11 @@ namespace orphen::port
       DAT_003551ec_sceneRequest_ = flags | 1u;
     };
 
+    // FUN_00265378, opcode 0x13A. One assignment, exactly as in the original --
+    // the byte sits until FUN_0022a418 spends it.
+    environment.FUN_00265378_request_movie = [this](std::int32_t movieId)
+    { DAT_003555d2_movieRequest_ = static_cast<std::int8_t>(movieId); };
+
     // FUN_0025daf8, opcode 0x3C. One assignment in the original; here it has to
     // reach both readers of DAT_00355208.
     environment.FUN_0025daf8_set_map_prop_bank = [this](std::int32_t bank)
@@ -2703,6 +2708,52 @@ namespace orphen::port
     return environment;
   }
 
+  // FUN_002F1808, the numbered-movie player, with everything but its routing
+  // removed. `\MV3\M01.MV3;1`..`M19.MV3` are on the disc and the port has no
+  // MV3 decoder, so each leg is a log line instead of a film.
+  //
+  // The chain it keeps is not decoration -- FUN_002F1808's do/while re-enters
+  // itself, so one request can be several movies:
+  //
+  //     movie 2                     -> then movie 13
+  //     movie 17, flag 0x55A clear  -> then movie 1, or movie 3 if 0x55B is set
+  //
+  // s14_e002's hand-off asks for 17, which is why the end of the chapter is two
+  // films rather than one. The `section == 12` break is the original's: the
+  // title screen is section 12, and a movie session that dropped back to it
+  // stops the chain.
+  void PortRuntime::FUN_002f1808_play_movie(int movieId)
+  {
+    const auto &eventFlags = sceneScript_.state().DAT_00342b70_flags;
+    const auto FUN_00266368_eventFlag = [&eventFlags](std::uint32_t flagId)
+    {
+      const std::size_t bucket = static_cast<std::size_t>(flagId) >> 3;
+      return bucket < orphen::ported::script::SceneScriptState::kFlagBucketCount &&
+             (eventFlags[bucket] & (1u << (flagId & 7u))) != 0;
+    };
+
+    for (;;)
+    {
+      std::cout << "[movie] " << (movieId < 10 ? "M0" : "M") << movieId
+                << ".MV3 -- stubbed, the port has no MV3 decoder (frame " << frameCount_ << ")\n";
+
+      if (DAT_003551f4_sceneSection_ == 0xC)
+      {
+        break;
+      }
+      if (movieId == 2)
+      {
+        movieId = 13;
+        continue;
+      }
+      if (movieId != 0x11 || FUN_00266368_eventFlag(0x55A))
+      {
+        break;
+      }
+      movieId = FUN_00266368_eventFlag(0x55B) ? 3 : 1;
+    }
+  }
+
   void PortRuntime::FUN_002239c8_service_scene_change()
   {
     if (DAT_003551ec_sceneRequest_ == 0)
@@ -2722,6 +2773,21 @@ namespace orphen::port
     // FUN_0022a418:49. Sticky for as long as the scene stays loaded, because
     // FUN_0022a238 keeps reading it to pick a descriptor list.
     DAT_003555d3_groupEScene_ = (DAT_003551ec_sceneRequest_ & 0x20000u) != 0;
+
+    // FUN_0022a418:64-72, and note where it sits: **between** the group-0xE
+    // decision and the load. The movie plays over the fade the request already
+    // brought down, and the next scene is loaded behind it.
+    //
+    // The original also clears eight halfwords at DAT_0031E686 and calls
+    // FUN_00206680, FUN_00203AA0(4) and FUN_0022A1F8 around the playback --
+    // sound teardown and a display-mode swap for the MPEG decoder, none of which
+    // the port has anything to tear down for. Left out deliberately; the
+    // unconditional `DAT_003555d2 = 0` on the line after is not.
+    if (DAT_003555d2_movieRequest_ > 0)
+    {
+      FUN_002f1808_play_movie(DAT_003555d2_movieRequest_);
+    }
+    DAT_003555d2_movieRequest_ = 0;
 
     // FUN_0022a418:98-103. Two calls, one selector each: the ordinary scene
     // takes (DAT_003551f4, DAT_003551f0) and the group-0xE scene takes

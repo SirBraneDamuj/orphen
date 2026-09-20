@@ -383,6 +383,12 @@ namespace orphen::port
     bool DAT_003555d3_groupEScene_ = false;
     // MCB0 section 14. FUN_0022a418:102 passes it as a literal.
     static constexpr std::uint16_t kGroupEScene = 14;
+    // DAT_003555d2, the movie request opcode 0x13A writes. Signed on purpose:
+    // FUN_0022a418:64 tests `' ' < DAT_003555d2`, so only a positive id plays.
+    // The port has no MV3 decoder, so FUN_002f1808_play_movie only logs -- but
+    // it walks the same chain the original does, because that chain is what
+    // decides how many movies the hand-off is worth.
+    std::int8_t DAT_003555d2_movieRequest_ = 0;
     // DAT_00354d78 / DAT_00354d7c, written at FUN_0022a418:409. The scene that
     // was current when the load started, which the *next* load compares against.
     int DAT_00354d78_previousSection_ = -1;
@@ -662,6 +668,9 @@ namespace orphen::port
     // FUN_002239c8:22-33: spend a pending scene-change request, if this frame is
     // allowed to. Runs at the top of the frame, before the pad is published.
     void FUN_002239c8_service_scene_change();
+    // FUN_002f1808, stubbed. Walks the movie chain and logs each leg; nothing
+    // decodes MV3 here yet.
+    void FUN_002f1808_play_movie(int movieId);
     // Push DAT_00355208 into the two places that answer with it. Both setters
     // are plain assignments, so the write is safe mid-scene -- which it has to
     // be, because opcode 0x3C makes it from inside the init.

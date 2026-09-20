@@ -766,6 +766,13 @@ namespace orphen::ported::script
     // top of the next frame.
     std::function<void(std::int32_t destination)> FUN_002610a8_request_scene_change;
 
+    // FUN_00265378, opcode 0x13A: `DAT_003555d2 = expr`, the movie request. One
+    // expression and nothing else -- the byte is spent by FUN_0022A418, which
+    // runs FUN_002F1808 on it after the fade is down and before the next scene
+    // loads. s14_e002's hand-off writes 0x11 here, so the two end-of-chapter
+    // FMVs play in front of the chapter-2 map.
+    std::function<void(std::int32_t movieId)> FUN_00265378_request_movie;
+
     // FUN_0025daf8, opcode 0x3C: `DAT_00355208 = expr`, the map-prop bank. The
     // banks live on the runtime's model store and descriptor table, so the write
     // has to reach both.
