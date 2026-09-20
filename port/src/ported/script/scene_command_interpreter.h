@@ -128,6 +128,13 @@ namespace orphen::ported::script
     // because it costs nothing and a later slice may find the reader.
     std::uint8_t DAT_00355656_sceneByte = 0;
 
+    // DAT_003556FC (fGpffffb78c), written by opcode 0xE2 as `expr / 100000`.
+    // It is the **water line the burning-ship effects stand on**: FUN_002ED3E0
+    // and FUN_002ED9A0 put every fire and smoke puff they spawn at this z, and
+    // its +0x4C/+0x50 as well. s01_e013's animatic sets it once before the
+    // monster shots. See ported/entity/original_ship_fire.h.
+    float DAT_003556fc_effectGroundZ = 0.0f;
+
     // DAT_003437b8: byte counters opcode 0xBC increments, capped at 99. Used by
     // event scripts as one-shot gates.
     static constexpr std::size_t kEventCounterCount = 256;

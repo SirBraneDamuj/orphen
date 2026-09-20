@@ -191,7 +191,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xDF initialize_battle_logo  # orig FUN_00264fa0 — calls FUN_0025d5b8 to init battle logo entity at 0x58C7E8 (type 0x49); see analyzed/ops/0xDF_initialize_camera_entity.c
 0xE0 destroy_battle_logo  # orig FUN_00264fc0 — see [analyzed/ops/0xE0_destroy_battle_logo.c](../analyzed/ops/0xE0_destroy_battle_logo.c)
 0xE1 boot_party_for_battle  # orig FUN_00265000 — see [analyzed/ops/0xE1_boot_party_for_battle.c](../analyzed/ops/0xE1_boot_party_for_battle.c)
-0xE2 set_global_float_3556fc  # orig FUN_002650e0 — see [analyzed/ops/0xE2_set_global_float_3556fc.c](../analyzed/ops/0xE2_set_global_float_3556fc.c)
+0xE2 set_effect_water_line  # orig FUN_002650e0 — the world z the burning-ship effects stand on, read by FUN_002ED3E0/FUN_002ED9A0 as fGpffffb78c; see [analyzed/ops/0xE2_set_global_float_3556fc.c](../analyzed/ops/0xE2_set_global_float_3556fc.c)
 0xE3 set_global_byte_355641  # orig FUN_00265120 — see [analyzed/ops/0xE3_set_global_byte_355641.c](../analyzed/ops/0xE3_set_global_byte_355641.c)
 0xE4 stage_swizzled_word_stream_upload  # orig FUN_00265148 — copy words into swizzled bank buffer and schedule DMA (FUN_00210b60)
 0xE5 load_backdrop_model  # orig FUN_002651a0 — two inline bytes are a PSB4 resource id, the expression is the background slot; see [analyzed/ops/0xE5_load_backdrop_model.c](../analyzed/ops/0xE5_load_backdrop_model.c)

@@ -539,6 +539,10 @@ namespace orphen::port
     environment.hitTest = &hitTestEnvironment_;
     environment.dispatchTable = &actorDispatchTable_;
     environment.frameTicks = frameTicks;
+    // DAT_003556FC, opcode 0xE2's water line. The burning-ship effects stand
+    // on it; see ported/entity/original_ship_fire.h.
+    environment.DAT_003556fc_effectGroundZ =
+        sceneScript_.state().DAT_003556fc_effectGroundZ;
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
     environment.DAT_00355588_hitEffectRequest = &DAT_00355588_hitEffectRequest_;
     // DAT_003253C0. FUN_0027DC38 walks it every frame and FUN_00276C30 drops a

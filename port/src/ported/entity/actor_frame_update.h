@@ -179,6 +179,10 @@ namespace orphen::ported::entity
     // DAT_003555bc / iGpffffb64c, the per-frame tick count. Nominally 0x20.
     std::uint32_t frameTicks = 0x20;
 
+    // DAT_003556FC / fGpffffb78c, set by opcode 0xE2. The water line the
+    // burning-ship effects sit on; see original_ship_fire.h.
+    float DAT_003556fc_effectGroundZ = 0.0f;
+
     // uGpffffb052. Bit 0 is "a battle is running"; type 0x8A's wrapper reads
     // bit 3, the broadcast that sends every enemy to its stand-down state.
     std::uint16_t sGpffffb052_battleFlags = 0;

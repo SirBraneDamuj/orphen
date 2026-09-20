@@ -6,6 +6,7 @@
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
+#include "ported/entity/original_ship_fire.h"
 #include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_summon_stage.h"
 #include "ported/entity/original_health_bar.h"
@@ -6997,6 +6998,9 @@ namespace orphen::ported::entity
     case 0x002EB990u: // FUN_002eb990, type 0x10E, the flyer's shot
     case 0x002EBC30u: // FUN_002ebc30, type 0x10F, the swoop's dust
     case 0x002ECB08u: // FUN_002ecb08, type 0x113, the Maneater's spores
+    case 0x002ED3E0u: // FUN_002ed3e0, type 0x1AA, the burning ship
+    case 0x002ED980u: // 0x002ED980,   type 0x1AB, one puff of its smoke
+    case 0x002ED9A0u: // FUN_002ed9a0, type 0x1AC, one link of its fire ring
     case 0x002D8CE0u: // FUN_002d8ce0, type 0x118, the status aura
       return true;
     default:
@@ -7048,6 +7052,12 @@ namespace orphen::ported::entity
       return "FUN_002ebc30 (swoop dust)";
     case 0x002ECB08u:
       return "FUN_002ecb08 (poison spore)";
+    case 0x002ED3E0u:
+      return "FUN_002ed3e0 (ship fire)";
+    case 0x002ED980u:
+      return "LAB_002ed980 (ship smoke puff)";
+    case 0x002ED9A0u:
+      return "FUN_002ed9a0 (ship fire ring)";
     case 0x002D8CE0u:
       return "FUN_002d8ce0 (status aura)";
     case 0x002D9C88u:
@@ -7279,6 +7289,18 @@ namespace orphen::ported::entity
         break;
       case 0x002ECB08u:
         FUN_002ecb08_spore(entity, slot, environment);
+        break;
+      // Types 0x1AA / 0x1AB / 0x1AC, the burning ship in s01_e013's animatic.
+      // The middle one has no src/ file because it is eight instructions; the
+      // disassembly is in original_ship_fire.h.
+      case 0x002ED3E0u:
+        FUN_002ed3e0_ship_fire(entity, slot, environment);
+        break;
+      case 0x002ED980u:
+        LAB_002ed980_ship_fire_puff(entity, slot, environment);
+        break;
+      case 0x002ED9A0u:
+        FUN_002ed9a0_ship_fire_ring(entity, slot, environment);
         break;
       case 0x002D8CE0u:
         FUN_002d8ce0_status_aura(entity, slot, environment);

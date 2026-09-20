@@ -557,6 +557,26 @@ namespace orphen::ported::entity
     // wreckage. FUN_002797D0 stamps it and nothing else writes it.
     std::uint16_t debrisKind1d4 = 0;
 
+    // Types 0x1AA / 0x1AB / 0x1AC, the burning ship's fire and smoke. Same
+    // storage again, under a fourth reading -- see ported/entity/
+    // original_ship_fire.h for what the three types are and how they chain.
+    //
+    //   +0x198  a countdown of how many more puffs this one may chain. Seeded
+    //           to 2 and decremented by each link, so a ring is three deep.
+    //   +0x199  the ring's divisor, 5. A link's radius is `rng % this`.
+    //   +0x19A  which ring this link is, stepped by one per chain. It is what
+    //           turns the ring: the angle is `ring * 120` degrees.
+    //   +0x19C  the fade's full length in ticks, 0 when it is not fading.
+    //   +0x1A0/+0x1A4/+0x1A8  the origin the whole ring is measured from,
+    //           carried down the chain unchanged.
+    std::uint8_t shipFireChain198 = 0;
+    std::uint8_t shipFireDivisor199 = 0;
+    std::uint8_t shipFireRing19a = 0;
+    std::int16_t shipFireFade19c = 0;
+    float shipFireOriginX1a0 = 0.0f;
+    float shipFireOriginY1a4 = 0.0f;
+    float shipFireOriginZ1a8 = 0.0f;
+
     // Type 0x44's block, the homing magic projectile. FUN_002d2e00 seeds it and
     // FUN_002d2470 spends it. Held apart from the readings above for the same
     // reason those are held apart from each other: the original reuses the

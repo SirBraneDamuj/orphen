@@ -4882,17 +4882,32 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0xE2 (FUN_002650E0): `DAT_003556FC = expr / DAT_00352CD0`, and that
+    // divisor is the same 100000 every coordinate operand uses. The global has
+    // a consumer after all -- it is the water line the burning-ship effects
+    // stand on, read by FUN_002ED3E0 and FUN_002ED9A0 through the gp name
+    // fGpffffb78c. See ported/entity/original_ship_fire.h.
+    case 0xE2:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const float value = scaledOperand();
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->DAT_003556fc_effectGroundZ = value;
+      return 0;
+    }
+
     // Single-value stores into globals the port has no consumer for.
     //
     //   0xCA FUN_00264500  the dialogue speaker byte
     //   0xD6 FUN_00264d68  renderer byte uGpffffb08c
     //   0xDA FUN_00264ea0  uGpffffb6f0
-    //   0xE2 FUN_002650e0  DAT_003556fc
     //   0xE3 FUN_00265120  DAT_00355641, which s01_e012 clears on its way out
     case 0xCA:
     case 0xD6:
     case 0xDA:
-    case 0xE2:
     case 0xE3:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 1);
