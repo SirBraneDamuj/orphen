@@ -1,5 +1,9 @@
 #include "harness/map_viewer.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <set>
+
 #include "harness/entity_probe.h"
 
 #include "ported/model/psc3_skeleton.h"
@@ -109,6 +113,54 @@ namespace orphen::harness
     // helpers are free functions and lambdas well below the MapViewer instance,
     // and threading the block through every one of them buys nothing.
     const orphen::ported::render::SceneLighting *g_sceneLighting = nullptr;
+
+    // ------------------------------------------- the framebuffer material slot
+    //
+    // **Map material slot type 9 is not texture page 9.** FUN_00211230:180 and
+    // FUN_0020A2C0:557 both special-case it before the packet is built: the
+    // type is rewritten to 0x3D, the packet's mode byte becomes 0x11, and byte
+    // 7 becomes primitive flag bit 2. 0x3D is past the end of DAT_003429A8,
+    // which holds 49 slots, so it names no page at all -- it is a sentinel, and
+    // FUN_0022C3D8 folds the other spelling of it (0x0F) onto 9 on the way in.
+    //
+    // A GS dump of s14_e002 says what the sentinel does. Every one of these
+    // draws carries:
+    //
+    //   TEX0   TBP = <the other framebuffer> + 672, TBW 10, PSMCT24, 512x128,
+    //          TFX 0 (modulate)
+    //   TEX1   bilinear both ways
+    //   ALPHA  A=Cs B=0 C=As D=Cd -- additive, scaled by the vertex alpha
+    //   ZBUF   ZMSK 1, no depth write
+    //
+    // FRAME alternates between TBP 0 and TBP 2240 and the draws sample 672 and
+    // 2912, so the page it reads is always **the buffer being displayed** --
+    // last frame's picture. 672 TBP units at FBW 10 is page 21, which is page
+    // row 2 column 1, so the window starts at pixel (64, 64) of a 640x224
+    // frame.
+    //
+    // So these primitives are the underwater murk, and they take their colour
+    // from the frame before. The port already keeps that picture for
+    // FUN_00201A38's smear; this points the map path at the same texture.
+    struct FramebufferSlotSource
+    {
+      unsigned int texture = 0;
+      // The captured rectangle inside the power-of-two texture.
+      float usedU = 1.0f;
+      float usedV = 1.0f;
+    };
+    FramebufferSlotSource g_framebufferSlot;
+
+    // Section E byte 8 == 9 after FUN_0022C3D8's 0x0F fold.
+    bool isFramebufferSlot(const orphen::ported::psm2::MaterialSlot &slot)
+    {
+      return slot.type == 0x09;
+    }
+
+    // The GS window, as a fraction of the 640x224 frame the game renders.
+    inline constexpr float kFramebufferSlotOriginU = 64.0f / 640.0f;
+    inline constexpr float kFramebufferSlotOriginV = 64.0f / 224.0f;
+    inline constexpr float kFramebufferSlotSpanU = 512.0f / 640.0f;
+    inline constexpr float kFramebufferSlotSpanV = 128.0f / 224.0f;
 
     // Entity +0x134 for the model currently being drawn, already turned into a
     // 0..1 multiplier. 1.0 is the not-fading case, which is what a zero +0x134
@@ -1596,9 +1648,21 @@ namespace orphen::harness
       // everywhere -- but it is the whole of the rain outside the windows.
       const auto offset =
           orphen::ported::psm2::uvOffsetForMaterialByte9(map.DAT_003556f4_uvAnimation, slot->byte9);
-      return {static_cast<float>(slot->textureCoordinates[sourceCorner * 2]) / 256.0f + offset.u,
-              static_cast<float>(slot->textureCoordinates[sourceCorner * 2 + 1]) / 256.0f +
-                  offset.v};
+      const float u = static_cast<float>(slot->textureCoordinates[sourceCorner * 2]) / 256.0f + offset.u;
+      const float v =
+          static_cast<float>(slot->textureCoordinates[sourceCorner * 2 + 1]) / 256.0f + offset.v;
+
+      // A framebuffer slot's coordinates are normalised against its own 512x128
+      // window, so they land inside the captured frame rather than across the
+      // whole of it. The capture is the game viewport, so the window's fraction
+      // of a 640x224 frame is also its fraction of the texture -- scaled by the
+      // part of the power-of-two texture the copy actually filled.
+      if (isFramebufferSlot(*slot))
+      {
+        return {(kFramebufferSlotOriginU + u * kFramebufferSlotSpanU) * g_framebufferSlot.usedU,
+                (kFramebufferSlotOriginV + v * kFramebufferSlotSpanV) * g_framebufferSlot.usedV};
+      }
+      return {u, v};
     }
 
     // The GS treats 0x80 as fully opaque, so the fade byte divides by 128. A
@@ -1832,11 +1896,34 @@ namespace orphen::harness
                            bool cullingEnabled,
                            MapBatchState &state)
     {
-      const std::optional<std::size_t> texturePage =
-          texturePageForSlot(map, primitiveIndex, slotIndex);
-      const bool hasTexture = texturePage.has_value() && *texturePage < textureIds.size() && textureIds[*texturePage] != 0;
-      const unsigned int texture = hasTexture ? textureIds[*texturePage] : 0u;
+      const orphen::ported::psm2::MaterialSlot *slot =
+          materialSlotForPrimitive(map, primitiveIndex, slotIndex);
 
+      // The sentinel slot draws from last frame's picture, not from a page. It
+      // is a real texture, so it must not take the untextured path -- which
+      // modulates the vertex colour against `flatColour()`, the first three
+      // *UV* bytes reinterpreted as a colour. That is what turned s14_e002's
+      // underwater murk into flat olive slabs: 152 primitives asking for page
+      // 9 of a map that has pages 0..8, each one drawn additively at alpha 0x1F
+      // against a colour read out of its own texture coordinates.
+      const bool framebufferSlot = slot != nullptr && isFramebufferSlot(*slot);
+      if (framebufferSlot && g_framebufferSlot.texture == 0)
+      {
+        // Nothing captured yet -- the first frame of a scene. On the console
+        // the other buffer always holds something; here the honest stand-in is
+        // to leave the pass out, because an additive pass with no source is the
+        // one thing it can never be.
+        return;
+      }
+
+      const std::optional<std::size_t> texturePage =
+          framebufferSlot ? std::nullopt : texturePageForSlot(map, primitiveIndex, slotIndex);
+      const bool hasTexture = framebufferSlot ||
+                              (texturePage.has_value() && *texturePage < textureIds.size() &&
+                               textureIds[*texturePage] != 0);
+      const unsigned int texture = framebufferSlot ? g_framebufferSlot.texture
+                                   : hasTexture   ? textureIds[*texturePage]
+                                                  : 0u;
       const bool modulate = !hasTexture;
       const auto &record80 = map.DAT_003556ac_dRecords80[primitiveIndex];
       const bool twoSided = (record80.primitiveFlags & kRecord80TwoSidedBit) != 0;
@@ -1845,8 +1932,6 @@ namespace orphen::harness
       // FUN_00211230:143-158. The slot's own alpha rides in the vertex colour
       // alongside the occlusion fade, the way the GS gets it from the vertex
       // rather than from a register.
-      const orphen::ported::psm2::MaterialSlot *slot =
-          materialSlotForPrimitive(map, primitiveIndex, slotIndex);
       int blendMode = slot != nullptr ? mapBlendMode(*slot) : 0;
       bool blend = slot != nullptr && mapBlendEnabled(*slot);
       if (blend)
@@ -3179,7 +3264,11 @@ namespace orphen::harness
   //
   void MapViewer::captureFrameFeedbackSource(const ViewportRect &gameView) const
   {
-    if (screenSmearDisabled_ || gameView.width <= 0 || gameView.height <= 0)
+    // Not gated on screenSmearDisabled_ any more. --no-screen-smear suppresses
+    // the smear *quad*; the copy itself is also what a framebuffer material
+    // slot samples, and the console has the other buffer sitting there whether
+    // or not FUN_00201A38 is drawing. Measured cost is 0.4 ms at 1280x960.
+    if (gameView.width <= 0 || gameView.height <= 0)
     {
       return;
     }
@@ -3585,6 +3674,19 @@ namespace orphen::harness
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
     g_sceneLighting = &sceneLighting_;
+    // Last frame's capture, for any map primitive carrying a framebuffer
+    // material slot. Set before the map is drawn and cleared with the rest of
+    // the render globals; on the first frame of a scene the texture is still 0
+    // and drawPrimitiveSlot leaves those passes out.
+    g_framebufferSlot.texture = frameFeedbackTexture_;
+    g_framebufferSlot.usedU =
+        frameFeedbackTextureWidth_ > 0
+            ? static_cast<float>(frameFeedbackCapturedWidth_) / static_cast<float>(frameFeedbackTextureWidth_)
+            : 1.0f;
+    g_framebufferSlot.usedV =
+        frameFeedbackTextureHeight_ > 0
+            ? static_cast<float>(frameFeedbackCapturedHeight_) / static_cast<float>(frameFeedbackTextureHeight_)
+            : 1.0f;
     g_gleamProbes = gleamProbeSink_;
     g_renderStats = renderStatsSink_;
     g_mapBlendDisabled = mapBlendDisabled_;
