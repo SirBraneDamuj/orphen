@@ -2,6 +2,7 @@
 
 #include "ported/camera/original_camera_path.h"
 #include "ported/camera/original_field_camera.h"
+#include "ported/entity/actor_frame_update.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/model/psc3_skeleton.h"
 #include "ported/entity/original_enemy_attack.h"
@@ -3100,7 +3101,20 @@ namespace orphen::ported::entity
           }
           // The player gets gravity back: +0x04 bit 3 is what the carry set.
           player.halfword04 = static_cast<std::uint16_t>(player.halfword04 & 0xFFF7u);
-          pool.releaseSlot(slot);
+          // **FUN_00265EC0, not a bare slot release.** Its second helper,
+          // FUN_00265F70, walks all 0x100 slots and re-enters FUN_00265EC0 for
+          // every live one whose +0x192 names this slot -- so letting go of the
+          // creature lets go of the nine type 0x1C5 limbs the death threw and
+          // the nine type 0xBF body segments along with it.
+          //
+          // Releasing only slot 25 left all eighteen behind, still carrying
+          // +0x192 = 25. The victory close-up rig (type 0x28) is allocated into
+          // the slot the creature just vacated, and FUN_0020C810's attached
+          // branch only asks whether the parent was drawn this frame -- the
+          // +0x0C bit 0x1000 latch -- not whether it is the same entity. So the
+          // orphans re-parented onto Orphen and drew their disintegration
+          // sparkle off his bones during the victory pose.
+          FUN_00265ec0_destroy_entity(slot, environment);
           return;
         }
         break;

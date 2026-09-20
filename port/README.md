@@ -9504,6 +9504,56 @@ Over a 30000-frame run the director reaches shots 1, 2, 5, 6, 7, 8, 9 and 11.
 Shots 3, 4, 10 and 12 belong to states 10 and 12, which the move rotation never
 picks -- see "Nothing picks state 10" above.
 
+#### The disintegration sparkle ended up on Orphen
+
+After the fight, the victory close-up had nine white starbursts stuck to
+Orphen's hands and torso -- the effect the creature throws off as it comes
+apart.
+
+The creature's death spawns nine type `0x1C5` limbs, one per segment bone, and
+binds each to itself:
+
+```
+*(short *)(limb + 0x192) = (entity - 0x58beb0) / 0x1d8;   // its own pool slot
+*(char  *)(limb + 0x194) = bone;
+```
+
+(The magic-number spelling Ghidra prints, `* -0x5f75270d >> 3`, is exact
+division by `0x1D8`: `0xA08AD8F3` is the inverse of 59 mod 2^32, applied after
+`>> 3`.)
+
+Type `0x1C5` has **no behaviour of its own** -- `PTR_LAB_0031CAB0[0x1C5 - 0xFC]`
+at `0x0031CDD4` reads `0x00239E78`, the no-op, which the same table's `0x1E3`
+entry (`0x002F13D0`, the known hit-effect handler) confirms is indexed right. So
+nothing retires a limb on its own timer. What retires them is the parent going
+away: `FUN_00265EC0` calls `FUN_00265F70`, which walks all `0x100` slots and
+re-enters `FUN_00265EC0` for every live one whose `+0x192` names the slot being
+freed.
+
+The port's death did `pool.releaseSlot(slot)` -- the bare one-slot free --
+instead of `FUN_00265ec0_destroy_entity`, which has the cascade. The nine limbs
+stayed behind holding `+0x192 = 25`, and the victory close-up rig (type `0x28`)
+is allocated into the slot the creature just vacated. `FUN_0020C810`'s attached
+branch only asks whether the parent was **drawn this frame** -- the `+0x0C` bit
+`0x1000` latch -- never whether it is still the same entity, so the orphans
+re-parented onto Orphen and drew off his bones.
+
+The nine type `0xBF` body segments survive the cascade, and that is correct:
+`FUN_002995E0` never writes `+0x192` on them. They are positioned outright by
+`FUN_0029CCB8` every frame rather than bone-attached, which is also why they
+never appeared on Orphen.
+
+Verified by killing the creature headlessly (`--enemy-hp 25=1:2450` with
+`--press-attack` on a timer): `--actor-report` at frame 4000 goes from nine live
+`type=0x1c5` at `pos=(0,0,0)` to none, live actors 40 -> 31, the nine `0xBF`
+segments unchanged, and the victory pose captures clean. Seven-scene guard
+byte-identical.
+
+Every other release in `original_mast_boss.cpp` is still a bare
+`pool.releaseSlot`, and every one of them is `FUN_00265EC0` in the original.
+They are invisible today because those entities have no children, but they are
+the same divergence and should be swept when something touches them.
+
 #### Hitting the creature did nothing visible or audible
 
 Reported as "it's supposed to flash red and make a noise -- I don't think we
