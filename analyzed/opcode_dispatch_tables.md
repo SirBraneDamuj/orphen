@@ -132,7 +132,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xA4 audio_submit  # orig FUN_00261f60 — calls audio_submit_type_A(expr, byte, 0x20); shared with 0xA6; see [analyzed/ops/0xA4_0xA6_audio_submit.c](../analyzed/ops/0xA4_0xA6_audio_submit.c)
 0xA5 audio_submit_triple  # orig FUN_00262058 — expr+byte+expr → audio_submit_three; see [analyzed/ops/0xA5_audio_submit_triple.c](../analyzed/ops/0xA5_audio_submit_triple.c)
 0xA6 audio_submit  # orig FUN_00261f60 — calls audio_submit_type_B(expr, byte, 0x800); shared with 0xA4; see [analyzed/ops/0xA4_0xA6_audio_submit.c](../analyzed/ops/0xA4_0xA6_audio_submit.c)
-0xA7 tag_entities_by_mask  # orig FUN_00261fd8 — overwrite top nibble of entity flag word for matching mask; see [analyzed/ops/0xA7_tag_entities_by_mask.c](../analyzed/ops/0xA7_tag_entities_by_mask.c)
+0xA7 retag_map_primitives  # orig FUN_00261fd8 — overwrite top nibble of the terrain flag word on every map collision primitive matching mask; see [analyzed/ops/0xA7_retag_map_primitives.c](../analyzed/ops/0xA7_retag_map_primitives.c)
 0xA8 register_lead_boot_handler  # orig FUN_00262f38 — install lead boot vector at script_slot_table[0x40]; see [analyzed/ops/0xA8_register_lead_boot_handler.c](../analyzed/ops/0xA8_register_lead_boot_handler.c)
 0xA9 step_lead_toward_xy  # orig FUN_00262f80 — drive lead toward target XY (walk/run); see [analyzed/ops/0xA9_step_lead_toward_xy.c](../analyzed/ops/0xA9_step_lead_toward_xy.c)
 0xAA abort_lead_motion  # orig FUN_00263118 — cancel lead motion + clear boot vector; see [analyzed/ops/0xAA_abort_lead_motion.c](../analyzed/ops/0xAA_abort_lead_motion.c)
