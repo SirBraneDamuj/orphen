@@ -5,6 +5,7 @@
 #include "ported/entity/actor_frame_update.h"
 #include "ported/input/original_analog_stick.h"
 #include "ported/psm2/psm2_collision_groups.h"
+#include "ported/scene/title_screen.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,9 +25,13 @@ namespace
   void printUsage(const char *programName)
   {
     std::cout << "Usage: " << programName
-              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> --scene sNN_eMMM]"
+              << " [--psm2 <decoded-map.psm2> | --disc-root <dir> [--scene sNN_eMMM]]"
                  " [--load-only] [--scene-tree] [--frames <count>] [--spawn x,y,z]"
                  " [--elf <SLUS_200.11>] [--scr-report] [--scr-tick] [--actor-report]\n"
+                 "  --scene         the scene to load. Left off, --disc-root boots\n"
+                 "                  into s12_e010, the title screen -- the scene\n"
+                 "                  FUN_002000C0 names at power-on. START or Cross\n"
+                 "                  there loads s01_e012.\n"
                  "  --elf           read static tables (entity descriptors, actor\n"
                  "                  behavior vtables) from the retail executable.\n"
                  "                  Defaults to SLUS_200.11 in the disc root.\n"
@@ -103,6 +108,21 @@ namespace
                  "  --cycle-map-every <frames>\n"
                  "                  headless only: advance to the next scene every\n"
                  "                  N frames, exercising the map-cycle reload.\n";
+  }
+
+  // FUN_002000C0:163-165. The boot path names no scene from anywhere: it
+  // writes DAT_003551F4 = 0xC and DAT_003551F0 = 10 outright, which is
+  // s12_e010 -- the title screen. `--scene` is the port's way of skipping
+  // that, so leaving it off is the cold boot.
+  void applyDefaultScene(orphen::port::PortRuntimeConfig &config)
+  {
+    if (config.hasDiscScene || config.discRoot.empty())
+    {
+      return;
+    }
+    config.discScene = {orphen::ported::scene::kTitleSceneSection,
+                        orphen::ported::scene::kTitleSceneEntry};
+    config.hasDiscScene = true;
   }
 
   orphen::port::PortRuntimeConfig parseArgs(int argc, char **argv)
@@ -886,6 +906,7 @@ namespace
       throw std::runtime_error("unknown argument: " + std::string(argument));
     }
 
+    applyDefaultScene(config);
     return config;
   }
 
@@ -975,11 +996,7 @@ namespace
     const bool hasDiscRoot = !config.discRoot.empty();
     if (hasDecodedPsm2 == hasDiscRoot)
     {
-      throw std::runtime_error("provide exactly one source: --psm2 or --disc-root with --scene");
-    }
-    if (hasDiscRoot && !config.hasDiscScene)
-    {
-      throw std::runtime_error("--disc-root requires --scene sNN_eMMM");
+      throw std::runtime_error("provide exactly one source: --psm2 or --disc-root");
     }
     if (!hasDiscRoot && config.hasDiscScene)
     {
@@ -987,7 +1004,7 @@ namespace
     }
     if (config.printSceneTree && !hasDiscRoot)
     {
-      throw std::runtime_error("--scene-tree requires --disc-root <dir> --scene sNN_eMMM");
+      throw std::runtime_error("--scene-tree requires --disc-root <dir>");
     }
   }
 

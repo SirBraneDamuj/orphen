@@ -19,6 +19,7 @@
 #include "ported/script/object_registers.h"
 #include "ported/player/original_game_over.h"
 #include "ported/player/original_interaction.h"
+#include "ported/scene/title_screen.h"
 
 #include <cmath>
 #include <iomanip>
@@ -2940,7 +2941,7 @@ namespace orphen::port
     }
   }
 
-  void PortRuntime::FUN_002239c8_service_scene_change()
+  void PortRuntime::FUN_002239c8_service_scene_change(std::uint32_t frameTicks)
   {
     if (DAT_003551ec_sceneRequest_ == 0)
     {
@@ -2950,8 +2951,13 @@ namespace orphen::port
     {
       return;
     }
+    // FUN_002239C8:29. Bit 1 of the request means "hold the scene until the
+    // fade-out block reports done", and FUN_0025D238 steps that block on
+    // DAT_003555BC -- the frame's own tick. The port used to hand it a literal
+    // zero, so the level never climbed and a request carrying bit 1 waited for
+    // ever. Nothing set that bit before module 12's START did.
     if ((DAT_003551ec_sceneRequest_ & 2u) != 0 &&
-        !DAT_00571dc0_screenFade_.FUN_0025d238_step_fade_out(0))
+        !DAT_00571dc0_screenFade_.FUN_0025d238_step_fade_out(frameTicks))
     {
       return;
     }
@@ -3136,6 +3142,82 @@ namespace orphen::port
     {
       battleParty_.markers().FUN_00267e78_clear();
       battleParty_.markers().FUN_00247f18_register(static_cast<std::int16_t>(kMarkerCount));
+    }
+
+    // Mode 3, FUN_0022A418:369 -- after the init entry and immediately before
+    // the start entry. **Module 12, the title screen, is the only one the port
+    // reaches it for**; see ported/scene/title_screen.h for what the mode
+    // builds and why the logo is an entity rather than an overlay.
+    if (mode == 3 && DAT_0032536c_sceneModule_ == orphen::ported::scene::kTitleSceneModule)
+    {
+      namespace title = orphen::ported::scene;
+      auto &state = sceneScript_.state();
+
+      // `*(int *)(DAT_00355060 + 4)`. Work word 1, which s12_e010's init entry
+      // fills with the pool slot of the kneeling actor -- 10 in this scene.
+      // Every position the shot is built from is that entity's, not the lead's.
+      const std::uint32_t subject = state.DAT_00355060_work[1];
+      if (subject >= entityPool_.slotCount())
+      {
+        return;
+      }
+      const auto &actor = entityPool_.slot(static_cast<std::size_t>(subject));
+
+      // FUN_00271220:23-33. FUN_00305130 is cosf and FUN_00305218 is sinf, and
+      // the radius/pitch pair is the ordinary field follow geometry
+      // FUN_00216930 seeded -- 3.0 and 0.36651909.
+      const float angle = DAT_0058c04c_titleOrbitAngle_;
+      const float radius = fieldCamera_.followDistance();
+      const float pitch = fieldCamera_.followPitch();
+      const orphen::ported::psm2::Vec3 eye{actor.positionX20 - radius * std::cos(angle),
+                                           actor.positionZ24 - radius * std::sin(angle),
+                                           actor.positionY28 + radius * std::sin(pitch)};
+      // The look-at is set once, here, and never moved again: FUN_00272010
+      // only calls FUN_00217D40. `+0x4C + 0x58` is the sampled ground height
+      // plus the collision height, so the shot points at the actor's head.
+      const orphen::ported::psm2::Vec3 lookAt{actor.positionX20, actor.positionZ24,
+                                              actor.groundHeight4c + actor.height58};
+      fieldCamera_.FUN_00217e18_release_manual_camera(false);
+      fieldCamera_.FUN_00217d70_set_manual_camera(eye, lookAt);
+
+      // FUN_00271220:34-36, with FUN_00216690 the (-pi, pi] wrap. The actor
+      // faces directly away from the camera, which is what keeps his back to
+      // the player for the whole orbit.
+      entityPool_.slot(static_cast<std::size_t>(subject)).facingRadians5c =
+          orphen::ported::model::FUN_00216690_wrap_angle(fieldCamera_.yawRadians() +
+                                                         title::kFacingBias);
+
+      DAT_00342b7d_titleState_ = 0;
+      DAT_0058c048_titleIdleTicks_ = 0;
+      titleScreenActive_ = true;
+
+      // FUN_00271220:41. Flag 0x511 is "the player has already been in the
+      // game", and on that path the module puts no logo up at all.
+      if (state.FUN_00266368_eventFlag(title::kReturnedFromGameFlag))
+      {
+        state.FUN_002663a0_setEventFlag(3);
+        return;
+      }
+
+      // FUN_00271220:43-47. The billboard, and the three flag writes that keep
+      // it where it is put -- +0x04 bit 0x100 is FUN_002262C0's first test, so
+      // without it the logo falls to the floor.
+      entityPool_.FUN_00229c40_initialize(title::kLogoSlot, title::kLogoTypeId, descriptorTable_);
+      auto &logo = entityPool_.slot(title::kLogoSlot);
+      logo.halfword04 = static_cast<std::uint16_t>(logo.halfword04 | title::kLogoFlags04);
+      logo.halfword08 = static_cast<std::uint16_t>(logo.halfword08 | title::kLogoFlags08);
+      logo.positionY28 = title::kLogoHeight;
+      if (!state.FUN_00266368_eventFlag(title::kLogoSeenFlag))
+      {
+        state.FUN_002663a0_setEventFlag(title::kLogoSeenFlag);
+        logo.flags06 = static_cast<std::uint16_t>(logo.flags06 | title::kLogoFlags06);
+      }
+      // FUN_00271220:50 raises DAT_00342C8E from DAT_00354BA8, the "there is
+      // save data on the card" byte. The port has no memory card, so the menu
+      // it selects is never reached and nothing reads it.
+      std::cout << "[title] s12_e010 module 12: logo type 0x48 in pool slot "
+                << title::kLogoSlot << ", camera orbit on entity slot " << subject << '\n';
+      return;
     }
 
     // Mode 4, the per-frame hook. Only module 10's is ported, because s14_e001
@@ -3332,6 +3414,88 @@ namespace orphen::port
         }
       }
     }
+    // Module 12, FUN_00271220 -- **the title screen**. Its mode 4 is one line,
+    // `(*PTR_FUN_003256F8[DAT_00342B7D])(DAT_00342B7D)`,
+    // and the port walks the first two of that table's twelve states. The rest
+    // are the menu behind the prompt (new game, load, options, the attract
+    // demo) and are not ported.
+    else if (mode == 4 && DAT_0032536c_sceneModule_ == orphen::ported::scene::kTitleSceneModule &&
+             titleScreenActive_)
+    {
+      namespace title = orphen::ported::scene;
+      // FUN_00271470, state 0. One frame: start the music and clear both of
+      // the counters state 1 runs on. Its other arms read flag 0x511 and pick
+      // a menu state, which is the returning-from-a-game path mode 3 already
+      // declined to build a logo for.
+      if (DAT_00342b7d_titleState_ == 0)
+      {
+        soundEngine_.FUN_00205d90_play_slot(title::kTitleMusicSlot, title::kTitleMusicFader);
+        DAT_0058c048_titleIdleTicks_ = 0;
+        DAT_00342b7d_titleState_ = 1;
+      }
+      // FUN_00271558, state 1.
+      else if (DAT_00342b7d_titleState_ == 1)
+      {
+        // FUN_00272100, the prompt, then FUN_00272010, the orbit. The original
+        // draws before it moves, so the sprite published here is the one that
+        // goes out with this frame.
+        titlePromptVisible_ = true;
+
+        const std::uint32_t subject = sceneScript_.state().DAT_00355060_work[1];
+        if (subject < entityPool_.slotCount())
+        {
+          const auto &actor = entityPool_.slot(static_cast<std::size_t>(subject));
+          const float angle = DAT_0058c04c_titleOrbitAngle_;
+          const float radius = fieldCamera_.followDistance();
+          const float pitch = fieldCamera_.followPitch();
+          fieldCamera_.FUN_00217d40_set_eye(
+              orphen::ported::psm2::Vec3{actor.positionX20 - radius * std::cos(angle),
+                                         actor.positionZ24 - radius * std::sin(angle),
+                                         actor.positionY28 + radius * std::sin(pitch)});
+          // FUN_00272010:21-22. The angle is advanced *after* the eye is
+          // placed, and wrapped on the way back in.
+          DAT_0058c04c_titleOrbitAngle_ = orphen::ported::model::FUN_00216690_wrap_angle(
+              angle + static_cast<float>(frameTicks) * title::kOrbitRadiansPerTick);
+        }
+
+        // FUN_00271558:24, `uGpffffb686 & 0x840` -- START or Cross. The
+        // original's state 2 tears the title down and walks into the new
+        // game / load menu (FUN_00271858 -> FUN_00236780). **This is the
+        // shim**: none of that is ported, so the button asks for s01_e012
+        // directly, using the same request the module's own scene changes use
+        // (FUN_00273320:12-16 -- fade, then request bit 1).
+        if ((uGpffffb686_pressedPad_ & title::kStartOrConfirmMask) != 0)
+        {
+          DAT_00342b7d_titleState_ = 2;
+          titleScreenActive_ = false;
+          titlePromptVisible_ = false;
+          DAT_003551f4_sceneSection_ = 1;
+          DAT_003551f0_sceneEntry_ = 12;
+          // Bit 1 holds the load behind the fade, which is what the module's
+          // own scene changes use. The other two bits are FUN_002000C0's cold
+          // boot pair (0x2000 takes the scene's own defaults block, bit 0
+          // stands the lead on it), so s01_e012 comes up exactly as a
+          // `--scene s01_e012` load does -- part of the shim, not of the
+          // original, which enters the game through FUN_00236780 instead.
+          DAT_003551ec_sceneRequest_ = 0x2003;
+          DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0xC, 0);
+          std::cout << "[title] START -> s01_e012. The original opens its menu here"
+                       " instead; this is the port's shim.\n";
+        }
+
+        // FUN_00271558:41. The timer the attract demo is handed off at. The
+        // demo playback is not ported, so this is accumulated and reported
+        // rather than acted on -- see the note in title_screen.h.
+        DAT_0058c048_titleIdleTicks_ += static_cast<std::int32_t>(frameTicks);
+        if (DAT_0058c048_titleIdleTicks_ >= title::kAttractTimeout && !titleAttractReported_)
+        {
+          titleAttractReported_ = true;
+          std::cout << "[title] idle past 0x" << std::hex << title::kAttractTimeout << std::dec
+                    << " ticks; the original hands off to the attract demo here, which is"
+                       " not ported\n";
+        }
+      }
+    }
     else if (mode == 4)
     {
       // Named in --battle-report rather than on stdout: eighteen of the
@@ -3515,6 +3679,15 @@ namespace orphen::port
       DAT_0032536c_sceneModule_ = -1;
     }
     sceneModuleReported_ = false;
+    // Module 12's own state. The original keeps DAT_00342B7D across a load and
+    // lets mode 3 reset it; the port clears the whole set here so a scene that
+    // is not the title screen can never inherit a live orbit or prompt.
+    titleScreenActive_ = false;
+    titlePromptVisible_ = false;
+    titleAttractReported_ = false;
+    DAT_00342b7d_titleState_ = 0;
+    DAT_0058c04c_titleOrbitAngle_ = 0.0f;
+    DAT_0058c048_titleIdleTicks_ = 0;
     // FUN_0022A418:134, immediately after FUN_0025B600 and before the module's
     // mode 0 hook -- the backdrop is in place before any script can run.
     FUN_0022cde8_load_background_models();
@@ -3794,6 +3967,13 @@ namespace orphen::port
     const std::uint16_t initHaltOpcode = sceneScript_.lastHaltOpcode();
     const std::uint32_t initHaltOffset = sceneScript_.lastHaltOffset();
     const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
+
+    // FUN_0022A418:369, `(*DAT_0032536c)(3); FUN_0025b728();`. Mode 3 is the
+    // hook a scene module builds its opening shot in, and it runs between the
+    // two script entries -- after the init entry has filled the work array it
+    // reads and before the start entry runs. Only module 12 has a mode 3 the
+    // port reaches; every other module's is unported and returns immediately.
+    FUN_0032536c_scene_module(3);
 
     sceneScript_.FUN_0025b728_run_start(environment, scriptTrace_);
 
@@ -8162,7 +8342,7 @@ namespace orphen::port
     // FUN_002239c8:22, ahead of the pad publish and of everything the frame
     // does. A scene change asked for last frame lands here, so no part of a
     // frame ever runs half on one scene and half on the next.
-    FUN_002239c8_service_scene_change();
+    FUN_002239c8_service_scene_change(frameTicks);
     // FUN_0023b5d8's slot: the pad's analog magnitude is published before
     // anything downstream of it runs.
     DAT_003555e8_stickMagnitude_ = input.stickMagnitude;
@@ -8281,6 +8461,14 @@ namespace orphen::port
                   << " at frame " << frameCount_ << '\n';
       }
 
+      // uGpffffb686, kept so FUN_002559E8's skip test can read it from a hook
+      // installed once at construction. **Published before the module hook**:
+      // FUN_002239C8 refreshes the pad word near the top of the frame and does
+      // not reach `(*DAT_0032536c)(4)` until well after it. It used to be
+      // written after the script tick, which left every reader of it a whole
+      // simulation step behind -- module 12's "press START" among them.
+      uGpffffb686_pressedPad_ = static_cast<std::uint16_t>(input.rawPressedPad);
+
       // FUN_002239C8:129-130 -- `(*DAT_0032536c)(4); FUN_0025b778();`. The
       // scene module's per-frame hook runs **before** the script tick, not
       // after it. The port had it a step later, down by the player update,
@@ -8313,10 +8501,6 @@ namespace orphen::port
       // catch-up steps of a slow frame, or the eight-frame window would be
       // measured in render frames rather than in simulation ones.
       DAT_00342a70_mappedActions_.FUN_0023b5d8_push(input.rawHeldPad, input.rawPressedPad);
-      // uGpffffb686, kept so FUN_002559E8's skip test can read it from a hook
-      // installed once at construction.
-      uGpffffb686_pressedPad_ = static_cast<std::uint16_t>(input.rawPressedPad);
-
       // FUN_002239c8:117. The battle module replaces the field controller
       // outright -- FUN_00249610 instead of FUN_00251ed8 -- once the scene has
       // raised DAT_003555d3 (a section-14 scene) and opcode 0xBD method 2 has
@@ -8623,6 +8807,33 @@ namespace orphen::port
         fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
       }
 
+      // FUN_002239C8:166, `FUN_002255B8()` -- **after FUN_00216AA0**, so it
+      // reads this frame's camera yaw.
+      //
+      // FUN_002255B8 is three lines and it is what turns the title logo. The
+      // entity a scene module builds at 0x0058C7E8 -- pool slot 5 -- gets its
+      // facing rewritten from the camera every frame, by type:
+      //
+      //   0x49  facing = the camera yaw, and the entity is dragged to a point
+      //         6 units down the view vector. That is FUN_0025D5B8's cut-in,
+      //         which the port has no other half of, so it is left out.
+      //   0x48  facing = wrap(camera yaw + pi), DAT_00352420 being that pi.
+      //
+      // Nothing else writes slot 5's +0x5C: the type's own actor handler is
+      // FUN_00239E78, the no-op. Verified on hardware by poking a sentinel
+      // into 0x0058C844 and stepping one frame -- it came back as the camera's
+      // angle again, and two screenshots 300 frames apart put the logo on
+      // identical pixels while the room turned behind it.
+      if (entityPool_.status(orphen::ported::scene::kLogoSlot) !=
+              orphen::ported::entity::SlotStatus::Free &&
+          entityPool_.slot(orphen::ported::scene::kLogoSlot).typeId00 ==
+              orphen::ported::scene::kLogoTypeId)
+      {
+        entityPool_.slot(orphen::ported::scene::kLogoSlot).facingRadians5c =
+            orphen::ported::model::FUN_00216690_wrap_angle(
+                fieldCamera_.yawRadians() + orphen::ported::scene::kFacingBias);
+      }
+
       mapViewer_.setLeadPlayerView(leadState);
       mapViewer_.setFollowCameraPose(fieldCamera_.pose());
       updateMapVisibility(*loadedMap, leadState, frameTicks);
@@ -8682,6 +8893,15 @@ namespace orphen::port
     }
     {
       auto builtSprites = buildDialogueSprites();
+      // FUN_00272100's "Press START button". It is a FUN_00239020 entry like
+      // every glyph in the list, so it rides the same pass -- and unlike the
+      // glyphs it needs no font, which is why it is appended here rather than
+      // inside buildDialogueSprites (that returns early without a measured
+      // font).
+      if (titlePromptVisible_)
+      {
+        builtSprites.push_back(orphen::ported::scene::FUN_00272100_prompt_sprite());
+      }
       lastDialogueSpriteCount_ = builtSprites.size();
       mapViewer_.setDialogueSprites(std::move(builtSprites));
     }

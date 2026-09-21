@@ -180,6 +180,10 @@ namespace orphen::ported::camera
     float yawRadians() const { return fGpffffb6d4_yaw_; }
     float pitchRadians() const { return fGpffffb6d8_pitch_; }
     float followDistance() const { return fGpffffad28_distance_; }
+    // uGpffffad24, the follow *setting* FUN_00216930 seeds at 0.36651909 --
+    // not fGpffffb6d8, which is the pitch the current pose happens to have.
+    // FUN_00272010 builds the title screen's orbit out of this pair.
+    float followPitch() const { return uGpffffad24_pitchSetting_; }
     FieldCameraMode mode() const { return bGpffffb6e0_mode_; }
     bool freeLookActive() const { return cGpffffb6e4_freeLook_ != 0; }
     std::uint32_t idleTicks() const { return uGpffffad0c_idleTimer_; }

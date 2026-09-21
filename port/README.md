@@ -28,6 +28,79 @@ Together those give the head bump: `FUN_002262c0` at `0x00226cb4` treats an upwa
 
 Scenes now bootstrap from their SCR script -- see Scene Script below. The previous PSC3 wireframe gallery is still gone; PSC3 records are visible in the resource tree but are not rendered, so script-spawned objects draw as labelled boxes rather than models.
 
+## The title screen
+
+`--scene` is now optional: `--disc-root <dir>` on its own boots into **s12_e010**,
+which is what `FUN_002000C0:163-165` does at power-on --
+
+```
+DAT_003551F4 = 0xC;  DAT_003551F0 = 10;  DAT_003551EC = 0x2001;
+```
+
+section 12, entry 10, with the same request bits any cold boot uses. **There is no
+title game mode.** `DAT_00354D2C` reads 0 at the prompt on hardware, so the title
+screen is an ordinary field frame; everything that makes it one belongs to scene
+module 12, `FUN_00271220`, which `FUN_0022A360` picks out of `PTR_LAB_003252B8`.
+`FUN_0022A418:371` even skips the navmesh build for `DAT_003551F4 == 0xC`.
+
+The module is ported in `src/ported/scene/title_screen.h` plus the mode 3 and
+mode 4 arms of `PortRuntime::FUN_0032536c_scene_module`:
+
+- **Mode 3** (`FUN_0022A418:369`, between the init and start script entries)
+  builds the shot. The subject is the entity named by script work word 1 -- slot
+  10 here, the kneeling actor -- and the camera is an ordinary manual camera
+  (`FUN_00217D70`) at the field follow radius and pitch, 3.0 and 0.36651909, that
+  `FUN_00216930` seeds. The actor's facing is set once to `wrap(cameraYaw + pi)`
+  and never moved again, which is why the orbit slowly comes round to his side.
+- **Mode 4** walks `PTR_FUN_003256F8`. State 0 (`FUN_00271470`) starts music slot
+  1 and clears the counters; state 1 (`FUN_00271558`) is the title screen, and it
+  draws the prompt, steps the orbit, and watches `uGpffffb686 & 0x840`.
+
+The orbit itself is `FUN_00272010`: `fGpffff8f58 = 0.0001875` radians per frame
+tick, so a revolution is about 1047 frames.
+
+### The logo is an entity, not an overlay
+
+Mode 3 spawns entity type **0x48** into the record at `0x0058C7E8` -- pool slot 5
+-- and parks it at `DAT_00352EC4 = 1.6` over the pedestal, with `+0x04 |= 0x100`
+so `FUN_002262C0` leaves it there. Its actor handler is `FUN_00239E78`, the
+no-op: it is a billboard and nothing else.
+
+What turns it is **`FUN_002255B8`**, three lines called from `FUN_002239C8:166`,
+after the camera update. It rewrites slot 5's facing from the camera every frame,
+by type: `0x49` takes the camera yaw outright (that is `FUN_0025D5B8`'s cut-in,
+which the port has no other half of), and `0x48` takes `wrap(cameraYaw + pi)`.
+Miss it and the logo is a flat quad seen edge-on, filling the screen in
+perspective. It was found by poking a sentinel into `0x0058C844` on hardware and
+stepping one frame -- the camera's angle came straight back.
+
+### The prompt is one sprite off a map page
+
+`FUN_00272100` draws the `FUN_00239020` entry at `0x00325738`: texture slot 5,
+256x40, entry `(-128, -112)`, which is `(192, 336)` in the 640x448 screen the
+subtitles land in. Slot 5 is an ordinary map texture page -- `0x0103` for this
+scene -- whose top 256x40 band is the words "Press START button". The rest of
+that page is the copyright block the legal screen uses.
+
+### What is shimmed
+
+START or Cross asks for **s01_e012** directly, with request `0x2003` (the cold
+boot's `0x2001` plus the fade-out hold) and a `FUN_0025D1C0(1, 0xC, 0)` fade.
+The original's state 2 tears the title down and walks into the new game / load
+menu (`FUN_00271858` -> `FUN_00236780`), and none of that is ported. Also not
+ported: the idle hand-off to the attract demo at `0xE101` ticks (reported once
+instead), the cheat-code button sequence `FUN_00271558` watches for -- the one
+that sets `DAT_003555DB` -- and the menu states behind the prompt.
+
+Servicing a scene-change request that carries bit 1 used to hang: the port
+handed `FUN_0025D238` a literal zero for `DAT_003555BC`, so the fade level never
+climbed and the request waited for ever. Nothing set that bit before this.
+
+One known difference against hardware, and it is not the module's: s12_e010's
+steam is far too thick in the port. The scene arms 28 plume emitters (opcode
+`0x10E`, 77 live puffs) and a 15-record haze field (`0x109`); at the same orbit
+angle hardware draws thin wisps where the port draws a wall of white.
+
 ## Scene Script
 
 `src/ported/script/` is a narrow, faithful port of the SCR bytecode VM:

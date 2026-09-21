@@ -681,7 +681,7 @@ namespace orphen::port
     void loadExecutable(const PortRuntimeConfig &config);
     // FUN_002239c8:22-33: spend a pending scene-change request, if this frame is
     // allowed to. Runs at the top of the frame, before the pad is published.
-    void FUN_002239c8_service_scene_change();
+    void FUN_002239c8_service_scene_change(std::uint32_t frameTicks);
     // FUN_002f1808, stubbed. Walks the movie chain and logs each leg; nothing
     // decodes MV3 here yet.
     void FUN_002f1808_play_movie(int movieId);
@@ -831,6 +831,26 @@ namespace orphen::port
     // Not the original's. Reports a work[58] the hook has no destination for,
     // once, so an unmodelled panel is visible in a run rather than silent.
     bool DAT_00355234_selectorReported_ = false;
+
+    // --- module 12, the title screen -------------------------------------
+    // See ported/scene/title_screen.h. FUN_00271220's mode 3 builds the shot
+    // and its mode 4 walks PTR_FUN_003256F8 with the state byte at
+    // DAT_00342B7D; the port reaches states 0 and 1, which is the title screen
+    // itself. The menu states behind it are not ported.
+    std::uint8_t DAT_00342b7d_titleState_ = 0;
+    bool titleScreenActive_ = false;
+    // The original keeps both of these *in the entity* work[1] names -- the
+    // orbit angle at its +0x19C and the idle timer at its +0x198 -- but
+    // nothing outside module 12 reads either, and both offsets already carry
+    // several unrelated per-type readings in OriginalEntity. Held here
+    // instead, named for where the original puts them.
+    float DAT_0058c04c_titleOrbitAngle_ = 0.0f;
+    std::int32_t DAT_0058c048_titleIdleTicks_ = 0;
+    // FUN_00272100's sprite, published for the frame the module ran on.
+    bool titlePromptVisible_ = false;
+    // Not the original's: says once, in a run, that the idle timeout passed
+    // the point the attract demo would have taken over.
+    bool titleAttractReported_ = false;
 
   // FUN_0022DC68(selector, enable, 0x800). Shared by opcode 0xA6 and by the
   // crab's swipe, which is why it is a member rather than a lambda body.
