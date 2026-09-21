@@ -9841,11 +9841,11 @@ chapter ends on **M17 then M01** -- two films, from one opcode.
 just after the boss goes down, `s14_e002` converts "who is with me" into a route
 flag, three symmetric arms:
 
-| condition | sets | destination | spawn |
-| --- | --- | --- | --- |
-| flag 1377 and not 1881 | 801 | `s03_e001` | (0, -22.000, 2.000) |
-| flag 1378 and not 1891 | 802 | `s05_e051` | (4.655, 3.539, 0) |
-| flag 1379 and not 1901 | 803 | -- | -- |
+| condition | sets | companion | destination | spawn |
+| --- | --- | --- | --- | --- |
+| flag 1377 and not 1881 | 801 | Magnus | `s03_e001` | (0, -22.000, 2.000) |
+| flag 1378 and not 1891 | 802 | Cleo | `s05_e051` | (4.655, 3.539, 0) |
+| flag 1379 and not 1901 | 803 | Mar | -- | -- |
 
 and then at `0x0F51`, after the `0x13A`, an if/else-if/else on the route flag:
 801 goes to `s03_e001`, 802 goes to `s05_e051`, and **anything else falls
@@ -9864,17 +9864,26 @@ three arms run in the port:
 
 ```
 --scene s14_e002 --enemy-hp 25=0:3000 --frames 7000 --set-event-flag <flag>:0
-  1377 -> [movie] M17, M01 -> [scene] s14_e002 -> s03_e001   (frame 6546)
-  1378 -> [movie] M17, M01 -> [scene] s14_e002 -> s05_e051   (frame 6546)
-  1379 -> [movie] M17, M01 -> [scene] s14_e002 -> s07_e011   (frame 6546)
+  1377 -> [movie] M17, M01 -> [scene] s14_e002 -> s03_e001   (frame 6546)  Magnus
+  1378 -> [movie] M17, M01 -> [scene] s14_e002 -> s05_e051   (frame 6546)  Cleo
+  1379 -> [movie] M17, M01 -> [scene] s14_e002 -> s07_e011   (frame 6546)  Mar
 ```
 
-With no flag at all it is `s07_e011`, the fall-through, which is what a port run
-that never played the ship chapter should get.
+With no flag at all it is `s07_e011`, Mar's arm, which is what a port run that
+never played the ship chapter should get.
 
-**Which arm is Magnus and which is Mar is not pinned yet.** Cleo is: the save
-state proves 1378, and 1378 is the `s05_e051` arm. The other two are identified
-by flag and destination only.
+**Landing there is not the same as the scene working.** All three destinations
+load their map and run their init, and all three then stop on opcodes this port
+has no case for -- `s03_e001` on `0xD8` at `0x151D`, `s07_e011` on `0x124` at
+`0x170E` and then `0x8A` per frame at `0x33AD`. `s05_e051` gets further and is
+the one to start with. Porting chapter 2's scenes is its own job; what this
+section claims is only that the hand-off picks the right one.
+
+**All three arms are named.** Cleo came off the save state -- it has flag 1378
+set, and 1378 is the `s05_e051` arm. Magnus is `s03_e001`, confirmed by the
+author of this port from play; Mar is then the fall-through by elimination,
+which matches `s07_e011` being the arm whose route flag (803) is written and
+never tested.
 
 One piece of `FUN_0022A418`'s movie block is deliberately not here. Lines 58-63
 arm movie `0x12` when the game arrives at the **title screen** -- section 12,
