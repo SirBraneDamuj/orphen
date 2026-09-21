@@ -1,17 +1,12 @@
 /*
- * Initialize Mini-Map Data Arrays - FUN_0022de88
+ * Clear the vertex->primitive adjacency table - FUN_0022de88
  *
- * Initializes mini-map data structures by filling data arrays with default values.
- * This function clears/resets mini-map data buffers to prepare them for new
- * mini-map rendering operations.
+ * First pass of the slope map (see docs/minimap_disp_is_a_slope_map.md).
+ * Fills one 0x20-byte row per collision-mesh vertex with 0xFFFF, giving each
+ * vertex 16 empty owner slots. FUN_0022def0 then fills them in.
  *
- * The function iterates through mini-map data entries and sets each 16-entry
- * block to 0xFFFF (likely indicating empty/uninitialized map cells).
- *
- * Array structure appears to be:
- * - Each entry is 0x20 bytes (32 bytes)
- * - Each entry contains 16 undefined2 values (16 * 2 = 32 bytes)
- * - Values are set to 0xFFFF (empty/default state)
+ * iGpffffb714 (DAT_00355684) is the PSM2 vertex count, not a mini-map cell
+ * count; puGpffffbc74 is the table base, which mode 0 parks at 0x01849A00.
  *
  * Original function: FUN_0022de88
  */

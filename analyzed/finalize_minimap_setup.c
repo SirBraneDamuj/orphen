@@ -1,19 +1,26 @@
 /*
- * Finalize Mini-Map Setup - FUN_0022dfb0
+ * Extract the slope edges - FUN_0022dfb0
  *
- * Finalizes mini-map setup by processing coordinate pairs and calculating
- * directional/distance relationships between map points. This function appears
- * to build navigation or pathfinding data for the mini-map display.
+ * Third pass of the slope map (see docs/minimap_disp_is_a_slope_map.md). This
+ * is not a grid and not pathfinding: it walks the PSM2 collision mesh and keeps
+ * the edges a floor plan would draw.
  *
- * The function processes coordinate pairs within each grid row, calculates
- * angles and distances between points, and stores valid connections in the
- * mini-map data buffer for rendering.
+ * For each primitive (iGpffffb718 of them, stride 0x78 at iGpffffb740) and each
+ * of its up to 4 edges:
  *
- * Key operations:
- * - Processes adjacent coordinate pairs in each grid row
- * - Calculates angles between coordinate pairs (in degrees)
- * - Applies distance/validity checks
- * - Stores valid connections in output buffer
+ *   FUN_0022e2a0  find the primitive sharing both endpoints, or -1
+ *   FUN_0022e1c8  blank that shared edge in the neighbour's 8-byte scratch so
+ *                 it is not emitted twice; returns 0 when this edge is spent
+ *   angle         999 when there is no neighbour, so a mesh boundary always
+ *                 counts; otherwise the angle between the two primitives'
+ *                 normals in degrees (FUN_0022e340 picks +0x50 or +0x60 for a
+ *                 quad, FUN_0022e438 is the dot-product angle), minus 10 when
+ *                 the neighbour is a quad (primitiveFlags & 2 at
+ *                 iGpffffb73c + index * 0x80 + 0x70)
+ *
+ * Edges over 49 degrees are appended to uGpffffbc7c as 8-byte
+ * {v0, v1, angleDegrees} records, counted in sGpffffbc80. s01_e024 yields 1573
+ * of them out of 1630 primitives.
  *
  * Original function: FUN_0022dfb0
  */
