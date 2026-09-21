@@ -97,6 +97,28 @@ namespace orphen::ported::camera
     void FUN_00217e18_release_manual_camera(bool restore);
 
     bool manualCameraActive() const { return cGpffffad2f_manualCamera_ != 0; }
+
+    // FUN_00255820:38-44, the game over's half of the camera. `cGpffffb6e2 |= 4`
+    // takes the free-look and the idle auto-camera away for good, and the
+    // sub-mode is cleared so the follow path -- not a script camera -- owns the
+    // frame. The caller does FUN_00217E18(0) and FUN_00216968(3.2) either side
+    // of it, both of which are already public.
+    void FUN_00255820_stage_game_over();
+
+    // FUN_00255820:46-49's `cGpffffb6e4` half: drop the free-look latch and
+    // say whether it was set, so the caller can put the body back on screen.
+    bool FUN_00255820_clear_free_look();
+
+    // FUN_002559E8's tail, which writes `bGpffffb6e0 = 5` and `cGpffffb6e6 = 1`
+    // on **every** frame of state 0x1B. Mode 5 is FixedStep, a constant yaw
+    // step with no goal, and that is the whole of the slow orbit around the
+    // body; the ground clamp goes off so the camera can swing under the floor
+    // without being pushed back out.
+    //
+    // It is a per-frame request because the original's mode byte is per-frame
+    // too: FUN_00251ED8 zeroes it at the top of every frame and FUN_00216AA0
+    // only ever raises it.
+    void FUN_002559e8_hold_game_over();
     // cGpffffb6e1. 0x23 is the script camera; behaviours that want to take the
     // camera over test for it before they do, because a path can only be
     // installed on top of one that is already there.
@@ -186,6 +208,10 @@ namespace orphen::ported::camera
 
     // --- mode and gates ----------------------------------------------------
     FieldCameraMode bGpffffb6e0_mode_ = FieldCameraMode::None;
+    // Set by FUN_002559e8_hold_game_over and spent by the next update, which is
+    // how the original's "cleared by the player update, raised by whoever wants
+    // it" ordering reads from inside the camera.
+    bool gameOverModeRequested_ = false;
     std::uint8_t cGpffffb6e1_subMode_ = 0;
     std::uint8_t cGpffffb6e2_cutsceneGate_ = 0;
     std::uint8_t cGpffffb6e3_snapRequest_ = 0;

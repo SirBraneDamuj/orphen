@@ -164,6 +164,8 @@ target_sources(orphen_port
     src/ported/entity/original_enemy_attack.cpp
     src/ported/entity/original_ship_fire.cpp
     src/ported/entity/original_ship_fire.h
+    src/ported/entity/original_field_hp_gauge.cpp
+    src/ported/entity/original_field_hp_gauge.h
     src/ported/entity/original_health_bar.cpp
     src/ported/entity/original_status_aura.cpp
     src/ported/entity/party_follower.cpp
@@ -176,6 +178,8 @@ target_sources(orphen_port
     src/ported/entity/original_entity_sound.h
     src/ported/entity/actor_trace.cpp
     src/ported/entity/actor_trace.h
+    src/ported/player/original_game_over.cpp
+    src/ported/player/original_game_over.h
     src/ported/player/original_interaction.cpp
     src/ported/player/original_interaction.h
     src/ported/script/object_registers.cpp

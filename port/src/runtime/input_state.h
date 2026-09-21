@@ -35,6 +35,14 @@ namespace orphen::port
     // only shows up in play, where there is no frame number to capture at.
     bool captureSnapshotRequested = false;
 
+    // '1'..'5' and '0': the harness's damage keys. Nothing in the port lands a
+    // blow on the lead yet -- no enemy in a ported scene runs an attack against
+    // it -- so these stamp FUN_00216140's mailbox directly and let FUN_00251ED8
+    // spend it on its next frame. 0 means "no key"; 1..5 index kDebugHitKinds.
+    int debugDamageKind = 0;
+    // '0': put the lead back to full hit points.
+    bool debugHealRequested = false;
+
     // Left click: fire a ray through this pixel and report every entity triangle
     // along it, drawn or not. Window pixels, origin top-left.
     bool probeRequested = false;

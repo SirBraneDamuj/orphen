@@ -32,6 +32,38 @@ namespace orphen::port
 
     // The blade of state 0x1C and the projectile of state 0x1D. See
     // OriginalActionEffectHooks.
+    void setLightTable(orphen::ported::render::LightTable *lights)
+    {
+      controller_.setLightTable(lights);
+    }
+
+    void setDeathHook(std::function<void()> hook) { controller_.setDeathHook(std::move(hook)); }
+
+    void setLandingDustHook(
+        std::function<void(float x, float y, float z, float radius, bool lit)> hook)
+    {
+      controller_.setLandingDustHook(std::move(hook));
+    }
+
+    void setGameOverHooks(orphen::ported::player::GameOverHooks hooks)
+    {
+      controller_.setGameOverHooks(std::move(hooks));
+    }
+
+    void setCameraReleaseHook(std::function<void()> hook)
+    {
+      controller_.setCameraReleaseHook(std::move(hook));
+    }
+
+    // FUN_00216140's mailbox, for the harness damage keys.
+    void FUN_00216140_stamp_hit(std::uint16_t damage,
+                                std::uint8_t reaction,
+                                std::uint16_t reactionFrames,
+                                float fromDirection)
+    {
+      controller_.FUN_00216140_stamp_hit(damage, reaction, reactionFrames, fromDirection);
+    }
+
     void setActionEffectHooks(orphen::ported::player::OriginalActionEffectHooks hooks)
     {
       controller_.setActionEffectHooks(std::move(hooks));
@@ -47,7 +79,15 @@ namespace orphen::port
                 // the low half. This is one word rather than a jump flag
                 // because FUN_00256bb8 reads three different bits out of it.
                 std::uint32_t recentMappedActions,
-                bool debugMidairJumpHeld,
+                // FUN_0023B890(1): this frame's packed mapped word, held in the
+                // high half and newly-pressed in the low half -- uGpffffb688 and
+                // uGpffffb09c, which FUN_00251ED8 is handed directly. Distinct
+                // from the eight-frame OR above, which would stretch a single
+                // press across eight frames.
+                std::uint32_t currentMappedActions,
+                // cGpffffb66a, the debug byte. The moon jump is its only reader
+                // on this path.
+                bool debugActive,
                 bool interactPressed,
                 const orphen::ported::psm2::Psm2RuntimeState *map,
                 const orphen::ported::player::OriginalInteractionProbe &interactionProbe = {});

@@ -263,8 +263,22 @@ namespace orphen::port
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
+    // --press-jump: Square, on the listed frames. The jump, the landing and the
+    // moon jump are all in FUN_002534D8 and none of them can be reached from a
+    // headless run without this.
+    std::vector<std::uint32_t> pressJumpFrames;
+    // --hold-attack: Circle held for every frame in [first, second]. The moon
+    // jump needs the attack button down *while* jump is tapped, which no
+    // per-frame press list can express.
+    std::uint32_t holdAttackFrom = 0;
+    std::uint32_t holdAttackTo = 0;
     // And for Triangle: --press-magic, the cast.
     std::vector<std::uint32_t> pressMagicFrames;
+    // --damage <frame>[:<kind>][,...]. The same shape again for the harness's
+    // damage keys, so a capture run can reach the hit reactions and the field
+    // HP gauge without a window. `kind` is 1..5, defaulting to 2; see
+    // PortRuntime::applyDebugDamageKeys.
+    std::vector<std::pair<std::uint32_t, int>> damageFrames;
     // --hold-triangle / --hold-circle / --hold-cross / --hold-square
     // <first>-<last>: hold one face button across an inclusive 1-based frame
     // range, with the pressed edge on the first frame only.
@@ -776,6 +790,15 @@ namespace orphen::port
     // primitive's fade byte, against the 0x80 = x1.0 scale -- so a small
     // non-zero value renders the world nearly black. Zero is "no cap".
     std::uint8_t DAT_00355700_globalFadeCap_ = 0;
+    // FUN_00255CE8's alpha for this frame, written by the game-over state and
+    // spent by the publish. Zero means the quad is not drawn.
+    std::uint8_t DAT_00255ce8_underlayAlpha_ = 0;
+    // uGpffffb686, this frame's newly-pressed raw pad word.
+    std::uint16_t uGpffffb686_pressedPad_ = 0;
+    // FUN_00237A08 runs once. The original gets away without a latch because it
+    // changes game mode on the spot; the port's hand-off does not, so the state
+    // would keep asking.
+    bool gameOverHandedOff_ = false;
     // FUN_002342c0's render-state block: while the item scene is up, the two
     // VU1 light colours drop and the fog colour goes to black. Held as a flag
     // rather than as three overwritten globals so applySceneEnvironment stays
@@ -829,6 +852,8 @@ namespace orphen::port
     orphen::ported::battle::BattleParty::Environment battleEnvironment();
     orphen::ported::battle::BattleUpdateEnvironment battleUpdateEnvironment(std::uint16_t frameTicks);
     void sampleBattleTrace(std::uint32_t heldPad);
+    // The harness's 1..5 / 0 damage keys.
+    void applyDebugDamageKeys(const InputSnapshot &input);
     orphen::ported::battle::BattleTrace battleTrace_;
     void printBattleReport() const;
     void printTargetDisplayReport() const;
@@ -865,6 +890,12 @@ namespace orphen::port
     // word 10.
     static constexpr std::size_t kSceneMusicRequests = 8;
     void startSceneMusic();
+
+    // FUN_00205938 for one slot, after the scene's own eight are in place. The
+    // death path is the only caller: it swaps the game-over piece into slot 7
+    // over whatever the scene parked there. `index` is into the slot's own
+    // category table, the same numbering the scene requests use.
+    bool FUN_00205938_load_music_slot(std::size_t slot, std::uint16_t index, bool playNow);
 
     // VOICE.BIN's table of contents, which is what gives a line of dialogue its
     // real length. Optional: without it every hold falls back to an estimate and

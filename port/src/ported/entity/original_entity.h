@@ -132,6 +132,13 @@ namespace orphen::ported::entity
     // +0x98: index of the map placement record this entity was built from.
     // Written by both of FUN_0025eb48's branches; opcode 0x5A searches on it.
     std::int32_t placementRecordIndex98 = -1;
+    // +0x98 again, for the type 0x58 field HP gauge: how long the bar has left
+    // to stay up, in the same ticks every other timer counts in, saturating at
+    // 0xF00. The original overlays it on the word above; the port keeps it
+    // apart because a gauge is never built from a placement record and a
+    // placement-built prop never runs FUN_002D0EA8, so the two can only ever
+    // alias by accident. See original_field_hp_gauge.h.
+    std::int32_t gaugeHold98 = 0;
 
     // +0xA0: animation id, an index into the table at +0x9C. FUN_00229c40
     // leaves it at the slot clear's zero; only FUN_00225bc8 ever selects one.
@@ -319,6 +326,16 @@ namespace orphen::ported::entity
     // interactTarget198 are.
     std::int32_t actionEffect198 = -1;
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
+    // +0x1B0 / +0x1A4 / +0x1A8 on the **lead player**, written by FUN_00251ED8's
+    // hit reaction and read by the three state handlers it hands the frame to.
+    // +0x1B0 is the knockback speed FUN_002555D8 bleeds off by DAT_00352980 a
+    // frame; the other two are where FUN_002555A8 parks the scale and the height
+    // it flattens to zero, so it can put them back. Other types overlay the same
+    // three words with their own fields -- see the type-specific blocks below --
+    // and none of them ever runs these handlers.
+    float playerKnockbackSpeed1b0 = 0.0f;
+    float playerSavedScaleZ1a4 = 1.0f;
+    float playerSavedHeight1a8 = 0.0f;
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     // +0x19C on the *lead player*: the entity holding the item a chest just
     // gave up, as a pool slot rather than the original's pointer. Zero means

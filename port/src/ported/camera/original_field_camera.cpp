@@ -190,6 +190,25 @@ namespace orphen::ported::camera
     FUN_00216968_set_follow_distance(3.0f);
   }
 
+  void OriginalFieldCamera::FUN_00255820_stage_game_over()
+  {
+    cGpffffb6e2_cutsceneGate_ = static_cast<std::uint8_t>(cGpffffb6e2_cutsceneGate_ | 4u);
+    cGpffffb6e1_subMode_ = 0;
+  }
+
+  bool OriginalFieldCamera::FUN_00255820_clear_free_look()
+  {
+    const bool wasActive = cGpffffb6e4_freeLook_ != 0;
+    cGpffffb6e4_freeLook_ = 0;
+    return wasActive;
+  }
+
+  void OriginalFieldCamera::FUN_002559e8_hold_game_over()
+  {
+    gameOverModeRequested_ = true;
+    cGpffffb6e6_disableGroundClamp_ = 1;
+  }
+
   void OriginalFieldCamera::FUN_00216968_set_follow_distance(float distance)
   {
     fGpffffad28_distance_ = distance;
@@ -424,14 +443,24 @@ namespace orphen::ported::camera
     // FUN_00251ed8 clears uGpffffb6e0 to 0 earlier in the frame, and
     // FUN_00216aa0 only ever raises it. Releasing the button therefore drops
     // straight back to the default branch, which decays the yaw speed to rest.
-    bGpffffb6e0_mode_ = FieldCameraMode::None;
-    if ((input.rawHeldPad & kRawPadR1) != 0)
+    // The one writer outside this function is FUN_002559E8, the game over,
+    // which asks for mode 5 on every frame it runs.
+    bGpffffb6e0_mode_ =
+        gameOverModeRequested_ ? FieldCameraMode::FixedStep : FieldCameraMode::None;
+    gameOverModeRequested_ = false;
+    // FUN_00216aa0:98. The pad can only raise the mode while cGpffffb6e2 is
+    // clear, which is what stops a shoulder button overriding a camera a
+    // cutscene -- or the game over -- has taken.
+    if (cGpffffb6e2_cutsceneGate_ == 0)
     {
-      bGpffffb6e0_mode_ = FieldCameraMode::RotateNegative;
-    }
-    else if ((input.rawHeldPad & kRawPadL1) != 0)
-    {
-      bGpffffb6e0_mode_ = FieldCameraMode::RotatePositive;
+      if ((input.rawHeldPad & kRawPadR1) != 0)
+      {
+        bGpffffb6e0_mode_ = FieldCameraMode::RotateNegative;
+      }
+      else if ((input.rawHeldPad & kRawPadL1) != 0)
+      {
+        bGpffffb6e0_mode_ = FieldCameraMode::RotatePositive;
+      }
     }
 
     // A snap was requested (scene load, distance change): place the camera and

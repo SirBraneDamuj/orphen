@@ -81,6 +81,31 @@ namespace orphen::ported::entity
     None,
     // FUN_002d2348, installed by FUN_002d2470 when the magic projectile ends.
     FUN_002d2348_sparks,
+    // FUN_002d3320, installed by FUN_002d36f8 -- which has exactly one caller,
+    // FUN_00255820, the game-over state. It is not ambient dust in the sense of
+    // scenery: it re-seeds itself off the dead body's bones for as long as the
+    // body is on screen, which is the rising column of sparks the game over is.
+    FUN_002d3320_gameOverDust,
+  };
+
+  // What FUN_002d3320 needs that a particle does not carry. The original reads
+  // all three straight out of globals: DAT_0058beb0 for the body, FUN_00216868
+  // for the noise and FUN_002298d0 for the weapon class.
+  struct GameOverDustContext
+  {
+    // DAT_0058bffc -- the lead's own +0x14C scale. `index < scale * 1000` is
+    // the live-entry test, so a normally sized player seeds 1000 of the 1536.
+    float DAT_0058bffc_leadScale = 1.0f;
+    // FUN_002298d0(DAT_0058beb0), the lead's weapon class. Only reaches the
+    // bone table, which holds the same four values in every row.
+    int FUN_002298d0_weaponClass = 0;
+    std::function<std::uint32_t()> FUN_00216868_random;
+    // FUN_0020dc88(DAT_0058beb0, bone, localOffset, particle): the world point
+    // of an offset in one of the body's bones. Null leaves the pool idle,
+    // because there is nowhere to seed from.
+    std::function<orphen::ported::psm2::Vec3(std::size_t bone,
+                                             const orphen::ported::psm2::Vec3 &localOffset)>
+        FUN_0020dc88_bone_point;
   };
 
   class ParticlePool
@@ -98,11 +123,21 @@ namespace orphen::ported::entity
     // overwrites +0x22 on spawn. Also drops the behaviour.
     void FUN_002d3290_reset(const std::function<std::uint32_t()> &random);
 
+    // FUN_002d36f8. Clear the pool and install FUN_002d3320 on it. The clear is
+    // FUN_002d3290, the same one above, so the stagger it writes is what spaces
+    // the first wave of sparks out in time.
+    void FUN_002d36f8_install_game_over_dust(const std::function<std::uint32_t()> &random);
+
     // FUN_002d3218. Steps every particle through the installed behaviour. The
     // original draws here too; this port collects the quads separately at
     // publish time, which puts the same particles in the same order into the
     // same display-list bucket.
-    void FUN_002d3218_step(std::uint32_t frameTicks);
+    //
+    // `dust` is only read by the FUN_002d3320 behaviour; the spark behaviour
+    // ignores it, and a null one leaves the game-over pool frozen rather than
+    // seeding particles at the origin.
+    void FUN_002d3218_step(std::uint32_t frameTicks,
+                           const GameOverDustContext *dust = nullptr);
 
     // FUN_002d2470:0x002d2818-0x002d29b0. The detonation burst: up to a hundred
     // particles seeded from the entity's position, fanning out from its facing
@@ -130,5 +165,13 @@ namespace orphen::ported::entity
   // FUN_002d2348. One particle, one frame. Public because it is the whole of the
   // behaviour and worth being able to test on its own.
   void FUN_002d2348_spark_step(OriginalParticle &particle, std::uint32_t frameTicks);
+
+  // FUN_002d3320, the same way. `index` is the entry's own pool index, which
+  // the original recovers by dividing the pointer difference by 0x40 -- it is
+  // an input to the behaviour, not bookkeeping.
+  void FUN_002d3320_game_over_dust_step(OriginalParticle &particle,
+                                        std::size_t index,
+                                        std::uint32_t frameTicks,
+                                        const GameOverDustContext &context);
 
 } // namespace orphen::ported::entity

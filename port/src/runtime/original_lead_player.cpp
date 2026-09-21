@@ -162,7 +162,8 @@ namespace orphen::port
                                   const orphen::ported::psm2::Vec3 &movementRequest,
                                   float stickMagnitude,
                                   std::uint32_t recentMappedActions,
-                                  bool debugMidairJumpHeld,
+                                  std::uint32_t currentMappedActions,
+                                  bool debugActive,
                                   bool interactPressed,
                                   const orphen::ported::psm2::Psm2RuntimeState *map,
                                   const orphen::ported::player::OriginalInteractionProbe &interactionProbe)
@@ -184,7 +185,9 @@ namespace orphen::port
     input.mappedPressedActions = recentMappedActions & 0xFFFFu;
     input.interactPressed = interactPressed;
     input.stickMagnitude = stickMagnitude;
-    input.debugMidairJumpHeld = debugMidairJumpHeld;
+    input.uGpffffb688_heldThisFrame = (currentMappedActions >> 16) & 0xFFFFu;
+    input.uGpffffb09c_pressedThisFrame = currentMappedActions & 0xFFFFu;
+    input.cGpffffb66a_debugActive = debugActive;
     const auto terrainSampler = [map](float originalX, float originalZ, float referenceY, const orphen::ported::player::OriginalTerrainQuery &query)
     {
       const auto groundHit = queryPsm2GroundAt(*map, originalX, originalZ, referenceY, toPsm2TerrainQueryOptions(query));

@@ -10,6 +10,7 @@
 #include "ported/entity/original_ship_fire.h"
 #include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_summon_stage.h"
+#include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
 
 #include "ported/battle/battle_tables.h"
@@ -7004,6 +7005,7 @@ namespace orphen::ported::entity
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
     case 0x0028B848u: // FUN_0028b848, type 0x8B, the s14_e031 target dummy
+    case 0x002D0EA8u: // FUN_002d0ea8, type 0x58, the field HP gauge
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
     case 0x002EB990u: // FUN_002eb990, type 0x10E, the flyer's shot
     case 0x002EBC30u: // FUN_002ebc30, type 0x10F, the swoop's dust
@@ -7055,6 +7057,8 @@ namespace orphen::ported::entity
       return "FUN_002dae60 (fireball)";
     case 0x002D73E8u:
       return "FUN_002d73e8 (target cursor)";
+    case 0x002D0EA8u:
+      return "FUN_002d0ea8 (field HP gauge)";
     case 0x002D5748u:
       return "LAB_002d5748 (health bar)";
     case 0x002EB990u:
@@ -7296,6 +7300,20 @@ namespace orphen::ported::entity
       case 0x002D5748u:
         FUN_002d5748_health_bar(entity, environment.frameTicks);
         break;
+      case 0x002D0EA8u:
+      {
+        // FUN_002D0EA8 reads the lead player outright -- its $s1 is the literal
+        // 0x0058BEB0 -- rather than anything the walk hands it.
+        FieldHpGaugeEnvironment gaugeEnvironment;
+        gaugeEnvironment.frameTicks = environment.frameTicks;
+        gaugeEnvironment.DAT_00354d2c_gameMode = environment.DAT_00354d2c_gameMode;
+        gaugeEnvironment.DAT_00355054_letterboxMode = environment.DAT_00355054_letterboxMode;
+        gaugeEnvironment.DAT_003551ec_sceneRequest = environment.DAT_003551ec_sceneRequest;
+        gaugeEnvironment.DAT_0034ab70_flag50b =
+            environment.eventFlag ? environment.eventFlag(0x50B) : false;
+        FUN_002d0ea8_field_hp_gauge(entity, pool.leadPlayer(), gaugeEnvironment);
+        break;
+      }
       case 0x002EB990u:
         FUN_002eb990_enemy_shot(entity, slot, environment);
         break;

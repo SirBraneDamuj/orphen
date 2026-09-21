@@ -62,3 +62,6 @@ SLPS_250.08
 /savestates/
 
 bash.exe.stackdump
+
+# Harness snapshot dumps (--capture-snapshot writes these into the cwd)
+orphen_snapshot_*.txt

@@ -182,6 +182,14 @@ namespace orphen::harness
     // original's own overlay sits relative to the debug text.
     void setScreenFadeOverlay(std::uint32_t packedRgb, std::uint8_t alpha);
 
+    // FUN_00255CE8's quad, the game over's own black overlay. It goes into GS
+    // sort bucket **2** rather than the fade's 0x1007, which puts it under the
+    // map and under every entity -- a hardware capture with its alpha at 0xFF
+    // still shows the room, once DAT_00355700 is forced back above 3. So all it
+    // can actually cover is the backdrop, and it is drawn here in the same
+    // place: over the fog-colour clear, before the world.
+    void setWorldUnderlayAlpha(std::uint8_t alpha) { worldUnderlayAlpha_ = alpha; }
+
     // The dialogue system's sprite list for this frame -- FUN_00237fc0's
     // 300-entry glyph array, reduced to what is actually placed. Drawn over the
     // fade, out of the texture slots, in the order given. Empty hides it.
@@ -327,6 +335,7 @@ namespace orphen::harness
     std::vector<orphen::ported::debug::DebugGlyph> originalDebugGlyphs_;
     std::uint32_t screenFadeRgb_ = 0;
     std::uint8_t screenFadeAlpha_ = 0;
+    std::uint8_t worldUnderlayAlpha_ = 0;
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
     std::vector<orphen::ported::render::HudQuad> hudQuads_;
     // One GL texture per (slot, CLUT bank) the frame actually asks for, keyed
@@ -412,6 +421,8 @@ namespace orphen::harness
     void drawDialogueSprites(int framebufferWidth, int framebufferHeight) const;
     // FUN_00207de8's UI quads, in that same screen.
     void drawHudQuads(int framebufferWidth, int framebufferHeight) const;
+    // FUN_00255CE8. Assumes the game viewport is already current.
+    void drawWorldUnderlay() const;
     // The 4-bit read of a slot's sheet through one CLUT bank; 0 when the slot
     // is empty. See BmpaTexture::clutBankPixels.
     unsigned int clutBankTexture(int slot, int bank) const;

@@ -3,6 +3,8 @@
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_entity_sound.h"
 #include "ported/psm2/psm2_runtime.h"
+#include "ported/player/original_game_over.h"
+#include "ported/render/original_light_table.h"
 
 #include <cstdint>
 #include <functional>
@@ -47,6 +49,40 @@ namespace orphen::ported::player
   constexpr std::uint16_t kAnimationIdleFidget = 0x17;
   constexpr std::uint16_t kAnimationSwordAttack = 0x33;
   constexpr std::uint16_t kAnimationMagicCast = 0x14;
+
+  // FUN_00251ED8:97-225, the hit reaction. `FUN_00225bf0(entity, state,
+  // animation)` -- three reactions and a death, picked by the hit record's
+  // +0xBC and by where the player was standing.
+  //
+  //   0x16 / 0x1F  the ordinary stagger, FUN_002554D8
+  //   0x17 / 0x22  the flatten, FUN_002555A8 -- +0xBC == 0x13
+  //   0x18 / 0x20  the knockback, FUN_002555D8 -- +0xBC == 0x12, airborne,
+  //                **or dead**: the death branch ends in this one too
+  //   0x19 / 0x0D  the terrain hazard, FUN_002557A0 -- lava or a pit, not death
+  constexpr std::uint16_t kStateHitStagger = 0x16;
+  constexpr std::uint16_t kStateHitFlatten = 0x17;
+  constexpr std::uint16_t kStateHitKnockback = 0x18;
+  // PTR_FUN_0031E0E8[0x19], FUN_002557A0. Written only by FUN_00251ED8:60-71,
+  // the `+0x6C & 0x1000000` terrain test -- the player stepped into something
+  // that kills on contact. The handler sinks the body and hands it to
+  // FUN_00255E40, the respawn. Nothing in the port writes it yet, because the
+  // terrain entry is not ported; the handler is kept so that when it is, the
+  // state it lands in already works.
+  constexpr std::uint16_t kStateTerrainHazard = 0x19;
+  // PTR_FUN_0031E0E8[0x1A] and [0x1B]: the game over. See original_game_over.h.
+  constexpr std::uint16_t kStateGameOverEnter = 0x1A;
+  constexpr std::uint16_t kStateGameOverHold = 0x1B;
+  constexpr std::uint16_t kAnimationHitStagger = 0x1f;
+  constexpr std::uint16_t kAnimationHitKnockback = 0x20;
+  constexpr std::uint16_t kAnimationKnockdown = 0x21;
+  constexpr std::uint16_t kAnimationHitFlatten = 0x22;
+  constexpr std::uint16_t kAnimationGetUp = 0x23;
+  // State 0x19's animation, not the death's -- the death plays 0x20.
+  constexpr std::uint16_t kAnimationTerrainHazard = 0x0d;
+
+  // FUN_00216140's +0xBC values FUN_00251ED8 branches on.
+  constexpr std::uint8_t kHitReactionKnockback = 0x12;
+  constexpr std::uint8_t kHitReactionFlatten = 0x13;
 
   // The type id FUN_00256130 spawns for the blade, and the animations
   // FUN_002d21b8 drives it through: 1 is the swing, 2 the dissipate.
@@ -159,9 +195,18 @@ namespace orphen::ported::player
     // FUN_00253488 scales air control by it directly. Full deflection is 128.
     float stickMagnitude = 0.0f;
 
-    // Circle held (raw pad 0x0020). Not an input the original's field movement
-    // reads; it gates the harness's debug mid-air jump, below.
-    bool debugMidairJumpHeld = false;
+    // uGpffffb688 / uGpffffb09c -- DAT_003555F8 and DAT_003555FA, **this
+    // frame's** mapped held and newly-pressed words, not the eight-frame OR
+    // above. FUN_00251ED8 is handed these two directly and FUN_002534D8's moon
+    // jump reads the second; an eight-frame window there would hold the boost
+    // on for eight frames per tap instead of one.
+    std::uint32_t uGpffffb688_heldThisFrame = 0;
+    std::uint32_t uGpffffb09c_pressedThisFrame = 0;
+
+    // cGpffffb66a, DAT_003555DA -- the debug-active byte. It is the only gate on
+    // the moon jump, and the port holds it on the way updateOriginalDebugOverlay
+    // does.
+    bool cGpffffb66a_debugActive = false;
   };
 
   struct OriginalPlayerSnapshot
@@ -230,12 +275,65 @@ namespace orphen::ported::player
       FUN_00267d38_playSound_ = std::move(play);
     }
 
+    // DAT_00343888. FUN_00251ED8's hit reaction lights the player red for
+    // fifteen frames out of the same sixteen-slot table the script opcodes
+    // allocate from, so the controller needs a view of it. Nothing consumes the
+    // table's falloff yet -- see original_light_table.h -- so this writes state
+    // rather than pixels.
+    void setLightTable(orphen::ported::render::LightTable *lights) { DAT_00343888_lights_ = lights; }
+
+    // FUN_00265EC0(0x58CD70) plus the death sting and the two music ramps --
+    // everything FUN_00251ED8's death branch does outside slot 0.
+    void setDeathHook(std::function<void()> hook) { onDeath_ = std::move(hook); }
+    // FUN_00255E40, the respawn. Left uninstalled means the body stays down.
+    void setDeathRespawnHook(std::function<void()> hook) { onDeathRespawn_ = std::move(hook); }
+    // Everything states 0x1A and 0x1B reach outside slot 0. Left uninstalled,
+    // the two states still run -- the player keeps its own fields -- but the
+    // room, the lights and the camera stay as they were.
+    void setGameOverHooks(GameOverHooks hooks) { gameOver_ = std::move(hooks); }
+    // FUN_002262C0:577-601, the landing dust. The pool lives outside the
+    // controller, so the touchdown test stays here and the ring goes out
+    // through this. `lit` is the original's `kind != 0`, which picks 0xFFFFFF
+    // over 0.
+    void setLandingDustHook(std::function<void(float x, float y, float z, float radius, bool lit)> hook)
+    {
+      FUN_00219af0_landingDust_ = std::move(hook);
+    }
+    // FUN_00217E18(0), the manual camera release FUN_002536A8 ends with.
+    void setCameraReleaseHook(std::function<void()> hook)
+    {
+      FUN_00217e18_releaseCamera_ = std::move(hook);
+    }
+
+    // FUN_00216140's mailbox, for a caller that lands a hit on the lead
+    // outside the hit test: +0xBE is the damage, +0xBC the reaction, +0xC0 the
+    // reaction's length in frames and +0xC4 the direction it came from.
+    // `FUN_00251ed8_apply_pending_damage` spends all four on its next frame.
+    void FUN_00216140_stamp_hit(std::uint16_t damage,
+                                std::uint8_t reaction,
+                                std::uint16_t reactionFrames,
+                                float fromDirection);
+
   private:
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
     OriginalScriptedStateStep scriptedStateStep_;
     OriginalActionEffectHooks actionEffect_;
     orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;
+    orphen::ported::render::LightTable *DAT_00343888_lights_ = nullptr;
+    // bGpffffbd58 / uGpffffbd5a: the light slot the last hit took, -1 for none,
+    // and the frames it has left. FUN_00251ED8 owns both.
+    std::int32_t bGpffffbd58_hitLightSlot_ = -1;
+    std::int32_t uGpffffbd5a_hitLightFrames_ = 0;
+    // uGpffffbd54. FUN_00251ED8:21-23 sets it from the attack button held, and
+    // clears it outright unless the debug byte is up. FUN_002534D8 is its only
+    // reader -- this is the arm half of the moon jump.
+    std::uint32_t uGpffffbd54_moonJumpArmed_ = 0;
+    std::function<void()> onDeath_;
+    std::function<void()> onDeathRespawn_;
+    GameOverHooks gameOver_;
+    std::function<void()> FUN_00217e18_releaseCamera_;
+    std::function<void(float x, float y, float z, float radius, bool lit)> FUN_00219af0_landingDust_;
 
     orphen::ported::entity::OriginalEntity &entity() { return *entityStorage_; }
     const orphen::ported::entity::OriginalEntity &entity() const { return *entityStorage_; }
@@ -252,6 +350,17 @@ namespace orphen::ported::player
     std::optional<std::uint32_t> currentSurfaceTerrainFlags() const;
 
     void FUN_00225bf0_set_entity_state(std::uint16_t state, std::uint16_t substate);
+    // FUN_00251ED8:97-227, the +0xBE block and the +0xC0 countdown under it.
+    void FUN_00251ed8_apply_pending_damage(std::uint32_t frameTicks);
+    // FUN_002536A8: the shove a reaction taken in states 3..6 starts with.
+    void FUN_002536a8_break_out_of_state();
+    // PTR_FUN_0031E0E8[0x16] / [0x17] / [0x18] / [0x19].
+    void FUN_002554d8_update_hit_stagger(std::uint32_t frameTicks);
+    void FUN_002555a8_update_hit_flatten();
+    void FUN_002555d8_update_hit_knockback(std::uint32_t frameTicks);
+    void FUN_002557a0_update_terrain_hazard(std::uint32_t frameTicks);
+    // FUN_00251C80 + FUN_00267D38, the three hurt cues.
+    void playCharacterCue(int soundIndex);
     void FUN_00252d88_return_to_idle_state();
     void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
                                                   const OriginalPlayerFrameInput &input,

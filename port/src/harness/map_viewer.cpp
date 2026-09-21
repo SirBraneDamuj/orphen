@@ -1300,10 +1300,20 @@ namespace orphen::harness
             // original gets this for free: +0x134 rides in the draw header and
             // VU1 folds it into the vertex alpha before the GS's own ALPHA
             // register ever sees it.
+            //
+            // **It stays on register block 0.** The fade never touches the block
+            // index -- only a pass's own texFlags mode rewrites it -- and block 0
+            // is the one block with ZMSK clear, so a faded model still writes
+            // depth. Promoting to mode 1 here turned the depth mask off and let
+            // every triangle draw over every other in submission order: at the
+            // game over's 0x7C the colour is within 3% of opaque but the body
+            // came out see-through, the far arm showing through the torso.
+            // Confirmed on hardware by poking the lead's +0x134 down to 0x08
+            // mid-game-over: the body blends with the floor behind it -- so ABE
+            // really does come on -- and its own limbs stay correctly sorted.
             if (!blend && g_entityFadeAlpha < 1.0f)
             {
               blend = true;
-              mode = 1;
             }
           }
           setBlendState(mode, blend);
@@ -2723,6 +2733,70 @@ namespace orphen::harness
     return textureId;
   }
 
+  // FUN_00255CE8. Four corners at +-320 and +-224 -- the whole 640x448 virtual
+  // screen -- with rgb 0 and the alpha the caller passes, and mode word 0x44180
+  // so the blend is ordinary source-alpha. FUN_00207DE8:130-141 halves the
+  // alpha of an untextured packet on the way to the GS, where 0x80 is 1.0, so
+  // 0xFF reaches the hardware as 0x7F and covers what is under it completely.
+  void MapViewer::drawWorldUnderlay() const
+  {
+    if (worldUnderlayAlpha_ == 0)
+    {
+      return;
+    }
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, 1.0, 1.0, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_FOG);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glColor4f(0.0f, 0.0f, 0.0f, static_cast<float>(worldUnderlayAlpha_) / 255.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(0.0f, 0.0f);
+    glVertex2f(1.0f, 0.0f);
+    glVertex2f(1.0f, 1.0f);
+    glVertex2f(0.0f, 1.0f);
+    glEnd();
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    if (cullWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_CULL_FACE);
+    }
+    if (fogWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_FOG);
+    }
+    if (textureWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_TEXTURE_2D);
+    }
+    if (depthWasEnabled == GL_TRUE)
+    {
+      glEnable(GL_DEPTH_TEST);
+    }
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
   void MapViewer::drawHudQuads(int framebufferWidth, int framebufferHeight) const
   {
     if (hudQuads_.empty() || textureSlots_ == nullptr || framebufferWidth <= 0 ||
@@ -3531,6 +3605,21 @@ namespace orphen::harness
     glEnable(GL_TEXTURE_2D);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
+    // **Discard fully transparent texels.** The GS's alpha test is ATST
+    // GREATER for the whole frame -- see docs/map_cutout_alpha_test.md -- and
+    // this pass was the one path that did not model it. A blended record hides
+    // its alpha-0 texels through the blend, so nothing noticed; a record with
+    // **blend mode 0** does not, and draws them as solid palette colour.
+    //
+    // The type 0x58 field HP gauge is what exposed it. Its four records stack a
+    // green liquid sphere, a black drain cap, an ornate ring and a glass
+    // highlight, and the ring -- mode 0, 62x47, with an alpha-0 hole in the
+    // middle for the orb to show through -- was painting that hole opaque brown
+    // over the two records beneath it. The gauge had a fill level the whole
+    // time; it was buried under its own frame.
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.0f);
+
     unsigned int boundTexture = 0;
     int currentMode = -1;
     bool depthTestOn = true;
@@ -3674,6 +3763,7 @@ namespace orphen::harness
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
+    glDisable(GL_ALPHA_TEST);
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     if (fogWasEnabled == GL_TRUE)
     {
@@ -3870,6 +3960,9 @@ namespace orphen::harness
         // into a bucket at the far end of the display list, so the GS sees the
         // backdrop before anything else. Here that is simply "draw it first".
         drawBackgroundQuads(backgroundQuads_, uploadedTextureIds_, backgroundProjection);
+
+        // Bucket 2, between the backdrop and the map. See setWorldUnderlayAlpha.
+        drawWorldUnderlay();
 
         drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_,
                 sceneObjectViews_, entityDrawList, slotTextureIds_);

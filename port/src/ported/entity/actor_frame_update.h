@@ -49,6 +49,13 @@ namespace orphen::ported::entity
     EntityPool *entityPool = nullptr;
     const ActorDispatchTable *dispatchTable = nullptr;
 
+    // The three globals FUN_002D0EA8's gate reads -- the game mode, the
+    // letterbox mode and the pending scene-change request. A field HP gauge
+    // takes itself off screen for any of them. See original_field_hp_gauge.h.
+    int DAT_00354d2c_gameMode = 0;
+    int DAT_00355054_letterboxMode = 0;
+    std::uint32_t DAT_003551ec_sceneRequest = 0;
+
     // FUN_00266368: read one bit of the event-flag bank at DAT_00342b70. The
     // bank lives in the script state, so it arrives as a callback rather than as
     // a dependency on the script namespace.

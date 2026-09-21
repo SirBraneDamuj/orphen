@@ -706,6 +706,34 @@ namespace
         }
         continue;
       }
+      if (argument == "--damage")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires <frame>[:<kind>]");
+        }
+        const std::string frames{argv[++argumentIndex]};
+        for (std::size_t start = 0; start < frames.size();)
+        {
+          const std::size_t comma = frames.find(',', start);
+          const std::string one = frames.substr(start, comma - start);
+          if (!one.empty())
+          {
+            const std::size_t colon = one.find(':');
+            const std::uint32_t frame =
+                static_cast<std::uint32_t>(std::stoul(one.substr(0, colon)));
+            const int kind =
+                colon == std::string::npos ? 2 : std::stoi(one.substr(colon + 1));
+            config.damageFrames.emplace_back(frame, kind);
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        continue;
+      }
       if (argument == "--press-attack")
       {
         if (argumentIndex + 1 >= argc)
@@ -772,6 +800,46 @@ namespace
         }
       }
 
+      if (argument == "--press-jump")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a frame number");
+        }
+        // Square, on the listed frames. Same shape as --press-attack.
+        const std::string frames{argv[++argumentIndex]};
+        for (std::size_t start = 0; start < frames.size();)
+        {
+          const std::size_t comma = frames.find(',', start);
+          const std::string one = frames.substr(start, comma - start);
+          if (!one.empty())
+          {
+            config.pressJumpFrames.push_back(static_cast<std::uint32_t>(std::stoul(one)));
+          }
+          if (comma == std::string::npos)
+          {
+            break;
+          }
+          start = comma + 1;
+        }
+        continue;
+      }
+      if (argument == "--hold-attack")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " needs <first>-<last>");
+        }
+        const std::string range{argv[++argumentIndex]};
+        const std::size_t dash = range.find('-');
+        if (dash == std::string::npos)
+        {
+          throw std::runtime_error("--hold-attack needs <first>-<last>");
+        }
+        config.holdAttackFrom = static_cast<std::uint32_t>(std::stoul(range.substr(0, dash)));
+        config.holdAttackTo = static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1)));
+        continue;
+      }
       if (argument == "--press-magic")
       {
         if (argumentIndex + 1 >= argc)
@@ -984,10 +1052,33 @@ int main(int argc, char **argv)
         const bool magicThisFrame =
             std::find(config.pressMagicFrames.begin(), config.pressMagicFrames.end(),
                       frameIndex + 1) != config.pressMagicFrames.end();
+        constexpr std::uint16_t kRawPadSquare = 0x0080;
+        const bool jumpThisFrame =
+            std::find(config.pressJumpFrames.begin(), config.pressJumpFrames.end(),
+                      frameIndex + 1) != config.pressJumpFrames.end();
         input.rawPressedPad = static_cast<std::uint16_t>((pressThisFrame ? kRawPadCross : 0) |
                                                          (attackThisFrame ? kRawPadCircle : 0) |
-                                                         (magicThisFrame ? kRawPadTriangle : 0));
+                                                         (magicThisFrame ? kRawPadTriangle : 0) |
+                                                         (jumpThisFrame ? kRawPadSquare : 0));
         input.rawHeldPad = input.rawPressedPad;
+        // --hold-attack: held only, never newly-pressed after the first frame,
+        // so it arms the moon jump without also starting a sword swing on every
+        // frame of the range.
+        if (config.holdAttackTo != 0 && frameIndex + 1 >= config.holdAttackFrom &&
+            frameIndex + 1 <= config.holdAttackTo)
+        {
+          input.rawHeldPad = static_cast<std::uint16_t>(input.rawHeldPad | kRawPadCircle);
+        }
+
+        // --damage: land a hit on the lead on this frame.
+        input.debugDamageKind = 0;
+        for (const auto &hit : config.damageFrames)
+        {
+          if (hit.first == frameIndex + 1)
+          {
+            input.debugDamageKind = hit.second;
+          }
+        }
 
         // --hold-triangle / --hold-circle / --hold-cross / --hold-square. Held
         // for the whole inclusive range, pressed only on its first frame, which
@@ -1181,6 +1272,8 @@ int main(int argc, char **argv)
         // once per tick, which can only be true on one of them.
         stepped.rawPressedPad = 0;
         stepped.captureSnapshotRequested = false;
+        stepped.debugDamageKind = 0;
+        stepped.debugHealRequested = false;
         stepped.toggleWireframeRequested = false;
         stepped.previousMapRequested = false;
         stepped.nextMapRequested = false;
@@ -1205,12 +1298,38 @@ int main(int argc, char **argv)
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCross);
       }
 
+      // --damage, the same thing for the harness's damage keys.
+      for (const auto &hit : config.damageFrames)
+      {
+        if (hit.first == renderedFrames + 1)
+        {
+          stepInput.debugDamageKind = hit.second;
+        }
+      }
+
       // --press-attack, the same thing for Circle.
       if (std::find(config.pressAttackFrames.begin(), config.pressAttackFrames.end(),
                     renderedFrames + 1) != config.pressAttackFrames.end())
       {
         constexpr std::uint16_t kRawPadCircle = 0x0020;
         stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCircle);
+        stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCircle);
+      }
+
+      // --press-jump, for Square.
+      if (std::find(config.pressJumpFrames.begin(), config.pressJumpFrames.end(),
+                    renderedFrames + 1) != config.pressJumpFrames.end())
+      {
+        constexpr std::uint16_t kRawPadSquare = 0x0080;
+        stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadSquare);
+        stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadSquare);
+      }
+
+      // --hold-attack, Circle down across a range without re-pressing it.
+      if (config.holdAttackTo != 0 && renderedFrames + 1 >= config.holdAttackFrom &&
+          renderedFrames + 1 <= config.holdAttackTo)
+      {
+        constexpr std::uint16_t kRawPadCircle = 0x0020;
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCircle);
       }
 

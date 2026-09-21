@@ -7,6 +7,7 @@
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/entity/entity_collision.h"
+#include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/original_mast_boss.h"
@@ -16,6 +17,7 @@
 #include "ported/model/psc3_skeleton.h"
 #include "ported/model/entity_animation.h"
 #include "ported/script/object_registers.h"
+#include "ported/player/original_game_over.h"
 #include "ported/player/original_interaction.h"
 
 #include <cmath>
@@ -39,6 +41,8 @@ namespace orphen::port
     // FUN_0022a360:22 seeds DAT_0032538c to 0x42000000. The scene block and
     // opcode 0xB8 both override it; a scene carrying neither runs at this.
     constexpr float kDAT_0032538c_defaultDrawDistance = 32.0f;
+    // DAT_00352470, the size of one puff in FUN_002262C0's landing ring.
+    constexpr float kDAT_00352470_landingDustSize = 0.400000005960464f;
 
     // FUN_00237fc0:65-68, the caption a control-code 0x15 menu keeps in the
     // corner. Message 0x28 of SCR.BIN resource 1 is "Press <Cross> to Select";
@@ -185,6 +189,126 @@ namespace orphen::port
     };
 
     leadPlayer_.setActionEffectHooks(std::move(actionHooks));
+
+    // FUN_00251ED8's hit reaction reaches three things outside slot 0.
+    leadPlayer_.setLightTable(&sceneScript_.state().DAT_00343888_lights);
+    leadPlayer_.setCameraReleaseHook([this] { fieldCamera_.FUN_00217e18_release_manual_camera(false); });
+
+    // FUN_002262C0:592's ring. The controller owns the touchdown test; the pool
+    // is the runtime's, so the spawn itself is here. DAT_00352470 is 0.4, and
+    // the actor's own +0x54 is passed for both the x jitter and the ring radius
+    // with no y jitter -- one outer step of five puffs, each living 5..35
+    // frames.
+    leadPlayer_.setLandingDustHook(
+        [this](float x, float y, float z, float radius, bool lit)
+        {
+          DAT_00355a9c_dust_.FUN_00219af0_spawn_impact(
+              x, y, z, kDAT_00352470_landingDustSize, radius, 0.0f, radius, 0x1E, 1, 5, 0, lit,
+              [this] { return FUN_00216868_random(); });
+        });
+    leadPlayer_.setDeathHook(
+        [this]
+        {
+          // FUN_00265EC0(0x58CD70): the field HP gauge goes with the player.
+          orphen::ported::entity::FUN_00265ec0_destroy_entity(
+              orphen::ported::entity::kDAT_0058cd70_fieldHpGaugeSlot, entityPool_,
+              &sceneScript_.state().DAT_00343888_lights);
+          // **The game-over music is loaded here, not by the scene.**
+          // FUN_00205938(7, 0x2F, 0) replaces slot 7's bank with category 2
+          // record 47 -- SND.BIN resource 133, a 2080-byte sequence -- and
+          // leaves it stopped; FUN_00255820's FUN_002063C8(7, 0xF, 1000) is
+          // what starts and ramps it half a second later. Without this the ramp
+          // brings up whatever the scene left in slot 7, and in s01_e024 that is
+          // resource 264: a sample bank whose sequence is seventeen bytes, a
+          // program change and an end-of-track. It starts, ends on the next
+          // event and is silent, which is why the game over had no music.
+          FUN_00205938_load_music_slot(7, 0x2F, false);
+          // FUN_00206260(0, 0x19, 0) and FUN_00206260(1, 0x19, 0): both the
+          // scene's own music slots ramp down over 0x19.
+          soundEngine_.FUN_00206260_ramp_down_slot(0, 0x19, 0);
+          soundEngine_.FUN_00206260_ramp_down_slot(1, 0x19, 0);
+        });
+
+    // ---- states 0x1A and 0x1B, the game over -----------------------------
+    // Everything FUN_00255820 and FUN_002559E8 touch that is not pool slot 0.
+    // See ported/player/original_game_over.h; the short version is that the
+    // death is an ordinary knockback and *this* is what the room does about it.
+    {
+      orphen::ported::player::GameOverHooks gameOver;
+      gameOver.DAT_0058beb0_pool = &entityPool_;
+      gameOver.DAT_00343888_lights = &sceneScript_.state().DAT_00343888_lights;
+      gameOver.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
+      gameOver.DAT_0035566c_ambient = &sceneScript_.state().uGpffffb6fc_globalRgb;
+      gameOver.DAT_00355670_lightColour = &sceneScript_.state().uGpffffb700_vectorRgb;
+      gameOver.DAT_00355674_fogColour = &sceneScript_.state().uGpffffb704_color1;
+      gameOver.DAT_003439c8_lightDirection = sceneScript_.state().DAT_003439c8_vector;
+      gameOver.applySceneEnvironment = [this] { applySceneEnvironment(); };
+
+      gameOver.FUN_00265ec0_release = [this](std::size_t slot)
+      {
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            slot, entityPool_, &sceneScript_.state().DAT_00343888_lights);
+      };
+
+      gameOver.FUN_002d36f8_install_dust = [this]
+      {
+        DAT_00355620_particles_.FUN_002d36f8_install_game_over_dust(
+            [this] { return FUN_00216868_random(); });
+      };
+
+      // FUN_002218F0(-1) and the six uGpffffad38..ad4c gates. Selectors 1 and 5
+      // are the two pools the port has; the other four are unported, so this is
+      // the whole of "every weather pool stops" that there is to do.
+      gameOver.stopEffectPools = [this]
+      {
+        DAT_00355b80_gather_.FUN_002218f0_release(
+            -1, &DAT_00355b74_hitSparks_.DAT_00355b7c_activeGroupsRef());
+        DAT_00355ac0_rain_.FUN_002620a8_clear_gate();
+        DAT_00355b50_haze_.FUN_002620a8_clear_gate();
+      };
+
+      gameOver.FUN_00255820_stage_camera = [this]
+      {
+        fieldCamera_.FUN_00217e18_release_manual_camera(false);
+        // uGpffff8a18, 3.2 -- a little further back than the field's 3.0.
+        fieldCamera_.FUN_00216968_set_follow_distance(3.2f);
+        fieldCamera_.FUN_00255820_stage_game_over();
+      };
+      gameOver.FUN_002559e8_hold_camera = [this] { fieldCamera_.FUN_002559e8_hold_game_over(); };
+      gameOver.clearFreeLook = [this] { return fieldCamera_.FUN_00255820_clear_free_look(); };
+
+      gameOver.FUN_00255820_stage_sound = [this]
+      {
+        for (std::size_t slot = 0; slot < 7; ++slot)
+        {
+          soundEngine_.FUN_00206260_ramp_down_slot(slot, 0x32, 0);
+        }
+        soundEngine_.FUN_002063c8_ramp_up_slot(7, 0x0F, 1000);
+      };
+
+      gameOver.FUN_00255ce8_black_quad = [this](std::uint8_t alpha)
+      { DAT_00255ce8_underlayAlpha_ = alpha; };
+
+      // uGpffffb686 & 0x60: Circle or Cross.
+      gameOver.skipRequested = [this] { return (uGpffffb686_pressedPad_ & 0x0060u) != 0; };
+
+      gameOver.onHandOff = [this]
+      {
+        if (gameOverHandedOff_)
+        {
+          return;
+        }
+        gameOverHandedOff_ = true;
+        // FUN_00237A08 is FUN_0025D1C0(1, 0xC, 0) followed by game mode 0xC and
+        // FUN_002241D8 -- the return to the title. The port has no mode 0xC, so
+        // it keeps the fade and says what it dropped.
+        DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0x0C, 0);
+        std::cout << "[game over] FUN_00237A08: fade armed; the mode 0xC title "
+                     "hand-off is not ported" << std::endl;
+      };
+
+      leadPlayer_.setGameOverHooks(std::move(gameOver));
+    }
 
     reset();
     spawnOverride_ = config.spawnOverride;
@@ -546,6 +670,11 @@ namespace orphen::port
     environment.DAT_003556fc_effectGroundZ =
         sceneScript_.state().DAT_003556fc_effectGroundZ;
     environment.DAT_003555d0_collisionGroupMoved = DAT_003555d0_collisionGroupMoved_;
+    // FUN_002D0EA8's gate: the field HP gauge goes off screen for a game mode
+    // other than 0, for letterbox bars, and while a scene change is pending.
+    environment.DAT_00354d2c_gameMode = static_cast<int>(DAT_00354d2c_gameMode_);
+    environment.DAT_00355054_letterboxMode = DAT_00355054_letterbox_.DAT_00355054_mode();
+    environment.DAT_003551ec_sceneRequest = DAT_003551ec_sceneRequest_;
     environment.DAT_00355588_hitEffectRequest = &DAT_00355588_hitEffectRequest_;
     // DAT_003253C0. FUN_0027DC38 walks it every frame and FUN_00276C30 drops a
     // row when a swarm crab leaves the world.
@@ -2607,6 +2736,63 @@ namespace orphen::port
   // One --battle-report line per frame the player's action byte, state, charge
   // or cooldowns moved. Read-only: the trace cannot move a --frames run off its
   // deterministic path.
+
+  // The harness's damage keys, 1..5 and 0.
+  //
+  // Nothing in the port lands a blow on the lead player: no ported enemy runs
+  // an attack against it and the sword hit test only reads outward. So these
+  // write FUN_00216140's four output fields directly -- +0xBE the damage, +0xBC
+  // the reaction, +0xC0 its length in frames and +0xC4 the direction it came
+  // from -- and FUN_00251ED8 spends them on its next frame exactly as it would
+  // a real contact. The hit direction is the lead's own facing, so it turns
+  // away from the blow the way a hit from in front would leave it.
+  //
+  //   1  a scratch, no reaction byte: FUN_00251ED8's ordinary stagger, 0x16
+  //   2  a heavier one, same reaction
+  //   3  +0xBC = 0x12, the knockback: state 0x18, flying then down then up
+  //   4  +0xBC = 0x13, the flatten: state 0x17, squashed for 0x1E frames
+  //   5  lethal, which takes the death branch and the gauge with it
+  //   0  back to full hit points
+  void PortRuntime::applyDebugDamageKeys(const InputSnapshot &input)
+  {
+    auto &lead = entityPool_.leadPlayer();
+
+    if (input.debugHealRequested)
+    {
+      lead.staggerTimer12a = lead.maxHitPoints128;
+      std::cout << "[debug] lead hp " << static_cast<int>(lead.staggerTimer12a) << '/'
+                << static_cast<int>(lead.maxHitPoints128) << " (healed)" << std::endl;
+      return;
+    }
+
+    if (input.debugDamageKind <= 0 || input.debugDamageKind > 5)
+    {
+      return;
+    }
+
+    struct DebugHitKind
+    {
+      const char *name;
+      std::uint16_t damage;
+      std::uint8_t reaction;    // entity +0xBC
+      std::uint16_t frames;     // entity +0xC0
+    };
+    static constexpr DebugHitKind kDebugHitKinds[5] = {
+        {"scratch", 3, 0x00, 0},
+        {"hit", 12, 0x00, 0},
+        {"knockback", 12, 0x12, 0x30},
+        {"flatten", 12, 0x13, 0x1E},
+        {"lethal", 0x3E7, 0x00, 0},
+    };
+    const DebugHitKind &kind = kDebugHitKinds[input.debugDamageKind - 1];
+
+    leadPlayer_.FUN_00216140_stamp_hit(kind.damage, kind.reaction, kind.frames,
+                                       lead.facingRadians5c);
+    const std::int32_t before = static_cast<std::int16_t>(lead.staggerTimer12a);
+    std::cout << "[debug] " << kind.name << " " << kind.damage << " -> lead hp " << before
+              << '/' << static_cast<int>(lead.maxHitPoints128) << std::endl;
+  }
+
   void PortRuntime::sampleBattleTrace(std::uint32_t heldPad)
   {
     using namespace orphen::ported::battle;
@@ -4069,6 +4255,71 @@ namespace orphen::port
       }
       soundEngine_.logMusicSlot(log);
     }
+  }
+
+  // FUN_00205938 on its own, for a slot the scene has already filled. The
+  // original tears the old bank down first (its loop from slot index 10 back to
+  // the one asked for) and then loads the record; SoundEngine::load_slot already
+  // replaces a slot wholesale, so the teardown is implicit.
+  //
+  // `playNow` is FUN_00205938's third argument: the death passes 0, so the
+  // sequence sits loaded and stopped until FUN_002063C8 starts it.
+  bool PortRuntime::FUN_00205938_load_music_slot(std::size_t slot, std::uint16_t index,
+                                                 bool playNow)
+  {
+    if (discRoot_.empty() || slot >= orphen::ported::sound::kMusicSlotCount)
+    {
+      return false;
+    }
+
+    const std::size_t category = orphen::ported::sound::musicCategoryForSlot(slot);
+    const auto *record = soundEngine_.musicRecord(category, index);
+    if (record == nullptr)
+    {
+      return false;
+    }
+
+    orphen::harness::FlatBinArchive snd;
+    if (!snd.open(discRoot_ / "SND.BIN"))
+    {
+      return false;
+    }
+    const std::vector<std::uint8_t> resource = snd.raw(record->sndResource);
+    if (resource.empty())
+    {
+      return false;
+    }
+
+    orphen::ported::sound::SoundEngine::MusicSlotLog log;
+    log.slot = slot;
+    log.category = category;
+    log.request = index;
+    log.index = index;
+    log.sndResource = record->sndResource;
+    log.volume = record->volume;
+    log.autoPlayed = playNow;
+
+    soundEngine_.setSlotRequestIndex(slot, index);
+    if (!soundEngine_.FUN_00205938_load_slot(slot, record->sndResource, record->volume, resource,
+                                             record->reverbType, record->reverbDepth))
+    {
+      log.outcome = soundEngine_.slotHasSequence(slot) ? "bank unreadable" : "no sequence";
+      soundEngine_.logMusicSlot(log);
+      return false;
+    }
+
+    if (playNow)
+    {
+      soundEngine_.FUN_00205d90_play_slot(slot,
+                                          orphen::ported::sound::SequencePlayer::kFaderFull);
+      log.outcome = "reloaded and playing";
+    }
+    else
+    {
+      log.outcome = "reloaded";
+    }
+    soundEngine_.logMusicSlot(log);
+    return true;
   }
 
   // FUN_00221b90's table, without which a line of dialogue has no length. Tried
@@ -7565,6 +7816,9 @@ namespace orphen::port
               << (DAT_00355620_particles_.DAT_00355e0c_behaviour() ==
                           orphen::ported::entity::ParticleBehaviour::FUN_002d2348_sparks
                       ? "FUN_002d2348"
+              : DAT_00355620_particles_.DAT_00355e0c_behaviour() ==
+                          orphen::ported::entity::ParticleBehaviour::FUN_002d3320_gameOverDust
+                      ? "FUN_002d3320"
                       : "none")
               << "\n";
 
@@ -7936,6 +8190,8 @@ namespace orphen::port
       std::cout << "[debug] SCR SUBPROC DISP " << (subprocDisplayEnabled() ? "ON" : "OFF") << '\n';
     }
 
+    applyDebugDamageKeys(input);
+
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {
       // A cycled map is a scene load, not just a new mesh: its script owns the
@@ -8045,10 +8301,6 @@ namespace orphen::port
         reportTickHalt("tick");
       }
 
-      // Raw pad 0x0020 is Circle, the attack button -- keyboard `C`. It goes
-      // into the mapped-action ring below as the attack bit; this separate
-      // read is the *held* state, which gates the debug mid-air jump.
-      constexpr std::uint16_t kRawPadCircle = 0x0020;
       // Raw pad 0x0040 is Cross, the confirm button. The original tests the
       // same bit in the *mapped* pressed word (uGpffffb68a = DAT_003555fa);
       // Cross maps through to the same position, and the port has no mapping
@@ -8061,6 +8313,9 @@ namespace orphen::port
       // catch-up steps of a slow frame, or the eight-frame window would be
       // measured in render frames rather than in simulation ones.
       DAT_00342a70_mappedActions_.FUN_0023b5d8_push(input.rawHeldPad, input.rawPressedPad);
+      // uGpffffb686, kept so FUN_002559E8's skip test can read it from a hook
+      // installed once at construction.
+      uGpffffb686_pressedPad_ = static_cast<std::uint16_t>(input.rawPressedPad);
 
       // FUN_002239c8:117. The battle module replaces the field controller
       // outright -- FUN_00249610 instead of FUN_00251ed8 -- once the scene has
@@ -8081,7 +8336,14 @@ namespace orphen::port
                            movementRequest,
                            input.stickMagnitude,
                            DAT_00342a70_mappedActions_.FUN_0023b890_recent(8),
-                           (input.rawHeldPad & kRawPadCircle) != 0,
+                           // uGpffffb688 / uGpffffb09c: the frame just pushed,
+                           // which is what FUN_00251ED8 is handed.
+                           DAT_00342a70_mappedActions_.FUN_0023b890_recent(1),
+                           // cGpffffb66a, held on the same way
+                           // updateOriginalDebugOverlay holds it -- there is
+                           // still no way into the debug byte from the harness,
+                           // so the moon jump is always available.
+                           true,
                            (input.rawPressedPad & kRawPadCross) != 0,
                            loadedMap,
                            [this] { return runInteractionProbe(); });
@@ -8150,7 +8412,27 @@ namespace orphen::port
         // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
         // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
         // its first step on the next one rather than on the frame it was seeded.
-        DAT_00355620_particles_.FUN_002d3218_step(frameTicks);
+        //
+        // FUN_002D3320 -- the game over's spark column -- reads the lead and
+        // its bone palette on every seed, which the pool cannot see, so it
+        // arrives as a context rather than as globals.
+        orphen::ported::entity::GameOverDustContext dust;
+        dust.DAT_0058bffc_leadScale = entityPool_.leadPlayer().scale14c;
+        dust.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+        dust.FUN_0020dc88_bone_point =
+            [this](std::size_t bone, const orphen::ported::psm2::Vec3 &localOffset)
+        {
+          const auto &lead = entityPool_.leadPlayer();
+          const orphen::ported::psm2::Vec3 fallback{lead.positionX20, lead.positionZ24,
+                                                    lead.positionY28 + lead.height58 * 0.5f};
+          if (DAT_00357e00_bonePalettes_.empty())
+          {
+            return fallback;
+          }
+          return orphen::ported::model::FUN_0020dc88_bone_point(DAT_00357e00_bonePalettes_[0], bone,
+                                                                localOffset, fallback);
+        };
+        DAT_00355620_particles_.FUN_002d3218_step(frameTicks, &dust);
         FUN_002192c0_step_effect_pools(frameTicks);
       }
       else
@@ -8442,6 +8724,12 @@ namespace orphen::port
       mapViewer_.setFrameFeedbackQuad(std::nullopt);
     }
 
+    // FUN_00255CE8 is called once per frame by state 0x1B and by nothing else,
+    // so the alpha is spent here and cleared: the quad stops the frame the
+    // state does.
+    mapViewer_.setWorldUnderlayAlpha(DAT_00255ce8_underlayAlpha_);
+    DAT_00255ce8_underlayAlpha_ = 0;
+
     mapViewer_.setScreenFadeOverlay(DAT_00571dc0_screenFade_.overlay().colour,
                                     DAT_00571dc0_screenFade_.overlay().alpha);
     mapViewer_.setLetterboxBarHeight(DAT_00355054_letterbox_.barHeight());
@@ -8571,6 +8859,12 @@ namespace orphen::port
     // only a battle one -- FUN_002d5630 is what refuses to raise one outside a
     // section-14 scene.
     orphen::ported::entity::FUN_0022a418_build_health_bars(entityPool_, descriptorTable_);
+    // FUN_0022a418:388-390, six lines further down: the type 0x58 field HP
+    // gauge, pool slot 8. Skipped in a battle section, in the title stage and
+    // in the arena mode the port never reaches -- see original_field_hp_gauge.h.
+    orphen::ported::entity::FUN_0022a418_build_field_hp_gauge(
+        entityPool_, descriptorTable_, DAT_003555d3_groupEScene_, false,
+        DAT_003551f4_sceneSection_);
     // FUN_002205d0 runs once at boot rather than per scene, but every entry it
     // leaves behind is dead and every group empty, so re-running it here is the
     // same state and it stops a burst surviving a map change.
@@ -8604,6 +8898,8 @@ namespace orphen::port
     // clears the fade cap for the same reason.
     DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
     DAT_00355700_globalFadeCap_ = 0;
+    DAT_00255ce8_underlayAlpha_ = 0;
+    gameOverHandedOff_ = false;
     itemSceneRenderState_ = false;
     DAT_00571dc0_screenFade_.reset();
     // FUN_0022a418:294 clears both smear alphas on a scene load.

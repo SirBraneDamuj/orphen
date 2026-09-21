@@ -223,6 +223,17 @@ namespace orphen::port
         {
           input.captureSnapshotRequested = true;
         }
+        // 1..5 land a hit on the lead, 0 heals it. See
+        // InputSnapshot::debugDamageKind.
+        if (event.key.repeat == 0 && event.key.keysym.sym >= SDLK_1 &&
+            event.key.keysym.sym <= SDLK_5)
+        {
+          input.debugDamageKind = (event.key.keysym.sym - SDLK_1) + 1;
+        }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_0)
+        {
+          input.debugHealRequested = true;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
         {
           input.previousMapRequested = true;

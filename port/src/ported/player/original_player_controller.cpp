@@ -1,5 +1,6 @@
 #include "ported/player/original_player_controller.h"
 
+#include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_hit_test.h"
 #include "ported/original_frame_timing.h"
 
@@ -22,6 +23,10 @@ namespace orphen::ported::player
     constexpr float kOriginalJumpVelocity = 0.0529999994f;      // DAT_0035287c/DAT_00355000.
     constexpr float kOriginalGravity = 0.000750000007f;         // JUMP TEST G_FORCE 00075 at x100000 scale.
     constexpr float kLandingTolerance = 0.05f;
+    // DAT_0035246C / DAT_00352470: the landing ring sits 0.15 below the feet and
+    // its puffs are 0.4 across. FUN_002262C0 passes the actor's own +0x54 for
+    // both the x jitter and the ring radius, with no y jitter.
+    constexpr float kDAT_0035246c_dustDrop = 0.15f;
     constexpr float kMovementEpsilon = 0.0001f;
     constexpr std::uint32_t kPhysicsFlagGrounded = 0x0001;
     constexpr std::uint32_t kPhysicsFlagBlocked = 0x0002;
@@ -46,6 +51,15 @@ namespace orphen::ported::player
     constexpr std::uint16_t kKeyframeEventSwordEnd = 0x0200;
 
     // FUN_00257b70 is one call, FUN_00267d38(0xA4, entity) -- the swing.
+    // FUN_00251ED8's hit-reaction constants, all gp-relative against
+    // gp = 0x00359F70 and read out of SLUS_200.11 rather than guessed.
+    constexpr float kfGpffff88c4_pi = 3.141592025756836f;       // 0x00352834
+    constexpr float kfGpffff88cc_pi = 3.141592025756836f;       // 0x0035283C
+    constexpr float kuGpffff88c0_deathKnockback = 0.00312500005f; // 0x00352830
+    constexpr float kuGpffff88c8_deathPopUp = 0.0450000018f;    // 0x00352838
+    constexpr float kuGpffff88d0_knockbackSpeed = 0.00312500005f; // 0x00352840
+    constexpr float kuGpffff88d4_knockbackPopUp = 0.0350000001f; // 0x00352844
+
     constexpr std::uint16_t kSoundCueSwordSwing = 0xa4;
     // FUN_00257b50 and FUN_00257b40, the two halves of the cast: 0xA5 when the
     // state starts and 0xA6 when the projectile leaves the hand.
@@ -155,6 +169,19 @@ namespace orphen::ported::player
     // FUN_002000c0 clamps DAT_003555bc to [0x20, 0x80] before anything reads it.
     const std::uint32_t clampedFrameTicks =
         std::clamp(frameTicks, orphen::ported::kMinFrameTicks, orphen::ported::kMaxFrameTicks);
+
+    // FUN_00251ED8:21-23, the first thing it does after the null check:
+    //
+    //   uGpffffbd54 = heldMapped & 0x20;
+    //   if (cGpffffb66a == 0) uGpffffbd54 = 0;
+    //
+    // 0x20 is the attack button and cGpffffb66a is the debug byte, so this is
+    // the arm half of the moon jump. FUN_002534D8 is the only thing that reads
+    // it.
+    uGpffffbd54_moonJumpArmed_ =
+        input.cGpffffb66a_debugActive
+            ? (input.uGpffffb688_heldThisFrame & kOriginalMappedActionAttack)
+            : 0u;
     // **The movement request is not cleared here.** FUN_00251ed8 does not touch
     // +0x30 / +0x34 / +0x38 anywhere -- its only write to them is the *additive*
     // leader-follow at its tail (`psVar8[0x18] += ...`, halfword indices, i.e.
@@ -171,6 +198,11 @@ namespace orphen::ported::player
     // target, never advanced +0x1BC and never set the event flag its cutscene
     // gates on. This is the same bug the actor loop had (see the FUN_00239ce0
     // note in port/README.md); the lead's copy of it survived that fix.
+
+    // FUN_00251ED8:97-230, ahead of the dispatch: the +0xBE mailbox. It can
+    // replace the state outright, so the branch below sees the reaction the hit
+    // just installed rather than the state the player was in.
+    FUN_00251ed8_apply_pending_damage(clampedFrameTicks);
 
     // FUN_00251ed8's table dispatch is exclusive: exactly one handler runs.
     // A state owned elsewhere -- the chest cutscene, states 0x0C..0x15 --
@@ -211,6 +243,32 @@ namespace orphen::ported::player
     else if (entity().state60 == kStateMagicCast)
     {
       FUN_002562b0_update_magic_cast();
+    }
+    else if (entity().state60 == kStateHitStagger)
+    {
+      FUN_002554d8_update_hit_stagger(clampedFrameTicks);
+    }
+    else if (entity().state60 == kStateHitFlatten)
+    {
+      FUN_002555a8_update_hit_flatten();
+    }
+    else if (entity().state60 == kStateHitKnockback)
+    {
+      FUN_002555d8_update_hit_knockback(clampedFrameTicks);
+    }
+    else if (entity().state60 == kStateTerrainHazard)
+    {
+      FUN_002557a0_update_terrain_hazard(clampedFrameTicks);
+    }
+    else if (entity().state60 == kStateGameOverEnter)
+    {
+      // FUN_00255820 stages the whole game over and leaves the entity in
+      // 0x1B, so this branch runs exactly once.
+      FUN_00255820_enter_game_over(entity(), gameOver_);
+    }
+    else if (entity().state60 == kStateGameOverHold)
+    {
+      FUN_002559e8_update_game_over(entity(), clampedFrameTicks, gameOver_);
     }
     else
     {
@@ -267,6 +325,421 @@ namespace orphen::ported::player
     FUN_00225bf0_set_entity_state(0, 1);
     entity().motionFlags1bb &= static_cast<std::uint8_t>(~0x12);
     entity().pendingJumpImpulse = false;
+  }
+
+
+  // FUN_00216140's mailbox, from outside the hit test. Nothing in the port
+  // lands a blow on the lead yet, so the harness's damage keys go through the
+  // same four fields a real contact would write.
+  void OriginalPlayerController::FUN_00216140_stamp_hit(std::uint16_t damage,
+                                                        std::uint8_t reaction,
+                                                        std::uint16_t reactionFrames,
+                                                        float fromDirection)
+  {
+    entity().pendingDamageBe = static_cast<std::uint16_t>(entity().pendingDamageBe + damage);
+    entity().hitReactionBc = reaction;
+    entity().hitSourceC0 = reactionFrames;
+    entity().hitDirectionC4 = fromDirection;
+  }
+
+  // FUN_00257C10 / FUN_00257C40 / FUN_00257BE0: three cues off the same table,
+  // FUN_00251C80(entity, index), which offsets a sound index by the character's
+  // class. 0x13 is the hurt cry, 0x12 the lighter one and 0x15 the landing.
+  void OriginalPlayerController::playCharacterCue(int soundIndex)
+  {
+    if (!FUN_00267d38_playSound_)
+    {
+      return;
+    }
+    FUN_00267d38_playSound_(
+        orphen::ported::entity::FUN_00251c80_character_cue(entity().typeId00, soundIndex),
+        entity());
+  }
+
+  // FUN_002536A8. Only reached from a reaction taken in states 3..6 -- the
+  // states where the player is attached to something -- and its job is to get
+  // it off: drop the held flags, shove it DAT_00352884 along its own facing
+  // plus pi, and release the manual camera.
+  void OriginalPlayerController::FUN_002536a8_break_out_of_state()
+  {
+    constexpr float kDAT_00352880_pushAngle = 3.141592025756836f;
+    constexpr float kDAT_00352884_pushDistance = 0.200000003f;
+    constexpr float kDAT_00352888_settleStep = 9.99999975e-06f;
+
+    const float angle = entity().facingRadians5c + kDAT_00352880_pushAngle;
+    entity().halfword04 = static_cast<std::uint16_t>(entity().halfword04 & 0xFFF7u);
+    entity().halfword08 = static_cast<std::uint16_t>(entity().halfword08 | 4u);
+    entity().collisionFlags0c &= 0xFFFFFFFEu;
+    entity().positionX20 += std::cos(angle) * kDAT_00352884_pushDistance;
+    entity().positionZ24 += std::sin(angle) * kDAT_00352884_pushDistance;
+    // The FUN_00227798 re-sample and the +0x4C / +0x28 reconciliation under it
+    // are left to FUN_002262C0, which runs later on this same frame and does
+    // exactly that. FUN_00217E18(0) -- the manual camera release -- is the
+    // caller's, for the same reason the pool is.
+    entity().rotationX154 = 0.0f;
+    entity().desiredDeltaX30 = kDAT_00352888_settleStep;
+    entity().idleTimer1b6 = 0;
+    entity().playerKnockbackSpeed1b0 = 0.0f;
+    if (FUN_00217e18_releaseCamera_)
+    {
+      FUN_00217e18_releaseCamera_();
+    }
+  }
+
+  // FUN_00251ED8:97-227. The lead's own damage drain -- the counterpart of the
+  // +0xBE block every enemy wrapper opens with, and the only place the field
+  // player's hit points move.
+  //
+  // It runs before the state dispatch and can replace the state outright, so a
+  // hit taken mid-swing ends the swing.
+  void OriginalPlayerController::FUN_00251ed8_apply_pending_damage(std::uint32_t frameTicks)
+  {
+    // :86-96. The red flash the previous hit lit, carried on the body and
+    // counted down. FUN_00267DA0 copies +0x20..+0x2B into the slot's first
+    // three floats, so the light follows the player while it lasts.
+    if (bGpffffbd58_hitLightSlot_ >= 0 && DAT_00343888_lights_ != nullptr)
+    {
+      auto &light =
+          DAT_00343888_lights_->slot(static_cast<std::uint32_t>(bGpffffbd58_hitLightSlot_));
+      light.x = entity().positionX20;
+      light.y = entity().positionZ24;
+      light.z = entity().positionY28;
+      uGpffffbd5a_hitLightFrames_ -= 1;
+      if (uGpffffbd5a_hitLightFrames_ < 1)
+      {
+        light.radius = 0.0f;
+        bGpffffbd58_hitLightSlot_ = -1;
+      }
+    }
+
+    if (entity().pendingDamageBe != 0)
+    {
+      // :98-103. cGpffffb6e4 is the "a cutscene is holding the player" latch;
+      // outside one the hit un-hides the body. FUN_0022A418 clears the latch and
+      // nothing in src/ ever writes it, so this is the only branch.
+      entity().halfword08 = static_cast<std::uint16_t>(entity().halfword08 & 0xFFFEu);
+
+      // :104-110, state 9's carried object, is left out: the port has no state 9
+      // and no +0x198 holder to detach.
+
+      // :114. +0xC2 bit 0x2000 is the attack record's "costs nothing" bit. The
+      // reaction still plays; only the subtraction is skipped.
+      bool survived = true;
+      if ((entity().hitFlagsC2 & 0x2000u) == 0)
+      {
+        // FUN_00257B00 is FUN_0023BBD8(0, 0x13), the pad rumble. Not ported --
+        // the port has no rumble path at all.
+        const std::int32_t before = static_cast<std::int16_t>(entity().staggerTimer12a);
+        const std::int32_t after = before - static_cast<std::int32_t>(entity().pendingDamageBe);
+        entity().staggerTimer12a = static_cast<std::uint16_t>(after);
+        survived = static_cast<std::int16_t>(entity().staggerTimer12a) > 0;
+      }
+
+      if (!survived)
+      {
+        // :122-141, the death. `psVar8` is a `short *`, so `psVar8[2]` is
+        // **+0x04**, not +0x02: bit 0 drops the entity out of the collision
+        // clamp and bit 4 out of the hit tests. +0x0C bit 0 takes it off the
+        // ground, +0x134 goes to *zero* -- FUN_002555D8 ramps it back up two a
+        // frame while the body flies -- and +0x62 is the 30 frames it then
+        // spends face down before FUN_002555D8 hands it to the game over.
+        entity().halfword04 = static_cast<std::uint16_t>(entity().halfword04 | 0x11u);
+        entity().collisionFlags0c &= 0xFFFFFFFEu;
+        entity().fadeRamp62 = 0x3C0;
+        entity().staggerTimer12a = 0;
+        entity().fadeLevel134 = 0;
+        // FUN_00265EC0(0x58CD70) releases the field HP gauge, and
+        // FUN_00205938(7, 0x2F, 0) plus the two FUN_00206260 ramps are the death
+        // sting and the music fade. All three are the caller's: the pool and the
+        // sequencer are outside a controller bound to one slot.
+        if (onDeath_)
+        {
+          onDeath_();
+        }
+        // Dying on a hazard surface -- the one state that is already 0x19 --
+        // gets no horizontal throw, because the body is meant to drop where it
+        // is rather than be launched off the edge that killed it.
+        if (entity().state60 == kStateTerrainHazard)
+        {
+          entity().playerKnockbackSpeed1b0 = 0.0f;
+        }
+        else
+        {
+          entity().playerKnockbackSpeed1b0 = kuGpffff88c0_deathKnockback;
+        }
+        entity().verticalVelocity44 = kuGpffff88c8_deathPopUp;
+        entity().facingRadians5c = entity().hitDirectionC4 + kfGpffff88c4_pi;
+        // **The knockback, not a death state of its own.** FUN_00225BF0's
+        // arguments here are literally 0x18 and 0x20, so the last thing the
+        // player does is the same tumble any hard hit produces -- and
+        // FUN_002555D8 is what notices, thirty frames later, that it never got
+        // up, because +0x12A is zero.
+        FUN_00225bf0_set_entity_state(kStateHitKnockback, kAnimationHitKnockback);
+        playCharacterCue(0x13);
+      }
+      else
+      {
+        // :146-207. Which reaction, and what it costs the state the player was
+        // already in.
+        const std::int16_t state = static_cast<std::int16_t>(entity().state60);
+        bool handled = false;
+        if (state >= 3 && state < 7)
+        {
+          // An attached state: break out of it first, and the reaction is the
+          // plain knockback whatever +0xBC asked for.
+          FUN_002536a8_break_out_of_state();
+          FUN_00225bf0_set_entity_state(kStateHitKnockback, kAnimationHitKnockback);
+          entity().velocityX3c = 0.0f;
+          entity().velocityZ40 = 0.0f;
+          entity().fadeRamp62 = entity().hitSourceC0;
+          playCharacterCue(0x13);
+          handled = true;
+        }
+        else if (state == kStateSwordAttack && entity().actionEffect198 >= 0 &&
+                 actionEffect_.retireSwordBlade)
+        {
+          // :161-168. A hit during the swing retires the blade. The original
+          // tests the effect entity's type for 0x42 first; the callback carries
+          // that test, because it is the side that can see the pool.
+          actionEffect_.retireSwordBlade(entity().actionEffect198);
+          entity().actionEffect198 = -1;
+        }
+
+        if (!handled)
+        {
+          entity().facingRadians5c = entity().hitDirectionC4 + kfGpffff88cc_pi;
+          if (entity().hitReactionBc == kHitReactionFlatten)
+          {
+            // :176-188. Squashed: the body is scaled and shrunk to nothing for
+            // +0xC0 frames, and FUN_002555A8 puts both back.
+            FUN_00225bf0_set_entity_state(kStateHitFlatten, kAnimationHitFlatten);
+            entity().playerSavedScaleZ1a4 = entity().scaleZ150;
+            entity().playerSavedHeight1a8 = entity().height58;
+            entity().scaleZ150 = 0.0f;
+            entity().height58 = 0.0f;
+            if (entity().hitSourceC0 == 0)
+            {
+              entity().hitSourceC0 = 0x1E;
+            }
+            playCharacterCue(0x12);
+          }
+          else if (entity().hitReactionBc == kHitReactionKnockback ||
+                   (entity().collisionFlags0c & 1u) == 0)
+          {
+            // :189-203. Knocked back, either because the attack asked for it or
+            // because the player was off the ground when it landed.
+            FUN_00225bf0_set_entity_state(kStateHitKnockback, kAnimationHitKnockback);
+            entity().collisionFlags0c &= 0xFFFFFFFEu;
+            entity().fadeRamp62 = entity().hitSourceC0 != 0 ? entity().hitSourceC0 : 0x100;
+            entity().playerKnockbackSpeed1b0 = entity().hitReactionBc == kHitReactionKnockback
+                                                   ? kuGpffff88d0_knockbackSpeed
+                                                   : 0.0f;
+            entity().verticalVelocity44 = kuGpffff88d4_knockbackPopUp;
+            playCharacterCue(0x13);
+          }
+          else
+          {
+            // :204-207. The ordinary stagger.
+            FUN_00225bf0_set_entity_state(kStateHitStagger, kAnimationHitStagger);
+            playCharacterCue(0x12);
+          }
+          entity().interactParam1b8 = 0x1680;
+        }
+      }
+
+      // :208-219. The red flash, out of the high half of the light table.
+      if (DAT_00343888_lights_ != nullptr)
+      {
+        if (bGpffffbd58_hitLightSlot_ < 0)
+        {
+          bGpffffbd58_hitLightSlot_ = DAT_00343888_lights_->FUN_00266008_allocateFromThree();
+        }
+        if (bGpffffbd58_hitLightSlot_ >= 0)
+        {
+          const auto index = static_cast<std::uint32_t>(bGpffffbd58_hitLightSlot_);
+          uGpffffbd5a_hitLightFrames_ = 0xF;
+          auto &light = DAT_00343888_lights_->slot(index);
+          light.red = 0xFF;
+          light.green = 0;
+          light.blue = 0;
+          light.radius = 1.0f;
+          DAT_00343888_lights_->noteRadius(index, 1.0f);
+        }
+      }
+
+      // :220-224. The mailbox is emptied, and +0xC0 turns from a frame count
+      // into a tick count -- 32 ticks per frame, the unit every other countdown
+      // in the engine runs in.
+      entity().hitFlagsC2 = 0;
+      entity().pendingDamageBe = 0;
+      entity().hitSourceC0 = static_cast<std::uint16_t>(entity().hitSourceC0 << 5);
+    }
+
+    // :226-230. That tick count, spent. FUN_002555A8 is what waits on it.
+    if (entity().hitSourceC0 != 0)
+    {
+      const std::int32_t remaining =
+          static_cast<std::int32_t>(entity().hitSourceC0) - static_cast<std::int32_t>(frameTicks);
+      entity().hitSourceC0 = static_cast<std::uint16_t>(remaining);
+      if (remaining < 0)
+      {
+        entity().hitSourceC0 = 0;
+      }
+    }
+  }
+
+  // PTR_FUN_0031E0E8[0x16], FUN_002554D8. The stagger: drift backwards until
+  // the animation finishes, then stand up.
+  void OriginalPlayerController::FUN_002554d8_update_hit_stagger(std::uint32_t frameTicks)
+  {
+    constexpr float kDAT_00352978_driftDivisor = 200000.0f;
+    constexpr float kDAT_0035297c_pi = 3.141592025756836f;
+
+    // +0x134 ramps the hit tint up two a frame to 0x78. Nothing draws it yet --
+    // see docs/hit_flash_is_entity_0x138.md -- but it is the entity's own state
+    // and the death handler reads it back.
+    if (entity().fadeLevel134 != 0 && entity().fadeLevel134 < 0x78)
+    {
+      entity().fadeLevel134 = static_cast<std::uint8_t>(entity().fadeLevel134 + 2);
+    }
+
+    if ((entity().flags06 & kAnimationComplete06) != 0)
+    {
+      FUN_00252d88_return_to_idle_state();
+      entity().fadeLevel134 = 0;
+      entity().interactParam1b8 = 0x1E0;
+      return;
+    }
+
+    const float angle = entity().facingRadians5c + kDAT_0035297c_pi;
+    const float step = (static_cast<float>(frameTicks) * 64.0f) / kDAT_00352978_driftDivisor;
+    entity().desiredDeltaX30 += step * std::cos(angle);
+    entity().desiredDeltaZ34 += step * std::sin(angle);
+  }
+
+  // PTR_FUN_0031E0E8[0x17], FUN_002555A8. The flatten: hold until +0xC0 runs
+  // out, put the scale and the height back, stand up.
+  void OriginalPlayerController::FUN_002555a8_update_hit_flatten()
+  {
+    if (static_cast<std::int16_t>(entity().hitSourceC0) > 0)
+    {
+      return;
+    }
+    entity().scaleZ150 = entity().playerSavedScaleZ1a4;
+    entity().height58 = entity().playerSavedHeight1a8;
+    entity().interactParam1b8 = 1;
+    FUN_00252d88_return_to_idle_state();
+  }
+
+  // PTR_FUN_0031E0E8[0x18], FUN_002555D8. The knockback, as a three-animation
+  // chain: 0x20 flying, 0x21 down, 0x23 getting up.
+  void OriginalPlayerController::FUN_002555d8_update_hit_knockback(std::uint32_t frameTicks)
+  {
+    constexpr float kDAT_00352980_knockbackDecay = 0.000156249997f;
+
+    if (entity().fadeLevel134 != 0 && entity().fadeLevel134 < 0x78)
+    {
+      entity().fadeLevel134 = static_cast<std::uint8_t>(entity().fadeLevel134 + 2);
+    }
+
+    const std::uint16_t animation = entity().animationA0;
+    if (animation == kAnimationKnockdown)
+    {
+      // Down. +0x62 is how long it stays there.
+      const std::int32_t remaining =
+          static_cast<std::int32_t>(entity().fadeRamp62) - static_cast<std::int32_t>(frameTicks);
+      entity().fadeRamp62 = static_cast<std::uint16_t>(remaining);
+      if (static_cast<std::int16_t>(entity().fadeRamp62) < 1)
+      {
+        if (static_cast<std::int16_t>(entity().staggerTimer12a) != 0)
+        {
+          orphen::ported::entity::FUN_00225bc8_set_animation(entity(), kAnimationGetUp);
+          return;
+        }
+        // Out of hit points while down: state 0x1A, FUN_00255820, the "dead on
+        // the floor" hold. Not ported; the state simply stops being driven.
+        entity().state60 = 0x1A;
+      }
+      return;
+    }
+
+    if (animation == kAnimationHitKnockback)
+    {
+      if ((entity().collisionFlags0c & 1u) != 0)
+      {
+        // Landed. FUN_00257BE0 is the impact grunt, FUN_00251C80(entity, 0x15).
+        orphen::ported::entity::FUN_00225bc8_set_animation(entity(), kAnimationKnockdown);
+        playCharacterCue(0x15);
+        return;
+      }
+      if ((entity().collisionFlags0c & 0x262u) == 0)
+      {
+        if (entity().playerKnockbackSpeed1b0 != 0.0f)
+        {
+          const float step = entity().playerKnockbackSpeed1b0 * static_cast<float>(frameTicks);
+          entity().desiredDeltaX30 += step * std::cos(entity().hitDirectionC4);
+          entity().desiredDeltaZ34 += step * std::sin(entity().hitDirectionC4);
+          entity().playerKnockbackSpeed1b0 -= kDAT_00352980_knockbackDecay;
+          if (entity().playerKnockbackSpeed1b0 < 0.0f)
+          {
+            entity().playerKnockbackSpeed1b0 = 0.0f;
+          }
+        }
+      }
+      else
+      {
+        entity().playerKnockbackSpeed1b0 = 0.0f;
+      }
+      return;
+    }
+
+    if (animation == kAnimationGetUp && (entity().flags06 & kAnimationComplete06) != 0)
+    {
+      entity().fadeLevel134 = 0;
+      entity().interactParam1b8 = 0x1E0;
+      FUN_00252d88_return_to_idle_state();
+    }
+  }
+
+  // PTR_FUN_0031E0E8[0x19], FUN_002557A0. **Not death.** FUN_00251ED8:60-71 is
+  // its only writer and it tests `+0x6C & 0x1000000` -- a terrain word saying
+  // the surface kills on contact -- so this is the lava-and-pit state: sink the
+  // body while the tint ramps down, hide it, and count to the respawn that puts
+  // the player back on the lead trail with a hit point. The terrain entry is
+  // not ported yet, so nothing reaches this handler; it is transcribed because
+  // it was already written, and because the port used to run the real death
+  // through it.
+  void OriginalPlayerController::FUN_002557a0_update_terrain_hazard(std::uint32_t frameTicks)
+  {
+    constexpr float kDAT_00352984_sinkPerFrame = 0.100000001f;
+    // The original runs this one off the frame, not off DAT_003555BC: neither
+    // branch reads the tick count.
+    (void)frameTicks;
+
+    if (entity().fadeLevel134 >= 8)
+    {
+      entity().fadeLevel134 = static_cast<std::uint8_t>(entity().fadeLevel134 - 4);
+      entity().positionY28 -= kDAT_00352984_sinkPerFrame;
+      entity().groundHeight4c = entity().positionY28;
+      return;
+    }
+
+    entity().fadeRamp62 = static_cast<std::uint16_t>(entity().fadeRamp62 + 1);
+    const std::int16_t counter = static_cast<std::int16_t>(entity().fadeRamp62);
+    if (counter == 1)
+    {
+      entity().fadeLevel134 = 4;
+      entity().halfword08 = static_cast<std::uint16_t>(entity().halfword08 | 1u);
+      return;
+    }
+    if (counter >= 0x21 && onDeathRespawn_)
+    {
+      // FUN_00255E40: walk DAT_00355704 backwards for a primitive carrying
+      // neither 0x0800000 nor 0x1000000, drop the player there and hand it back
+      // one hit point. It needs the lead trail and the map's terrain words, so
+      // it is the caller's; with no hook installed the body stays hidden.
+      onDeathRespawn_();
+    }
   }
 
   void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
@@ -399,25 +872,44 @@ namespace orphen::ported::player
   {
     const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
 
-    // Harness debug affordance, not something the original's airborne state
-    // does: holding Circle re-arms the jump button in mid-air. It restarts
-    // state 2 / animation 0x0C exactly as FUN_00256bb8's grounded branch does,
-    // so the jump runs the same 4-frame startup and the same +0x44 seed --
-    // which is what makes it useful for reaching a ceiling to test against.
-    if (input.debugMidairJumpHeld && (input.mappedPressedActions & kOriginalMappedActionJump) != 0)
+    // FUN_002534D8:12. **The animation is sampled before the moon jump rewrites
+    // it**, and every branch below tests the sample rather than the field. So a
+    // moon jump out of a fall still takes the 0x0D arm on the frame it fires --
+    // it gets that frame's landing checks and its splash cue -- and only reads
+    // as a rise from the next frame on.
+    const std::uint16_t animation = entity().animationA0;
+
+    // FUN_002534D8:14-17, the moon jump. **This is the original's, not a
+    // harness affordance.** Hold the attack button (raw 0x20, Circle) with the
+    // debug byte up, and every press of jump (raw 0x80, Square) re-seeds the
+    // vertical velocity to the full jump speed and puts the rise animation back:
+    //
+    //   if (uGpffffbd54 != 0 && (uGpffffb09c & 0x80) != 0) {
+    //       +0xA0 = 0xC;  +0x44 = DAT_0035287C;
+    //   }
+    //
+    // Two stores, no state change, no return and no four-frame startup. Tapping
+    // jump repeatedly re-seeds the climb, which is what carries the character
+    // upward. The port used to zero +0x44 and arm the startup instead, so each
+    // tap cancelled the fall and then waited four frames before pushing: it
+    // hovered rather than climbed.
+    if (uGpffffbd54_moonJumpArmed_ != 0 &&
+        (input.uGpffffb09c_pressedThisFrame & kOriginalMappedActionJump) != 0)
     {
-      entity().verticalVelocity44 = 0.0f;
-      entity().pendingJumpImpulse = true;
-      entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
-      entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
-      FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
-      FUN_00253488_apply_airborne_control(frameTicks, input);
-      return;
+      entity().animationA0 = kAnimationJumpRise;
+      entity().verticalVelocity44 = kOriginalJumpVelocity;
     }
 
-    if (entity().animationA0 == kAnimationJumpRise)
+    if (animation == kAnimationJumpRise)
     {
-      if (entity().timelineCursorA8 >= 4)
+      // FUN_002534D8:20-23. The first four timeline entries are the crouch, and
+      // the state does nothing but steer through them -- the grounded test below
+      // is not reached, which is what stops a jump ending on the frame it starts.
+      if (entity().timelineCursorA8 < 4)
+      {
+        FUN_00253488_apply_airborne_control(frameTicks, input);
+        return;
+      }
       {
         if (entity().timelineCursorA8 == 4 && entity().pendingJumpImpulse)
         {
@@ -443,19 +935,48 @@ namespace orphen::ported::player
         return;
       }
     }
-    else if (entity().animationA0 == kAnimationJumpFall)
+    else if (animation == kAnimationJumpFall)
     {
+      // FUN_002534D8:56-60. +0x0C bit 0x400 is the splash FUN_002262C0 raises
+      // when an actor comes down on a liquid surface. It latches +0x1BB bit 0x10
+      // and plays character cue 0x0D, and that latch is what suppresses the
+      // ordinary landing thud below. Nothing in the port sets 0x400 yet -- the
+      // water branch of FUN_002262C0 is unported -- so this arm is inert, but it
+      // is the reason the thud is conditional rather than unconditional.
+      if ((entity().collisionFlags0c & 0x0400u) != 0)
+      {
+        entity().motionFlags1bb |= 0x10;
+        playCharacterCue(0x0D);
+      }
       if (grounded)
       {
         entity().animationA0 = kAnimationLand;
         entity().pendingJumpImpulse = false;
         FUN_00253468_finish_landing();
+        // FUN_002534D8:63-66. The landing thud, FUN_00255D88(entity, 3) -- the
+        // same surface table the footsteps and the takeoff read, column 3. Only
+        // a fall earns it: a rise that touches down (:41-44) returns without one,
+        // and so does a splash, which already played its own.
+        if ((entity().motionFlags1bb & 0x10) == 0 && FUN_00267d38_playSound_)
+        {
+          FUN_00267d38_playSound_(
+              orphen::ported::entity::FUN_00255d88_surface_cue(
+                  entity().typeId00, currentSurfaceTerrainFlags(),
+                  entity().interactTarget68 >= 0,
+                  orphen::ported::entity::SurfaceSoundKind::Extra),
+              entity());
+        }
         return;
       }
     }
-    else if (entity().animationA0 == kAnimationLand)
+    else if (animation == kAnimationLand)
     {
-      if (grounded)
+      // FUN_002534D8:50-54. **The landing runs to the end of its animation.**
+      // The exit is +0x06 bit 0 -- the timeline reporting complete -- not the
+      // ground test: the character is already grounded the moment this animation
+      // is chosen, so testing that here ended the state on its first frame and
+      // the recovery never played at all.
+      if ((entity().flags06 & kAnimationComplete06) != 0)
       {
         FUN_00252d88_return_to_idle_state();
         return;
@@ -963,6 +1484,11 @@ namespace orphen::ported::player
       entity().desiredDeltaY38 = 0.0f;
     }
 
+    // FUN_002262C0 keeps the post-gravity velocity in its workspace at +0x10
+    // and never writes it again, so the landing test below reads the speed the
+    // actor hit the ground at rather than the zero the landing leaves behind.
+    const float impactVelocity = entity().verticalVelocity44;
+
     const float previousY = entity().positionY28;
     float attemptedY = entity().positionY28 + entity().desiredDeltaY38;
     if (entity().verticalVelocity44 > 0.0f)
@@ -1007,6 +1533,46 @@ namespace orphen::ported::player
     if (!airborneState && (nextCollisionFlags & kPhysicsFlagGrounded) != 0)
     {
       attemptedY = entity().groundHeight4c;
+    }
+
+    // FUN_002262C0:576-601, immediately before +0x0C is written -- the dust a
+    // fall throws up on touchdown. **This is the plume under the game over**:
+    // the death launches the body with uGpffff88c8 of pop-up, so it lands like
+    // any jump and the landing spawns the same ring.
+    //
+    //   FUN_0030BD20(v * 128.0) < -4
+    //
+    // is the whole speed gate. `FUN_0030BD20` is the soft-float conversion, and
+    // it shifts the mantissa down before applying the sign -- so it truncates
+    // toward zero, exactly as a C cast does, and the real threshold is
+    // **v <= -5/128**, not -4/128. That boundary is load-bearing here: the
+    // death's fall reaches -0.045 and throws dust, while a plain knockback's
+    // reaches -0.034 -- which is -4.35, truncating to -4 -- and does not.
+    // Rounding instead of truncating would put dust under the knockback too.
+    //
+    // It is skipped when the actor was already grounded last frame, and on a
+    // killing surface (+0x6C bit 0x1000000).
+    //
+    // The original also accepts +0x0C bit 0x10000 as grounded. The port has no
+    // such bit -- nothing it models ever sets one -- so the test is bit 0 alone.
+    if (static_cast<int>(impactVelocity * 128.0f) < -4 &&
+        (nextCollisionFlags & kPhysicsFlagGrounded) != 0 && !wasGrounded &&
+        (entity().flagWord6c & 0x01000000u) == 0)
+    {
+      // The top nibble of +0x6C is the surface kind. Only 0 and 3 raise dust --
+      // the rest are water, which gets FUN_002D4108's ripple instead -- and the
+      // kind doubles as the colour: 3 is lit white, 0 is the pool's own default.
+      const std::uint32_t surfaceKind = entity().flagWord6c >> 28;
+      if ((surfaceKind == 0 || surfaceKind == 3) && FUN_00219af0_landingDust_)
+      {
+        FUN_00219af0_landingDust_(entity().positionX20, entity().positionZ24,
+                                  attemptedY - kDAT_0035246c_dustDrop, entity().radius54,
+                                  surfaceKind != 0);
+      }
+      // +0x0C bit 0x800, the "dust went out this frame" marker. Nothing in the
+      // port reads it yet; it is set so that anything that later does sees what
+      // the original would have left.
+      nextCollisionFlags |= 0x0800u;
     }
 
     entity().positionY28 = attemptedY;

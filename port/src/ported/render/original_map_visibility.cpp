@@ -141,6 +141,17 @@ namespace orphen::ported::render
     std::vector<std::vector<MapDrawItem>> buckets(visibility::kDepthBucketCount);
     std::size_t drawCount = 0;
 
+    // FUN_00209140:127. The whole primitive walk is behind
+    // `cap == 0 || cap > 3`, so a cap of 1..3 does not draw the map faintly --
+    // it does not draw the map at all. That is one test, before the loop, and
+    // it is what the game over uses to empty the room: FUN_002559E8 parks
+    // DAT_00355700 at exactly 3. Confirmed on hardware by writing 0x7F back
+    // into it mid-sequence, which brings the room straight back.
+    if (input.globalFadeCap != 0 && input.globalFadeCap <= 3)
+    {
+      return {};
+    }
+
     for (std::size_t primitiveIndex = 0; primitiveIndex < map.DAT_003556ac_dRecords80.size(); ++primitiveIndex)
     {
       DRecord80 &record80 = map.DAT_003556ac_dRecords80[primitiveIndex];
