@@ -228,7 +228,27 @@ namespace orphen::ported::text
         case kControlPlayVoiceExtra:
           // FUN_00206d98(channel). The clip must already be cached; the
           // original returns -2 and stays silent when it is not.
-          if (at + 1 < end && blob[at + 1] < 3)
+          //
+          // **A record can carry more than one 0x18, and only the first one
+          // that finds a cached clip does anything.** Both FUN_00206d98 and
+          // FUN_00206f08 open with `if (DAT_00356788 == 0)`, and FUN_00207010
+          // sets that flag as it starts the voice, so a later 0x18 in the same
+          // record returns -1 before it even reads its channel. It cannot
+          // interrupt the clip and it cannot replace it. A 0x18 on an *unarmed*
+          // channel leaves the flag alone -- it returns -2 from the
+          // `DAT_00356480[channel] == 0` test above the start -- so "the first
+          // one that finds a clip" is the whole rule, which `playedVoice == 0`
+          // says exactly.
+          //
+          // s01_e014's last record is why this matters. It arms channel 0 with
+          // clip 115 and plays it, and then, after the 0x13 speaker name, does
+          // a stray `18 01` on a channel the scene never arms. Hardware drops
+          // it. The port took the last 0x18 instead of the first, so it played
+          // whatever channel 1 was left holding -- clip 2540 armed by
+          // s14_e001's crab fight, three scenes earlier, because DAT_00356480
+          // is global and survives a scene load on hardware too. Orphen said
+          // "Where were you two?" over "Get to the deck! Fast!".
+          if (playedVoice == 0 && at + 1 < end && blob[at + 1] < 3)
           {
             playedVoice = voiceCache_[blob[at + 1]];
           }
