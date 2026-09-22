@@ -8393,6 +8393,15 @@ namespace orphen::port
       loadSceneForCurrentMap();
       DAT_003551ec_sceneRequest_ = 0;
     }
+    // FUN_002239C8:126 again, for the other two modes the port now reaches.
+    // PTR_FUN_00318A88 slots 4 and 5 are the field menu, and their handlers are
+    // the draw tail plus FUN_002192C0 and nothing else -- so every simulation
+    // step below is skipped while the panel is up. Latched at the top of the
+    // frame rather than read per call site, because FUN_00224FF0 raises the
+    // mode *later in this same frame*: the frame a press opens the panel on
+    // still runs in full, the way FUN_002239C8's single test makes it.
+    const bool menuFrame = fieldMenu_.open();
+
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
     {
@@ -8479,11 +8488,14 @@ namespace orphen::port
       //
       // Still not gated the way the original gates it: FUN_002239C8:126 leaves
       // for FUN_002241E0 whenever DAT_00354D2C is non-zero at all, where the
-      // port's `cutsceneFrame` tests only for the cutscene mode. Widening that
-      // reaches well past this scene and is left alone for now.
-      FUN_0032536c_scene_module(4, frameTicks);
+      // port tests for the modes it has handlers for -- 6, the cutscene, and
+      // now 4 and 5, the field menu. The remaining eleven are unreached.
+      if (!menuFrame)
+      {
+        FUN_0032536c_scene_module(4, frameTicks);
+      }
 
-      if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
+      if (!menuFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("tick");
@@ -8510,7 +8522,46 @@ namespace orphen::port
       // It replaces the *controller* and nothing else. FUN_002261E0 still runs
       // slot 0's physics, from a loop over the whole pool further down the
       // frame -- see the call after the path followers below.
-      if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
+      if (menuFrame)
+      {
+        // FUN_002241E0's slot. Neither FUN_00249610 nor FUN_00251ED8 is in
+        // either menu mode's handler, so the lead is not driven at all; the
+        // panel's own step stands in for the whole simulation half of the
+        // frame.
+        orphen::ported::scene::FieldMenuPad menuPad;
+        menuPad.uGpffffb684_held = static_cast<std::uint16_t>(input.rawHeldPad);
+        menuPad.uGpffffb686_pressed = static_cast<std::uint16_t>(input.rawPressedPad);
+        menuPad.uGpffffb68e_stickDirection = static_cast<std::uint16_t>(input.rawStickDirection);
+        const orphen::ported::scene::FieldMenuStep menuStep =
+            fieldMenu_.step(menuPad, frameTicks);
+        if (menuStep.cue >= 0)
+        {
+          soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(menuStep.cue));
+        }
+        if (menuStep.confirmed >= 0)
+        {
+          // FUN_00231958:36, `iGpffffbcbc = PTR_FUN_0031C3C0[selected](0)`. The
+          // seven submenus behind that table are not ported, so the selection
+          // is reported and the panel stays up.
+          std::cout << "[menu] selected " << menuStep.confirmed << " \""
+                    << fieldMenu_.label(menuStep.confirmed)
+                    << "\" -- FUN_0031C3C0 handler not ported\n";
+        }
+        if (menuStep.closed)
+        {
+          // FUN_002241D8: back to the field frame, and FUN_0023BAE8 wipes the
+          // 64-entry action ring so the Triangle that closed the panel cannot
+          // be spent by FUN_0023B890's eight-frame window on the way out.
+          DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+          DAT_00342a70_mappedActions_.reset();
+          std::cout << "[menu] closed\n";
+        }
+        else
+        {
+          DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
+        }
+      }
+      else if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
       }
@@ -8533,11 +8584,21 @@ namespace orphen::port
                            [this] { return runInteractionProbe(); });
       }
 
+      // FUN_002239C8:131, `FUN_00224FF0()` -- immediately after the player
+      // controller. It is what reads Up or Down and raises game mode 4.
+      if (!menuFrame)
+      {
+        FUN_00224ff0_field_menu_gate(input);
+      }
+
       // FUN_002446e8 must land before the actor loop: it writes the movement
       // request at +0x30/+0x34 and the physics inside that loop is what spends
       // it. Run the other way round and every path-driven step is a frame late
       // and gets cleared before it is applied.
-      pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
+      if (!menuFrame)
+      {
+        pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
+      }
 
       // **FUN_002261E0 walks every pool slot, slot 0 included**, and it sits
       // after both the controller branch and FUN_0023FD30 (which is what steps
@@ -8551,7 +8612,7 @@ namespace orphen::port
       // "arrived" three frames later at the same spot and 120 sent him straight
       // back. The visible result is the walk animation firing for three frames
       // once a second with the pad locked out for each of them.
-      if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
+      if (!menuFrame && battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
       }
@@ -8562,6 +8623,10 @@ namespace orphen::port
       // set up on demand instead of waiting for a scene to arrange it.
       for (const auto &placed : placedSlots_)
       {
+        if (menuFrame)
+        {
+          break;
+        }
         if (placed.slot < 0 ||
             static_cast<std::size_t>(placed.slot) >= orphen::ported::entity::kEntitySlotCount)
         {
@@ -8577,7 +8642,10 @@ namespace orphen::port
         entity.positionY28 = placed.position.z;
       }
 
-      orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
+      if (!menuFrame)
+      {
+        orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
+      }
 
       // FUN_002239C8:126 -- `if (iGpffffadbc != 0) { FUN_002241E0(); goto ... }`.
       // A non-zero DAT_00354D2C hands the frame to the mode table, and mode 6,
@@ -8591,32 +8659,41 @@ namespace orphen::port
       // rain pool's live count and gate at 0x00355AA0 are unchanged across the
       // whole cutscene. The records are frozen, not freed, so the rain comes
       // back exactly where it was the frame the mode goes home.
-      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField)
+      // **FUN_002192C0 is in both menu handlers.** 0x00224570 and 0x00224518
+      // both end `... FUN_0020F3E0, FUN_002192C0, FUN_0020C290`, so the effect
+      // pools keep stepping while the panel is up even though nothing else
+      // does -- rain outside a window goes on falling. FUN_002D3218, the
+      // impact-dust pool above it, is *not* in either handler.
+      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame)
       {
-        // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
-        // after FUN_00239ce0, so a burst spawned by a behaviour this frame gets
-        // its first step on the next one rather than on the frame it was seeded.
-        //
-        // FUN_002D3320 -- the game over's spark column -- reads the lead and
-        // its bone palette on every seed, which the pool cannot see, so it
-        // arrives as a context rather than as globals.
-        orphen::ported::entity::GameOverDustContext dust;
-        dust.DAT_0058bffc_leadScale = entityPool_.leadPlayer().scale14c;
-        dust.FUN_00216868_random = [this] { return FUN_00216868_random(); };
-        dust.FUN_0020dc88_bone_point =
-            [this](std::size_t bone, const orphen::ported::psm2::Vec3 &localOffset)
+        if (!menuFrame)
         {
-          const auto &lead = entityPool_.leadPlayer();
-          const orphen::ported::psm2::Vec3 fallback{lead.positionX20, lead.positionZ24,
-                                                    lead.positionY28 + lead.height58 * 0.5f};
-          if (DAT_00357e00_bonePalettes_.empty())
+          // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
+          // after FUN_00239ce0, so a burst spawned by a behaviour this frame
+          // gets its first step on the next one rather than on the frame it was
+          // seeded.
+          //
+          // FUN_002D3320 -- the game over's spark column -- reads the lead and
+          // its bone palette on every seed, which the pool cannot see, so it
+          // arrives as a context rather than as globals.
+          orphen::ported::entity::GameOverDustContext dust;
+          dust.DAT_0058bffc_leadScale = entityPool_.leadPlayer().scale14c;
+          dust.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+          dust.FUN_0020dc88_bone_point =
+              [this](std::size_t bone, const orphen::ported::psm2::Vec3 &localOffset)
           {
-            return fallback;
-          }
-          return orphen::ported::model::FUN_0020dc88_bone_point(DAT_00357e00_bonePalettes_[0], bone,
-                                                                localOffset, fallback);
-        };
-        DAT_00355620_particles_.FUN_002d3218_step(frameTicks, &dust);
+            const auto &lead = entityPool_.leadPlayer();
+            const orphen::ported::psm2::Vec3 fallback{lead.positionX20, lead.positionZ24,
+                                                      lead.positionY28 + lead.height58 * 0.5f};
+            if (DAT_00357e00_bonePalettes_.empty())
+            {
+              return fallback;
+            }
+            return orphen::ported::model::FUN_0020dc88_bone_point(
+                DAT_00357e00_bonePalettes_[0], bone, localOffset, fallback);
+          };
+          DAT_00355620_particles_.FUN_002d3218_step(frameTicks, &dust);
+        }
         FUN_002192c0_step_effect_pools(frameTicks);
       }
       else
@@ -8633,7 +8710,7 @@ namespace orphen::port
       // this slice. FUN_00243f80 installs those scripts on members *other* than
       // 0, so the player's control block has none and the player path does not
       // need the VM. --battle-report says so rather than leaving it silent.
-      if (battleParty_.battleRunning())
+      if (!menuFrame && battleParty_.battleRunning())
       {
         // FUN_0023fd30:42. The first thing the battle tick does is recount the
         // actor table and drop any binding whose entity has gone -- so a target
@@ -8725,9 +8802,12 @@ namespace orphen::port
       // ladder waits on the narration line *after* the battle has been torn
       // down. Counting down only while a battle was running left that wait
       // spinning forever.
-      DAT_00356788_voiceHoldTicks_ = DAT_00356788_voiceHoldTicks_ > frameTicks
-                                         ? DAT_00356788_voiceHoldTicks_ - frameTicks
-                                         : 0u;
+      if (!menuFrame)
+      {
+        DAT_00356788_voiceHoldTicks_ = DAT_00356788_voiceHoldTicks_ > frameTicks
+                                           ? DAT_00356788_voiceHoldTicks_ - frameTicks
+                                           : 0u;
+      }
 
       // FUN_00208450, in its own slot in FUN_002239c8: after FUN_00239ce0 and
       // before FUN_0025b918's late slots. It spends whatever the tick wrote
@@ -8765,14 +8845,22 @@ namespace orphen::port
       // FUN_00208450, so the physics walk reads DAT_003555d0 on the same frame
       // it was set. It runs unconditionally -- the original does not gate it on
       // a map being present.
-      orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
+      // Neither menu handler runs it: both jump from FUN_00208450 straight to
+      // FUN_00208EE8, so a body left mid-fall stays where it is.
+      if (!menuFrame)
+      {
+        orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
+      }
 
       // FUN_002239c8:134-138 -- FUN_00208450, the physics pass, FUN_00224060,
       // then the late slots. The lead's breadcrumb goes down after it has
       // finished moving for the frame and before anything can read it back.
-      FUN_00224060_record_lead_trail();
+      if (!menuFrame)
+      {
+        FUN_00224060_record_lead_trail();
+      }
 
-      if (!cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
+      if (!menuFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("late slots");
@@ -8789,7 +8877,14 @@ namespace orphen::port
 
       // Behaviors can move and turn entities, so the render views are rebuilt
       // every frame now rather than only at load.
-      advanceEntityAnimations(frameTicks);
+      // The pose walk belongs to FUN_00239CE0, which neither menu handler
+      // calls -- the ninety frames of stepped hardware that came back
+      // byte-identical had the lead's idle loop stopped too. The publish below
+      // it is FUN_0020C5A8, which both handlers do call.
+      if (!menuFrame)
+      {
+        advanceEntityAnimations(frameTicks);
+      }
       publishSceneObjectViews(frameTicks);
 
       const auto &leadState = leadPlayer_.viewState();
@@ -8802,7 +8897,7 @@ namespace orphen::port
       cameraInput.autoFocusGoalYaw = leadState.facingRadians;
       previousStickMagnitude_ = input.stickMagnitude;
 
-      if (!cutsceneFrame)
+      if (!menuFrame && !cutsceneFrame)
       {
         fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
       }
@@ -8824,7 +8919,8 @@ namespace orphen::port
       // into 0x0058C844 and stepping one frame -- it came back as the camera's
       // angle again, and two screenshots 300 frames apart put the logo on
       // identical pixels while the room turned behind it.
-      if (entityPool_.status(orphen::ported::scene::kLogoSlot) !=
+      if (!menuFrame &&
+          entityPool_.status(orphen::ported::scene::kLogoSlot) !=
               orphen::ported::entity::SlotStatus::Free &&
           entityPool_.slot(orphen::ported::scene::kLogoSlot).typeId00 ==
               orphen::ported::scene::kLogoTypeId)
@@ -8847,7 +8943,10 @@ namespace orphen::port
 
     // FUN_00237fc0, which mode 6 runs after the actors. Cross is raw pad 0x40,
     // the same bit the interaction probe reads.
-    itemWindow_.FUN_00237fc0_update(frameTicks, (input.rawPressedPad & 0x0040) != 0);
+    if (!menuFrame)
+    {
+      itemWindow_.FUN_00237fc0_update(frameTicks, (input.rawPressedPad & 0x0040) != 0);
+    }
     // The same call, for the cutscene subtitles: this is where FUN_00237fc0
     // sits in FUN_002239c8's frame, after the script has had its turn, so a
     // record opened this frame types its first character this frame.
@@ -8863,7 +8962,10 @@ namespace orphen::port
     dialoguePad.uGpffffb684_held = input.rawHeldPad;
     dialoguePad.uGpffffb686_pressed = input.rawPressedPad;
     dialoguePad.uGpffffb68e_stickDirection = input.rawStickDirection;
-    dialogueStream_.FUN_00237fc0_update(frameTicks, dialoguePad, sceneScript_.state());
+    if (!menuFrame)
+    {
+      dialogueStream_.FUN_00237fc0_update(frameTicks, dialoguePad, sceneScript_.state());
+    }
     // --glyph-report. Two numbers that separate a dialogue bug from a renderer
     // one: what is in the 300 glyph slots, read back as text, and what the last
     // draw pass actually submitted. If the text is right and the submitted
@@ -9242,12 +9344,111 @@ namespace orphen::port
   // per character as the stream runs and FUN_00237fc0 redraws the whole array
   // every frame -- so rebuilding it from the revealed count lands in the same
   // place for a single line, which is all a caption is.
+  // FUN_0025B9E8(index) read as text. The messages the menus use are plain
+  // NUL-terminated ASCII rather than the control-code stream a dialogue record
+  // carries, so the whole of the read is the terminator.
+  std::string PortRuntime::FUN_0025b9e8_text(std::size_t messageIndex) const
+  {
+    std::string out;
+    for (const std::uint8_t byte : itemDatabase_.FUN_0025b9e8_message(messageIndex))
+    {
+      if (byte == 0)
+      {
+        break;
+      }
+      out.push_back(static_cast<char>(byte));
+    }
+    return out;
+  }
+
+  // FUN_00231A98:12-26. uGpffffbcc0 starts 0xFFFF and loses a bit for every
+  // null entry of PTR_FUN_0031C3C0 -- all seven are filled, so none -- and then
+  // bit 6 when `FUN_002298D0(DAT_0058BEB0) - 1` is below 2. FUN_002298D0 maps
+  // the lead's entity type onto a party index; the port has no party table
+  // behind it, so the mask is the unconditional 0xFFFF the entry-state scene
+  // reads back on hardware, and the one conditional item is noted rather than
+  // guessed at.
+  std::uint16_t PortRuntime::FUN_00231a98_availability() const
+  {
+    return 0xFFFF;
+  }
+
+  // FUN_00224FF0:88-98, the gate that opens the panel. The guards above the
+  // press test that the port can answer, in the original's order:
+  //
+  //   iGpffffb0e4  the cinematic bars      (DAT_00355054)
+  //   iGpffffb27c  a scene change in flight (DAT_003551EC)
+  //   cGpffffb663  battle mode -- there is no field menu in a battle
+  //   DAT_0058bf10 the lead's state, +0x60: no menu mid-action
+  //   FUN_00237c60 a dialogue or item window is up
+  //
+  // The ones it cannot: sGpffffb0ec and cGpffffb6d0, two flags nothing else in
+  // the port reads; cGpffffb656, the attract-mode demo; event flag 0x508; and
+  // iGpffffb284 == 0 / 0xC / 0xD, which keeps the panel off the boot and title
+  // scenes -- the port's own title path never reaches this code.
+  void PortRuntime::FUN_00224ff0_field_menu_gate(const InputSnapshot &input)
+  {
+    // 0x5000: Up or Down newly pressed. Not the stick -- FUN_00224FF0 reads
+    // uGpffffb686 straight, with none of FUN_0023B9F8's folding in of
+    // uGpffffb68e, so the movement stick does not open the panel.
+    constexpr std::uint16_t kPadUpOrDown = 0x5000;
+    if ((input.rawPressedPad & kPadUpOrDown) == 0)
+    {
+      return;
+    }
+    if (DAT_00354d2c_gameMode_ != orphen::ported::player::kGameModeField)
+    {
+      return;
+    }
+    if (DAT_00355054_letterbox_.DAT_00355054_mode() != 0 || DAT_003551ec_sceneRequest_ != 0)
+    {
+      return;
+    }
+    if (battleParty_.battleActive(DAT_003555d3_groupEScene_) || battleParty_.battleRunning())
+    {
+      return;
+    }
+    if (entityPool_.leadPlayer().state60 != 0)
+    {
+      return;
+    }
+    if (itemWindow_.FUN_00237c60_isOpen() || dialogueStream_.FUN_00237c60_busy())
+    {
+      return;
+    }
+    if (!dialogueFont_.measured() || !itemDatabase_.loaded())
+    {
+      return;
+    }
+
+    std::array<std::string, orphen::ported::scene::kFieldMenuItemCount> labels;
+    for (std::size_t index = 0; index < labels.size(); ++index)
+    {
+      labels[index] = FUN_0025b9e8_text(
+          static_cast<std::size_t>(orphen::ported::scene::kFieldMenuFirstLabelMessage) + index);
+    }
+    fieldMenu_.FUN_00231a98_open(labels, FUN_00231a98_availability(), dialogueFont_);
+    // FUN_00237AD8 -> FUN_00267D38(4, 0), the non-positional path.
+    soundEngine_.FUN_00267d38_play_flat(orphen::ported::scene::kFieldMenuCueOpen);
+    DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
+    std::cout << "[menu] opened at frame " << frameCount_ << '\n';
+  }
+
   std::vector<orphen::ported::text::DialogueSprite> PortRuntime::buildDialogueSprites() const
   {
     namespace text = orphen::ported::text;
     if (!dialogueFont_.measured())
     {
       return {};
+    }
+
+    // FUN_00231C50, which both menu modes run. It is the whole of what the two
+    // handlers draw beyond the world behind it, so it goes in ahead of
+    // everything else the list carries.
+    if (fieldMenu_.open())
+    {
+      return fieldMenu_.FUN_00231c50_layout(
+          FUN_0025b9e8_text(orphen::ported::scene::kFieldMenuCaptionMessage), dialogueFont_);
     }
 
     // The cutscene subtitles. These come out of the real glyph slot array, so
@@ -9270,17 +9471,7 @@ namespace orphen::port
     // belongs to the item database, not to the dialogue system.
     if (dialogueStream_.choiceActive())
     {
-      const std::span<const std::uint8_t> message =
-          itemDatabase_.FUN_0025b9e8_message(kChoiceCaptionMessage);
-      std::string caption;
-      for (const std::uint8_t byte : message)
-      {
-        if (byte == 0)
-        {
-          break;
-        }
-        caption.push_back(static_cast<char>(byte));
-      }
+      const std::string caption = FUN_0025b9e8_text(kChoiceCaptionMessage);
       if (!caption.empty())
       {
         const int width = text::FUN_00238e68_measure(caption, dialogueFont_, kChoiceCaptionCell);

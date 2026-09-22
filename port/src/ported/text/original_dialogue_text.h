@@ -168,6 +168,12 @@ namespace orphen::ported::text
     int sourceWidth = 0;
     int sourceHeight = 0;
     std::uint32_t color = kColorDefault;
+    // FUN_00239020's `param_1`, the entry's +0x2C, which FUN_00207938:96-110
+    // turns into PRIM.ABE and the ALPHA register block index. Every glyph entry
+    // FUN_00238608 and FUN_00238A08 build carries 1 -- blend on -- and so does
+    // the title prompt at 0x00325738. The field menu's bar at 0x0031C388 is the
+    // one entry here that carries 0, and it is opaque because of it.
+    int blendMode = 1;
   };
 
   // The proportional width table FUN_00238c90 builds, at 0x0031C518.

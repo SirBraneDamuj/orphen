@@ -234,11 +234,13 @@ namespace orphen::port
         {
           input.debugHealRequested = true;
         }
-        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFT)
+        // Was Left/Right; the arrow keys are the D-pad now, and the D-pad is
+        // what opens the field menu.
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_LEFTBRACKET)
         {
           input.previousMapRequested = true;
         }
-        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_RIGHT)
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_RIGHTBRACKET)
         {
           input.nextMapRequested = true;
         }
@@ -282,24 +284,34 @@ namespace orphen::port
     bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
 
-    // WASD is the D-pad. On hardware these four bits sit in DAT_003555f4 and
-    // FUN_0023b5d8's digital branch turns them into the movement angle above;
-    // FUN_002462c8 reads the same bits to cycle the battle target, so the keys
-    // that walk also aim.
+    // **The D-pad does not walk the character, and it is not WASD.**
+    //
+    // FUN_0023B5D8:38-50 gates its whole digital branch on DAT_003555E0, which
+    // it sets to -1 for a pad whose type nibble reads 7 -- a DualShock -- and
+    // to 0 for anything else. The branch is `0 < DAT_003555E0` on a signed
+    // char, so with the analog pad the game ships with it never runs and the
+    // four direction bits never reach DAT_003555E8/E4. Confirmed on hardware:
+    // sixty frames of D-pad Right left the lead's position at 0x0058BED0
+    // unchanged to the byte.
+    //
+    // What the D-pad *is* for is FUN_00224FF0 -- Up or Down opens the field
+    // menu, Left opens the map -- and FUN_002462C8's battle target cycling. So
+    // it gets the arrow keys here, and WASD stays the movement stick. Sharing
+    // the two made W open the menu on every step forward.
     std::uint16_t directionBits = 0;
-    if (keys[SDL_SCANCODE_W] != 0)
+    if (keys[SDL_SCANCODE_UP] != 0)
     {
       directionBits |= kPadUp;
     }
-    if (keys[SDL_SCANCODE_D] != 0)
+    if (keys[SDL_SCANCODE_RIGHT] != 0)
     {
       directionBits |= kPadRight;
     }
-    if (keys[SDL_SCANCODE_S] != 0)
+    if (keys[SDL_SCANCODE_DOWN] != 0)
     {
       directionBits |= kPadDown;
     }
-    if (keys[SDL_SCANCODE_A] != 0)
+    if (keys[SDL_SCANCODE_LEFT] != 0)
     {
       directionBits |= kPadLeft;
     }
@@ -308,7 +320,12 @@ namespace orphen::port
     // a long cutscene the same way R2 is on hardware.
     input.fastForwardHeld = keys[SDL_SCANCODE_P] != 0;
 
-    // A gamepad, when present, overrides the keyboard for movement and camera.
+    // A gamepad, when present, overrides the keyboard for movement and camera
+    // -- but only while its stick is actually off centre. WASD used to survive
+    // a plugged-in pad by way of the D-pad fallback below; that fallback is
+    // gone, so the resting stick has to hand the keys back explicitly.
+    const float keyboardMoveX = input.moveX;
+    const float keyboardMoveY = input.moveY;
     bool usingAnalogStick = false;
     auto *controller = static_cast<SDL_GameController *>(controller_);
     if (controller != nullptr && SDL_GameControllerGetAttached(controller) == SDL_TRUE)
@@ -331,7 +348,7 @@ namespace orphen::port
         input.moveX = std::cos(stick.angle);
         input.moveY = std::sin(stick.angle);
       }
-      else
+      else if (keyboardMoveX == 0.0f && keyboardMoveY == 0.0f)
       {
         // Inside the deadzone the original reports a hard zero on both, and
         // FUN_00256bb8 compares fGpffffb678 against 0.0 exactly.
@@ -340,6 +357,13 @@ namespace orphen::port
         input.stickAngle = 0.0f;
         input.moveX = 0.0f;
         input.moveY = 0.0f;
+      }
+      else
+      {
+        // Pad attached, stick at rest, WASD held: the keyboard's synthesised
+        // stick below takes the frame.
+        input.moveX = keyboardMoveX;
+        input.moveY = keyboardMoveY;
       }
 
       cameraLeftHeld = cameraLeftHeld ||
@@ -440,23 +464,12 @@ namespace orphen::port
     // not work on a controller at all.
     input.jumpRequested = (input.rawPressedPad & kRawPadSquare) != 0;
 
-    // FUN_0023b5d8:47-58. The digital word wins outright: with any direction
-    // bit held the stick is ignored and DAT_003555e8 is a flat 0x43000000
-    // (128.0), which is why a D-pad direction always runs. Without this the
-    // pad's D-pad moved nothing, and WASD did nothing at all once a controller
-    // was plugged in.
-    if (directionBits != 0)
-    {
-      input.moveX = keyAxis((directionBits & kPadLeft) != 0, (directionBits & kPadRight) != 0);
-      input.moveY = keyAxis((directionBits & kPadDown) != 0, (directionBits & kPadUp) != 0);
-      usingAnalogStick = false;
-    }
-
     if (!usingAnalogStick)
     {
-      // Keyboard falls through the original's digital branch in FUN_0023b5d8,
-      // which writes DAT_003555e8 = 0x43000000 (128.0) outright -- a held
-      // direction on the d-pad always runs.
+      // The keyboard has no stick, so WASD stands in for one at full
+      // deflection -- 128.0, the value FUN_0023B3F0 tops out at. This is a
+      // harness substitution and nothing in the original: the D-pad above has
+      // no path to DAT_003555E8 at all.
       const float moveLength = std::sqrt(input.moveX * input.moveX + input.moveY * input.moveY);
       if (moveLength > 0.0f)
       {
@@ -470,6 +483,11 @@ namespace orphen::port
         input.stickMagnitude = 0.0f;
         input.stickAngle = 0.0f;
       }
+      // DAT_003555FE, the same FUN_0023B4E8 quantisation the controller branch
+      // runs. Without it the synthesised stick could not cycle a battle target
+      // or walk a dialogue choice, both of which read it.
+      input.rawStickDirection = orphen::ported::input::FUN_0023b4e8_stick_direction_bits(
+          input.stickMagnitude, input.stickAngle);
     }
   }
 

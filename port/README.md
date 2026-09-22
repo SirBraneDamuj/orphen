@@ -2731,13 +2731,24 @@ word in `DAT_003555FE`; `DAT_00355600` is that word's newly-pressed edge. Its
 gate is magnitude > 100 of 128, well clear of `FUN_0023B3F0`'s 60 deadzone, so a
 nudge that moves the character does not also move the cursor.
 
-Both are live in the port: `sdl_gl_window.cpp` puts WASD and the pad's D-pad
-into the high nibble of `rawHeldPad` where the hardware pad has them, and runs
-the left stick through `FUN_0023b4e8_stick_direction_bits` for
-`rawPressedStickDirection`. That is the same nibble `FUN_0023B5D8`'s digital
-branch turns into a movement angle, so those keys walk and aim through one word,
-as they do on hardware -- which is also why the pad's D-pad now moves the
-character and WASD keeps working with a controller plugged in.
+Both are live in the port: `sdl_gl_window.cpp` puts the **arrow keys** and the
+pad's D-pad into the high nibble of `rawHeldPad` where the hardware pad has them,
+and runs the left stick -- or WASD standing in for one -- through
+`FUN_0023b4e8_stick_direction_bits` for `rawStickDirection`.
+
+An earlier version of this note said that nibble is also what walks the
+character, "as they do on hardware". **It is not, and they do not.**
+`FUN_0023B5D8:38-50` gates its digital branch on `DAT_003555E0`, which it sets to
+-1 for a pad whose type nibble reads 7 -- the DualShock the game ships with --
+and to 0 for anything else; the branch is `0 < DAT_003555E0` on a signed char, so
+it never runs and the four direction bits never reach `DAT_003555E8`/`E4`.
+Sixty frames of D-pad Right on hardware left the lead's position at `0x0058BED0`
+unchanged to the byte. The D-pad is a menu control: `FUN_00224FF0` opens the
+field menu on Up or Down and the map on Left, and `FUN_002462C8` cycles the
+battle target with all four.
+
+That is why WASD and the arrows are split. They shared the nibble until the field
+menu was ported, at which point every step forward opened the menu.
 
 The block is gated on the member having a target at all (`0 < FUN_002493b8`), and
 the player's first one does not come from `FUN_0023fd30`'s auto-acquire loop:
@@ -5568,6 +5579,89 @@ overhead. The port models neither `+0x0A` nor the material table, and an actor
 whose behavior moved it is the nearest test it has. A script-placed cutscene
 actor never qualifies, so its authored height survives, which is the point:
 `s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
+
+## The field menu, and the two game modes it runs in
+
+Up or Down on the D-pad in a field scene puts up a seven-item panel and freezes
+everything behind it. `FUN_00224FF0:96` is the whole of the trigger:
+
+```
+if ((uGpffffb686 & 0x5000) != 0) { iGpffffadbc = 4; FUN_00231A98(); return 0; }
+```
+
+`0x5000` is Up or Down newly pressed, `iGpffffadbc` is `DAT_00354D2C` -- the
+frame mode -- and `FUN_00231A98` lays the panel out. `FUN_002239C8:126` tests
+that word at the top of every frame and hands the whole frame to
+`PTR_FUN_00318A88[mode]` whenever it is non-zero, so the switch takes effect on
+the frame *after* the press.
+
+**Neither mode-4 nor mode-5 has a Ghidra function.** Both are `LAB_` blocks, so
+the two handlers were read out of `SLUS_200.11`:
+
+| mode | handler | what it runs |
+|---|---|---|
+| 4 | `0x00224570` | wait for release, then `FUN_00231C50` + the draw tail |
+| 5 | `0x00224518` | `FUN_00231958` (navigate, then draw) + the same tail |
+
+Mode 4 is `lhu v0,-0x497c(gp); andi v0,v0,0xf060; bne v0,zero,+3; li v0,5;
+sw v0,-0x5244(gp)` -- while any of the four directions, Circle or Cross is still
+*held*, stay in 4. It is the swallow of the press that opened the panel; without
+it the Up that opened it would immediately walk the selection.
+
+The tail both share is `FUN_00225C20, FUN_00208450, FUN_00208EE8, FUN_00208F28,
+FUN_0020C5A8, FUN_0020F3E0, FUN_002192C0, FUN_0020C290` -- the draw half of the
+field frame plus the effect-pool step, and nothing else. No script tick, no
+player controller, no actor loop, no `FUN_002261E0` physics, no `FUN_00216AA0`
+camera, no `FUN_00237FC0`. **The game is frozen, not slowed**, down to the idle
+animation: ninety stepped frames on hardware with the panel up produced a
+byte-identical screenshot, and the port now does the same. `FUN_002192C0` is the
+one exception -- rain outside a window goes on falling.
+
+### The panel
+
+Seven labels, SCR.BIN resource 1 messages `0x3F`..`0x45`, which are plain
+NUL-terminated ASCII rather than a dialogue stream:
+
+```
+0  Button Configuration          4  Return to Title Screen
+1  Screen Ratio                  5  Item
+2  Analog Controller Vibration   6  Equip
+```
+
+Each is centred at entry y `0x70 - index * 0x1E` with a bar two units below it,
+the widest label plus `0x20` wide for all seven. `FUN_002318C0` walks the alpha
+byte of each label's colour word towards `0x80` for the selected item and `0x20`
+for the rest, by `frameTicks / 8` a frame, so the highlight fades in over 24
+frames rather than snapping.
+
+The bar is one `FUN_00239020` entry, at `0x0031C388`: a 128x20 texel block of
+the button-icon sheet, slot `0x2C` read through CLUT bank 6. **Its `+0x2C` is
+0** where every glyph entry `FUN_00238608` builds carries 1, and `FUN_00207938`
+turns that field into `PRIM.ABE` -- which is why the bars are opaque and the
+text over them is not. `DialogueSprite` carries a `blendMode` for it now.
+
+Draw order is the display list's. `FUN_00207938` pushes each entry onto the head
+of its bucket, so the last submitted draws first; `FUN_00231C50` submits text
+then bar per item, top item first, and the panel therefore paints caption, bar 6,
+text 6, bar 5, ... -- each bar behind its own label.
+
+Navigation is `FUN_00231958`: Triangle closes through `FUN_002241D8` (which also
+wipes the 64-entry action ring, so the Triangle cannot be spent on the way out),
+Cross runs `PTR_FUN_0031C3C0[selected]` if the item's availability bit is set,
+and any of the four directions through `FUN_0023B9F8(0xF000, 1)` moves the
+selection and plays the move cue -- so **Left and Right click without moving**.
+The repeat ladder is that helper's: the first press fires, then nothing for
+eleven frames, then every fourth.
+
+**None of the seven submenus is ported.** Cross on an available item logs the
+selection and leaves the panel up.
+
+### On the keyboard
+
+The D-pad is the **arrow keys**, not WASD. See the battle-target-cycling note
+for why: the D-pad does not walk the character on hardware, and sharing the
+nibble with WASD made every step forward open the menu. `[` and `]` cycle the
+map, which is what Left and Right arrow used to do.
 
 ## The field HP gauge, and the hit reaction under it
 

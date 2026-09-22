@@ -2956,6 +2956,10 @@ namespace orphen::harness
 
     unsigned int boundTexture = 0;
     std::uint32_t submittedColor = 0;
+    // FUN_00207938 sets PRIM.ABE from the entry's +0x2C. The list is almost all
+    // glyphs, which carry 1, so blending starts on and only a blend-mode-0
+    // entry -- the field menu's bar -- turns it off.
+    int submittedBlendMode = 1;
     dialogueDrawTally_ = DialogueDrawTally{};
     for (const auto &sprite : dialogueSprites_)
     {
@@ -2995,6 +2999,18 @@ namespace orphen::harness
       {
         submittedColor = sprite.color;
         submitColor(submittedColor);
+      }
+      if (sprite.blendMode != submittedBlendMode)
+      {
+        submittedBlendMode = sprite.blendMode;
+        if (submittedBlendMode == 0)
+        {
+          glDisable(GL_BLEND);
+        }
+        else
+        {
+          glEnable(GL_BLEND);
+        }
       }
 
       const float u0 = static_cast<float>(sprite.u) / texture.width;

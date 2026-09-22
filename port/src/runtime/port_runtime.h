@@ -10,6 +10,7 @@
 #include "ported/debug/original_position_display.h"
 #include "ported/player/original_chest_cutscene.h"
 #include "ported/player/original_item_window.h"
+#include "ported/scene/field_menu.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/sound/original_voice_index.h"
 #include "ported/text/original_dialogue_text.h"
@@ -809,6 +810,21 @@ namespace orphen::port
     bool buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId);
     orphen::ported::player::ItemWindow itemWindow_;
     orphen::ported::resource::ItemDatabase itemDatabase_;
+
+    // --- the field menu, game modes 4 and 5 ------------------------------
+    // See ported/scene/field_menu.h. FUN_00224FF0's Up/Down gate opens it and
+    // FUN_002241D8 closes it; while it is up DAT_00354D2C is 4 or 5 and the
+    // simulation half of the frame does not run.
+    orphen::ported::scene::FieldMenu fieldMenu_;
+    // FUN_00224FF0:88-98, the gate. Called from the slot FUN_00224FF0 occupies
+    // in FUN_002239C8 -- after the player controller, so the mode it raises is
+    // not read until the top of the next frame.
+    void FUN_00224ff0_field_menu_gate(const InputSnapshot &input);
+    // FUN_00231A98's seven labels and FUN_00231C50's caption, out of SCR.BIN
+    // resource 1. They are plain NUL-terminated ASCII, not dialogue streams.
+    std::string FUN_0025b9e8_text(std::size_t messageIndex) const;
+    // FUN_002298D0's availability sweep, reduced to what the port can answer.
+    std::uint16_t FUN_00231a98_availability() const;
 
     // The battle module. FUN_002239c8:117 picks FUN_00249610 over FUN_00251ed8
     // when DAT_003555d3 and sGpffffb052 are both set, and script opcode 0xBD's
