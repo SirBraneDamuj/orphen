@@ -135,10 +135,16 @@ namespace orphen::ported::script
     // monster shots. See ported/entity/original_ship_fire.h.
     float DAT_003556fc_effectGroundZ = 0.0f;
 
-    // DAT_003437b8: byte counters opcode 0xBC increments, capped at 99. Used by
-    // event scripts as one-shot gates.
-    static constexpr std::size_t kEventCounterCount = 256;
-    std::uint8_t DAT_003437b8_eventCounters[kEventCounterCount]{};
+    // DAT_003437b8: the inventory -- how many of each item id the party holds.
+    // Opcode 0xBC adds one, capped at 99, and reports whether there was room.
+    // Spells are items: ids 1..0xE are the fourteen spell rows, and granting
+    // one here is all "learning" a spell is (s14_e031's reward arms, and
+    // s01_e024's init, which stocks all 43 test items). An *equipped* item is
+    // not counted: FUN_00244CC0 and the Equip screen move one in and out as they
+    // swap, and a new game starts every count at zero with 5/7/1 equipped.
+    // This is the only copy -- BattleParty borrows it for FUN_00244CC0.
+    static constexpr std::size_t kItemCountTableSize = 256;
+    std::uint8_t DAT_003437b8_itemCounts[kItemCountTableSize]{};
 
     // uGpffffb704 / uGpffffb708 (0xB9, 0xBA) and fGpffffb70c / fGpffffb710
     // (0xBB). Global colours and the fade radius pair; recorded, not yet used.
@@ -1174,7 +1180,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025e560_event_flag();          // 0x3D..0x40
     std::uint32_t FUN_00260318_read_object_register();    // 0x76
     std::uint32_t FUN_00260360_modify_object_register(); // 0x77..0x7C
-    std::uint32_t FUN_00263e30_increment_event_counter(); // 0xBC
+    std::uint32_t FUN_00263e30_give_item(); // 0xBC
     std::uint32_t FUN_00264448_set_frame_feedback();      // 0xC8 / 0xC9
     std::uint32_t FUN_00263ee0_call_function_table_entry(); // 0xBE
     void FUN_00263d10_set_global_color();                // 0xB9, 0xBA

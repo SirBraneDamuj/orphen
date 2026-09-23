@@ -58,11 +58,11 @@
 //
 // == What the port does not do ==
 //
-// `FUN_00237A08` itself: it arms a fade, sets game mode 0xC and calls
-// `FUN_002241D8`, which is the return to the title screen. The port has no mode
-// 0xC, so the hand-off is a hook -- see `onHandOff` -- and the runtime spends it
-// on the fade alone. The lead is left in state 10 either way, which is what the
-// original does first.
+// `FUN_00237A08` is not here: it is the return to the title screen -- a fade
+// and a scene request for s12_e010 -- and it is shared with the field menu's
+// Return to Title Screen, so the hand-off is a hook (`onHandOff`) and the
+// runtime owns it. The lead is left in state 10 first, which is what the
+// original does.
 //
 // `DAT_00343A10 = -1000.0` (the gate on `FUN_002025E0`, which the port does not
 // have), `FUN_00212DB0(0, 0, 0)` (the star field, likewise) and

@@ -50,7 +50,9 @@ namespace orphen::ported::render
 
       drawList.push_back(
           {index,
-           FUN_0020eec0_depthBucket(object.worldOrigin, viewProjection, object.depthBias133)});
+           object.overlayBucket08_40
+               ? entityDraw::kOverlayBucket
+               : FUN_0020eec0_depthBucket(object.worldOrigin, viewProjection, object.depthBias133)});
     }
 
     // Low bucket to high is far to near, the same order the map draw list is

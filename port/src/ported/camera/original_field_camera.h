@@ -174,6 +174,13 @@ namespace orphen::ported::camera
     // the sea with. Both write the global directly, so whichever runs last in
     // the script's own order wins, exactly as here.
     void setRoll(float radians) { uGpffffb6dc_roll_ = radians; }
+    // A direct write of fGpffffb6d8, the way FUN_0022F020:69 levels the Equip
+    // screen's view after FUN_00217D70 has worked a pitch out.
+    void setPitch(float radians)
+    {
+      fGpffffb6d8_pitch_ = radians;
+      pose_.pitchRadians = radians;
+    }
 
     const CameraPose &pose() const { return pose_; }
 

@@ -1684,16 +1684,16 @@ namespace orphen::ported::script
     return 0;
   }
 
-  // 0xBC (FUN_00263e30): increment a byte counter, capped at 99, and return
-  // whether it still had room. Event scripts use it as a one-shot gate.
-  std::uint32_t SceneCommandInterpreter::FUN_00263e30_increment_event_counter()
+  // 0xBC (FUN_00263e30): give the party one of item `index`, capped at 99, and
+  // return whether it still had room. This is how every spell is learned.
+  std::uint32_t SceneCommandInterpreter::FUN_00263e30_give_item()
   {
     const std::uint32_t index = FUN_0025c258_evaluate();
-    if (halted_ || index >= SceneScriptState::kEventCounterCount)
+    if (halted_ || index >= SceneScriptState::kItemCountTableSize)
     {
       return 0;
     }
-    std::uint8_t &counter = environment_.state->DAT_003437b8_eventCounters[index];
+    std::uint8_t &counter = environment_.state->DAT_003437b8_itemCounts[index];
     const std::uint8_t previous = counter;
     if (previous < 99)
     {
@@ -3914,7 +3914,7 @@ namespace orphen::ported::script
 
     case 0xBC:
       noteOpcode(opcode, OpcodeSupport::Modelled);
-      return FUN_00263e30_increment_event_counter();
+      return FUN_00263e30_give_item();
 
     case 0x96:
       noteOpcode(opcode, OpcodeSupport::Modelled);

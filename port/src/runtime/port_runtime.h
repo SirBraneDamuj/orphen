@@ -11,6 +11,7 @@
 #include "ported/player/original_chest_cutscene.h"
 #include "ported/player/original_item_window.h"
 #include "ported/scene/area_map.h"
+#include "ported/scene/equip_screen.h"
 #include "ported/scene/field_menu.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/sound/original_voice_index.h"
@@ -300,6 +301,9 @@ namespace orphen::port
     // above all -- is reachable without a pad. Magnitude is the original's
     // 0..128; above 100 is a run.
     std::optional<std::pair<float, float>> holdStick;
+    // `--hold-stick <angle>,<magnitude>,<first>-<last>`: only on those frames
+    // (inclusive, headless runs only). Absent is every frame.
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> holdStickFrames;
     // Fires the next-map request every N headless frames, so the map-cycle
     // scene reload can be exercised without a window.
     std::uint32_t cycleMapEveryFrames = 0;
@@ -824,6 +828,15 @@ namespace orphen::port
     // in FUN_002239C8 -- after the player controller, so the mode it raises is
     // not read until the top of the next frame.
     void FUN_00224ff0_field_menu_gate(const InputSnapshot &input);
+    // FUN_00237A08, the return to the title screen: the menu's Yes and the game
+    // over's hand-off both end here.
+    void FUN_00237a08_return_to_title();
+    // FUN_002294D0, the new-game reset FUN_0022A418 runs behind flag 0x500.
+    void FUN_002294d0_new_game_reset();
+    // FUN_00232FA8's FUN_0025D0E0 dim. The original re-issues it every frame
+    // the confirm draws; the port's overlay is sticky, so it is released at the
+    // top of the next frame and put back if the confirm is still up.
+    bool returnToTitleDimHeld_ = false;
     // FUN_00231A98's seven labels and FUN_00231C50's caption, out of SCR.BIN
     // resource 1. They are plain NUL-terminated ASCII, not dialogue streams.
     std::string FUN_0025b9e8_text(std::size_t messageIndex) const;
@@ -887,6 +900,140 @@ namespace orphen::port
     // FUN_0020BEC8 equivalent runs.
     void FUN_00214300_step_area_map(const InputSnapshot &input, std::uint32_t frameTicks);
     std::optional<orphen::ported::render::ViewProjection> areaMapCamera_;
+
+    // --- the Equip screen, game mode 3 -------------------------------------
+    // See ported/scene/equip_screen.h. Field-menu row 6 raises the mode; the
+    // implementation is runtime/port_runtime_equip.cpp.
+    //
+    // uGpffffae30 (DAT_00354DA0), the index into PTR_LAB_0031C2F0.
+    int DAT_00354da0_equipState_ = 0;
+    // What FUN_00233B28 copies into its 0x1DAC8-byte block, narrowed to the
+    // state the port has. FUN_0022FF20 and FUN_00233EB8 put it back.
+    struct EquipFieldSnapshot
+    {
+      // +0x0000, the whole pool, and +0x1D800 its status bytes. Only slots
+      // 2..255 are ever copied back.
+      std::vector<orphen::ported::entity::OriginalEntity> DAT_0058beb0_pool;
+      std::array<orphen::ported::entity::SlotStatus, orphen::ported::entity::kEntitySlotCount>
+          DAT_005a96b0_slotStatus{};
+      // Entity +0x168, which is inside the slot in the original.
+      std::vector<std::array<std::int8_t, orphen::ported::model::kMaxFilteredBones>> mode168;
+      // +0x1D900, the sixteen lights.
+      orphen::ported::render::LightTable DAT_00343888_lights{};
+      // +0x1DA40..+0x1DA64: the eye, the yaw/pitch/roll, the look-at and the
+      // camera sub-mode, and +0x1DA98 the zoom. The port's camera is one object,
+      // so the object is what is kept.
+      orphen::ported::camera::OriginalFieldCamera camera;
+      // +0x1DA68 / +0x1DA6C, the two colours FUN_0022EF30 fades from.
+      std::uint32_t uGpffffb6fc_globalRgb = 0;
+      std::uint32_t uGpffffb700_vectorRgb = 0;
+      // +0x1DA70, the key light's direction.
+      float DAT_003439c8_lightDirection[3]{};
+      // +0x1DA7C, +0x1DA88, +0x1DA80, +0x1DA84: the fog.
+      std::uint32_t uGpffffb704_color1 = 0;
+      std::uint32_t uGpffffb708_color2 = 0;
+      float fGpffffb70c_fadeNear = 0.0f;
+      float fGpffffb710_fadeFar = 0.0f;
+      // +0x1DA94, DAT_0058BF0C: the lead's facing.
+      float DAT_0058bf0c_leadFacing = 0.0f;
+      // +0x1DA8C..+0x1DA90, FUN_002340E0's fade.
+      orphen::ported::scene::EquipFade fade{};
+    };
+    EquipFieldSnapshot equipSaved_;
+    // DAT_00570DA0[3]: the pool slot of each loadout slot's icon, or -1 for
+    // the null pointer.
+    std::array<int, orphen::ported::scene::kEquipSlotCount> DAT_00570da0_slotIcon_{-1, -1, -1};
+    // Each icon's +0x19C / +0x1A0: its item's name and description.
+    std::array<std::string, orphen::ported::scene::kEquipSlotCount> iconName19c_{};
+    std::array<std::string, orphen::ported::scene::kEquipSlotCount> iconDescription1a0_{};
+    // DAT_00570DD8[3], the row labels.
+    std::array<std::string, orphen::ported::scene::kEquipSlotCount> DAT_00570dd8_slotName_{};
+    // DAT_00570DE8, DAT_00570DEC and the four DAT_00570DF4 lines.
+    std::string DAT_00570de8_characterName_;
+    std::string DAT_00570dec_spellName_;
+    std::array<std::string, 4> DAT_00570df4_description_{};
+    // The ring's +0x1C0 (the slot cursor, 0xFE0 until the fade is done),
+    // +0x1C4, +0x1C6 and +0x1C8 (the item an Item-screen exit uses; -1).
+    std::int16_t equipRing1c0_ = 0;
+    std::int16_t equipRing1c4_ = 0;
+    std::int16_t equipRing1c6_ = 0;
+    std::int16_t equipRing1c8_ = -1;
+    // One entry of DAT_00570BA0, the ring's icon list, with the icon's own
+    // work fields. The original keeps those inside the icon entity; the port
+    // keeps them here, next to the list, since only this screen reads them.
+    struct EquipRingIcon
+    {
+      int slot = -1;                            // the pool slot; -1 is null
+      orphen::ported::camera::Curve3 curve198;  // +0x198's spline block
+      std::string name19c;                      // +0x19C
+      std::string description1a0;               // +0x1A0
+      std::int16_t position1bc = 0;             // +0x1BC, 0 is the front
+      std::int16_t index1be = 0;                // +0x1BE, the order it was built in
+      std::uint16_t count1c0 = 0;               // +0x1C0, how many are held
+      std::uint8_t angle1c5 = 0;                // +0x1C5, its point on the loop
+    };
+    std::array<EquipRingIcon, orphen::ported::scene::kEquipRingMaxIcons> DAT_00570ba0_ringIcons_{};
+    // DAT_00570B10: loop point per ring position, rebuilt on every turn.
+    std::array<std::uint8_t, orphen::ported::scene::kEquipRingPathPoints> DAT_00570b10_positionAngle_{};
+    orphen::ported::scene::EquipRingPath DAT_005711f8_ringPath_{};
+    // The ring's +0x198 (the front icon, as a DAT_00570BA0 index), +0x19C
+    // (the outgoing slot icon's pool slot), +0x1A0 (the incoming ring icon,
+    // as an index), +0x1A4 (the ticks a slide or swap has run) and the two
+    // swap curves at +0x1AC and +0x1B0.
+    int equipRing198_ = -1;
+    int equipRing19c_ = -1;
+    int equipRing1a0_ = -1;
+    float equipRing1a4_ = 0.0f;
+    orphen::ported::camera::Curve3 equipRing1ac_;
+    orphen::ported::camera::Curve3 equipRing1b0_;
+    // DAT_00570DB0: the FUN_00229820 record the pentagon reads. Nothing
+    // clears it, so it keeps the last spell shown from one visit to the next.
+    orphen::ported::resource::ItemRecord DAT_00570db0_record_{};
+    // FUN_00229820(type - 0x1F1, 0x570DB0, 0, 0).
+    void FUN_00229820_equip_record(std::int16_t iconType);
+    // FUN_00230E50's pentagon, when it draws.
+    std::vector<orphen::ported::render::HudQuad> buildEquipPentagonQuads() const;
+    // DAT_00570DF0, the message state 8 shows.
+    std::string DAT_00570df0_message_;
+    // FUN_0022FBD0 ran this frame: its box is drawn ahead of the dispatcher's.
+    bool equipNoSpellsDrawn_ = false;
+    // FUN_002311E8's per-row entry x, kept from the step for the draw.
+    std::array<int, orphen::ported::scene::kEquipSlotCount> equipRowX_{};
+    bool equipDrawn_ = false;
+    // State 4 ran this frame: FUN_0022F408 ends with its own FUN_00230DB0, so
+    // the description goes down twice.
+    bool equipDescriptionTwice_ = false;
+    // Mode 3's whole simulation step: FUN_0022E910 and its state handlers.
+    void FUN_0022e910_equip_screen(const InputSnapshot &input, std::uint32_t frameTicks);
+    void FUN_0022f020_enter_equip_screen();
+    void FUN_0022f2d8_equip_fade_in(std::uint32_t frameTicks);
+    void FUN_0022f408_pick_slot(const InputSnapshot &input, std::uint32_t frameTicks);
+    void FUN_0022fea8_leave_by_reload(std::uint32_t frameTicks);
+    void FUN_0022ff20_leave_equip_screen();
+    void FUN_002338f0_spawn_ring();
+    void FUN_00233b28_save_field();
+    void FUN_00233eb8_restore_field();
+    void FUN_00233a10_place_camera();
+    void FUN_002302f0_spawn_slot_icons();
+    void FUN_002340e0_equip_fade(std::uint32_t frameTicks);
+    void FUN_0022f588_close_ring(const InputSnapshot &input, std::uint32_t frameTicks);
+    void FUN_0022f620_ring_open(const InputSnapshot &input, std::uint32_t frameTicks);
+    void FUN_0022fa18_swap(std::uint32_t frameTicks);
+    // FUN_00230910: rebuild the ring for loadout slot `slot`, `front` (an
+    // item id, or -1) first. Returns the icon count.
+    int FUN_00230910_build_ring(int slot, int front);
+    void FUN_002378e0_spawn_ring_icon(float step, int index, std::int16_t type, float &angle);
+    // FUN_002313B8: the ring's own sub-state, PTR_LAB_0031C370[+0x1C4].
+    // `picked` receives a DAT_00570BA0 index where the original hands back
+    // the entity.
+    int FUN_002313b8_ring_step(const InputSnapshot *input, std::uint32_t frameTicks, int *picked);
+    void FUN_002333e8_ring_fade(std::uint32_t frameTicks);
+    // FUN_0020DC88(ring, bone, zero offset): last frame's pose.
+    orphen::ported::psm2::Vec3 equipRingBonePoint(int bone) const;
+    // FUN_00230CE0 and FUN_00229820(type - 0x1F1, 0x570DB0, 0, 0) for the
+    // highlighted slot: its name, its description and its stat record.
+    void selectEquipSlot(int slot);
+    std::vector<orphen::ported::text::DialogueSprite> buildEquipScreenSprites() const;
 
     // The battle module. FUN_002239c8:117 picks FUN_00249610 over FUN_00251ed8
     // when DAT_003555d3 and sGpffffb052 are both set, and script opcode 0xBD's

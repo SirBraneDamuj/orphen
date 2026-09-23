@@ -418,7 +418,11 @@ namespace orphen::harness
     // FUN_0025cfb8's two flat black sprites.
     void drawLetterboxBars(int framebufferWidth, int framebufferHeight) const;
     // FUN_00239020's sprites, in the same screen the bars use.
-    void drawDialogueSprites(int framebufferWidth, int framebufferHeight) const;
+    // The entries whose sort bucket is in [firstBucket, lastBucket].
+    void drawDialogueSprites(int framebufferWidth,
+                             int framebufferHeight,
+                             int firstBucket,
+                             int lastBucket) const;
     // FUN_00207de8's UI quads, in that same screen.
     void drawHudQuads(int framebufferWidth, int framebufferHeight) const;
     // FUN_00255CE8. Assumes the game viewport is already current.

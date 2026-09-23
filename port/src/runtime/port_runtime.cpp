@@ -300,12 +300,8 @@ namespace orphen::port
           return;
         }
         gameOverHandedOff_ = true;
-        // FUN_00237A08 is FUN_0025D1C0(1, 0xC, 0) followed by game mode 0xC and
-        // FUN_002241D8 -- the return to the title. The port has no mode 0xC, so
-        // it keeps the fade and says what it dropped.
-        DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0x0C, 0);
-        std::cout << "[game over] FUN_00237A08: fade armed; the mode 0xC title "
-                     "hand-off is not ported" << std::endl;
+        std::cout << "[game over] hand-off\n";
+        FUN_00237a08_return_to_title();
       };
 
       leadPlayer_.setGameOverHooks(std::move(gameOver));
@@ -1645,7 +1641,8 @@ namespace orphen::port
         }
         return 0;
       case 0x78:
-        return battleParty_.FUN_00244cc0_equip_spell(static_cast<std::uint32_t>(arg3), arg4);
+        return battleParty_.FUN_00244cc0_equip_spell(static_cast<std::uint32_t>(arg3), arg4,
+                                                     sceneScript_.state().DAT_003437b8_itemCounts);
       default: return 0;
       }
     };
@@ -2962,9 +2959,37 @@ namespace orphen::port
       return;
     }
 
+    // FUN_0022a418:42-48. Flag 0x500 is the title menu's New Game: the leader
+    // goes back to Orphen (type 1), FUN_002294D0 wipes the run, and the field
+    // camera takes FUN_00216930's defaults -- which the port's load installs
+    // anyway. DAT_003555D3 is cleared here and recomputed on the next line.
+    if (sceneScript_.state().FUN_00266368_eventFlag(orphen::ported::scene::kNewGameFlag))
+    {
+      entityPool_.leadPlayer().typeId00 = 1;
+      FUN_002294d0_new_game_reset();
+      fieldCamera_.FUN_00216930_install_normal_field_defaults();
+    }
+
     // FUN_0022a418:49. Sticky for as long as the scene stays loaded, because
     // FUN_0022a238 keeps reading it to pick a descriptor list.
     DAT_003555d3_groupEScene_ = (DAT_003551ec_sceneRequest_ & 0x20000u) != 0;
+
+    // FUN_0022a418:58-63. A load of s12_e010 with no movie queued plays movie
+    // 0x12 first -- unless it comes from s12_e040/e041, or the debug byte has
+    // bit 2 without bit 8 (retail boots it at 0x22, so never here). The title
+    // screen's own way back from gameplay, FUN_00237A08, queues -1 to get past
+    // this.
+    if (DAT_003555d2_movieRequest_ == 0 &&
+        DAT_003551f4_sceneSection_ == orphen::ported::scene::kTitleSceneSection &&
+        DAT_003551f0_sceneEntry_ == orphen::ported::scene::kTitleSceneEntry &&
+        !DAT_003555d3_groupEScene_ &&
+        (DAT_00354d78_previousSection_ != orphen::ported::scene::kTitleSceneSection ||
+         static_cast<unsigned>(DAT_00354d7c_previousEntry_ - 0x28) > 1u))
+    {
+      DAT_003555d2_movieRequest_ = 0x12;
+      sceneScript_.state().FUN_002663d8_clearEventFlag(
+          orphen::ported::scene::kReturnedFromGameFlag);
+    }
 
     // FUN_0022a418:64-72, and note where it sits: **between** the group-0xE
     // decision and the load. The movie plays over the fade the request already
@@ -3416,9 +3441,9 @@ namespace orphen::port
     }
     // Module 12, FUN_00271220 -- **the title screen**. Its mode 4 is one line,
     // `(*PTR_FUN_003256F8[DAT_00342B7D])(DAT_00342B7D)`,
-    // and the port walks the first two of that table's twelve states. The rest
-    // are the menu behind the prompt (new game, load, options, the attract
-    // demo) and are not ported.
+    // and the port walks states 0, 1, 2 and 5 of that table's twelve, with a
+    // shim standing in for state 3's menu. The rest are the menu's other rows
+    // (load, options, the attract demo) and are not ported.
     else if (mode == 4 && DAT_0032536c_sceneModule_ == orphen::ported::scene::kTitleSceneModule &&
              titleScreenActive_)
     {
@@ -3458,29 +3483,32 @@ namespace orphen::port
               angle + static_cast<float>(frameTicks) * title::kOrbitRadiansPerTick);
         }
 
-        // FUN_00271558:24, `uGpffffb686 & 0x840` -- START or Cross. The
-        // original's state 2 tears the title down and walks into the new
-        // game / load menu (FUN_00271858 -> FUN_00236780). **This is the
-        // shim**: none of that is ported, so the button asks for s01_e012
-        // directly, using the same request the module's own scene changes use
-        // (FUN_00273320:12-16 -- fade, then request bit 1).
+        // FUN_00271558:24-35, `uGpffffb686 & 0x840` -- START or Cross. The
+        // state goes to 2 and the teardown runs in the same call: the eye is
+        // put back at orbit angle 0 around **slot 0** (not the subject), and
+        // the logo and the two entities named by work words 8 and 9 are
+        // released. The `* 0xEC` there is a short-array index, so the stride
+        // is the pool's 0x1D8.
         if ((uGpffffb686_pressedPad_ & title::kStartOrConfirmMask) != 0)
         {
           DAT_00342b7d_titleState_ = 2;
-          titleScreenActive_ = false;
           titlePromptVisible_ = false;
-          DAT_003551f4_sceneSection_ = 1;
-          DAT_003551f0_sceneEntry_ = 12;
-          // Bit 1 holds the load behind the fade, which is what the module's
-          // own scene changes use. The other two bits are FUN_002000C0's cold
-          // boot pair (0x2000 takes the scene's own defaults block, bit 0
-          // stands the lead on it), so s01_e012 comes up exactly as a
-          // `--scene s01_e012` load does -- part of the shim, not of the
-          // original, which enters the game through FUN_00236780 instead.
-          DAT_003551ec_sceneRequest_ = 0x2003;
-          DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0xC, 0);
-          std::cout << "[title] START -> s01_e012. The original opens its menu here"
-                       " instead; this is the port's shim.\n";
+          const auto &lead = entityPool_.leadPlayer();
+          const float radius = fieldCamera_.followDistance();
+          fieldCamera_.FUN_00217d40_set_eye(orphen::ported::psm2::Vec3{
+              lead.positionX20 - radius * std::cos(0.0f), lead.positionZ24 - radius * std::sin(0.0f),
+              lead.positionY28 + radius * std::sin(fieldCamera_.followPitch())});
+          const auto &work = sceneScript_.state().DAT_00355060_work;
+          for (const std::uint32_t slot :
+               {static_cast<std::uint32_t>(title::kLogoSlot), work[8], work[9]})
+          {
+            if (slot < entityPool_.slotCount())
+            {
+              orphen::ported::entity::FUN_00265ec0_destroy_entity(
+                  slot, entityPool_, &sceneScript_.state().DAT_00343888_lights);
+            }
+          }
+          std::cout << "[title] START at frame " << frameCount_ << '\n';
         }
 
         // FUN_00271558:41. The timer the attract demo is handed off at. The
@@ -3495,6 +3523,45 @@ namespace orphen::port
                        " not ported\n";
         }
       }
+      // FUN_00271858, state 2: wait for the logo's slot to be free (FUN_00265EC0
+      // on it if its +0x06 bit 0 asks), then raise flag 0x511 and open the
+      // new game / load menu -- FUN_00236780(0, DAT_00342C8E) -- as state 3.
+      else if (DAT_00342b7d_titleState_ == 2)
+      {
+        auto &logo = entityPool_.slot(title::kLogoSlot);
+        if (logo.typeId00 < 1)
+        {
+          sceneScript_.state().FUN_002663a0_setEventFlag(title::kReturnedFromGameFlag);
+          DAT_00342b7d_titleState_ = 3;
+        }
+        else if ((logo.flags06 & 1u) != 0)
+        {
+          orphen::ported::entity::FUN_00265ec0_destroy_entity(
+              title::kLogoSlot, entityPool_, &sceneScript_.state().DAT_00343888_lights);
+        }
+      }
+      // State 3, FUN_002718F0, is the menu. **This is the port's shim**: the
+      // menu is not ported, so START is taken to mean its "New Game" row --
+      // FUN_002369B0 returning 0 -- on the first frame it is up. Case 0 is:
+      //
+      //   DAT_00342B7E = DAT_00342C8E = 0;  FUN_002663A0(0);
+      //   FUN_002663A0(0x500);  uGpffffad54 = uGpffffad48 = 1;  state 5
+      //
+      // Flag 0 is what s12_e010's script is waiting on: it stands the actor
+      // up, fades, and asks for s01_e012 itself. Flag 0x500 is what makes that
+      // load a new game (FUN_0022A418:42). The two gates are the plume and
+      // haze pools', which FUN_00271858 closed for the menu and this reopens;
+      // with no menu frame between them the pair is a no-op here.
+      else if (DAT_00342b7d_titleState_ == 3)
+      {
+        sceneScript_.state().FUN_002663a0_setEventFlag(title::kNewGameScriptFlag);
+        sceneScript_.state().FUN_002663a0_setEventFlag(title::kNewGameFlag);
+        DAT_00342b7d_titleState_ = 5;
+        std::cout << "[title] menu shim: New Game at frame " << frameCount_ << '\n';
+      }
+      // State 5, FUN_00271AD0: the orbit, but only under the DAT_003555C7
+      // cheat byte, which retail leaves at 0. Nothing else -- the script
+      // does the rest.
     }
     else if (mode == 4)
     {
@@ -3864,9 +3931,15 @@ namespace orphen::port
     decltype(orphen::ported::script::SceneScriptState::DAT_00342b70_flags) carriedFlags;
     std::copy(std::begin(sceneScript_.state().DAT_00342b70_flags),
               std::end(sceneScript_.state().DAT_00342b70_flags), std::begin(carriedFlags));
+    // The inventory at DAT_003437B8 carries for the same reason.
+    decltype(orphen::ported::script::SceneScriptState::DAT_003437b8_itemCounts) carriedItems;
+    std::copy(std::begin(sceneScript_.state().DAT_003437b8_itemCounts),
+              std::end(sceneScript_.state().DAT_003437b8_itemCounts), std::begin(carriedItems));
     sceneScript_ = {};
     std::copy(std::begin(carriedFlags), std::end(carriedFlags),
               std::begin(sceneScript_.state().DAT_00342b70_flags));
+    std::copy(std::begin(carriedItems), std::end(carriedItems),
+              std::begin(sceneScript_.state().DAT_003437b8_itemCounts));
 
     // FUN_0022a360's per-load seed, applied before anything scene specific.
     // Every early return below then leaves the renderer on these rather than on
@@ -4680,6 +4753,7 @@ namespace orphen::port
       view.fadeLevel = lead.fadeLevel134;
       view.fadeColor138 = lead.fadeColor138;
       view.depthBias133 = lead.depthBias133;
+      view.overlayBucket08_40 = (lead.halfword08 & 0x40u) != 0;
       view.scale = lead.scale14c;
       view.scaleZ150 = lead.scaleZ150;
       view.rotationX154 = lead.rotationX154;
@@ -5641,6 +5715,7 @@ namespace orphen::port
           view.fadeLevel = entity.fadeLevel134;
           view.fadeColor138 = entity.fadeColor138;
           view.depthBias133 = entity.depthBias133;
+          view.overlayBucket08_40 = (entity.halfword08 & 0x40u) != 0;
           view.scale = entity.scale14c;
           view.scaleZ150 = entity.scaleZ150;
           view.rotationX154 = entity.rotationX154;
@@ -6354,6 +6429,14 @@ namespace orphen::port
       std::uint32_t held;
       const char *actions;
     };
+    // DAT_003437b8, the spell rows of the inventory: what the Equip screen
+    // would offer. An equipped spell is not counted here.
+    std::cout << "spells held (DAT_003437b8[1..0xE]):";
+    for (std::uint32_t itemId = 1; itemId <= 0xE; ++itemId)
+    {
+      std::cout << ' ' << static_cast<int>(sceneScript_.state().DAT_003437b8_itemCounts[itemId]);
+    }
+    std::cout << "\n";
     std::cout << "loadout (DAT_003437a0 row 0, the player):\n";
     for (std::uint32_t slot = 0; slot < 3; ++slot)
     {
@@ -8372,6 +8455,15 @@ namespace orphen::port
     // FUN_002239c8:22, ahead of the pad publish and of everything the frame
     // does. A scene change asked for last frame lands here, so no part of a
     // frame ever runs half on one scene and half on the next.
+    //
+    // Ahead of it, the release of last frame's Return-to-Title dim: the
+    // original's quad was only in last frame's packet list. After Yes the fade
+    // FUN_00237A08 armed takes the overlay over from here.
+    if (returnToTitleDimHeld_)
+    {
+      DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(0, 0);
+      returnToTitleDimHeld_ = false;
+    }
     FUN_002239c8_service_scene_change(frameTicks);
     // FUN_0023b5d8's slot: the pad's analog magnitude is published before
     // anything downstream of it runs.
@@ -8431,13 +8523,27 @@ namespace orphen::port
     // mode *later in this same frame*: the frame a press opens the panel on
     // still runs in full, the way FUN_002239C8's single test makes it.
     const bool menuFrame = fieldMenu_.open();
+    if (!menuFrame)
+    {
+      fieldMenu_.clearDrawn();
+    }
     // And slot 12, the area map. FUN_00224418 is shorter still than the two
     // menu handlers: no FUN_0020F3E0, no FUN_002192C0 and no FUN_0020C290, so
     // where the menu leaves the effect pools running the map stops those too.
     const bool mapFrame = areaMap_.open();
+    // And slot 3, the Equip screen: FUN_0022E910 in place of the whole field
+    // simulation -- but with FUN_002261E0 after it, which the other three
+    // leave out. That walk is the animation step as well as the physics, so
+    // the flags below let it through for this mode alone.
+    const bool equipFrame =
+        DAT_00354d2c_gameMode_ == static_cast<std::uint32_t>(orphen::ported::scene::kGameModeEquipScreen);
+    if (!equipFrame)
+    {
+      equipDrawn_ = false;
+    }
     // Everything below that either handler leaves out, which is the whole
     // simulation half of the frame.
-    const bool uiFrame = menuFrame || mapFrame;
+    const bool uiFrame = menuFrame || mapFrame || equipFrame;
 
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
@@ -8575,14 +8681,34 @@ namespace orphen::port
         {
           soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(menuStep.cue));
         }
+        if (menuStep.equipScreen)
+        {
+          std::cout << "[menu] selected 6 \"" << fieldMenu_.label(6)
+                    << "\" -- game mode 3 at frame " << frameCount_ << '\n';
+        }
         if (menuStep.confirmed >= 0)
         {
-          // FUN_00231958:36, `iGpffffbcbc = PTR_FUN_0031C3C0[selected](0)`. The
-          // seven submenus behind that table are not ported, so the selection
-          // is reported and the panel stays up.
+          // FUN_00231958:36, `iGpffffbcbc = PTR_FUN_0031C3C0[selected](0)`. Six
+          // of the seven submenus behind that table are not ported, so the
+          // selection is reported and the panel stays up.
           std::cout << "[menu] selected " << menuStep.confirmed << " \""
                     << fieldMenu_.label(menuStep.confirmed)
                     << "\" -- FUN_0031C3C0 handler not ported\n";
+        }
+        if (menuStep.returnToTitle)
+        {
+          // FUN_00232FA8:48. Inside the handler, so ahead of its own dim --
+          // the fade it arms applies at level 0 and the dim still wins this
+          // frame.
+          FUN_00237a08_return_to_title();
+        }
+        if (menuStep.dimScreen)
+        {
+          // FUN_00232FA8:58, `FUN_0025D0E0(0x60000000, 1)`.
+          DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(
+              orphen::ported::scene::kReturnToTitleDimColour,
+              orphen::ported::scene::kReturnToTitleDimAlpha);
+          returnToTitleDimHeld_ = true;
         }
         if (menuStep.closed)
         {
@@ -8597,6 +8723,11 @@ namespace orphen::port
         {
           DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
         }
+      }
+      else if (equipFrame)
+      {
+        // 0x002244C8's first call. Neither player controller runs.
+        FUN_0022e910_equip_screen(input, frameTicks);
       }
       else if (mapFrame)
       {
@@ -8908,8 +9039,9 @@ namespace orphen::port
       // it was set. It runs unconditionally -- the original does not gate it on
       // a map being present.
       // Neither menu handler runs it: both jump from FUN_00208450 straight to
-      // FUN_00208EE8, so a body left mid-fall stays where it is.
-      if (!uiFrame)
+      // FUN_00208EE8, so a body left mid-fall stays where it is. The Equip
+      // screen's handler does run it, second, right after FUN_0022E910.
+      if (!uiFrame || equipFrame)
       {
         orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
       }
@@ -8939,11 +9071,14 @@ namespace orphen::port
 
       // Behaviors can move and turn entities, so the render views are rebuilt
       // every frame now rather than only at load.
-      // The pose walk belongs to FUN_00239CE0, which neither menu handler
-      // calls -- the ninety frames of stepped hardware that came back
-      // byte-identical had the lead's idle loop stopped too. The publish below
-      // it is FUN_0020C5A8, which both handlers do call.
-      if (!uiFrame)
+      // The pose walk is FUN_00225C90, which FUN_002261E0 calls once per live
+      // slot -- not FUN_00239CE0, as this note used to say. The conclusion for
+      // the two menu handlers stands, because neither calls FUN_002261E0: the
+      // ninety frames of stepped hardware that came back byte-identical had
+      // the lead's idle loop stopped too. Mode 3 calls it, and on hardware
+      // Orphen breathes on the Equip screen. The publish below it is
+      // FUN_0020C5A8, which every handler calls.
+      if (!uiFrame || equipFrame)
       {
         advanceEntityAnimations(frameTicks);
       }
@@ -9071,7 +9206,13 @@ namespace orphen::port
     }
     // FUN_00233818's pentagon. Its captions ride the dialogue list, which is
     // the same FUN_00239020 path they take in the original.
-    mapViewer_.setHudQuads(battleParty_.targetDisplayQuads());
+    // FUN_00230E50's, on the Equip screen: the same FUN_0022EC30.
+    {
+      auto hudQuads = battleParty_.targetDisplayQuads();
+      const auto equipQuads = buildEquipPentagonQuads();
+      hudQuads.insert(hudQuads.end(), equipQuads.begin(), equipQuads.end());
+      mapViewer_.setHudQuads(std::move(hudQuads));
+    }
 
     // FUN_00267a80 measures against DAT_0058C0A8 and uGpffffb6d4 -- the camera,
     // not the player. Published after the camera has run for the frame.
@@ -9465,11 +9606,6 @@ namespace orphen::port
   // behind it, so the mask is the unconditional 0xFFFF the entry-state scene
   // reads back on hardware, and the one conditional item is noted rather than
   // guessed at.
-  std::uint16_t PortRuntime::FUN_00231a98_availability() const
-  {
-    return 0xFFFF;
-  }
-
   // FUN_00224FF0:88-98, the gate that opens the panel. The guards above the
   // press test that the port can answer, in the original's order:
   //
@@ -9546,6 +9682,89 @@ namespace orphen::port
     soundEngine_.FUN_00267d38_play_flat(orphen::ported::scene::kFieldMenuCueOpen);
     DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
     std::cout << "[menu] opened at frame " << frameCount_ << '\n';
+  }
+
+  // FUN_002294D0, the new-game reset. Its only caller that matters is
+  // FUN_0022A418:45, behind flag 0x500 (FUN_00228E28 runs it once at boot).
+  //
+  // Two of its writes have no port state to land in: FUN_00267E78(0x343838,
+  // 0x40), a 64-byte counter table only the battle-side FUN_00245860 bumps, and
+  // DAT_00355638. DAT_003555C7 is the cheat byte, 0 on retail, so the three
+  // loadout bytes it would set are skipped with it.
+  void PortRuntime::FUN_002294d0_new_game_reset()
+  {
+    auto &state = sceneScript_.state();
+
+    // :12-28. Flags 0x50C..0x50F and the byte at DAT_00342C8F -- flag bucket
+    // 0x11F -- are the only things carried across the 0x900-byte wipe.
+    constexpr std::size_t kKeptBucket = 0x342c8f - 0x342b70;
+    const std::uint8_t keptByte = state.DAT_00342b70_flags[kKeptBucket];
+    bool keptFlags[4]{};
+    for (std::uint32_t index = 0; index < 4; ++index)
+    {
+      keptFlags[index] = state.FUN_00266368_eventFlag(0x50C + index);
+    }
+    std::fill(std::begin(state.DAT_00342b70_flags), std::end(state.DAT_00342b70_flags), std::uint8_t{0});
+    for (std::uint32_t index = 0; index < 4; ++index)
+    {
+      if (keptFlags[index])
+      {
+        state.FUN_002663a0_setEventFlag(0x50C + index);
+      }
+    }
+    state.DAT_00342b70_flags[kKeptBucket] = keptByte;
+
+    // :33-42. The seven party records, each with +0x0A (DAT_00343692 for its
+    // slot) at 0x100 -- "not in the pool".
+    state.FUN_002294d0_load_party_records(characterStats_);
+    std::fill(std::begin(state.DAT_00343692_partySlots), std::end(state.DAT_00343692_partySlots),
+              std::uint16_t{0x100});
+    state.FUN_002663a0_setEventFlag(0x501);
+    state.FUN_00251dc0_load_player_stats(entityPool_.leadPlayer());
+    // :46. Orphen's record says pool slot 0.
+    state.DAT_00343692_partySlots[0] = 0;
+    // :48, FUN_00267E78(0x3437B8, 0x80): the inventory, spells included.
+    std::fill_n(state.DAT_003437b8_itemCounts, 0x80, std::uint8_t{0});
+    battleParty_.FUN_002294d0_new_game_reset();
+    state.FUN_002663a0_setEventFlag(0x513);
+    state.FUN_002663a0_setEventFlag(0x7BC);
+    std::cout << "[title] FUN_002294D0: new game -- flags, party records and items reset;"
+                 " flag bytes 0xA0..0xA3 = "
+              << std::hex;
+    for (std::size_t bucket = 0xA0; bucket < 0xA4; ++bucket)
+    {
+      std::cout << static_cast<int>(state.DAT_00342b70_flags[bucket]) << ' ';
+    }
+    std::cout << "0xF7 = " << static_cast<int>(state.DAT_00342b70_flags[0xF7]) << std::dec << '\n';
+  }
+
+  // FUN_00237A08, whole. The gp names resolve against 0x00359F70: uGpffffb280
+  // and uGpffffb284 are DAT_003551F0 / DAT_003551F4, the scene entry and
+  // section, uGpffffb27c is the DAT_003551EC request, and uGpffffb662 is
+  // DAT_003555D2, the movie request.
+  //
+  // So this is a scene load of s12_e010, not a game mode -- an earlier note
+  // read the 0xC as DAT_00354D2C. Request 2 holds the load behind the fade it
+  // arms and carries neither spawn bit, so the title scene places its actor
+  // itself. The 0xFF movie request is the point of the fifth line:
+  // FUN_0022A418:58 queues movie 0x12 for any load of s12_e010 whose movie byte
+  // is zero, and -1 is neither zero nor positive, so coming back to the title
+  // skips the opening movie.
+  void PortRuntime::FUN_00237a08_return_to_title()
+  {
+    DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0x0C, 0);
+    DAT_003551f0_sceneEntry_ = orphen::ported::scene::kTitleSceneEntry;
+    DAT_003551f4_sceneSection_ = orphen::ported::scene::kTitleSceneSection;
+    DAT_003551ec_sceneRequest_ = 2;
+    DAT_003555d2_movieRequest_ = -1;
+    // FUN_0023BB00 zeroes the four rumble channels at DAT_00571B50 and this
+    // pad's motor timers. The port has no rumble.
+    sceneScript_.state().FUN_002663d8_clearEventFlag(
+        orphen::ported::scene::kReturnedFromGameFlag);
+    // FUN_002241D8.
+    DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+    DAT_00342a70_mappedActions_.reset();
+    std::cout << "[title] FUN_00237A08: fade out, then s12_e010 (frame " << frameCount_ << ")\n";
   }
 
   // FUN_00213EF0. The original pushes fifteen regions onto the scratch stack at
@@ -9749,10 +9968,28 @@ namespace orphen::port
       return {};
     }
 
-    // FUN_00231C50, which both menu modes run. It is the whole of what the two
-    // handlers draw beyond the world behind it, so it goes in ahead of
-    // everything else the list carries.
-    if (fieldMenu_.open())
+    // FUN_00231C50, which both menu modes run, or FUN_00232FA8 in its place. It
+    // is the whole of what the two handlers draw beyond the world behind it, so
+    // it goes in ahead of everything else the list carries. Keyed on what the
+    // last step drew rather than on open(): the confirm draws on the frame it
+    // closes the menu.
+    //
+    // The Equip screen first: FUN_0022E910's draw, which is all mode 3 puts
+    // over the world.
+    if (equipDrawn_)
+    {
+      return buildEquipScreenSprites();
+    }
+    if (fieldMenu_.returnToTitleDrawn())
+    {
+      orphen::ported::scene::ReturnToTitleText strings;
+      strings.question = FUN_0025b9e8_text(orphen::ported::scene::kReturnToTitleQuestionMessage);
+      strings.caption = FUN_0025b9e8_text(orphen::ported::scene::kFieldMenuCaptionMessage);
+      strings.yes = FUN_0025b9e8_text(orphen::ported::scene::kReturnToTitleYesMessage);
+      strings.no = FUN_0025b9e8_text(orphen::ported::scene::kReturnToTitleNoMessage);
+      return fieldMenu_.FUN_00232fa8_layout(strings, dialogueFont_);
+    }
+    if (fieldMenu_.panelDrawn())
     {
       return fieldMenu_.FUN_00231c50_layout(
           FUN_0025b9e8_text(orphen::ported::scene::kFieldMenuCaptionMessage), dialogueFont_);

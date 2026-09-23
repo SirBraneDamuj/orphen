@@ -72,6 +72,8 @@ target_sources(orphen_port
         src/ported/player/original_item_window.h
         src/ported/scene/area_map.cpp
         src/ported/scene/area_map.h
+        src/ported/scene/equip_screen.cpp
+        src/ported/scene/equip_screen.h
         src/ported/scene/field_menu.cpp
         src/ported/scene/field_menu.h
         src/ported/scene/title_screen.h
@@ -237,6 +239,7 @@ target_sources(orphen_port
     src/ported/camera/original_camera_path.cpp
     src/ported/camera/original_camera_path.h
         src/runtime/port_runtime.cpp
+        src/runtime/port_runtime_equip.cpp
         src/runtime/port_runtime.h
         src/runtime/original_lead_player.cpp
         src/runtime/original_lead_player.h

@@ -664,6 +664,11 @@ namespace orphen::ported::entity
                                             std::uint16_t state,
                                             std::uint16_t animation);
 
+  // FUN_00229ef0: set +0x14C/+0x150 and rescale the collision volume from the
+  // descriptor.
+  void FUN_00229ef0_set_scale(OriginalEntity &entity, float scale,
+                              const EntityDescriptorTable *descriptors);
+
   // FUN_0023a568: the fade path, taken instead of the type handler when +0x04
   // has bit 0x800. Fades in, then out, then releases the slot.
   void FUN_0023a568_fade(EntityPool &pool, std::size_t slot, std::uint32_t frameTicks);

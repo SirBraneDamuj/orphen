@@ -82,15 +82,41 @@ subtitles land in. Slot 5 is an ordinary map texture page -- `0x0103` for this
 scene -- whose top 256x40 band is the words "Press START button". The rest of
 that page is the copyright block the legal screen uses.
 
-### What is shimmed
+### START is New Game
 
-START or Cross asks for **s01_e012** directly, with request `0x2003` (the cold
-boot's `0x2001` plus the fade-out hold) and a `FUN_0025D1C0(1, 0xC, 0)` fade.
-The original's state 2 tears the title down and walks into the new game / load
-menu (`FUN_00271858` -> `FUN_00236780`), and none of that is ported. Also not
-ported: the idle hand-off to the attract demo at `0xE101` ticks (reported once
-instead), the cheat-code button sequence `FUN_00271558` watches for -- the one
-that sets `DAT_003555DB` -- and the menu states behind the prompt.
+START or Cross runs the original's states straight through, with one shim in
+the middle. `FUN_00271558` state 1 sees the press, and in the same call puts the
+eye back at orbit angle 0 around slot 0 and releases the logo and the two
+entities in script work words 8 and 9. State 2 (`FUN_00271858`) waits for the
+logo's slot to be free, raises flag `0x511`, and would open the new game / load
+menu (`FUN_00236780`) as state 3.
+
+**State 3 is the shim.** The menu is not ported, so the port takes its first
+frame as a pick of the "New Game" row -- `FUN_002718F0` case 0:
+
+```
+DAT_00342B7E = DAT_00342C8E = 0;  FUN_002663A0(0);  FUN_002663A0(0x500);
+uGpffffad54 = uGpffffad48 = 1;    state 5
+```
+
+Nothing after that is the port's. State 5 does nothing on retail (its orbit is
+behind the `DAT_003555C7` cheat byte). **s12_e010's own script is waiting on
+flag 0**: it stands the actor up, fades, queues movie 2 (which chains to 13) and
+requests s01_e012 with `0x2001`. `FUN_0022A418:42` then sees flag `0x500` and
+runs `FUN_002294D0`, the new-game reset: every event flag cleared except
+`0x50C..0x50F` and the `DAT_00342C8F` byte, the party records reloaded, the
+first 0x80 item counts zeroed, the default loadout copied back, and flags
+`0x501`, `0x513` and `0x7BC` raised.
+
+Checked on PCSX2 from `savestates/title_menu_new_game.p2s` (the menu, cursor on
+New Game): the same stand-and-fade, the anime opening, s01_e012 with request
+`0x2001`, and flag bytes `0xA0..0xA3` reading `02 00 08 00` after the reset on
+both. Two of `FUN_002294D0`'s writes have nowhere to land in the port -- the
+64-byte counter table at `0x00343838` and `DAT_00355638`.
+
+Also not ported: the idle hand-off to the attract demo at `0xE101` ticks
+(reported once instead), the cheat-code button sequence `FUN_00271558` watches
+for -- the one that sets `DAT_003555DB` -- and every other row of the menu.
 
 Servicing a scene-change request that carries bit 1 used to hang: the port
 handed `FUN_0025D238` a literal zero for `DAT_003555BC`, so the fade level never
@@ -5653,8 +5679,58 @@ selection and plays the move cue -- so **Left and Right click without moving**.
 The repeat ladder is that helper's: the first press fires, then nothing for
 eleven frames, then every fourth.
 
-**None of the seven submenus is ported.** Cross on an available item logs the
-selection and leaves the panel up.
+Only **Return to Title Screen** of the seven submenus is ported (below). Cross
+on any other available item logs the selection and leaves the panel up.
+
+### Return to Title Screen
+
+`PTR_FUN_0031C3C0` is seven words in `SLUS_200.11`; slot 4 is `FUN_00232FA8`, a
+Yes/No confirm. `FUN_00231958` keeps the handler's return in `iGpffffbcbc` and
+calls the handler with it every frame while it is non-zero, and the handler
+returns its own state -- so that word *is* the cursor: 1 is Yes, 2 is No, and it
+opens on No. Left or Right (`FUN_0023B9F8(0xA000, 1)`) flips it.
+
+While it runs the panel is not drawn (`FUN_00231958:43` skips `FUN_00231C50` when
+`iGpffffbcbc` is set and the selection is 4). It draws message `0x1E` ("Cancel
+game and return to the Title Screen?"), the `0x29` caption at y `-0x40`, Yes and
+No (`0x4C`/`0x4D`) centred as one run under the question, and
+`FUN_0025D0E0(0x60000000, 1)` -- a black screen quad at alpha `0x60`. Measured
+against hardware, the dim multiplies the scene by 0.62 on both.
+
+**Every exit closes the whole menu**, not just the confirm: Cross on either
+answer and Triangle all end in `FUN_002241D8`. Only Cross on Yes goes on to
+`FUN_00237A08`, which is five writes and three calls:
+
+```
+FUN_0025D1C0(1, 0xC, 0);                 fade out
+uGpffffb280 = 10; uGpffffb284 = 0xC;     DAT_003551F0/F4: s12_e010
+uGpffffb27c = 2;                         DAT_003551EC: load behind the fade
+uGpffffb662 = 0xFF;                      DAT_003555D2: movie request -1
+FUN_0023BB00(); FUN_002663D8(0x511); FUN_002241D8();
+```
+
+The `0xC` is the scene section, not a game mode -- an earlier note read it as
+`DAT_00354D2C = 12` and the game over's hand-off stopped at the fade because of
+it. The `-1` movie request is what gets past `FUN_0022A418:58`, which would
+otherwise play the opening movie on the way into the title. `FUN_0023BB00` stops
+the rumble motors; the port has none. The game over's hand-off is the same
+function and now goes through the same code.
+
+Confirmed on PCSX2 from `entry_stable.p2s`: the confirm opens on No, the dim is
+0.62x, and Yes lands on the title with the logo up and no movie, with
+`DAT_003551EC` spent.
+
+The port's overlay is sticky where the original's quad lives for one frame (see
+the screen overlay note), so the runtime releases the dim at the top of the next
+frame and the confirm puts it back if it is still up.
+
+**Not ported: module 12's mode 0.** `FUN_00271220(0)` runs on every title load,
+and when the previous scene was not section 12 it calls `FUN_002294D0` -- the
+new-game wipe: every event flag cleared except `0x50C..0x50F`, party records
+reloaded, inventory and item counters zeroed, the default loadout copied back.
+The port does none of it, so a returned-to title keeps the run's flags and
+items until START. START then runs the same reset through flag `0x500` (see
+"START is New Game"), so the game it starts is clean either way.
 
 ### On the keyboard
 
@@ -5662,6 +5738,153 @@ The D-pad is the **arrow keys**, not WASD. See the battle-target-cycling note
 for why: the D-pad does not walk the character on hardware, and sharing the
 nibble with WASD made every step forward open the menu. `[` and `]` cycle the
 map, which is what Left and Right arrow used to do.
+
+## The Equip screen, and how spells are learned
+
+### Spells are items
+
+There is no unlock bitfield. `DAT_003437B8` is the inventory -- one byte per
+item id -- and spells are items `1..0xE`, the rows of the spell table at
+`DAT_00324FC8`. **Script opcode `0xBC` (`FUN_00263E30`) is "give item"**: one
+more of `id`, capped at 99. `analyzed/` called it an event counter, and the port
+kept a *second* copy of the table under that name that nothing but the opcode
+read, so a learned spell never reached the loadout code. There is one copy now,
+`SceneScriptState::DAT_003437b8_itemCounts`.
+
+- **s01_e024 gives you everything, on hardware too.** Its init runs `0xBC` 43
+  times -- items 1..0xE and 29 others -- before anything else. It is a test room.
+- **s14_e031's reward arms each run `0xBC` with their spell.** That is the whole
+  of learning one; the arm then equips it into slot 0 (`0xBD` method `0x78`).
+- **An equipped item is not counted.** Swapping one in takes one off its count
+  and puts the old one back. A new game (`FUN_002294D0`) zeroes counts
+  `0..0x7F` and equips `05 07 01`: Hand of Pyro, Bite of Lightning, Sword.
+
+`--battle-report` prints the held spell counts. The table is game-wide like the
+event flags, so both scene-load paths carry it across the state reset; the port
+used to wipe it on every load, which would have undone every reward.
+
+### Mode 3
+
+Field-menu rows 5 (Item) and 6 (Equip) are both `iGpffffadbc = 3; return 0`
+(`0x00233240` / `0x00233250`, no `src/` file). Mode 3's handler at `0x002244C8`
+is `FUN_0022E910`, then **`FUN_002261E0`**, then the draw tail. That second
+call is the difference from the menu modes: `FUN_002261E0` is where
+`FUN_00225C90`, the animation step, runs -- so on the Equip screen Orphen
+breathes and the highlighted icon animates, where the menu freezes both.
+(An older note here put the animation step in `FUN_00239CE0`; it is not.)
+
+`FUN_0022E910` handles Triangle, then dispatches `PTR_LAB_0031C2F0[DAT_00354DA0]`:
+
+| state | handler | ported |
+|---|---|---|
+| 0 | `0x0022F010`, -> 1 | yes |
+| 1 | `FUN_0022F020`, build the screen once the lead is grounded | yes |
+| 2 | `FUN_0022F2D8`, the fade (`FUN_002340E0`, twice a frame) | yes |
+| 3 | `0x0022F3E8`, highlight slot 0 | yes |
+| 4 | `FUN_0022F408`, Up/Down picks a slot, Cross opens the ring | yes |
+| 5 | `FUN_0022F588`, the ring closing | yes |
+| 6 | `FUN_0022F620`, the ring open: turn, move slot, Cross swaps | yes |
+| 7 | `FUN_0022FA18`, the two icons trade places | yes |
+| 8 | `FUN_0022FBD0`, "No items available" until Cross | yes |
+| 9..11 | the Item screen | no |
+| 12 | `FUN_0022FEA8`, leave by reloading (battle scenes) | yes |
+| 13 | `FUN_0022FF20`, leave by restoring the field | yes |
+
+### The ring, and what "equip" writes
+
+The ring model (type `0x4C`, slot 6) has forty rim bones. `FUN_00230450` turns
+them into an eighty-point loop -- each bone, then the midpoint to the next --
+every time the ring opens, from last frame's pose. `FUN_00230910` spawns one
+icon per item that is held *and* whose record's first halfword carries both the
+character's roster bit and `0x100`; all start at point 0 and slide to point
+`i * 80 / count` along a chord-length spline (`FUN_00230608` into
+`FUN_00266A78` with a positive fourth argument -- the camera paths only ever
+used the uniform knots). Left/Right re-aim every icon one position round;
+Cross picks whichever icon is at position 0.
+
+The swap (`FUN_0022F620`) is the whole of equipping: one off the new item's
+count, one onto the old one's, and the loadout byte at
+`DAT_003437A0[roster * 3 + slot]` overwritten. Then the two icons fly along
+random bowed curves for 1920 ticks, the slot gets a fresh icon, and the ring is
+rebuilt with the spell just removed at the front.
+
+Checked against hardware from `savestates/field_menu_on_equip.p2s`: icon
+spacing on open, the turn, the swap's flight and landing, the loadout bytes and
+every count after the swap, and the "no items" box (counts zeroed in RAM).
+
+The ring's turn direction is read from the held word *after* `FUN_0023B9F8`
+has ORed the stick's direction bits into it. The port first read the word from
+before that call, so the stick (WASD) turned the ring the same way both sides.
+
+Things the original does that look like bugs and are not:
+
+- **The ring stays faintly visible after it closes.** `FUN_002333E8` fades it
+  to about `0x80` and stops, leaving `+0x134` at 3 or 4; only opening it again
+  fades it back to opaque (`+0x134 = 0`).
+- **Stick-up on the slot list steps down** (read from the code, not yet seen
+  on hardware). `FUN_0022F408` takes the direction from the *pressed* word,
+  which the stick never reaches, so only the D-pad goes up.
+- **A swapped-in slot icon is lit, not flat.** `FUN_0022FA18` sets only `+0x08`
+  bit `0x40`, not `FUN_002302F0`'s `0x4040`, and leaves its physics on.
+
+### The pentagon is the battle readout's
+
+`FUN_00230E50` draws the element pentagon with `FUN_0022EC30(0x220, 0xD0,
+0x570DB0, 0)` -- the same function the battle target readout (`FUN_00233818`)
+calls with `param_4 = 1`, so the port calls the same
+`battle::FUN_0022ec30_pentagon`. The `0` picks the other banding: pips lit =
+element value / 10, capped at 3, where the enemy readout bands at `0x22`/`0x4B`.
+`DAT_00570DB0` is the item's `FUN_00229820` record, refilled on a slot pick, on
+the ring closing and at the end of each ring slide -- not on the swap -- and
+never cleared, so it keeps the last spell shown between visits. Checked against
+hardware for Armor of Purity and Hand of Pyro; the pips match.
+
+The pips are sort key `0x1006` (`FUN_0022EB00` into `FUN_00207DE8`): the
+smear's bucket, under the letterbox bars and the fade (`0x1007`). The port used
+to draw every HUD quad after the fade; they now go straight after the smear,
+for the battle readout too.
+
+### The field is copied, not hidden
+
+`FUN_00233B28` snapshots the whole pool, its status bytes, the lights, the
+camera, the scene colours and the fog; then every live slot from 10 up is
+*released*. `FUN_0022FF20` copies slots 2..255 back wholesale. Slots 2, 3 and 6
+are released and the ring built in slot 6 *before* the copy, so the ring comes
+back with the rest and is released again. The room goes the game over's way:
+`DAT_00355700` steps down to 3, where `FUN_00209140` stops drawing the map, over
+`FUN_00255CE8`'s black quad. The restore reads `DAT_00355700` from a snapshot
+byte nothing writes; hardware has 0 there after the screen closes.
+
+The field HP orb disappears for a couple of seconds after the screen closes.
+That is the gauge's own count-up: it hides itself on the frame the menu opens,
+the snapshot keeps it hidden, and it takes `+0x98` to `0xF00` to come back.
+
+The screen smear is left at 7 after the fade, not 0 -- the ramp stops at 96
+before its `< 6` branch can zero it. Hardware reads 7 there too, so a slot
+change leaves a one-frame 5% ghost of the old description.
+
+### Two renderer fixes it needed
+
+- **Entity `+0x08` bit `0x40` puts a model in sort bucket `0x1005`**
+  (`FUN_0020EEC0:181`), past the depth table and among the 2D overlays. The slot
+  icons carry it, which is why they sit *over* the bars (`0x1004`) and under
+  the button glyphs. The port had the constant as `kBlendedBucket` with nothing
+  assigning it. Sprites now carry their bucket too, and `MapViewer::render`
+  draws buckets up to `0x1005` before the smear and fade.
+- **An untextured PSC3 pass is not always opaque.** With primitive flag `0x200`,
+  `FUN_002129B8` reads the colour entry after the pass's own as an alpha byte
+  and a register block (`FUN_00212058:153-167`). The ring is all such passes:
+  a GS dump shows ABE on, `ALPHA 0x48`, vertex alpha 63.
+
+The dialogue sprite pass also alpha-tests now (`TEST_1` is `ATST GREATER`,
+`AREF 0` everywhere), which is what removes the dark box behind each button
+glyph.
+
+**Open:** the ring still draws at twice hardware's brightness. The GS dump has
+only 55 of its 120 primitives, every one wound the same way -- VU1 back-face
+culls them -- while the port draws models double-sided, so both faces add.
+Culling is a whole-renderer question (party models ship reversed primitives
+that must stay visible), not an Equip-screen one.
 
 ## The area map, and why it is the level
 
@@ -7345,7 +7568,9 @@ orphen_port --disc-root . --scene s01_e024 --frames 620     --spawn -4.5,-10.5,0
 
 `--hold-stick <angle>,<magnitude>` drives the analog stick for every headless
 or capture frame, which is how the footsteps get exercised without a pad --
-magnitude is the original's 0..128 and above 100 is a run:
+magnitude is the original's 0..128 and above 100 is a run. A third field,
+`<first>-<last>`, limits it to those frames in a headless run (the stick is
+released outside them), which is how a menu gets a stick nudge after it opens:
 
 ```
 orphen_port --disc-root . --scene s01_e024 --frames 400 --spawn -4.5,-10.5,0 --hold-stick 1.0,60 --sound-dump out/sfx/walk_and_buzz.wav --sound-report
@@ -10541,11 +10766,11 @@ author of this port from play; Mar is then the fall-through by elimination,
 which matches `s07_e011` being the arm whose route flag (803) is written and
 never tested.
 
-One piece of `FUN_0022A418`'s movie block is deliberately not here. Lines 58-63
-arm movie `0x12` when the game arrives at the **title screen** -- section 12,
-entry 10 -- and clear flag `0x511`; the port has no title screen and no
-`DAT_003555D8`, so the condition can never be true and there would be nothing to
-test the code with. The sound teardown around the playback
+`FUN_0022A418:58-63` arm movie `0x12` when the game arrives at the **title
+screen** -- section 12, entry 10 -- with no movie already queued, and clear flag
+`0x511`. That is ported now that something loads the title (see "Return to
+Title Screen"); `DAT_003555D8` is taken as retail's `0x22`, which always passes.
+The sound teardown around the playback
 (`FUN_00206680`, `FUN_00203AA0(4)`, `FUN_0022A1F8`, and the eight halfwords at
 `DAT_0031E686`) is left out for the same reason -- there is no MPEG decoder to
 hand the display to. The unconditional `DAT_003555D2 = 0` after the block is

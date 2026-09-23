@@ -67,6 +67,24 @@ namespace orphen::ported::camera
     std::array<float, kMaxSplinePoints> coefficient_{};
   };
 
+  // One 3-component curve on its own: FUN_00266a78 builds it, FUN_00266ce8
+  // samples it. `chordKnots` is FUN_00266a78's fourth argument being positive
+  // -- the knots are the running chord length over the total, so a sample at t
+  // is t of the way along the polyline, not t of the way through the points.
+  // A curve whose points all coincide is cut to one point (:61-64).
+  class Curve3
+  {
+  public:
+    void FUN_00266a78_build(std::span<const Vec3> points, bool chordKnots);
+    void clear();
+    // The curve's +0x00, the point count.
+    std::size_t pointCount() const { return axis_[0].pointCount(); }
+    Vec3 FUN_00266ce8_sample(float t) const;
+
+  private:
+    std::array<CubicSpline, 3> axis_{};
+  };
+
   struct CameraPathSample
   {
     Vec3 eye{};

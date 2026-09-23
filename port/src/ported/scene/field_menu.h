@@ -70,6 +70,27 @@
 // last entry submitted is drawn first. FUN_00231C50 submits text then bar per
 // item, top item first, so the panel paints caption, bar 6, text 6, bar 5, ...
 // -- each bar behind its own label.
+//
+// == Return to Title Screen ==
+//
+// The one submenu ported so far: PTR_FUN_0031C3C0[4] is FUN_00232FA8, a Yes/No
+// confirm. FUN_00231958 keeps its return in iGpffffbcbc and, while that is
+// non-zero, calls the handler with it every frame instead of navigating --
+// FUN_00232FA8 returns its own state, so the word is the submenu's cursor:
+// 1 is Yes and 2 is No. Opening lands on No.
+//
+//   src/FUN_00232fa8.c  the confirm
+//   src/FUN_00237a08.c  Yes: fade out, request s12_e010, clear flag 0x511
+//
+// The panel is not drawn behind it: FUN_00231958:43 skips FUN_00231C50 while
+// iGpffffbcbc is set and the selection is 4. What is drawn is message 0x1E (the
+// question) at y 0x14, the 0x29 caption at y -0x40, Yes/No (0x4C/0x4D) side by
+// side at y -2, and FUN_0025D0E0(0x60000000, 1) -- a black screen quad at alpha
+// 0x60 behind the text, re-issued every frame the confirm is up.
+//
+// Every exit closes the whole menu, not just the confirm: Cross on either
+// answer and Triangle all call FUN_002241D8. Only Cross on Yes goes on to
+// FUN_00237A08. The handler still draws on the frame it closes.
 
 #include "ported/text/original_dialogue_text.h"
 
@@ -98,6 +119,27 @@ namespace orphen::ported::scene
   inline constexpr int kFieldMenuCueConfirm = 2;
   inline constexpr int kFieldMenuCueOpen = 4;
   inline constexpr int kFieldMenuCueBack = 5;
+  // FUN_002256A0, the confirm's Triangle.
+  inline constexpr int kFieldMenuCueCancel = 3;
+
+  // PTR_FUN_0031C3C0's index for FUN_00232FA8.
+  inline constexpr int kFieldMenuReturnToTitleItem = 4;
+  // FUN_00232FA8:21-26, the messages it draws.
+  inline constexpr int kReturnToTitleQuestionMessage = 0x1E;
+  inline constexpr int kReturnToTitleYesMessage = 0x4C;
+  inline constexpr int kReturnToTitleNoMessage = 0x4D;
+  // FUN_00232FA8:56, `FUN_0025D0E0(0x60000000, 1)`: black at alpha 0x60.
+  inline constexpr std::uint32_t kReturnToTitleDimColour = 0x000000;
+  inline constexpr std::uint8_t kReturnToTitleDimAlpha = 0x60;
+
+  // The strings FUN_00232FA8 fetches through FUN_0025B9E8 every frame it draws.
+  struct ReturnToTitleText
+  {
+    std::string question; // 0x1E
+    std::string caption;  // 0x29
+    std::string yes;      // 0x4C
+    std::string no;       // 0x4D
+  };
 
   struct FieldMenuPad
   {
@@ -115,8 +157,15 @@ namespace orphen::ported::scene
     int cue = -1;
     // The item Cross confirmed, or -1. Only an available item ever lands here.
     int confirmed = -1;
-    // Triangle: FUN_002241D8 put the frame mode back to 0.
+    // FUN_002241D8 put the frame mode back to 0: Triangle on the panel, or
+    // any exit from a submenu.
     bool closed = false;
+    // Cross on Yes in FUN_00232FA8: the caller runs FUN_00237A08.
+    bool returnToTitle = false;
+    // FUN_00232FA8 drew this step, which re-issues its FUN_0025D0E0 dim.
+    bool dimScreen = false;
+    // Row 6: the frame mode is now 3, the Equip screen.
+    bool equipScreen = false;
   };
 
   class FieldMenu
@@ -142,7 +191,29 @@ namespace orphen::ported::scene
         const std::string &caption,
         const orphen::ported::text::DialogueFont &font) const;
 
-    bool open() const { return DAT_00354d2c_mode_ != 0; }
+    // FUN_00232FA8's draw half, for the frame its step last ran.
+    std::vector<orphen::ported::text::DialogueSprite> FUN_00232fa8_layout(
+        const ReturnToTitleText &text,
+        const orphen::ported::text::DialogueFont &font) const;
+
+    // What the last step drew. The panel's own Triangle returns before
+    // FUN_00231C50, but a submenu draws on the frame it closes, so this is not
+    // the same thing as open().
+    bool panelDrawn() const { return panelDrawn_; }
+    bool returnToTitleDrawn() const { return returnToTitleDrawn_; }
+    // A frame the menu did not run: neither handler drew.
+    void clearDrawn()
+    {
+      panelDrawn_ = false;
+      returnToTitleDrawn_ = false;
+    }
+
+    // Modes 4 and 5. Row 6 leaves the word at 3, which is the Equip screen's
+    // frame and not the panel's.
+    bool open() const
+    {
+      return DAT_00354d2c_mode_ == kFieldMenuModeSwallow || DAT_00354d2c_mode_ == kFieldMenuModeActive;
+    }
     // iGpffffadbc while the panel owns the frame: 4 or 5.
     int DAT_00354d2c_mode() const { return DAT_00354d2c_mode_; }
     int uGpffffae34_selected() const { return uGpffffae34_selected_; }
@@ -152,15 +223,29 @@ namespace orphen::ported::scene
       return (uGpffffbcc0_availability_ >> index & 1) != 0;
     }
 
-  private:
-    // FUN_002318C0(selected, index, &colourByte, 0x2080): ramp the alpha byte of
-    // one item's colour word towards 0x80 when it is the selected one and 0x20
-    // when it is not, by frameTicks/8 a step.
-    void FUN_002318c0_ramp(int index, std::uint32_t frameTicks);
     // FUN_0023B9F8(mask, 1). The original's budget and step counter are globals
     // shared with the dialogue window's copy of this helper; nothing reads them
-    // across the two, because only one of the two can be up at a time.
+    // across the two, because only one of the two can be up at a time. Public
+    // because the Equip screen steps with the same globals.
     bool FUN_0023b9f8_autoRepeat(std::uint16_t mask, FieldMenuPad &pad, std::uint32_t frameTicks);
+
+  private:
+    // FUN_002318C0(selected, index, &colourByte, 0x2080): ramp one colour
+    // word's alpha byte towards 0x80 when `index` is the selected one and 0x20
+    // when it is not, by frameTicks/8 a step.
+    static void FUN_002318c0_ramp(int selected, int index, int &alpha, std::uint32_t frameTicks);
+    // FUN_00232FA8(state). Returns the new state; 0 opens.
+    int FUN_00232fa8_returnToTitle(int state, FieldMenuPad &pad, std::uint32_t frameTicks,
+                                   FieldMenuStep &result);
+
+    // iGpffffbcbc, the running submenu's state. FUN_00231A98 zeroes it; nothing
+    // else does, so it is still non-zero after a submenu has closed the menu.
+    int iGpffffbcbc_submenuState_ = 0;
+    // DAT_0031C508 / DAT_0031C509, the Yes and No colour words' alpha bytes.
+    int DAT_0031c508_yesAlpha_ = 0;
+    int DAT_0031c509_noAlpha_ = 0;
+    bool panelDrawn_ = false;
+    bool returnToTitleDrawn_ = false;
 
     int DAT_00354d2c_mode_ = 0;
     int uGpffffae34_selected_ = 0;

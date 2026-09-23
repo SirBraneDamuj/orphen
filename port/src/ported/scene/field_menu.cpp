@@ -1,5 +1,7 @@
 #include "ported/scene/field_menu.h"
 
+#include "ported/scene/equip_screen.h"
+
 #include <algorithm>
 
 namespace orphen::ported::scene
@@ -40,6 +42,20 @@ namespace orphen::ported::scene
     constexpr int kCaptionYBias = 0x26;
     constexpr int kCaptionRightEdge = 0x120;
 
+    // FUN_00232FA8's two states, and the geometry of :21-56.
+    constexpr int kConfirmYes = 1;
+    constexpr int kConfirmNo = 2;
+    // DAT_0031C510, written 0x14 on open and never changed: the question's y.
+    constexpr int kConfirmQuestionY = 0x14;
+    // :26, the caption's y.
+    constexpr int kConfirmCaptionY = -0x40;
+    // :49, the answers sit 0x16 under the question.
+    constexpr int kConfirmAnswerDrop = 0x16;
+    // :53-56, the gap between Yes and No.
+    constexpr int kConfirmAnswerGap = 0x10;
+    // :30, `FUN_0023B9F8(0xA000, 1)`: Left or Right toggles.
+    constexpr std::uint16_t kConfirmToggleMask = 0xA000;
+
     // FUN_00231A98:38-41. The alpha byte is what FUN_002318C0 walks; these are
     // the other three channels it leaves alone.
     constexpr std::uint32_t kAvailableRgb = 0x00808080;
@@ -78,6 +94,8 @@ namespace orphen::ported::scene
     // FUN_00231A98:16. The selection is reset by DAT_0031C458 = 0 at the top of
     // the open, not carried over from the last time the panel was up.
     uGpffffae34_selected_ = 0;
+    // :50.
+    iGpffffbcbc_submenuState_ = 0;
 
     // :32-47. One pass over the seven labels: the widest measured at the 0x14
     // cell sets the bar width, and every item's colour word starts at the idle
@@ -102,11 +120,10 @@ namespace orphen::ported::scene
   // original's `(iGpffffb64c << 13) >> 16` with the usual round-toward-zero
   // fixup ahead of it -- so a nominal 0x20 tick walks the byte by 4 and the
   // 0x20 -> 0x80 fade in takes 24 frames.
-  void FieldMenu::FUN_002318c0_ramp(int index, std::uint32_t frameTicks)
+  void FieldMenu::FUN_002318c0_ramp(int selected, int index, int &alpha, std::uint32_t frameTicks)
   {
     const int step = static_cast<int>(frameTicks) / 8;
-    int &alpha = itemAlpha_[static_cast<std::size_t>(index)];
-    const int target = index == uGpffffae34_selected_ ? kAlphaSelected : kAlphaIdle;
+    const int target = index == selected ? kAlphaSelected : kAlphaIdle;
     if (alpha < target)
     {
       alpha = std::min(target, alpha + step);
@@ -161,9 +178,66 @@ namespace orphen::ported::scene
     return false;
   }
 
+  // FUN_00232FA8(param_1 = state), at 0x00232fa8 -- PTR_FUN_0031C3C0[4].
+  int FieldMenu::FUN_00232fa8_returnToTitle(int state,
+                                            FieldMenuPad &pad,
+                                            std::uint32_t frameTicks,
+                                            FieldMenuStep &result)
+  {
+    // :12-17. The open: both answers start dim, the cursor starts on No, and
+    // nothing is drawn this frame.
+    if (state == 0)
+    {
+      DAT_0031c508_yesAlpha_ = kAlphaIdle;
+      DAT_0031c509_noAlpha_ = kAlphaIdle;
+      return kConfirmNo;
+    }
+    // `param_1 - 1U < 2`. Nothing else is ever handed in.
+    if (state != kConfirmYes && state != kConfirmNo)
+    {
+      return state;
+    }
+
+    if ((pad.uGpffffb686_pressed & kPadCross) != 0)
+    {
+      // :43-50. Either answer closes the menu; only Yes goes on.
+      result.cue = kFieldMenuCueConfirm;
+      DAT_00354d2c_mode_ = 0;
+      result.closed = true;
+      if (state == kConfirmYes)
+      {
+        // `uGpffffae34 = 0; FUN_00237A08();`
+        uGpffffae34_selected_ = 0;
+        result.returnToTitle = true;
+      }
+    }
+    else if ((pad.uGpffffb686_pressed & kPadTriangle) != 0)
+    {
+      // :39-41.
+      result.cue = kFieldMenuCueCancel;
+      DAT_00354d2c_mode_ = 0;
+      result.closed = true;
+    }
+    else if (FUN_0023b9f8_autoRepeat(kConfirmToggleMask, pad, frameTicks))
+    {
+      // :30-36. Either direction flips it.
+      state = state == kConfirmYes ? kConfirmNo : kConfirmYes;
+      result.cue = kFieldMenuCueMove;
+    }
+
+    // :52-53, then the draw -- which happens on the closing frame too.
+    FUN_002318c0_ramp(state, kConfirmYes, DAT_0031c508_yesAlpha_, frameTicks);
+    FUN_002318c0_ramp(state, kConfirmNo, DAT_0031c509_noAlpha_, frameTicks);
+    returnToTitleDrawn_ = true;
+    result.dimScreen = true;
+    return state;
+  }
+
   FieldMenuStep FieldMenu::step(const FieldMenuPad &padIn, std::uint32_t frameTicks)
   {
     FieldMenuStep result;
+    panelDrawn_ = false;
+    returnToTitleDrawn_ = false;
     if (DAT_00354d2c_mode_ == kFieldMenuModeSwallow)
     {
       // 0x00224570:1-6. The press that opened the panel is still down, so this
@@ -176,9 +250,16 @@ namespace orphen::ported::scene
     else if (DAT_00354d2c_mode_ == kFieldMenuModeActive)
     {
       FieldMenuPad pad = padIn;
+      if (iGpffffbcbc_submenuState_ != 0)
+      {
+        // FUN_00231958:40, `iGpffffbcbc = PTR_FUN_0031C3C0[selected]()`. Only
+        // item 4 can get here: the unported six leave the word at zero.
+        iGpffffbcbc_submenuState_ =
+            FUN_00232fa8_returnToTitle(iGpffffbcbc_submenuState_, pad, frameTicks, result);
+      }
       // FUN_00231958:5-10. Triangle closes, and the function **returns before
       // the draw** -- the panel's last frame is the one before this.
-      if ((pad.uGpffffb686_pressed & kPadTriangle) != 0)
+      else if ((pad.uGpffffb686_pressed & kPadTriangle) != 0)
       {
         DAT_00354d2c_mode_ = 0;
         result.closed = true;
@@ -186,7 +267,7 @@ namespace orphen::ported::scene
         return result;
       }
 
-      if ((pad.uGpffffb686_pressed & kPadCross) == 0)
+      else if ((pad.uGpffffb686_pressed & kPadCross) == 0)
       {
         if (FUN_0023b9f8_autoRepeat(kNavigationMask, pad, frameTicks))
         {
@@ -212,21 +293,47 @@ namespace orphen::ported::scene
       }
       else if (available(uGpffffae34_selected_))
       {
-        // :36-38. The original calls PTR_FUN_0031C3C0[selected](0) here and
-        // keeps its return in iGpffffbcbc, which is the submenu's state. None
-        // of the seven submenus is ported, so the selection is handed back to
-        // the caller and the panel stays where it is. An unavailable item makes
-        // no sound at all -- the whole branch is inside the availability test.
-        result.confirmed = uGpffffae34_selected_;
+        // :35-37, `iGpffffbcbc = PTR_FUN_0031C3C0[selected](0)`, then the
+        // confirm cue. An unavailable item makes no sound at all -- the whole
+        // branch is inside the availability test.
+        if (uGpffffae34_selected_ == kFieldMenuReturnToTitleItem)
+        {
+          iGpffffbcbc_submenuState_ = FUN_00232fa8_returnToTitle(0, pad, frameTicks, result);
+        }
+        else if (uGpffffae34_selected_ == kFieldMenuEquipItem)
+        {
+          // 0x00233250, PTR_FUN_0031C3C0[6]: `iGpffffadbc = 3; return 0`. The
+          // submenu word stays 0, so the panel still draws this frame.
+          DAT_00354d2c_mode_ = kGameModeEquipScreen;
+          result.equipScreen = true;
+        }
+        else
+        {
+          // The other six submenus are not ported, so the selection is handed
+          // back to the caller and the panel stays where it is.
+          result.confirmed = uGpffffae34_selected_;
+        }
         result.cue = kFieldMenuCueConfirm;
       }
     }
 
-    // FUN_00231C50:25, which runs once per item on every frame the panel draws
-    // -- and both modes draw.
-    for (int index = 0; index < kFieldMenuItemCount; ++index)
+    // FUN_00231958:43, `(iGpffffbcbc == 0 || selected != 4) && iGpffffb27c ==
+    // 0`, and mode 4 draws unconditionally. The scene-request half never
+    // decides anything here: the gate will not open the menu with a request
+    // standing, and the one submenu that raises one closes the menu first.
+    const bool drawPanel = DAT_00354d2c_mode_ == kFieldMenuModeSwallow ||
+                           ((DAT_00354d2c_mode_ == kFieldMenuModeActive || result.equipScreen) &&
+                            (iGpffffbcbc_submenuState_ == 0 ||
+                             uGpffffae34_selected_ != kFieldMenuReturnToTitleItem));
+    if (drawPanel)
     {
-      FUN_002318c0_ramp(index, frameTicks);
+      // FUN_00231C50:25, once per item on every frame the panel draws.
+      for (int index = 0; index < kFieldMenuItemCount; ++index)
+      {
+        FUN_002318c0_ramp(uGpffffae34_selected_, index,
+                          itemAlpha_[static_cast<std::size_t>(index)], frameTicks);
+      }
+      panelDrawn_ = true;
     }
     return result;
   }
@@ -269,7 +376,11 @@ namespace orphen::ported::scene
       groups.push_back({bar});
     }
 
-    if (!caption.empty())
+    // FUN_00231C50:26-28. Items 1..3 keep the caption while their submenu runs;
+    // the others draw one of their own.
+    const bool submenuHidesCaption = iGpffffbcbc_submenuState_ != 0 && uGpffffae34_selected_ != 1 &&
+                                     uGpffffae34_selected_ != 2 && uGpffffae34_selected_ != 3;
+    if (!caption.empty() && !submenuHidesCaption)
     {
       const int width = text::FUN_00238e68_measure(caption, font, kCellWidth);
       groups.push_back(text::FUN_00238608_layout(kCaptionRightEdge - width,
@@ -277,6 +388,46 @@ namespace orphen::ported::scene
                                                  text::kColorDefault, kCellWidth, kCellHeight,
                                                  font));
     }
+
+    std::vector<text::DialogueSprite> sprites;
+    for (auto group = groups.rbegin(); group != groups.rend(); ++group)
+    {
+      sprites.insert(sprites.end(), group->begin(), group->end());
+    }
+    return sprites;
+  }
+
+  std::vector<text::DialogueSprite> FieldMenu::FUN_00232fa8_layout(const ReturnToTitleText &strings,
+                                                                   const text::DialogueFont &font) const
+  {
+    // Submitted question, caption, Yes, No, and reversed for FUN_00207938's
+    // head-first list as the panel is. None of the four overlaps.
+    std::vector<std::vector<text::DialogueSprite>> groups;
+
+    // :21-26. Both centred, both at the default colour.
+    const auto centred = [&](const std::string &line, int y)
+    {
+      const int width = text::FUN_00238e68_measure(line, font, kCellWidth);
+      groups.push_back(text::FUN_00238608_layout(-width / 2, y, line, text::kColorDefault,
+                                                 kCellWidth, kCellHeight, font));
+    };
+    centred(strings.question, kConfirmQuestionY);
+    centred(strings.caption, kConfirmCaptionY);
+
+    // :48-55. The pair is centred as one run -- Yes, a 0x10 gap, No -- with
+    // the sum truncated to 16 bits before it is halved.
+    const int answerY = kConfirmQuestionY - kConfirmAnswerDrop;
+    const int yesWidth = text::FUN_00238e68_measure(strings.yes, font, kCellWidth);
+    const int noWidth = text::FUN_00238e68_measure(strings.no, font, kCellWidth);
+    const int left = -static_cast<std::int16_t>(yesWidth + noWidth + kConfirmAnswerGap) / 2;
+    groups.push_back(text::FUN_00238608_layout(
+        left, answerY, strings.yes,
+        static_cast<std::uint32_t>(DAT_0031c508_yesAlpha_) << 24 | kAvailableRgb, kCellWidth,
+        kCellHeight, font));
+    groups.push_back(text::FUN_00238608_layout(
+        left + kConfirmAnswerGap + yesWidth, answerY, strings.no,
+        static_cast<std::uint32_t>(DAT_0031c509_noAlpha_) << 24 | kAvailableRgb, kCellWidth,
+        kCellHeight, font));
 
     std::vector<text::DialogueSprite> sprites;
     for (auto group = groups.rbegin(); group != groups.rend(); ++group)

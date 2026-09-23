@@ -151,6 +151,11 @@ namespace orphen::ported::battle
     // FUN_0022a418:269-275, at scene load: rows 1, 2 and 6 take row 0's items.
     // Then FUN_002239c8:35-67 fills any slot still empty from the defaults.
     void FUN_0022a418_propagate_loadout();
+
+    // FUN_002294B8, called from FUN_002294D0 on a new game: the 0x15-byte
+    // default loadout back over DAT_003437A0. The same function's clear of the
+    // item counts is the runtime's -- the table lives in SceneScriptState.
+    void FUN_002294d0_new_game_reset();
     void FUN_002239c8_fill_empty_loadout_slots(std::int32_t iGpffffb284);
 
     // The 0xBD methods, by their handler addresses.
@@ -206,7 +211,10 @@ namespace orphen::ported::battle
     std::int32_t DAT_00355c88_splinePosition() const { return DAT_00355c88_; }
     std::int32_t DAT_00355c8c_splineDuration() const { return DAT_00355c8c_; }
     std::int32_t DAT_00355ca8_splineDwell() const { return DAT_00355ca8_; }
-    std::uint32_t FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId);
+    // `DAT_003437b8_itemCounts` is SceneScriptState's inventory; an equipped
+    // item leaves it and the one it replaces goes back.
+    std::uint32_t FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId,
+                                           std::uint8_t *DAT_003437b8_itemCounts);
 
     // FUN_002458a8 / FUN_00245978: stamp one entity into its party record and
     // its control block. Both are called from FUN_002432d8 and nowhere else in
@@ -360,6 +368,14 @@ namespace orphen::ported::battle
     std::uint32_t DAT_00354fc2() const { return sGpffffb052_; }
 
     std::span<const std::uint8_t> DAT_003437a0_loadout() const { return DAT_003437a0_; }
+    // FUN_0022F620's one write to the loadout: the Equip screen's swap.
+    void FUN_0022f620_set_loadout(std::size_t at, std::uint8_t item)
+    {
+      if (at < DAT_003437a0_.size())
+      {
+        DAT_003437a0_[at] = item;
+      }
+    }
     const std::vector<SpellTableRow> &spellTable() const { return spellTable_; }
     // Linear scan of DAT_00324fc8 for an item id, as FUN_002432d8:115-122 does.
     const SpellTableRow *spellRowForItem(std::uint16_t itemId) const;
@@ -446,7 +462,6 @@ namespace orphen::ported::battle
     std::int32_t DAT_0031dad0_ = -1; // FUN_002d6c68(0x1E3), the shared hit effect
 
     std::array<std::uint8_t, kLoadoutRows * kLoadoutSlots> DAT_003437a0_{};
-    std::array<std::uint8_t, 256> DAT_003437b8_itemCounts_{};
     std::array<std::uint8_t, kLoadoutRows * kLoadoutSlots> defaultLoadout_{};
     std::vector<SpellTableRow> spellTable_;
   };

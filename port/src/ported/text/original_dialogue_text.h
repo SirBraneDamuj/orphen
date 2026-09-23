@@ -174,6 +174,12 @@ namespace orphen::ported::text
     // the title prompt at 0x00325738. The field menu's bar at 0x0031C388 is the
     // one entry here that carries 0, and it is opaque because of it.
     int blendMode = 1;
+    // The entry's +0x04, negated: the GS sort bucket FUN_00207938 links it
+    // into. Every glyph FUN_00238608 builds is 0x1009 (0xFFFFEFF7), over the
+    // smear (0x1006) and the fade (0x1007). The Equip screen's bars sit at
+    // 0x1004 and its button glyphs at 0x1005, *under* both -- and at the same
+    // 0x1005 a model with +0x08 bit 0x40 is drawn into.
+    int sortBucket = 0x1009;
   };
 
   // The proportional width table FUN_00238c90 builds, at 0x0031C518.

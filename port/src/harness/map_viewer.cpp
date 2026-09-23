@@ -1322,6 +1322,38 @@ namespace orphen::harness
               blend = true;
             }
           }
+          // FUN_002129B8:87-110 and FUN_00212058:153-167. An untextured pass is
+          // only opaque when the primitive's +0x08 lacks bit 0x200. With it,
+          // the colour entry *after* the pass's own -- or after the primitive's
+          // per-corner run under flag 0x8 -- is not a colour: its first byte is
+          // the vertex alpha (0xFF meaning 0x80, anything else halved) and its
+          // second, shifted up by 11, picks a register block -- 0x4000 block 1,
+          // 0x2000 block 2, 0x1000 block 3 -- and raises ABE.
+          //
+          // The Equip screen's ring (type 0x4C, no subdraws at all) is the case
+          // that shows it: a GS dump has every one of its 55 draws untextured,
+          // ABE on, ALPHA 0x48 and vertex colour (0, 128, 255, 63) -- additive
+          // at half strength, (0, 61, 124) on screen and double that where the
+          // band crosses itself.
+          if (untexturedPass && (primitive.flags & 0x200u) != 0)
+          {
+            const std::size_t at =
+                primitive.perVertexColour()
+                    ? (static_cast<std::size_t>(colourOverride) + corners) * 3
+                    : static_cast<std::size_t>(colourOverride) * 3 + 3;
+            if (at + 1 < model.colours.size())
+            {
+              const std::uint32_t alphaByte = model.colours[at];
+              const std::uint32_t word = alphaByte | (static_cast<std::uint32_t>(model.colours[at + 1]) << 11);
+              passAlpha = static_cast<float>(alphaByte == 0xFF ? 0x80u : alphaByte >> 1) / 128.0f *
+                          g_entityFadeAlpha;
+              if ((word & 0x7000u) != 0)
+              {
+                mode = (word & 0x4000u) != 0 ? 1 : (word & 0x2000u) != 0 ? 2 : 3;
+                blend = true;
+              }
+            }
+          }
           setBlendState(mode, blend);
 
           // **A pass picks its own sheet.** FUN_00212058:180-208 reads the
@@ -2316,8 +2348,9 @@ namespace orphen::harness
         drawPrimitive(map, textureIds, item.primitiveIndex, alphaForFade(item.fade),
                       item.globalFadeCapped, cullingEnabled, batchState);
       }
-      // Anything nearer than the last map primitive, plus the blended bucket.
-      drawEntitiesUpTo(orphen::ported::render::entityDraw::kBlendedBucket);
+      // Anything nearer than the last map primitive. The overlay bucket is
+      // left for render(), which puts it among the 2D entries.
+      drawEntitiesUpTo(orphen::ported::render::entityDraw::kMaximumBucket);
       flushMapBatch(batchState);
 
       glDisable(GL_TEXTURE_2D);
@@ -2949,7 +2982,10 @@ namespace orphen::harness
     glMatrixMode(GL_MODELVIEW);
   }
 
-  void MapViewer::drawDialogueSprites(int framebufferWidth, int framebufferHeight) const
+  void MapViewer::drawDialogueSprites(int framebufferWidth,
+                                      int framebufferHeight,
+                                      int firstBucket,
+                                      int lastBucket) const
   {
     if (textureSlots_ == nullptr || framebufferWidth <= 0 || framebufferHeight <= 0)
     {
@@ -2996,9 +3032,18 @@ namespace orphen::harness
     // glyphs, which carry 1, so blending starts on and only a blend-mode-0
     // entry -- the field menu's bar -- turns it off.
     int submittedBlendMode = 1;
-    dialogueDrawTally_ = DialogueDrawTally{};
+    // The GS's TEST register discards alpha-0 texels outright (ATST GREATER,
+    // AREF 0), blended or not. That is what keeps the transparent corners of
+    // a blend-mode-0 entry -- the Equip screen's button glyphs -- off the
+    // screen; blended ones lose nothing to it.
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.0f);
     for (const auto &sprite : dialogueSprites_)
     {
+      if (sprite.sortBucket < firstBucket || sprite.sortBucket > lastBucket)
+      {
+        continue;
+      }
       const auto slot = static_cast<std::size_t>(sprite.textureSlot);
       if (slot >= slotTextureIds_.size() || slotTextureIds_[slot] == 0)
       {
@@ -3078,6 +3123,7 @@ namespace orphen::harness
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_ALPHA_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_TEXTURE_2D);
     if (fogWasEnabled == GL_TRUE)
@@ -3837,6 +3883,9 @@ namespace orphen::harness
     ensureSlotTexturesUploaded();
     lastFramebufferWidth_ = framebufferWidth;
     lastFramebufferHeight_ = framebufferHeight;
+    // The sprite list is drawn in bucket ranges now, so the tally spans all of
+    // them.
+    dialogueDrawTally_ = DialogueDrawTally{};
     g_sceneLighting = &sceneLighting_;
     // Last frame's capture, for any map primitive carrying a framebuffer
     // material slot. Set before the map is drawn and cleared with the rest of
@@ -4041,6 +4090,54 @@ namespace orphen::harness
     // FUN_0020f3e0 runs after FUN_0020c5a8's pass, on the entities it refused.
     drawSpriteQuads();
 
+    // Buckets 0x1004 and 0x1005, which sort *under* the smear and the fade:
+    // the Equip screen's bars, then the models FUN_0020EEC0 put in 0x1005
+    // (+0x08 bit 0x40), then that bucket's sprites. Within 0x1005 the models
+    // go first because FUN_0020C5A8 submits after FUN_0022E910 and a bucket is
+    // drawn head-first.
+    {
+      constexpr int kOverlay = orphen::ported::render::entityDraw::kOverlayBucket;
+      const bool anyOverlayModel =
+          std::any_of(entityDrawList.begin(), entityDrawList.end(),
+                      [](const auto &item) { return item.depthBucket == kOverlay; });
+      const bool anyLowSprite =
+          std::any_of(dialogueSprites_.begin(), dialogueSprites_.end(),
+                      [](const auto &sprite) { return sprite.sortBucket <= kOverlay; });
+      if (anyOverlayModel || anyLowSprite)
+      {
+        GLint worldViewport[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, worldViewport);
+        // Still inside the world pass's state: the sprites are y-flipped quads
+        // and would be culled, and must not be lit.
+        const auto spritesInBuckets = [&](int first, int last) {
+          const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+          const GLboolean lightingWasEnabled = glIsEnabled(GL_LIGHTING);
+          glDisable(GL_CULL_FACE);
+          glDisable(GL_LIGHTING);
+          glViewport(0, 0, framebufferWidth, framebufferHeight);
+          drawDialogueSprites(framebufferWidth, framebufferHeight, first, last);
+          glViewport(worldViewport[0], worldViewport[1], worldViewport[2], worldViewport[3]);
+          if (cullWasEnabled == GL_TRUE)
+          {
+            glEnable(GL_CULL_FACE);
+          }
+          if (lightingWasEnabled == GL_TRUE)
+          {
+            glEnable(GL_LIGHTING);
+          }
+        };
+        spritesInBuckets(0, kOverlay - 1);
+        for (const auto &item : entityDrawList)
+        {
+          if (item.depthBucket == kOverlay)
+          {
+            drawObjectModel(sceneObjectViews_[item.viewIndex], slotTextureIds_);
+          }
+        }
+        spritesInBuckets(kOverlay, kOverlay);
+      }
+    }
+
     glDisable(GL_FOG);
     glDisable(GL_CULL_FACE);
     if (debugOverlayVisible_)
@@ -4075,6 +4172,14 @@ namespace orphen::harness
     // FUN_00201a38, sort bucket 0x1006: over the world, under the bars and the
     // fade below.
     drawFrameFeedbackQuad(gameView);
+
+    // FUN_0022EB00's pips, FUN_00207DE8(0x1006): the smear's bucket, so under
+    // the letterbox bars and the fade (0x1007) and every glyph of text
+    // (0x1009). The smear is submitted later in the frame and so drawn first.
+    if (!hudQuads_.empty())
+    {
+      drawHudQuads(framebufferWidth, framebufferHeight);
+    }
 
     // FUN_0025cfb8's bars. They and the fade share GS sort bucket 0x1007, and
     // both FUN_002239c8 and FUN_00224320 submit the fade first -- insertion is
@@ -4153,14 +4258,10 @@ namespace orphen::harness
       glMatrixMode(GL_MODELVIEW);
     }
 
-    if (!hudQuads_.empty())
-    {
-      drawHudQuads(framebufferWidth, framebufferHeight);
-    }
-
     if (!dialogueSprites_.empty())
     {
-      drawDialogueSprites(framebufferWidth, framebufferHeight);
+      drawDialogueSprites(framebufferWidth, framebufferHeight,
+                          orphen::ported::render::entityDraw::kOverlayBucket + 1, 0x7FFFFFFF);
     }
 
     // The game's picture is finished here, so this is the frame the next one

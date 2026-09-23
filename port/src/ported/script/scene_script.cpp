@@ -44,13 +44,22 @@ namespace orphen::ported::script
     // next. Wiping them here broke every cross-scene flag; the one that made it
     // visible is BFLG 50..62, which s14_e001 sets to tell s14_e031 which spell
     // to demonstrate and which arrived in the next scene reading zero.
+    //
+    // The inventory at DAT_003437B8 is the same kind of thing: game-wide, and
+    // only FUN_002294D0's new game clears it. Wiping it here threw away every
+    // spell s14_e031 had just granted the moment the next scene loaded.
     {
       decltype(SceneScriptState::DAT_00342b70_flags) carried;
       std::copy(std::begin(state_.DAT_00342b70_flags), std::end(state_.DAT_00342b70_flags),
                 std::begin(carried));
+      decltype(SceneScriptState::DAT_003437b8_itemCounts) carriedItems;
+      std::copy(std::begin(state_.DAT_003437b8_itemCounts),
+                std::end(state_.DAT_003437b8_itemCounts), std::begin(carriedItems));
       state_ = SceneScriptState{};
       std::copy(std::begin(carried), std::end(carried),
                 std::begin(state_.DAT_00342b70_flags));
+      std::copy(std::begin(carriedItems), std::end(carriedItems),
+                std::begin(state_.DAT_003437b8_itemCounts));
     }
 
     if (decodedScript.size() < kSceneScriptHeaderWordCount * 4)

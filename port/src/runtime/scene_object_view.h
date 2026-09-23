@@ -57,6 +57,12 @@ namespace orphen::port
     // caster live on it: the three shield barriers set -10, the summon veil
     // -48 with +48 on the caster, the ground rings and markers -12.
     std::int8_t depthBias133 = 0;
+    // Entity +0x08 bit 0x40. FUN_0020EEC0:181 skips the depth key altogether
+    // and links the model into sort bucket 0x1005 -- past the whole depth
+    // table and among the 2D overlays, over the Equip screen's bars (0x1004)
+    // and under its button glyphs. The Equip screen's slot icons are the
+    // entities that carry it.
+    bool overlayBucket08_40 = false;
 
     // Null when the type has no static descriptor (the map-streamed ids from
     // 0x272) or the grp record is not in any open bundle.

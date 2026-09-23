@@ -133,6 +133,11 @@ namespace orphen::ported::battle
     DAT_00354ebe_ = 1;
   }
 
+  void BattleParty::FUN_002294d0_new_game_reset()
+  {
+    DAT_003437a0_ = defaultLoadout_;
+  }
+
   void BattleParty::FUN_0022a418_propagate_loadout()
   {
     // FUN_0022a418:269-275. Ghidra spells it as three scalar copies of
@@ -1413,7 +1418,8 @@ namespace orphen::ported::battle
     }
   }
 
-  std::uint32_t BattleParty::FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId)
+  std::uint32_t BattleParty::FUN_00244cc0_equip_spell(std::uint32_t packed, std::int64_t spellId,
+                                                      std::uint8_t *DAT_003437b8_itemCounts)
   {
     // FUN_00244cc0. `packed & 0xF` is the slot and `(packed >> 8) & 0xF` the
     // loadout row; s14_e012 calls it with 0x300..0x302, 0x400..0x402 and
@@ -1433,14 +1439,14 @@ namespace orphen::ported::battle
       const std::uint8_t previous = DAT_003437a0_[at];
       if (previous != itemId)
       {
-        if (DAT_003437b8_itemCounts_[itemId] != 0 && row != 2)
+        if (DAT_003437b8_itemCounts[itemId] != 0 && row != 2)
         {
-          DAT_003437b8_itemCounts_[itemId] =
-              static_cast<std::uint8_t>(DAT_003437b8_itemCounts_[itemId] - 1);
+          DAT_003437b8_itemCounts[itemId] =
+              static_cast<std::uint8_t>(DAT_003437b8_itemCounts[itemId] - 1);
         }
         DAT_003437a0_[at] = itemId;
-        DAT_003437b8_itemCounts_[previous] =
-            static_cast<std::uint8_t>(DAT_003437b8_itemCounts_[previous] + 1);
+        DAT_003437b8_itemCounts[previous] =
+            static_cast<std::uint8_t>(DAT_003437b8_itemCounts[previous] + 1);
       }
       return 0;
     }

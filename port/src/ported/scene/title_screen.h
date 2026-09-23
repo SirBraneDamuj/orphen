@@ -70,6 +70,11 @@ namespace orphen::ported::scene
   // FUN_00271220:41 and :48, the two event flags the mode-3 hook consults.
   inline constexpr std::uint16_t kReturnedFromGameFlag = 0x511;
   inline constexpr std::uint16_t kLogoSeenFlag = 0x000E;
+  // FUN_002718F0:12-14, the menu's New Game row. Flag 0 is the one s12_e010's
+  // script waits on; 0x500 is what FUN_0022A418:42 reads as "this load starts
+  // a new game".
+  inline constexpr std::uint16_t kNewGameScriptFlag = 0x0000;
+  inline constexpr std::uint16_t kNewGameFlag = 0x0500;
 
   // FUN_00272010:20, `fGpffff8f58`. Radians of orbit per frame tick, so at the
   // nominal 0x20 ticks a revolution takes 2*pi / (0x20 * 0.0001875) ~= 1047

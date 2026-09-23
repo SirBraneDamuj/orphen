@@ -49,9 +49,11 @@ namespace orphen::ported::render
     // start at 2, so a map primitive in bucket 1 is always behind them.
     inline constexpr int kMinimumBucket = 2;
     inline constexpr int kMaximumBucket = 0xFFF;
-    // Past the end of the shared table, so blended entities draw after every
-    // opaque thing regardless of depth.
-    inline constexpr int kBlendedBucket = 0x1005;
+    // FUN_0020EEC0:203, for an entity with +0x08 bit 0x40: past the end of the
+    // depth table, among the 2D overlays. The world pass stops at
+    // kMaximumBucket; MapViewer draws these between the 0x1004 and 0x1005
+    // sprites.
+    inline constexpr int kOverlayBucket = 0x1005;
     // fGpffff80c4, 0x00352034. Entity +0x133 is a signed byte of view-space
     // units at this scale, added to the depth the bucket is keyed on --
     // negative pulls the entity toward the camera. The sprite pass reads the

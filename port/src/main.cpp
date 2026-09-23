@@ -244,8 +244,18 @@ namespace
         const std::string value = argv[++argumentIndex];
         const std::size_t comma = value.find(',');
         const float angle = std::stof(value.substr(0, comma));
+        const std::size_t secondComma = comma == std::string::npos ? comma : value.find(',', comma + 1);
         const float magnitude = comma == std::string::npos ? 128.0f : std::stof(value.substr(comma + 1));
         config.holdStick = std::make_pair(angle, magnitude);
+        if (secondComma != std::string::npos)
+        {
+          const std::string range = value.substr(secondComma + 1);
+          const std::size_t dash = range.find('-');
+          const auto first = static_cast<std::uint32_t>(std::stoul(range.substr(0, dash)));
+          const auto last =
+              dash == std::string::npos ? first : static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1)));
+          config.holdStickFrames = std::make_pair(first, last);
+        }
         continue;
       }
       if (argument == "--window")
@@ -1122,7 +1132,9 @@ int main(int argc, char **argv)
           }
         }
 
-        if (config.holdStick.has_value())
+        if (config.holdStick.has_value() &&
+            (!config.holdStickFrames.has_value() ||
+             (frameIndex + 1 >= config.holdStickFrames->first && frameIndex + 1 <= config.holdStickFrames->second)))
         {
           input.stickAngle = config.holdStick->first;
           input.stickMagnitude = config.holdStick->second;
@@ -1139,6 +1151,16 @@ int main(int argc, char **argv)
           input.rawPressedStickDirection =
               static_cast<std::uint16_t>(stickDirection & ~input.rawStickDirection);
           input.rawStickDirection = stickDirection;
+        }
+        else if (config.holdStickFrames.has_value())
+        {
+          // Outside the range: the stick is let go.
+          input.stickAngle = 0.0f;
+          input.stickMagnitude = 0.0f;
+          input.moveX = 0.0f;
+          input.moveY = 0.0f;
+          input.rawPressedStickDirection = 0;
+          input.rawStickDirection = 0;
         }
 
         // Edge-triggered the same way the window path delivers it, so the

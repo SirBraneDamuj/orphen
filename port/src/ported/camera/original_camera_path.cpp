@@ -122,6 +122,73 @@ namespace orphen::ported::camera
            value_[index];
   }
 
+  void Curve3::clear()
+  {
+    for (auto &axis : axis_)
+    {
+      axis.clear();
+    }
+  }
+
+  void Curve3::FUN_00266a78_build(std::span<const Vec3> points, bool chordKnots)
+  {
+    clear();
+    const std::size_t count = std::min(points.size(), kMaxSplinePoints);
+    if (count == 0)
+    {
+      return;
+    }
+    std::array<float, kMaxSplinePoints> knots{};
+    std::size_t kept = count;
+    if (count > 2)
+    {
+      if (!chordKnots)
+      {
+        knots = uniformKnots(count);
+      }
+      else
+      {
+        // :57-76. The running length in the scratch at +0xC2, then each
+        // knot as its share of the total.
+        std::array<float, kMaxSplinePoints> run{};
+        for (std::size_t index = 1; index < count; ++index)
+        {
+          const float dx = points[index].x - points[index - 1].x;
+          const float dy = points[index].y - points[index - 1].y;
+          const float dz = points[index].z - points[index - 1].z;
+          run[index] = run[index - 1] + std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        const float total = run[count - 1];
+        if (total == 0.0f)
+        {
+          kept = 1;
+        }
+        else
+        {
+          for (std::size_t index = 1; index < count; ++index)
+          {
+            knots[index] = run[index] / total;
+          }
+        }
+      }
+    }
+    std::array<float, kMaxSplinePoints> channel{};
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      for (std::size_t index = 0; index < kept; ++index)
+      {
+        const Vec3 &point = points[index];
+        channel[index] = axis == 0 ? point.x : (axis == 1 ? point.y : point.z);
+      }
+      axis_[axis].build({knots.data(), kept}, {channel.data(), kept});
+    }
+  }
+
+  Vec3 Curve3::FUN_00266ce8_sample(float t) const
+  {
+    return {axis_[0].evaluate(t), axis_[1].evaluate(t), axis_[2].evaluate(t)};
+  }
+
   float FUN_00218230_zoomLog2(float scale)
   {
     // log(2x) / log(2). FUN_00305670 is the libc log; the ratio is log2(2x).
