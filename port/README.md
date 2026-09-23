@@ -74,6 +74,13 @@ Miss it and the logo is a flat quad seen edge-on, filling the screen in
 perspective. It was found by poking a sentinel into `0x0058C844` on hardware and
 stepping one frame -- the camera's angle came straight back.
 
+That is only the yaw. **`FUN_00271558:35-38`** -- title state 1 -- copies the
+other two every frame: `+0x154` takes the camera pitch (`DAT_00355648`,
+`-0.157` at the prompt on hardware) and `+0x158` the roll (`DAT_0035564C`). The
+port missed it for a while, and the logo stood bolt upright under a camera
+looking down at it: a faint trapezoid, easiest to see as the lean in the
+vertical bar of the O.
+
 ### The prompt is one sprite off a map page
 
 `FUN_00272100` draws the `FUN_00239020` entry at `0x00325738`: texture slot 5,

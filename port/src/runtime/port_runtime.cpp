@@ -3520,6 +3520,21 @@ namespace orphen::port
           std::cout << "[title] START at frame " << frameCount_ << '\n';
         }
 
+        // FUN_00271558:35-38. The logo's other two angles come from the
+        // camera too: +0x154 takes the pitch (fGpffffb6d8) and +0x158 the roll
+        // (uGpffffb6dc), every frame, so the billboard leans back with the
+        // view. FUN_002255B8 only turns it; without this it stands bolt
+        // upright under a camera looking down at it, and reads as a
+        // trapezoid. The test is the slot's type word, so a logo released by
+        // the START branch above is skipped.
+        if (entityPool_.status(title::kLogoSlot) != orphen::ported::entity::SlotStatus::Free &&
+            entityPool_.slot(title::kLogoSlot).typeId00 > 0)
+        {
+          auto &logo = entityPool_.slot(title::kLogoSlot);
+          logo.rotationX154 = fieldCamera_.pitchRadians();
+          logo.rotationY158 = fieldCamera_.uGpffffb6dc_roll();
+        }
+
         // FUN_00271558:41. The timer the attract demo is handed off at. The
         // demo playback is not ported, so this is accumulated and reported
         // rather than acted on -- see the note in title_screen.h.
