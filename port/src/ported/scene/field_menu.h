@@ -229,11 +229,13 @@ namespace orphen::ported::scene
     // because the Equip screen steps with the same globals.
     bool FUN_0023b9f8_autoRepeat(std::uint16_t mask, FieldMenuPad &pad, std::uint32_t frameTicks);
 
-  private:
     // FUN_002318C0(selected, index, &colourByte, 0x2080): ramp one colour
     // word's alpha byte towards 0x80 when `index` is the selected one and 0x20
-    // when it is not, by frameTicks/8 a step.
+    // when it is not, by frameTicks/8 a step. The save prompt ramps its
+    // answers with it too.
     static void FUN_002318c0_ramp(int selected, int index, int &alpha, std::uint32_t frameTicks);
+
+  private:
     // FUN_00232FA8(state). Returns the new state; 0 opens.
     int FUN_00232fa8_returnToTitle(int state, FieldMenuPad &pad, std::uint32_t frameTicks,
                                    FieldMenuStep &result);

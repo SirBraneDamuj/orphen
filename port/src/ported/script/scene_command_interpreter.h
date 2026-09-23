@@ -135,6 +135,17 @@ namespace orphen::ported::script
     // monster shots. See ported/entity/original_ship_fire.h.
     float DAT_003556fc_effectGroundZ = 0.0f;
 
+    // iGpffffb0b8 / uGpffffb0bc, written by opcode 0xD8 and cleared by
+    // FUN_00251CD0 at scene load. An attack record in the script blob and the
+    // value FUN_00255E40 -- the terrain-hazard respawn -- swaps into the
+    // player's +0x12C while it charges that record through FUN_00216128. With
+    // none set the respawn restores the player to one hit point instead. The
+    // original stores an absolute pointer and tests it for zero; the port
+    // stores the blob offset and a flag, since offset 0 is a real offset.
+    bool iGpffffb0b8_hazardRecordSet = false;
+    std::uint32_t iGpffffb0b8_hazardRecordOffset = 0;
+    std::uint16_t uGpffffb0bc_hazardRecordValue = 0;
+
     // DAT_003437b8: the inventory -- how many of each item id the party holds.
     // Opcode 0xBC adds one, capped at 99, and reports whether there was room.
     // Spells are items: ids 1..0xE are the fourteen spell rows, and granting
@@ -354,11 +365,6 @@ namespace orphen::ported::script
     // while a dialogue stream is running and sets them when it ends, so a
     // record gated on those bits waits for the text to finish.
     std::uint32_t uGpffffb0f4_gateMask = 0;
-
-    // DAT_00354d2c: the battle-start state opcode 0xE1 raises to 0x10. The port
-    // has no battle system; this is recorded so the report can say the scene
-    // asked for one.
-    std::uint32_t DAT_00354d2c_battleState = 0;
 
     // The fullscreen fade used to be modelled a second time right here, as a
     // pair of banks with their own arm/step methods. It stepped correctly and
@@ -1010,6 +1016,11 @@ namespace orphen::ported::script
     // current one when the offset is zero. Both the scheduler and opcode 0x33
     // reach the text system through this.
     std::function<void(std::uint32_t blobOffset)> FUN_00237b38_start_dialogue;
+
+    // Opcode 0xE1's `DAT_00354D2C = 0x10` and the FUN_002686A0 after it: the
+    // frame mode is the runtime's, so the raise goes through here. See
+    // ported/scene/save_prompt.h.
+    std::function<void()> FUN_00265000_raise_save_prompt;
 
     // FUN_00237c60 / FUN_00237c70: is a stream up, and has it finished. Opcodes
     // 0x34 and 0x35 poll these every frame while a cutscene waits on a line.

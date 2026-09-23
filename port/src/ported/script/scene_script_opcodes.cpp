@@ -7,6 +7,7 @@
 // unconsumed and everything after them would decode as nonsense.
 
 #include "ported/script/scene_command_interpreter.h"
+#include "ported/scene/save_prompt.h"
 
 #include "ported/camera/original_camera_path.h"
 #include "ported/entity/actor_frame_update.h"
@@ -1545,20 +1546,21 @@ namespace orphen::ported::script
     return 0;
   }
 
-  // 0xE1 (FUN_00265000): raise the save/menu mode. No operands at all. This is
-  // what s01_e024's mask-0x2 floor panel reaches, at script offset 0x4ce.
+  // 0xE1 (FUN_00265000): put up the save prompt. No operands at all. This is
+  // what s01_e024's mask-0x2 floor panel reaches, at script offset 0x4ce, and
+  // what s03_e001 runs once its opening cutscene is over.
   //
   // The opcode table calls this "boot_party_for_battle", and that name is wrong.
   // Confirmed against the game: the mask-0x2 quad at (-6.00, -11.25) is the
-  // *save point* -- standing on it brings up the save dialog. DAT_00354d2c is a
-  // mode selector (0 on a freshly loaded map, per the EE dump) that this raises
-  // to 0x10, and FUN_002686a0 is the handoff into that mode.
+  // *save point* -- standing on it brings up the save dialog. DAT_00354d2c is
+  // the frame mode, and 0x10 is PTR_FUN_00318A88's save-prompt slot; see
+  // ported/scene/save_prompt.h.
   //
-  // Clears event flag 0x8EE, raises the mode, puts the lead into state 10 /
-  // animation 1, and walks the seven party slots at DAT_00343692 restaging every
-  // member whose type is 0x37. The port has no party-slot table and no menu, so
-  // the flag, the mode global and the lead's state are done for real and the
-  // party walk is recorded as absent.
+  // Raises event flag 0x8EE -- FUN_002663A0, the setter; the port used to clear
+  // it, and the prompt's handler reads it as "first frame, reset the cursor".
+  // Then the mode, the lead into state 10 / animation 1, and every party member
+  // whose type is 0x37 into state 1 / animation 0 with +0x62 = 8. Last,
+  // FUN_002686A0: the pad latches and FUN_0023BAE8's action ring.
   std::uint32_t SceneCommandInterpreter::FUN_00265000_boot_party_for_battle()
   {
     if (halted_ || environment_.state == nullptr)
@@ -1566,12 +1568,32 @@ namespace orphen::ported::script
       return 0;
     }
 
-    environment_.state->FUN_002663d8_clearEventFlag(0x8EE);
-    environment_.state->DAT_00354d2c_battleState = 0x10;
+    environment_.state->FUN_002663a0_setEventFlag(orphen::ported::scene::kSavePromptOpenFlag);
     if (environment_.entityPool != nullptr)
     {
-      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(
-          environment_.entityPool->leadPlayer(), 10, 1);
+      auto &pool = *environment_.entityPool;
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(pool.leadPlayer(), 10, 1);
+      // FUN_00265000:14-22, the seven slots at DAT_00343692 in order.
+      for (std::size_t party = 0; party < SceneScriptState::kPartySlotCount; ++party)
+      {
+        const std::int16_t slot =
+            static_cast<std::int16_t>(environment_.state->DAT_00343692_partySlots[party]);
+        if (slot == 0 || slot >= 0x100)
+        {
+          continue;
+        }
+        auto &member = pool.slot(static_cast<std::size_t>(slot));
+        if (member.typeId00 != 0x37)
+        {
+          continue;
+        }
+        orphen::ported::entity::FUN_00225bf0_set_state_and_animation(member, 1, 0);
+        member.fadeRamp62 = 8;
+      }
+    }
+    if (environment_.FUN_00265000_raise_save_prompt)
+    {
+      environment_.FUN_00265000_raise_save_prompt();
     }
     trace_.recordBattleBoot();
     return 0;
@@ -4922,6 +4944,24 @@ namespace orphen::ported::script
     case 0xC9:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00264448_set_frame_feedback();
+
+    // 0xD8 (FUN_00264DE8): a stream offset and one expression, stored as the
+    // terrain-hazard respawn's damage record. See iGpffffb0b8_hazardRecordSet.
+    // The respawn (FUN_00255E40) is not ported, so nothing reads it yet.
+    case 0xD8:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t offset = FUN_0025c1d0_readStreamU32();
+      const std::uint32_t value = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->iGpffffb0b8_hazardRecordSet = true;
+      environment_.state->iGpffffb0b8_hazardRecordOffset = offset;
+      environment_.state->uGpffffb0bc_hazardRecordValue = static_cast<std::uint16_t>(value);
+      return 0;
+    }
 
     // 0xD7 FUN_00264d90  a palette slot and its byte.
     case 0xD7:

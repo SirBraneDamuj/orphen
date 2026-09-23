@@ -13,6 +13,7 @@
 #include "ported/scene/area_map.h"
 #include "ported/scene/equip_screen.h"
 #include "ported/scene/field_menu.h"
+#include "ported/scene/save_prompt.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/sound/original_voice_index.h"
 #include "ported/text/original_dialogue_text.h"
@@ -840,6 +841,13 @@ namespace orphen::port
     // FUN_00231A98's seven labels and FUN_00231C50's caption, out of SCR.BIN
     // resource 1. They are plain NUL-terminated ASCII, not dialogue streams.
     std::string FUN_0025b9e8_text(std::size_t messageIndex) const;
+
+    // --- the save prompt, game modes 0x10 and 0x11 ------------------------
+    // See ported/scene/save_prompt.h. Opcode 0xE1 raises it; the handlers are
+    // the prompt (or the wait after Yes) plus FUN_00224218, the mode-0 frame:
+    // physics, the draw half and the effect pools, and no simulation besides.
+    orphen::ported::scene::SavePrompt savePrompt_;
+    void FUN_00224ba8_step_save_prompt(const InputSnapshot &input, std::uint32_t frameTicks);
     // FUN_002298D0's availability sweep, reduced to what the port can answer.
     std::uint16_t FUN_00231a98_availability() const;
 

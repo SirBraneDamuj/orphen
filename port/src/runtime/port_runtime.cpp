@@ -1874,6 +1874,15 @@ namespace orphen::port
       fieldCamera_.FUN_00217fe8_set_camera_path(eyePoints, rollValues, zoomScales, lookAtPoints);
     };
 
+    // FUN_00265000:11 and its FUN_002686A0 tail. The mode is read at the top
+    // of the next frame, as FUN_002239C8:126 reads it.
+    environment.FUN_00265000_raise_save_prompt = [this]
+    {
+      savePrompt_.raise();
+      DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(orphen::ported::scene::kGameModeSavePrompt);
+      DAT_00342a70_mappedActions_.reset();
+    };
+
     environment.FUN_00237b38_start_dialogue = [this](std::uint32_t blobOffset)
     {
       if (blobOffset == 0)
@@ -8266,7 +8275,8 @@ namespace orphen::port
     if (scriptTrace_.battleBootCount() != 0 && reportedBattleBoots_ == 0)
     {
       reportedBattleBoots_ = 1;
-      std::cout << "[panel] save point: mode 0x10 raised (no menu to hand off to)\n";
+      std::cout << "[panel] save point: mode 0x10 raised, save prompt up at frame " << frameCount_
+                << '\n';
     }
     std::uint32_t locks = 0;
     for (const auto &entry : scriptTrace_.playerLocks())
@@ -8541,9 +8551,19 @@ namespace orphen::port
     {
       equipDrawn_ = false;
     }
+    // And slots 0x10 and 0x11, the save prompt and the wait after its Yes.
+    // Both end in FUN_00224218, so -- like the Equip screen -- FUN_002261E0
+    // runs under them, and like the menu the effect pools do too.
+    const bool saveFrame =
+        DAT_00354d2c_gameMode_ == static_cast<std::uint32_t>(orphen::ported::scene::kGameModeSavePrompt) ||
+        DAT_00354d2c_gameMode_ == static_cast<std::uint32_t>(orphen::ported::scene::kGameModeSaveWait);
+    if (!saveFrame)
+    {
+      savePrompt_.clearDrawn();
+    }
     // Everything below that either handler leaves out, which is the whole
     // simulation half of the frame.
-    const bool uiFrame = menuFrame || mapFrame || equipFrame;
+    const bool uiFrame = menuFrame || mapFrame || equipFrame || saveFrame;
 
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
@@ -8725,6 +8745,14 @@ namespace orphen::port
           DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
         }
       }
+      else if (saveFrame)
+      {
+        // 0x00224BA8 / 0x00224E68 ahead of their FUN_00224218 tail. Neither
+        // player controller runs; FUN_002261E0 does, slot 0 here and the rest
+        // of the pool below.
+        FUN_00224ba8_step_save_prompt(input, frameTicks);
+        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
+      }
       else if (equipFrame)
       {
         // 0x002244C8's first call. Neither player controller runs.
@@ -8858,7 +8886,7 @@ namespace orphen::port
       // pools keep stepping while the panel is up even though nothing else
       // does -- rain outside a window goes on falling. FUN_002D3218, the
       // impact-dust pool above it, is *not* in either handler.
-      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame)
+      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame || saveFrame)
       {
         if (!uiFrame)
         {
@@ -9042,7 +9070,7 @@ namespace orphen::port
       // Neither menu handler runs it: both jump from FUN_00208450 straight to
       // FUN_00208EE8, so a body left mid-fall stays where it is. The Equip
       // screen's handler does run it, second, right after FUN_0022E910.
-      if (!uiFrame || equipFrame)
+      if (!uiFrame || equipFrame || saveFrame)
       {
         orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
       }
@@ -9079,7 +9107,7 @@ namespace orphen::port
       // the lead's idle loop stopped too. Mode 3 calls it, and on hardware
       // Orphen breathes on the Equip screen. The publish below it is
       // FUN_0020C5A8, which every handler calls.
-      if (!uiFrame || equipFrame)
+      if (!uiFrame || equipFrame || saveFrame)
       {
         advanceEntityAnimations(frameTicks);
       }
@@ -9627,6 +9655,88 @@ namespace orphen::port
   // the port reads; cGpffffb656, the attract-mode demo; event flag 0x508; and
   // iGpffffb284 == 0 / 0xC / 0xD, which keeps the panel off the boot and title
   // scenes -- the port's own title path never reaches this code.
+  // PTR_FUN_00318A88[0x10] and [0x11]: the prompt's step or the wait's, and
+  // the FUN_0025D0E0(0x50000000, 1) dim both put ahead of FUN_00224218.
+  void PortRuntime::FUN_00224ba8_step_save_prompt(const InputSnapshot &input, std::uint32_t frameTicks)
+  {
+    namespace scene = orphen::ported::scene;
+    auto &lead = entityPool_.leadPlayer();
+
+    // FUN_00252D88 on the lead: state 0 / animation 1, +0x1B6 = 0, +0x1B8
+    // raised to 1 if it was 0. It is what hands the pad back. cGpffffb6E1's
+    // clamp is left out; nothing in the port reads it.
+    const auto releaseLead = [&lead]
+    {
+      orphen::ported::entity::FUN_00225bf0_set_state_and_animation(lead, 0, 1);
+      lead.idleTimer1b6 = 0;
+      if (lead.interactParam1b8 == 0)
+      {
+        lead.interactParam1b8 = 1;
+      }
+    };
+
+    scene::SavePromptStep step;
+    if (savePrompt_.DAT_00354d2c_mode() == scene::kGameModeSavePrompt)
+    {
+      auto &flags = sceneScript_.state();
+      const bool openLatch = flags.FUN_00266368_eventFlag(scene::kSavePromptOpenFlag);
+      if (openLatch)
+      {
+        flags.FUN_002663d8_clearEventFlag(scene::kSavePromptOpenFlag);
+      }
+      scene::FieldMenuPad pad;
+      pad.uGpffffb684_held = static_cast<std::uint16_t>(input.rawHeldPad);
+      pad.uGpffffb686_pressed = static_cast<std::uint16_t>(input.rawPressedPad);
+      pad.uGpffffb68e_stickDirection = static_cast<std::uint16_t>(input.rawStickDirection);
+      step = savePrompt_.FUN_00224ba8_prompt(openLatch, fieldMenu_, pad, frameTicks);
+    }
+    else
+    {
+      // Lead +0x0C bit 0, what 0x00224E9C tests.
+      step = savePrompt_.FUN_00224e68_wait((lead.collisionFlags0c & 1u) != 0, frameTicks);
+    }
+
+    if (step.cue >= 0)
+    {
+      soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(step.cue));
+    }
+    if (step.closed)
+    {
+      // FUN_002241D8: mode 0 and FUN_0023BAE8's action ring. Then FUN_00252D88.
+      DAT_00342a70_mappedActions_.reset();
+      releaseLead();
+      std::cout << "[save] prompt closed on No at frame " << frameCount_ << '\n';
+    }
+    if (step.extraPhysics)
+    {
+      leadPlayer_.FUN_002261e0_step_physics(frameTicks, mapViewer_.loadedMap());
+    }
+    if (step.openSaveScreen)
+    {
+      // FUN_00234468(1) and mode 8, the memory-card save screen. Not ported, so
+      // the port backs out the way No does rather than leave the frame in a
+      // mode it has no handler for. **The original does not do this.**
+      std::cout << "[save] Yes: FUN_00234468(1) / mode 8, the save screen, is not ported;"
+                   " returning to the field instead\n";
+      DAT_00342a70_mappedActions_.reset();
+      releaseLead();
+    }
+
+    // The tail: the dim. The port's overlay is sticky, so it is released at the
+    // top of the next frame alongside the Return-to-Title one.
+    DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(scene::kSavePromptDimColour,
+                                                      scene::kSavePromptDimAlpha);
+    returnToTitleDimHeld_ = true;
+
+    if (step.closed || step.openSaveScreen)
+    {
+      savePrompt_.clear();
+      DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+      return;
+    }
+    DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(savePrompt_.DAT_00354d2c_mode());
+  }
+
   void PortRuntime::FUN_00224ff0_field_menu_gate(const InputSnapshot &input)
   {
     // 0x5000: Up or Down newly pressed, and 0x8000 Left. Not the stick --
@@ -9987,6 +10097,15 @@ namespace orphen::port
     if (equipDrawn_)
     {
       return buildEquipScreenSprites();
+    }
+    if (savePrompt_.drawn())
+    {
+      orphen::ported::scene::SavePromptText strings;
+      strings.title = FUN_0025b9e8_text(orphen::ported::scene::kSavePromptTitleMessage);
+      strings.yes = FUN_0025b9e8_text(orphen::ported::scene::kSavePromptYesMessage);
+      strings.no = FUN_0025b9e8_text(orphen::ported::scene::kSavePromptNoMessage);
+      strings.hint = FUN_0025b9e8_text(orphen::ported::scene::kSavePromptHintMessage);
+      return savePrompt_.layout(strings, dialogueFont_);
     }
     if (fieldMenu_.returnToTitleDrawn())
     {
