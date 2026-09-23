@@ -16,9 +16,15 @@ namespace orphen::ported::entity
 
   void EntityPool::clearBoneOverrides(std::size_t index)
   {
+    // Only +0x168, which lives inside the 0x1D8 slot. The poses and countdowns
+    // are DAT_004A7E00, which nothing but FUN_0020D378/D8C0/D968 ever touches:
+    // no allocate or release clears them. Wiping them here broke the Equip
+    // screen's snapshot restore -- a follower came back with its +0x168 still
+    // set but zeroed override poses, and its neck bones collapsed onto their
+    // parent until FUN_00257C78 wrote them again.
     if (boneOverrides_ != nullptr && index < boneOverrideCount_)
     {
-      boneOverrides_[index].reset();
+      boneOverrides_[index].mode168.fill(0);
     }
   }
 

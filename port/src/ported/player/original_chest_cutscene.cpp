@@ -209,6 +209,16 @@ namespace orphen::ported::player
           context.FUN_002663a0_setEventFlag(chest->eventFlagId198);
         }
 
+        // FUN_00254f60:26-27. The item is added the moment the lid is up, on
+        // the id byte alone -- before, and whatever becomes of, the item's
+        // entity. A plain byte `+ 1`: unlike opcode 0xBC there is no cap at 99.
+        if (chest != nullptr && chest->recordId130 >= 0 && context.DAT_003437b8_itemCounts != nullptr)
+        {
+          // +0x130 is a signed halfword index; the table is 0x100 bytes.
+          std::uint8_t &count = context.DAT_003437b8_itemCounts[static_cast<std::size_t>(chest->recordId130) & 0xFFu];
+          count = static_cast<std::uint8_t>(count + 1);
+        }
+
         // FUN_00254f60's two branches. The original picks on the chest's id
         // byte; the port additionally falls back to the no-item path when the
         // item's own entity cannot be built, rather than cross-fading to

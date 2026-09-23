@@ -995,8 +995,12 @@ namespace orphen::port
     std::vector<orphen::ported::render::HudQuad> buildEquipPentagonQuads() const;
     // DAT_00570DF0, the message state 8 shows.
     std::string DAT_00570df0_message_;
-    // FUN_0022FBD0 ran this frame: its box is drawn ahead of the dispatcher's.
+    // FUN_0022FBD0 or FUN_0022FDE8 ran this frame: its box is drawn ahead of
+    // the dispatcher's, with this caption message.
     bool equipNoSpellsDrawn_ = false;
+    int equipNoItemsCaption_ = 0;
+    // FUN_0022FD38's "%s*%d" line this frame; empty when it drew nothing.
+    std::string equipItemLine_;
     // FUN_002311E8's per-row entry x, kept from the step for the draw.
     std::array<int, orphen::ported::scene::kEquipSlotCount> equipRowX_{};
     bool equipDrawn_ = false;
@@ -1019,6 +1023,8 @@ namespace orphen::port
     void FUN_0022f588_close_ring(const InputSnapshot &input, std::uint32_t frameTicks);
     void FUN_0022f620_ring_open(const InputSnapshot &input, std::uint32_t frameTicks);
     void FUN_0022fa18_swap(std::uint32_t frameTicks);
+    void FUN_0022fca8_build_item_ring();
+    void FUN_0022fd38_browse_items(const InputSnapshot &input, std::uint32_t frameTicks);
     // FUN_00230910: rebuild the ring for loadout slot `slot`, `front` (an
     // item id, or -1) first. Returns the icon count.
     int FUN_00230910_build_ring(int slot, int front);

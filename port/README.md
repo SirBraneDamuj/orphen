@@ -5755,6 +5755,12 @@ read, so a learned spell never reached the loadout code. There is one copy now,
   times -- items 1..0xE and 29 others -- before anything else. It is a test room.
 - **s14_e031's reward arms each run `0xBC` with their spell.** That is the whole
   of learning one; the arm then equips it into slot 0 (`0xBD` method `0x78`).
+- **A chest adds its item directly**, not through `0xBC`: `FUN_00254F60:26`
+  does `DAT_003437B8[chest +0x130]++` the moment the lid's animation event
+  fires -- a plain byte add, with no cap at 99. The port had the chest cutscene
+  and the item window but not this line, so no chest ever raised a count.
+  Items without record flag `0x80` (the lanterns, for one) are counted but
+  never appear in the Item screen's ring.
 - **An equipped item is not counted.** Swapping one in takes one off its count
   and puts the old one back. A new game (`FUN_002294D0`) zeroes counts
   `0..0x7F` and equips `05 07 01`: Hand of Pyro, Bite of Lightning, Sword.
@@ -5786,7 +5792,9 @@ breathes and the highlighted icon animates, where the menu freezes both.
 | 6 | `FUN_0022F620`, the ring open: turn, move slot, Cross swaps | yes |
 | 7 | `FUN_0022FA18`, the two icons trade places | yes |
 | 8 | `FUN_0022FBD0`, "No items available" until Cross | yes |
-| 9..11 | the Item screen | no |
+| 9 | `0x0022FCA8`, the Item screen's ring (slot 3) | yes |
+| 10 | `FUN_0022FD38`, browse items; Cross picks and leaves | yes; the use is a log line |
+| 11 | `FUN_0022FDE8`, "No items available"; only Triangle leaves | yes |
 | 12 | `FUN_0022FEA8`, leave by reloading (battle scenes) | yes |
 | 13 | `FUN_0022FF20`, leave by restoring the field | yes |
 
@@ -5826,6 +5834,22 @@ Things the original does that look like bugs and are not:
   which the stick never reaches, so only the D-pad goes up.
 - **A swapped-in slot icon is lit, not flat.** `FUN_0022FA18` sets only `+0x08`
   bit `0x40`, not `FUN_002302F0`'s `0x4040`, and leaves its physics on.
+
+### The Item screen is the same ring
+
+Field-menu row 5 sets the same game mode 3; `uGpffffae34` is all that tells the
+two screens apart. No slot icons are spawned, and state 9 builds the ring with
+`FUN_00230910(3, -1)`: slot 3 asks each item record for bit `0x80` instead of
+`0x100`, so the ring holds consumables rather than spells. State 10 prints the
+front item as `"%s*%d"` (name and count; `*` is the font's multiply sign) and
+Cross leaves straight to state 13 with the item's type in ring `+0x1C8`.
+
+**Using the item happens on the way out**, in `FUN_0022FF20:28-50`: the item
+is spawned over the lead's head, the lead plays animation `0x45` in state 10,
+cue `FUN_00237AA8` plays and the count goes down one. None of that is ported:
+the port logs `[item] use item ...` and leaves the count alone. Checked against
+hardware: the ring's contents and order, and Left then Cross using the Herb
+(`0x55`, count 1 -> 0 in RAM) -- the item the port logs.
 
 ### The pentagon is the battle readout's
 

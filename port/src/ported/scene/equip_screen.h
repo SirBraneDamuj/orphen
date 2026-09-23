@@ -36,7 +36,11 @@
 //   7  FUN_0022FA18  the two icons trade places along curves; then the ring
 //                    is rebuilt with the old spell at the front -> 6
 //   8  FUN_0022FBD0  "no spells" box until Cross -> 4
-//   9..11           the Item screen -- not yet ported
+//   9  0x0022FCA8    the Item screen's ring, FUN_00230910(3, -1) -> 10, or
+//                    -> 11 when nothing is held
+//  10  FUN_0022FD38  browse it; Cross picks and leaves (-> 13), and
+//                    FUN_0022FF20 then uses the item from ring +0x1C8
+//  11  FUN_0022FDE8  "no items" box; only Triangle leaves
 //  12  FUN_0022FEA8  leave by reloading the scene (a section-14 scene)
 //  13  FUN_0022FF20  leave by putting the field back
 //
@@ -106,6 +110,13 @@ namespace orphen::ported::scene
   inline constexpr int kEquipStateSwap = 7;
   inline constexpr int kEquipStateNoSpells = 8;
   inline constexpr int kEquipStateItemList = 9;
+  inline constexpr int kEquipStateItemBrowse = 10;
+  inline constexpr int kEquipStateNoItems = 11;
+  // 0x0022FCA8: the Item screen builds its ring as slot 3, which asks the
+  // item record for bit 0x80 instead of 0x100.
+  inline constexpr int kItemScreenSlot = 3;
+  // FUN_0022FDE8's caption, message 0x2B.
+  inline constexpr int kItemNoItemsCaptionMessage = 0x2B;
   inline constexpr int kEquipStateLeaveByReload = 0xC;
   inline constexpr int kEquipStateLeave = 0xD;
 
@@ -276,8 +287,13 @@ namespace orphen::ported::scene
     std::array<bool, kEquipSlotCount> slotIcon{};         // DAT_00570DA0 non-null
     std::array<int, kEquipSlotCount> rowX{};              // FUN_002311E8's asStack_a0
     std::string caption;        // message 0x29
-    // FUN_0022FBD0 ran (state 8): DAT_00570DF0 in a box, and message 0x27.
+    // FUN_0022FBD0 (state 8) or FUN_0022FDE8 (state 11) ran: DAT_00570DF0 in
+    // a box, and message 0x27 or 0x2B.
     bool noSpellsBox = false;
+    // FUN_0022FD38 drew (state 10, a front icon): "%s*%d" of its name and
+    // count, the description, and bar 1 -- ahead of the dispatcher's draw.
+    bool itemBrowseLine = false;
+    std::string itemLine;
     std::string noSpellsMessage;
     std::string noSpellsCaption;
   };

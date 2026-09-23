@@ -300,16 +300,19 @@ namespace orphen::ported::scene
         {
           iGpffffbcbc_submenuState_ = FUN_00232fa8_returnToTitle(0, pad, frameTicks, result);
         }
-        else if (uGpffffae34_selected_ == kFieldMenuEquipItem)
+        else if (uGpffffae34_selected_ == kFieldMenuEquipItem ||
+                 uGpffffae34_selected_ == kFieldMenuItemItem)
         {
-          // 0x00233250, PTR_FUN_0031C3C0[6]: `iGpffffadbc = 3; return 0`. The
-          // submenu word stays 0, so the panel still draws this frame.
+          // 0x00233240 / 0x00233250, PTR_FUN_0031C3C0[5] and [6]: both are
+          // `iGpffffadbc = 3; return 0` -- the Item and Equip screens are one
+          // game mode, told apart later by uGpffffae34. The submenu word stays
+          // 0, so the panel still draws this frame.
           DAT_00354d2c_mode_ = kGameModeEquipScreen;
           result.equipScreen = true;
         }
         else
         {
-          // The other six submenus are not ported, so the selection is handed
+          // The other five submenus are not ported, so the selection is handed
           // back to the caller and the panel stays where it is.
           result.confirmed = uGpffffae34_selected_;
         }

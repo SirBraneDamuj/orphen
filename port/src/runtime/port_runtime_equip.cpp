@@ -134,6 +134,7 @@ namespace orphen::port
     // :33, `PTR_LAB_0031C2F0[uGpffffae30]()`.
     bool pickSlotRan = false;
     equipNoSpellsDrawn_ = false;
+    equipItemLine_.clear();
     switch (DAT_00354da0_equipState_)
     {
     case scene::kEquipStateArm:
@@ -173,10 +174,23 @@ namespace orphen::port
     case scene::kEquipStateNoSpells:
       // FUN_0022FBD0. Its draw is in buildEquipScreenSprites.
       equipNoSpellsDrawn_ = true;
+      equipNoItemsCaption_ = scene::kEquipNoSpellsCaptionMessage;
       if ((input.rawPressedPad & scene::kEquipPadCross) != 0)
       {
         DAT_00354da0_equipState_ = scene::kEquipStatePickSlot;
       }
+      break;
+    case scene::kEquipStateItemList:
+      FUN_0022fca8_build_item_ring();
+      break;
+    case scene::kEquipStateItemBrowse:
+      FUN_0022fd38_browse_items(input, frameTicks);
+      break;
+    case scene::kEquipStateNoItems:
+      // FUN_0022FDE8: the same box as state 8, but nothing but Triangle
+      // (handled above) leaves it.
+      equipNoSpellsDrawn_ = true;
+      equipNoItemsCaption_ = scene::kItemNoItemsCaptionMessage;
       break;
     case scene::kEquipStateLeaveByReload:
       FUN_0022fea8_leave_by_reload(frameTicks);
@@ -185,7 +199,6 @@ namespace orphen::port
       FUN_0022ff20_leave_equip_screen();
       break;
     default:
-      // States 9..11: the Item screen.
       break;
     }
 
@@ -703,9 +716,13 @@ namespace orphen::port
     DAT_00342a70_mappedActions_.reset();
     if (usedItemType > 0x1F0)
     {
-      // :28-50, the Item screen's "use it here" -- not reachable from Equip.
-      std::cout << "[equip] item type 0x" << std::hex << usedItemType << std::dec
-                << " left to use -- the Item screen is not ported\n";
+      // :28-50, using the item: it is spawned over the lead's head, the lead
+      // plays animation 0x45 in state 10, cue FUN_00237AA8, and its count
+      // goes down one. None of that is ported yet -- the count included.
+      const int item = usedItemType - scene::kEquipIconTypeBase;
+      std::cout << "[item] use item 0x" << std::hex << item << std::dec << " \""
+                << itemDatabase_.FUN_00229688_name(item)
+                << "\" at frame " << frameCount_ << " -- its effect (FUN_0022FF20:28-50) is not ported\n";
     }
 
     auto &lead = entityPool_.leadPlayer();
@@ -758,6 +775,47 @@ namespace orphen::port
     }
     // :55-59. The ring, which came back with the copy.
     entity::FUN_00265ec0_destroy_entity(scene::kEquipRingSlot, entityPool_, &state.DAT_00343888_lights);
+  }
+
+  // 0x0022FCA8, state 9: the Item screen's ring.
+  void PortRuntime::FUN_0022fca8_build_item_ring()
+  {
+    if (FUN_00230910_build_ring(scene::kItemScreenSlot, -1) == 0)
+    {
+      DAT_00570df0_message_ = FUN_0025b9e8_text(scene::kEquipNoSpellsMessage);
+      DAT_00354da0_equipState_ = scene::kEquipStateNoItems;
+      return;
+    }
+    // 0x22FCC8-0x22FD08: icon 0's description and name, the ring fading in.
+    const auto &first = DAT_00570ba0_ringIcons_[0];
+    DAT_00570df4_description_ = scene::FUN_00230ce0_split(first.description1a0);
+    DAT_00570dec_spellName_ = first.name19c;
+    auto &ring = entityPool_.slot(scene::kEquipRingSlot);
+    ring.state60 = scene::kRingFadeIn;
+    ring.fadeRamp62 = scene::kRingFadeOpenFrom;
+    DAT_00354da0_equipState_ = scene::kEquipStateItemBrowse;
+    soundEngine_.FUN_00267d38_play_flat(scene::kEquipCueRingOpen);
+  }
+
+  // FUN_0022FD38, state 10.
+  void PortRuntime::FUN_0022fd38_browse_items(const InputSnapshot &input, std::uint32_t frameTicks)
+  {
+    int picked = -1;
+    if (FUN_002313b8_ring_step(&input, frameTicks, &picked) < 0)
+    {
+      // :13-21. `sprintf(buf, "%s*%d", name, +0x1C0)` for the front icon.
+      if (equipRing198_ >= 0)
+      {
+        const auto &front = DAT_00570ba0_ringIcons_[static_cast<std::size_t>(equipRing198_)];
+        equipItemLine_ = front.name19c + "*" + std::to_string(front.count1c0);
+      }
+      return;
+    }
+    // :23-26. Leave, remembering what to use on the way out.
+    DAT_00354da0_equipState_ = scene::kEquipStateLeave;
+    const auto &chosen = DAT_00570ba0_ringIcons_[static_cast<std::size_t>(picked)];
+    equipRing1c8_ = chosen.slot >= 0 ? entityPool_.slot(static_cast<std::size_t>(chosen.slot)).typeId00
+                                     : static_cast<std::int16_t>(-1);
   }
 
   // FUN_0022F588, state 5: wait for the icons to be gone and the ring to have
@@ -1034,7 +1092,7 @@ namespace orphen::port
     equipRing198_ = 0;
     equipRing1c4_ = scene::kRingStepSlide;
     equipRing1a4_ = 0.0f;
-    std::cout << "[equip] ring built for slot " << slot << " with " << items.size() << " spell(s) at frame "
+    std::cout << "[equip] ring built for slot " << slot << " with " << items.size() << " icon(s) at frame "
               << frameCount_ << '\n';
     return static_cast<int>(items.size());
   }
@@ -1319,8 +1377,10 @@ namespace orphen::port
     if (equipNoSpellsDrawn_)
     {
       draw.noSpellsMessage = DAT_00570df0_message_;
-      draw.noSpellsCaption = FUN_0025b9e8_text(scene::kEquipNoSpellsCaptionMessage);
+      draw.noSpellsCaption = FUN_0025b9e8_text(static_cast<std::size_t>(equipNoItemsCaption_));
     }
+    draw.itemBrowseLine = !equipItemLine_.empty();
+    draw.itemLine = equipItemLine_;
     return scene::FUN_0022e910_layout(draw, dialogueFont_);
   }
 

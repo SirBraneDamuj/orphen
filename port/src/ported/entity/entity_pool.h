@@ -77,6 +77,10 @@ namespace orphen::ported::entity
     // FUN_002cdb28 drives bones {3,4,5,6} on every type 0x62, and s01_e012's
     // close-up head lands in a slot one of them vacated, so its jaw -- bones
     // 3..7 of grp_001f -- collapsed onto the skull.
+    //
+    // Only the mode bytes share the slot's lifetime. The poses they select are
+    // DAT_004A7E00, outside the slot, and survive a release on hardware; a
+    // snapshot restore (the Equip screen's) depends on that.
     void setBoneOverrideTable(orphen::ported::model::EntityBoneOverrides *table,
                               std::size_t count);
 

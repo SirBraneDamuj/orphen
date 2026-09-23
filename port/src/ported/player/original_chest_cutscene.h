@@ -25,21 +25,15 @@
 // -- they are only ever reached through the state table. They were read from
 // the disassembly.
 //
-// == What the port leaves out ==
+// == What is and is not ported ==
 //
-// **The item display.** The original's state 0x0F builds a second entity in
-// pool slot 2 (0x0058C260) carrying the item's model, hangs it off the chest's
-// bone 1, and states 0x10/0x11 cross-fade the chest out and the item in while
-// a text window names it. That window is FUN_00237b38 / FUN_00237c60 and the
-// scene reconfiguration around it is FUN_002342c0 / FUN_00234400, none of
-// which is ported.
-//
-// The original already has a path for a chest with no item: FUN_00254f60's
-// `chest +0x130 < 0` branch leaves player +0x19C at zero, and state 0x0F then
-// skips straight from the animation to 0x12. The port takes that branch
-// unconditionally, so 0x10 and 0x11 are unreachable here. They are written
-// out anyway, because the states either side hand to them by number and a
-// reader deserves to see where the gap is.
+// **The item display is ported**: state 0x0F adds the item to DAT_003437B8
+// (FUN_00254F60:26), builds the item entity in pool slot 2 on the chest's
+// role-1 bone (buildItemEntity), and 0x10/0x11 cross-fade it in while the item
+// window names it. When the port cannot build that entity it takes the
+// original's no-item path instead -- the count has already gone up by then,
+// as it has on hardware. The add itself was missing from the port until the
+// Item screen made it visible; the display was not.
 //
 // **FUN_002342c0 / FUN_00234400.** These bracket the cutscene. Three of the
 // things they do are visible with or without the item window, and the port
@@ -118,6 +112,8 @@ namespace orphen::ported::player
     // kCutsceneFadeCap and FUN_00233eb8 restores it from the snapshot.
     std::uint8_t *DAT_00355700_globalFadeCap = nullptr;
     std::uint32_t frameTicks = 0;
+    // DAT_003437B8, the inventory: FUN_00254F60:26 adds the chest's item here.
+    std::uint8_t *DAT_003437b8_itemCounts = nullptr;
 
     // FUN_002663a0, the event-flag set. This is the thing the whole cutscene
     // exists to do: FUN_002d1ea8 only ever observes the flag.

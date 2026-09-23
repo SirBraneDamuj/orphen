@@ -482,7 +482,22 @@ namespace orphen::ported::scene
       describe();
     }
 
-    // FUN_0022FBD0, state 8's handler: the message centred on y 0 with the
+    // FUN_0022FD38, state 10's handler: the front item's name and count where
+    // the spell name goes, its description, and bar 1 -- which FUN_00230E50
+    // then draws a second time.
+    if (draw.itemBrowseLine)
+    {
+      const int width = text::FUN_00238e68_measure(draw.itemLine, font, kSpellNameCellWidth);
+      submitted.push_back({kBucketText, text::FUN_00238608_layout(kRightEdge - width, kSpellNameY,
+                                                                  draw.itemLine, kEntryColour,
+                                                                  kSpellNameCellWidth,
+                                                                  kSpellNameCellHeight, font)});
+      describe();
+      submitted.push_back({kBucketBars, {bar(1, kSpellBarY)}});
+    }
+
+    // FUN_0022FBD0, state 8's handler (FUN_0022FDE8 for state 11 is the same
+    // draw with message 0x2B): the message centred on y 0 with the
     // box FUN_00231C30 lays behind it, then message 0x27 where the spell's
     // name goes. All three go to bucket 0x1009, box after text, so the box is
     // drawn first.

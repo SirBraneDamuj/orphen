@@ -8683,7 +8683,8 @@ namespace orphen::port
         }
         if (menuStep.equipScreen)
         {
-          std::cout << "[menu] selected 6 \"" << fieldMenu_.label(6)
+          std::cout << "[menu] selected " << fieldMenu_.uGpffffae34_selected() << " \""
+                    << fieldMenu_.label(fieldMenu_.uGpffffae34_selected())
                     << "\" -- game mode 3 at frame " << frameCount_ << '\n';
         }
         if (menuStep.confirmed >= 0)
@@ -9524,12 +9525,19 @@ namespace orphen::port
     context.DAT_00354d2c_gameMode = &DAT_00354d2c_gameMode_;
     context.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
     context.setItemSceneRenderState = [this](bool enable) { setItemSceneRenderState(enable); };
+    context.DAT_003437b8_itemCounts = sceneScript_.state().DAT_003437b8_itemCounts;
     context.buildItemEntity = [this](std::size_t chestSlot, std::int16_t itemId) {
       return buildChestItemEntity(chestSlot, itemId);
     };
     context.openItemWindow = [this](std::size_t messageIndex, std::int32_t itemId) {
       itemWindow_.FUN_00237b38_open(messageIndex, itemId, itemDatabase_);
-      std::cout << "[chest] message " << messageIndex << " \"" << itemWindow_.text() << "\"\n";
+      std::cout << "[chest] message " << messageIndex << " \"" << itemWindow_.text() << "\"";
+      if (itemId >= 0 && itemId < 0x100)
+      {
+        std::cout << ", item 0x" << std::hex << itemId << std::dec << " now held "
+                  << static_cast<int>(sceneScript_.state().DAT_003437b8_itemCounts[itemId]);
+      }
+      std::cout << '\n';
       if (itemWindow_.unhandledCode() != 0)
       {
         std::cout << "[chest] message stream stopped on control code 0x" << std::hex
