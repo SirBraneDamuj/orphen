@@ -83,6 +83,11 @@ namespace orphen::ported::entity
     OriginalEntity &slot(std::size_t index) { return slots_[index]; }
     const OriginalEntity &slot(std::size_t index) const { return slots_[index]; }
     SlotStatus status(std::size_t index) const { return status_[index]; }
+    // DAT_005A96B0 is a plain byte array in the original and FUN_00213EF0
+    // writes it directly, without releasing anything: the area map hides most
+    // of the pool for the duration and puts the bytes back on the way out.
+    // Nothing else in the port should reach for this -- use releaseSlot.
+    void setStatus(std::size_t index, SlotStatus status) { status_[index] = status; }
     static constexpr std::size_t slotCount() { return kEntitySlotCount; }
 
     OriginalEntity &leadPlayer() { return slots_[0]; }

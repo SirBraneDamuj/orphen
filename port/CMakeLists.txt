@@ -70,6 +70,8 @@ target_sources(orphen_port
         src/ported/player/original_chest_cutscene.h
         src/ported/player/original_item_window.cpp
         src/ported/player/original_item_window.h
+        src/ported/scene/area_map.cpp
+        src/ported/scene/area_map.h
         src/ported/scene/field_menu.cpp
         src/ported/scene/field_menu.h
         src/ported/scene/title_screen.h

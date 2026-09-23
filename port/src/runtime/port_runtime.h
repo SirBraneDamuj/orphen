@@ -10,6 +10,7 @@
 #include "ported/debug/original_position_display.h"
 #include "ported/player/original_chest_cutscene.h"
 #include "ported/player/original_item_window.h"
+#include "ported/scene/area_map.h"
 #include "ported/scene/field_menu.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/sound/original_voice_index.h"
@@ -713,7 +714,10 @@ namespace orphen::port
                                    std::size_t slot,
                                    orphen::ported::entity::OriginalEntity &entity,
                                    std::uint32_t frameTicks);
-    void advanceEntityAnimations(std::uint32_t frameTicks);
+    // `leadOnly` is game mode 12: FUN_00214300 calls FUN_00225C90 on slot 0
+    // and nothing walks the rest of the pool, so the map furniture that is
+    // still drawn is frozen mid-pose.
+    void advanceEntityAnimations(std::uint32_t frameTicks, bool leadOnly = false);
     void attachModel(SceneObjectView &view,
                      orphen::ported::entity::OriginalEntity &entity,
                      std::uint32_t frameTicks);
@@ -825,6 +829,64 @@ namespace orphen::port
     std::string FUN_0025b9e8_text(std::size_t messageIndex) const;
     // FUN_002298D0's availability sweep, reduced to what the port can answer.
     std::uint16_t FUN_00231a98_availability() const;
+
+    // --- the area map, game mode 12 ---------------------------------------
+    // See ported/scene/area_map.h. The same FUN_00224FF0 gate opens it, on
+    // Left rather than Up/Down, and FUN_00224418's own Cross-or-Left test
+    // closes it. Mode 12 runs even less of the frame than the menu modes do.
+    orphen::ported::scene::AreaMap areaMap_;
+    // What FUN_00213EF0 pushed onto the scratch stack at 0x01949A10, narrowed
+    // to the globals the port models. FUN_002141D8 pops all of it back.
+    struct AreaMapSavedGlobals
+    {
+      // 0x005A96B0 +0x100, then masked down to the map-furniture slots.
+      std::array<orphen::ported::entity::SlotStatus, orphen::ported::entity::kEntitySlotCount>
+          DAT_005a96b0_slotStatus{};
+      // 0x0058BEB0 +0x1D8, then respawned as the type 0x256 marker.
+      orphen::ported::entity::OriginalEntity DAT_0058beb0_leadPlayer{};
+      // 0x003439C8 +0x0C, then driven by FUN_00214300's turning key light.
+      float DAT_003439c8_lightDirection[3]{};
+      // 0x00343888 +0x140, then every radius zeroed. FUN_00213EF0 writes the
+      // last word of each of the sixteen 0x14-byte slots, walking backwards
+      // from 0x003439C4, and that word is the radius -- so the map view runs
+      // with every dynamic light off.
+      orphen::ported::render::LightTable DAT_00343888_lights{};
+      // 0x0035566C and 0x00355670, then 0x404040 and 0xFFFFFF: a neutral
+      // ambient and a white key, in place of whatever the scene was lit with.
+      std::uint32_t uGpffffb6fc_globalRgb = 0;
+      std::uint32_t uGpffffb700_vectorRgb = 0;
+      // 0x00355674 and 0x00355678, then both 0. The first is the colour the
+      // port clears the game viewport to, so this is what makes the void
+      // around the level black instead of the scene's fog grey.
+      std::uint32_t uGpffffb704_color1 = 0;
+      std::uint32_t uGpffffb708_color2 = 0;
+      // 0x0035567C and 0x00355680, then 500.0 and 600.0.
+      float fGpffffb70c_fadeNear = 0.0f;
+      float fGpffffb710_fadeFar = 0.0f;
+      // 0x00355628, then 500.0 -- the change that makes the whole level draw.
+      float DAT_00355628_drawDistance = 0.0f;
+      // 0x00355700, then 0.
+      std::uint8_t DAT_00355700_globalFadeCap = 0;
+      // 0x003FFE00 +0x540: the first 21 bones (0x540 / 0x40) of slot 0's pose
+      // filter bank. The marker draws in slot 0 and filters through the same
+      // block, so without this the lead comes back smoothing out of the
+      // marker's pose -- sunk into the floor for the few frames it takes.
+      std::array<orphen::ported::model::BoneFilterState, 0x540 / 0x40> DAT_003ffe00_poseFilter{};
+      // Entity +0x168 lives inside the 0x1D8 slot in the original, so the
+      // slot pop restores it; the port keeps it beside the override table,
+      // which FUN_00229C40's respawn clears. Nothing in the original writes
+      // the table while the map is up, so putting both back is the same.
+      orphen::ported::model::EntityBoneOverrides DAT_004a7e00_boneOverrides{};
+    };
+    AreaMapSavedGlobals areaMapSaved_;
+    // FUN_00213EF0 and FUN_002141D8.
+    void FUN_00213ef0_open_area_map();
+    void FUN_002141d8_close_area_map();
+    // FUN_00214300, in the slot FUN_00208EE8 gives it. The camera it builds is
+    // held here until updateMapVisibility, which is where the field frame's
+    // FUN_0020BEC8 equivalent runs.
+    void FUN_00214300_step_area_map(const InputSnapshot &input, std::uint32_t frameTicks);
+    std::optional<orphen::ported::render::ViewProjection> areaMapCamera_;
 
     // The battle module. FUN_002239c8:117 picks FUN_00249610 over FUN_00251ed8
     // when DAT_003555d3 and sGpffffb052 are both set, and script opcode 0xBD's

@@ -114,6 +114,14 @@ namespace orphen::ported::resource
                                                  std::int32_t entry,
                                                  bool groupE) const;
 
+    // The same descriptor's **halfword +0x0C**, a flag word. FUN_0022A418:107
+    // tests bit 0x8000 on every scene load: clear, it sets event flag 0x512 --
+    // "the area map is available here" -- and set, it clears it. Empty when
+    // the scene has no descriptor.
+    std::optional<std::uint16_t> FUN_0022a418_sceneFlags0c(std::int32_t section,
+                                                           std::int32_t entry,
+                                                           bool groupE) const;
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t recordTableOffset_ = 0;

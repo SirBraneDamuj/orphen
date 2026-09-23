@@ -3678,6 +3678,32 @@ namespace orphen::port
     {
       DAT_0032536c_sceneModule_ = -1;
     }
+    // FUN_0022A418:107-112, straight after FUN_0022A360: the descriptor's
+    // +0x0C bit 0x8000 decides, per scene, whether the area map is available.
+    // Event flag 0x512 is rewritten on every load -- it is not story progress
+    // -- and FUN_00224FF0 silently ignores Left while it is clear.
+    if (const auto loadedScene = mapViewer_.loadedDiscScene(); loadedScene.has_value())
+    {
+      constexpr std::uint16_t kSceneNoAreaMap = 0x8000;
+      const auto sceneFlags = itemDatabase_.FUN_0022a418_sceneFlags0c(
+          static_cast<std::int32_t>(loadedScene->section),
+          static_cast<std::int32_t>(DAT_003555d3_groupEScene_
+                                        ? static_cast<std::uint32_t>(DAT_003551f8_groupEntry_)
+                                        : loadedScene->entry),
+          DAT_003555d3_groupEScene_);
+      if (sceneFlags.has_value())
+      {
+        auto &flagState = sceneScript_.state();
+        if ((*sceneFlags & kSceneNoAreaMap) == 0)
+        {
+          flagState.FUN_002663a0_setEventFlag(orphen::ported::scene::kAreaMapEventFlag);
+        }
+        else
+        {
+          flagState.FUN_002663d8_clearEventFlag(orphen::ported::scene::kAreaMapEventFlag);
+        }
+      }
+    }
     sceneModuleReported_ = false;
     // Module 12's own state. The original keeps DAT_00342B7D across a load and
     // lets mode 3 reset it; the port clears the whole set here so a scene that
@@ -4266,7 +4292,7 @@ namespace orphen::port
 
   // FUN_00225c90 for every entity that has a model, run before the views are
   // published so the pose column the renderer reads is this frame's.
-  void PortRuntime::advanceEntityAnimations(std::uint32_t frameTicks)
+  void PortRuntime::advanceEntityAnimations(std::uint32_t frameTicks, bool leadOnly)
   {
     const auto step = [&](orphen::ported::entity::OriginalEntity &entity) {
       const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
@@ -4278,6 +4304,10 @@ namespace orphen::port
     };
 
     step(entityPool_.leadPlayer());
+    if (leadOnly)
+    {
+      return;
+    }
     entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity) {
           if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
@@ -8401,6 +8431,13 @@ namespace orphen::port
     // mode *later in this same frame*: the frame a press opens the panel on
     // still runs in full, the way FUN_002239C8's single test makes it.
     const bool menuFrame = fieldMenu_.open();
+    // And slot 12, the area map. FUN_00224418 is shorter still than the two
+    // menu handlers: no FUN_0020F3E0, no FUN_002192C0 and no FUN_0020C290, so
+    // where the menu leaves the effect pools running the map stops those too.
+    const bool mapFrame = areaMap_.open();
+    // Everything below that either handler leaves out, which is the whole
+    // simulation half of the frame.
+    const bool uiFrame = menuFrame || mapFrame;
 
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
@@ -8490,12 +8527,12 @@ namespace orphen::port
       // for FUN_002241E0 whenever DAT_00354D2C is non-zero at all, where the
       // port tests for the modes it has handlers for -- 6, the cutscene, and
       // now 4 and 5, the field menu. The remaining eleven are unreached.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         FUN_0032536c_scene_module(4, frameTicks);
       }
 
-      if (!menuFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
+      if (!uiFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b778_run_tick(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("tick");
@@ -8561,6 +8598,13 @@ namespace orphen::port
           DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
         }
       }
+      else if (mapFrame)
+      {
+        // FUN_00208EE8's fork. FUN_00214300 is the map's whole simulation: the
+        // orbit camera, the marker's scale and the key light, and nothing else
+        // moves for as long as the view is up.
+        FUN_00214300_step_area_map(input, frameTicks);
+      }
       else if (battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         orphen::ported::battle::FUN_00249610_battle_character_update(battleUpdateEnvironment(frameTicks), 0);
@@ -8585,17 +8629,35 @@ namespace orphen::port
       }
 
       // FUN_002239C8:131, `FUN_00224FF0()` -- immediately after the player
-      // controller. It is what reads Up or Down and raises game mode 4.
-      if (!menuFrame)
+      // controller. It is what reads Up or Down and raises game mode 4, and
+      // Left and raises mode 12.
+      if (!uiFrame)
       {
         FUN_00224ff0_field_menu_gate(input);
+      }
+
+      // FUN_00224418:12-17, at the tail of the mode-12 handler: Cross or Left
+      // newly pressed drops the mode and pops every global FUN_00213EF0
+      // pushed. It sits *after* the draw calls in the original, so the frame
+      // the press lands on is still drawn as a map frame -- which is what
+      // running it here, after this frame has already taken its camera,
+      // reproduces.
+      if (mapFrame &&
+          (input.rawPressedPad & orphen::ported::scene::kAreaMapExitMask) != 0)
+      {
+        FUN_002141d8_close_area_map();
+        DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+        // FUN_0023BAE8 by way of FUN_002241D8, so the Cross that closed the
+        // view is not still in the ring for FUN_0023B890 to spend on the way
+        // out.
+        DAT_00342a70_mappedActions_.reset();
       }
 
       // FUN_002446e8 must land before the actor loop: it writes the movement
       // request at +0x30/+0x34 and the physics inside that loop is what spends
       // it. Run the other way round and every path-driven step is a frame late
       // and gets cleared before it is applied.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         pathFollowers_->FUN_002446e8_update(entityPool_, frameTicks);
       }
@@ -8612,7 +8674,7 @@ namespace orphen::port
       // "arrived" three frames later at the same spot and 120 sent him straight
       // back. The visible result is the walk animation firing for three frames
       // once a second with the pad locked out for each of them.
-      if (!menuFrame && battleParty_.battleActive(DAT_003555d3_groupEScene_))
+      if (!uiFrame && battleParty_.battleActive(DAT_003555d3_groupEScene_))
       {
         leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
       }
@@ -8623,7 +8685,7 @@ namespace orphen::port
       // set up on demand instead of waiting for a scene to arrange it.
       for (const auto &placed : placedSlots_)
       {
-        if (menuFrame)
+        if (uiFrame)
         {
           break;
         }
@@ -8642,7 +8704,7 @@ namespace orphen::port
         entity.positionY28 = placed.position.z;
       }
 
-      if (!menuFrame)
+      if (!uiFrame)
       {
         orphen::ported::entity::FUN_00239ce0_update_actors(actorEnvironment(frameTicks), actorTrace_);
       }
@@ -8666,7 +8728,7 @@ namespace orphen::port
       // impact-dust pool above it, is *not* in either handler.
       if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame)
       {
-        if (!menuFrame)
+        if (!uiFrame)
         {
           // FUN_002d3218, in the slot FUN_002239c8:125 gives it -- immediately
           // after FUN_00239ce0, so a burst spawned by a behaviour this frame
@@ -8710,7 +8772,7 @@ namespace orphen::port
       // this slice. FUN_00243f80 installs those scripts on members *other* than
       // 0, so the player's control block has none and the player path does not
       // need the VM. --battle-report says so rather than leaving it silent.
-      if (!menuFrame && battleParty_.battleRunning())
+      if (!uiFrame && battleParty_.battleRunning())
       {
         // FUN_0023fd30:42. The first thing the battle tick does is recount the
         // actor table and drop any binding whose entity has gone -- so a target
@@ -8802,7 +8864,7 @@ namespace orphen::port
       // ladder waits on the narration line *after* the battle has been torn
       // down. Counting down only while a battle was running left that wait
       // spinning forever.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         DAT_00356788_voiceHoldTicks_ = DAT_00356788_voiceHoldTicks_ > frameTicks
                                            ? DAT_00356788_voiceHoldTicks_ - frameTicks
@@ -8847,7 +8909,7 @@ namespace orphen::port
       // a map being present.
       // Neither menu handler runs it: both jump from FUN_00208450 straight to
       // FUN_00208EE8, so a body left mid-fall stays where it is.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
       }
@@ -8855,12 +8917,12 @@ namespace orphen::port
       // FUN_002239c8:134-138 -- FUN_00208450, the physics pass, FUN_00224060,
       // then the late slots. The lead's breadcrumb goes down after it has
       // finished moving for the frame and before anything can read it back.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         FUN_00224060_record_lead_trail();
       }
 
-      if (!menuFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
+      if (!uiFrame && !cutsceneFrame && runScriptTick_ && sceneScript_.loaded())
       {
         sceneScript_.FUN_0025b918_run_late_slots(scriptEnvironment(frameTicks), scriptTrace_);
         reportTickHalt("late slots");
@@ -8881,7 +8943,7 @@ namespace orphen::port
       // calls -- the ninety frames of stepped hardware that came back
       // byte-identical had the lead's idle loop stopped too. The publish below
       // it is FUN_0020C5A8, which both handlers do call.
-      if (!menuFrame)
+      if (!uiFrame)
       {
         advanceEntityAnimations(frameTicks);
       }
@@ -8897,7 +8959,7 @@ namespace orphen::port
       cameraInput.autoFocusGoalYaw = leadState.facingRadians;
       previousStickMagnitude_ = input.stickMagnitude;
 
-      if (!menuFrame && !cutsceneFrame)
+      if (!uiFrame && !cutsceneFrame)
       {
         fieldCamera_.FUN_00216aa0_update(frameTicks, cameraInput, leadState.position, cameraGroundSampler());
       }
@@ -8919,7 +8981,7 @@ namespace orphen::port
       // into 0x0058C844 and stepping one frame -- it came back as the camera's
       // angle again, and two screenshots 300 frames apart put the logo on
       // identical pixels while the room turned behind it.
-      if (!menuFrame &&
+      if (!uiFrame &&
           entityPool_.status(orphen::ported::scene::kLogoSlot) !=
               orphen::ported::entity::SlotStatus::Free &&
           entityPool_.slot(orphen::ported::scene::kLogoSlot).typeId00 ==
@@ -8943,7 +9005,7 @@ namespace orphen::port
 
     // FUN_00237fc0, which mode 6 runs after the actors. Cross is raw pad 0x40,
     // the same bit the interaction probe reads.
-    if (!menuFrame)
+    if (!uiFrame)
     {
       itemWindow_.FUN_00237fc0_update(frameTicks, (input.rawPressedPad & 0x0040) != 0);
     }
@@ -8962,7 +9024,7 @@ namespace orphen::port
     dialoguePad.uGpffffb684_held = input.rawHeldPad;
     dialoguePad.uGpffffb686_pressed = input.rawPressedPad;
     dialoguePad.uGpffffb68e_stickDirection = input.rawStickDirection;
-    if (!menuFrame)
+    if (!uiFrame)
     {
       dialogueStream_.FUN_00237fc0_update(frameTicks, dialoguePad, sceneScript_.state());
     }
@@ -9071,6 +9133,41 @@ namespace orphen::port
                                         const PlayerViewState &leadState,
                                         std::uint32_t frameTicks)
   {
+    // FUN_00208EE8's fork: mode 12 runs FUN_00214300 where every other mode
+    // runs FUN_0020BEC8, and everything downstream -- the visibility walk, the
+    // sort keys, the entity draw -- is handed that matrix without knowing the
+    // difference. The camera was built in the frame's controller slot, so this
+    // only has to pick it up.
+    if (areaMapCamera_.has_value())
+    {
+      renderCamera_ = *areaMapCamera_;
+      renderCameraYaw_ = areaMap_.DAT_00355a58_yaw();
+
+      orphen::ported::render::MapVisibilityInput mapVisibility;
+      mapVisibility.DAT_0058bed0_playerPosition = leadState.position;
+      mapVisibility.DAT_0058bf08_playerHeadOffset = leadState.bodyHeight;
+      // FUN_00213EF0:44 put DAT_00355628 to 500.0 for the duration, which is
+      // what lets the whole level into the frustum at once.
+      mapVisibility.drawDistance = mapViewer_.drawDistance();
+      mapVisibility.globalFadeCap = DAT_00355700_globalFadeCap_;
+      const int mapWidth = mapViewer_.lastFramebufferWidth();
+      const int mapHeight = mapViewer_.lastFramebufferHeight();
+      if (mapWidth > 0 && mapHeight > 0)
+      {
+        const auto mapCamera = orphen::ported::render::glCameraFor(
+            renderCamera_, mapWidth, mapHeight,
+            orphen::ported::render::constants::kGeometryNearClip, mapVisibility.drawDistance);
+        mapVisibility.horizontalCullHalfTangent = std::max(1.0f, mapCamera.horizontalHalfTangent);
+        mapVisibility.verticalCullHalfTangent = std::max(1.0f, mapCamera.verticalHalfTangent);
+      }
+
+      mapViewer_.setRenderCamera(renderCamera_);
+      mapViewer_.setGleamDirection(renderCameraYaw_, areaMap_.DAT_00355a54_pitch());
+      mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
+          map, renderCamera_, mapVisibility, &visibilityReport_));
+      return;
+    }
+
     orphen::ported::render::FieldCameraView cameraView;
     cameraView.eye = fieldCamera_.pose().eye;
     cameraView.yawRadians = fieldCamera_.yawRadians();
@@ -9388,11 +9485,12 @@ namespace orphen::port
   // scenes -- the port's own title path never reaches this code.
   void PortRuntime::FUN_00224ff0_field_menu_gate(const InputSnapshot &input)
   {
-    // 0x5000: Up or Down newly pressed. Not the stick -- FUN_00224FF0 reads
-    // uGpffffb686 straight, with none of FUN_0023B9F8's folding in of
-    // uGpffffb68e, so the movement stick does not open the panel.
+    // 0x5000: Up or Down newly pressed, and 0x8000 Left. Not the stick --
+    // FUN_00224FF0 reads uGpffffb686 straight, with none of FUN_0023B9F8's
+    // folding in of uGpffffb68e, so the movement stick opens neither.
     constexpr std::uint16_t kPadUpOrDown = 0x5000;
-    if ((input.rawPressedPad & kPadUpOrDown) == 0)
+    constexpr std::uint16_t kPadLeft = 0x8000;
+    if ((input.rawPressedPad & (kPadUpOrDown | kPadLeft)) == 0)
     {
       return;
     }
@@ -9421,6 +9519,22 @@ namespace orphen::port
       return;
     }
 
+    // FUN_00224FF0:103-113. Every guard above is shared; only here do the two
+    // parts of the gate diverge, and Left is checked second, so Up+Left on the
+    // same frame opens the menu and not the map.
+    if ((input.rawPressedPad & kPadUpOrDown) == 0)
+    {
+      // `FUN_00266368(0x512)` -- without the flag the press does nothing at
+      // all, not even a refusal sound.
+      if (!sceneScript_.state().FUN_00266368_eventFlag(orphen::ported::scene::kAreaMapEventFlag))
+      {
+        return;
+      }
+      FUN_00213ef0_open_area_map();
+      DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(orphen::ported::scene::kAreaMapMode);
+      return;
+    }
+
     std::array<std::string, orphen::ported::scene::kFieldMenuItemCount> labels;
     for (std::size_t index = 0; index < labels.size(); ++index)
     {
@@ -9432,6 +9546,199 @@ namespace orphen::port
     soundEngine_.FUN_00267d38_play_flat(orphen::ported::scene::kFieldMenuCueOpen);
     DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
     std::cout << "[menu] opened at frame " << frameCount_ << '\n';
+  }
+
+  // FUN_00213EF0. The original pushes fifteen regions onto the scratch stack at
+  // 0x01949A10 and overwrites each; this saves and overwrites the ones the
+  // port has state for. The one it does not is the fog band at 0x00343A08,
+  // whose DAT_00343A10 goes to -1000.0 -- the literal FUN_002000C0:216 reads as
+  // "skip the fog pass" (FUN_002025E0), which the port does not draw at all.
+  void PortRuntime::FUN_00213ef0_open_area_map()
+  {
+    auto &lead = entityPool_.leadPlayer();
+
+    // FUN_00213EF0:11-19, the three-word copy of slot 0's position into
+    // DAT_0055F090. It runs before the respawn, so the focus is where the
+    // player was standing.
+    areaMap_.FUN_00213ef0_open({lead.positionX20, lead.positionZ24, lead.positionY28},
+                              fieldCamera_.yawRadians());
+
+    areaMapSaved_.DAT_0058beb0_leadPlayer = lead;
+    for (std::size_t slot = 0; slot < entityPool_.slotCount(); ++slot)
+    {
+      areaMapSaved_.DAT_005a96b0_slotStatus[slot] = entityPool_.status(slot);
+    }
+    auto *lightDirection = sceneScript_.state().DAT_003439c8_vector;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      areaMapSaved_.DAT_003439c8_lightDirection[axis] = lightDirection[axis];
+    }
+    auto &sceneState = sceneScript_.state();
+    areaMapSaved_.DAT_00343888_lights = sceneState.DAT_00343888_lights;
+    areaMapSaved_.uGpffffb6fc_globalRgb = sceneState.uGpffffb6fc_globalRgb;
+    areaMapSaved_.uGpffffb700_vectorRgb = sceneState.uGpffffb700_vectorRgb;
+    areaMapSaved_.uGpffffb704_color1 = sceneState.uGpffffb704_color1;
+    areaMapSaved_.uGpffffb708_color2 = sceneState.uGpffffb708_color2;
+    areaMapSaved_.fGpffffb70c_fadeNear = sceneState.fGpffffb70c_fadeNear;
+    areaMapSaved_.fGpffffb710_fadeFar = sceneState.fGpffffb710_fadeFar;
+    areaMapSaved_.DAT_00355628_drawDistance = mapViewer_.drawDistance();
+    areaMapSaved_.DAT_00355700_globalFadeCap = DAT_00355700_globalFadeCap_;
+    std::copy_n(DAT_003ffe00_poseFilters_[0].bones.begin(),
+                areaMapSaved_.DAT_003ffe00_poseFilter.size(),
+                areaMapSaved_.DAT_003ffe00_poseFilter.begin());
+    areaMapSaved_.DAT_004a7e00_boneOverrides = DAT_004a7e00_boneOverrides_[0];
+
+    // FUN_00213EF0:56-72. Slots 1..255 go dark unless they are map furniture:
+    // +0x08 bit 0x2000 clear and a type at or above 0x272, with type 0x38
+    // reading its real one out of +0x1CE first. Slot 0 is skipped -- the walk
+    // starts at DAT_0058C088 -- because it is about to become the marker.
+    std::size_t kept = 0;
+    for (std::size_t slot = 1; slot < entityPool_.slotCount(); ++slot)
+    {
+      if (entityPool_.status(slot) == orphen::ported::entity::SlotStatus::Free)
+      {
+        continue;
+      }
+      const auto &entity = entityPool_.slot(slot);
+      std::uint16_t type = static_cast<std::uint16_t>(entity.typeId00);
+      if (type == orphen::ported::scene::kAreaMapIndirectType)
+      {
+        type = static_cast<std::uint16_t>(entity.originalType1ce);
+      }
+      const bool hidden =
+          (entity.halfword08 & orphen::ported::scene::kAreaMapHiddenFlag08) != 0 ||
+          type < orphen::ported::scene::kAreaMapKeptTypeFloor;
+      if (hidden)
+      {
+        entityPool_.setStatus(slot, orphen::ported::entity::SlotStatus::Free);
+      }
+      else
+      {
+        ++kept;
+      }
+    }
+
+    // 0x00214154-0x002141A8. Four fields are read out of the slot, the slot is
+    // respawned as the marker actor -- FUN_00229C40 clears all 0x1D8 bytes of
+    // it -- and then exactly those four are put back: +0x20, +0x24, +0x28 and
+    // the ground height at +0x4C. **The facing is not among them.** The arrow
+    // points wherever the descriptor leaves it, not where the player was
+    // looking. (Ghidra's decompile of this drops +0x24 and +0x4C; the
+    // disassembly has all four.)
+    const float markerX = lead.positionX20;
+    const float markerZ = lead.positionZ24;
+    const float markerY = lead.positionY28;
+    const float markerGround = lead.groundHeight4c;
+
+    entityPool_.FUN_00229c40_initialize(0, orphen::ported::scene::kAreaMapMarkerType,
+                                        descriptorTable_);
+    entityPool_.setStatus(0, orphen::ported::entity::SlotStatus::ScriptSpawned);
+    auto &marker = entityPool_.leadPlayer();
+    marker.positionX20 = markerX;
+    marker.positionZ24 = markerZ;
+    marker.positionY28 = markerY;
+    marker.groundHeight4c = markerGround;
+    marker.halfword04 = static_cast<std::uint16_t>(
+        marker.halfword04 | orphen::ported::scene::kAreaMapMarkerFlags04);
+    // `sh zero, 0xa0(s0)` in the return's delay slot.
+    marker.animationA0 = 0;
+
+    // FUN_00213EF0's remaining global writes that the port has state for. The
+    // colour pair going to 0 is what turns the void around the level black:
+    // the port clears the game viewport to uGpffffb704 rather than leaving a
+    // seam at the fog horizon.
+    for (std::uint32_t light = 0; light < orphen::ported::render::LightTable::kSlotCount; ++light)
+    {
+      sceneState.DAT_00343888_lights.slot(light).radius = 0.0f;
+    }
+    sceneState.uGpffffb6fc_globalRgb = orphen::ported::scene::kAreaMapAmbientRgb;
+    sceneState.uGpffffb700_vectorRgb = orphen::ported::scene::kAreaMapLightRgb;
+    sceneState.uGpffffb704_color1 = 0;
+    sceneState.uGpffffb708_color2 = 0;
+    sceneState.fGpffffb70c_fadeNear = 500.0f;
+    sceneState.fGpffffb710_fadeFar = 600.0f;
+    mapViewer_.setDrawDistance(orphen::ported::scene::kDAT_00355628_areaMapDrawDistance);
+    DAT_00355700_globalFadeCap_ = 0;
+
+    std::cout << "[map] opened at frame " << frameCount_ << ", " << kept
+              << " slot(s) kept visible" << '\n';
+  }
+
+  // FUN_002141D8: pop every region FUN_00213EF0 pushed, in the order it pushed
+  // them. Nothing is merged back -- the map view's writes are discarded whole.
+  void PortRuntime::FUN_002141d8_close_area_map()
+  {
+    areaMap_.FUN_002141d8_close();
+    areaMapCamera_.reset();
+
+    entityPool_.leadPlayer() = areaMapSaved_.DAT_0058beb0_leadPlayer;
+    for (std::size_t slot = 0; slot < entityPool_.slotCount(); ++slot)
+    {
+      entityPool_.setStatus(slot, areaMapSaved_.DAT_005a96b0_slotStatus[slot]);
+    }
+    auto *lightDirection = sceneScript_.state().DAT_003439c8_vector;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      lightDirection[axis] = areaMapSaved_.DAT_003439c8_lightDirection[axis];
+    }
+    auto &sceneState = sceneScript_.state();
+    sceneState.DAT_00343888_lights = areaMapSaved_.DAT_00343888_lights;
+    sceneState.uGpffffb6fc_globalRgb = areaMapSaved_.uGpffffb6fc_globalRgb;
+    sceneState.uGpffffb700_vectorRgb = areaMapSaved_.uGpffffb700_vectorRgb;
+    sceneState.uGpffffb704_color1 = areaMapSaved_.uGpffffb704_color1;
+    sceneState.uGpffffb708_color2 = areaMapSaved_.uGpffffb708_color2;
+    sceneState.fGpffffb70c_fadeNear = areaMapSaved_.fGpffffb70c_fadeNear;
+    sceneState.fGpffffb710_fadeFar = areaMapSaved_.fGpffffb710_fadeFar;
+    mapViewer_.setDrawDistance(areaMapSaved_.DAT_00355628_drawDistance);
+    DAT_00355700_globalFadeCap_ = areaMapSaved_.DAT_00355700_globalFadeCap;
+    std::copy(areaMapSaved_.DAT_003ffe00_poseFilter.begin(),
+              areaMapSaved_.DAT_003ffe00_poseFilter.end(),
+              DAT_003ffe00_poseFilters_[0].bones.begin());
+    DAT_004a7e00_boneOverrides_[0] = areaMapSaved_.DAT_004a7e00_boneOverrides;
+
+    std::cout << "[map] closed" << '\n';
+  }
+
+  // FUN_00214300, reached through FUN_00208EE8's `iGpffffadbc == 0xC` fork. The
+  // original runs it between FUN_00208450 and FUN_00208F28; the port runs it in
+  // the frame's controller slot instead, which is equivalent because nothing
+  // between the two touches the pad globals or the orbit state.
+  void PortRuntime::FUN_00214300_step_area_map(const InputSnapshot &input,
+                                               std::uint32_t frameTicks)
+  {
+    orphen::ported::scene::AreaMapPad pad;
+    pad.DAT_003555f4_held = input.rawHeldPad;
+    pad.DAT_003555f6_pressed = input.rawPressedPad;
+    pad.DAT_003555e4_moveAngle = input.stickAngle;
+    pad.DAT_003555e8_moveMagnitude = input.stickMagnitude;
+    pad.DAT_003555ec_cameraAngle = input.cameraStickAngle;
+    pad.DAT_003555f0_cameraMagnitude = input.cameraStickMagnitude;
+
+    const orphen::ported::scene::AreaMapStep step =
+        areaMap_.FUN_00214300_step(pad, frameTicks, false);
+    areaMapCamera_ = step.camera;
+
+    // 0x0021437C-0x002143A4: the marker's +0x14C and +0x150 track 2.0 / zoom,
+    // so it holds its size on screen however far the view pulls back, and
+    // DAT_00355A50 puts +0xA4 to 1 on the first frame.
+    auto &marker = entityPool_.leadPlayer();
+    marker.scale14c = step.markerScale;
+    marker.scaleZ150 = step.markerScale;
+    if (step.markerStateReset)
+    {
+      marker.stateResetA4 = 1;
+    }
+
+    // FUN_00216510(0x3439C8): the key light, which circles the level once every
+    // six seconds.
+    auto *lightDirection = sceneScript_.state().DAT_003439c8_vector;
+    lightDirection[0] = step.DAT_003439c8_lightDirection.x;
+    lightDirection[1] = step.DAT_003439c8_lightDirection.y;
+    lightDirection[2] = step.DAT_003439c8_lightDirection.z;
+
+    // FUN_00225C90(0x58BEB0) at 0x00214374, the first thing FUN_00214300 does.
+    // It is the one thing mode 12 still steps, and it steps only slot 0.
+    advanceEntityAnimations(frameTicks, true);
   }
 
   std::vector<orphen::ported::text::DialogueSprite> PortRuntime::buildDialogueSprites() const
@@ -9449,6 +9756,27 @@ namespace orphen::port
     {
       return fieldMenu_.FUN_00231c50_layout(
           FUN_0025b9e8_text(orphen::ported::scene::kFieldMenuCaptionMessage), dialogueFont_);
+    }
+
+    // FUN_00224418:19-21, the whole of what mode 12 draws over the world:
+    // message 0x30, "Press <Cross> to Exit", right-aligned to entry x 0x138 at
+    // y -0x60.
+    if (areaMap_.open())
+    {
+      const std::string caption = FUN_0025b9e8_text(orphen::ported::scene::kAreaMapCaptionMessage);
+      if (caption.empty())
+      {
+        return {};
+      }
+      constexpr int kAreaMapCaptionRightEdge = 0x138;
+      constexpr int kAreaMapCaptionY = -0x60;
+      constexpr int kAreaMapCaptionCellWidth = 0x14;
+      constexpr int kAreaMapCaptionCellHeight = 0x16;
+      const int width =
+          text::FUN_00238e68_measure(caption, dialogueFont_, kAreaMapCaptionCellWidth);
+      return text::FUN_00238608_layout(kAreaMapCaptionRightEdge - width, kAreaMapCaptionY,
+                                       caption, text::kColorDefault, kAreaMapCaptionCellWidth,
+                                       kAreaMapCaptionCellHeight, dialogueFont_);
     }
 
     // The cutscene subtitles. These come out of the real glyph slot array, so

@@ -234,6 +234,18 @@ namespace orphen::ported::resource
                    : static_cast<std::int16_t>(u16At(blob_, at + 2));
   }
 
+  std::optional<std::uint16_t> ItemDatabase::FUN_0022a418_sceneFlags0c(std::int32_t section,
+                                                                      std::int32_t entry,
+                                                                      bool groupE) const
+  {
+    const std::uint32_t at = sceneDescriptorOffset(section, entry, groupE);
+    if (at == 0)
+    {
+      return std::nullopt;
+    }
+    return u16At(blob_, at + 0x0C);
+  }
+
   std::int16_t ItemDatabase::FUN_0022cde8_backgroundResource(std::int32_t section,
                                                              std::int32_t entry,
                                                              bool groupE) const

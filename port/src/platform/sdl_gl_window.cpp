@@ -263,6 +263,14 @@ namespace orphen::port
     // were taking four keys the game inputs could use.
     input.rotateX = keyAxis(keys[SDL_SCANCODE_J] != 0, keys[SDL_SCANCODE_L] != 0);
 
+    // The camera stick, which only the area map reads: U/O along the zoom axis
+    // and I/K along the tilt one, the four keys framing J/K/L so the map's four
+    // controls -- WASD to pan, J/L to turn, U/O/I/K to zoom and tilt -- sit
+    // under one hand. I/K and Q/E used to drive the free viewer's pitch and
+    // zoom, which is what freed them.
+    const float keyboardCameraX = keyAxis(keys[SDL_SCANCODE_U] != 0, keys[SDL_SCANCODE_O] != 0);
+    const float keyboardCameraY = keyAxis(keys[SDL_SCANCODE_K] != 0, keys[SDL_SCANCODE_I] != 0);
+
     // Keyboard camera rotate maps onto the shoulder bits the original reads.
     bool cameraLeftHeld = keys[SDL_SCANCODE_J] != 0;
     bool cameraRightHeld = keys[SDL_SCANCODE_L] != 0;
@@ -327,6 +335,7 @@ namespace orphen::port
     const float keyboardMoveX = input.moveX;
     const float keyboardMoveY = input.moveY;
     bool usingAnalogStick = false;
+    bool usingCameraStick = false;
     auto *controller = static_cast<SDL_GameController *>(controller_);
     if (controller != nullptr && SDL_GameControllerGetAttached(controller) == SDL_TRUE)
     {
@@ -364,6 +373,28 @@ namespace orphen::port
         // stick below takes the frame.
         input.moveX = keyboardMoveX;
         input.moveY = keyboardMoveY;
+      }
+
+      // FUN_0023b5d8's other FUN_0023b3f0 call, on the pad's right stick.
+      // Same deadzone, same rescale; the area map's zoom and tilt sectors are
+      // measured on the angle this produces.
+      const float cameraRawRight =
+          axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX)) *
+          orphen::ported::input::kRawAxisRange;
+      const float cameraRawUp =
+          -axisToUnit(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY)) *
+          orphen::ported::input::kRawAxisRange;
+      const auto cameraStick =
+          orphen::ported::input::FUN_0023b3f0_read_analog_stick(cameraRawRight, cameraRawUp);
+      if (cameraStick.magnitude > 0.0f)
+      {
+        usingCameraStick = true;
+        input.cameraStickMagnitude = cameraStick.magnitude;
+        input.cameraStickAngle = cameraStick.angle;
+      }
+      else if (keyboardCameraX == 0.0f && keyboardCameraY == 0.0f)
+      {
+        usingCameraStick = true;
       }
 
       cameraLeftHeld = cameraLeftHeld ||
@@ -488,6 +519,14 @@ namespace orphen::port
       // or walk a dialogue choice, both of which read it.
       input.rawStickDirection = orphen::ported::input::FUN_0023b4e8_stick_direction_bits(
           input.stickMagnitude, input.stickAngle);
+    }
+
+    if (!usingCameraStick && (keyboardCameraX != 0.0f || keyboardCameraY != 0.0f))
+    {
+      // Same substitution the movement keys get: full deflection, and the
+      // angle straight out of the two axes.
+      input.cameraStickMagnitude = kFullStickMagnitude;
+      input.cameraStickAngle = std::atan2(keyboardCameraY, keyboardCameraX);
     }
   }
 

@@ -78,6 +78,13 @@ namespace orphen::port
     // FUN_00253488 scales by it directly, so full deflection is 128.
     float stickAngle = 0.0f;     // fGpffffb674
     float stickMagnitude = 0.0f; // fGpffffb678
+
+    // The *camera* stick: the second FUN_0023b3f0 call in FUN_0023b5d8, on pad
+    // bytes 4 and 5, landing in DAT_003555ec and DAT_003555f0. Nothing in the
+    // field frame reads it -- FUN_00216aa0 turns the camera on L1/R1 -- so the
+    // area map is the first thing in the port that needs it.
+    float cameraStickAngle = 0.0f;     // DAT_003555ec
+    float cameraStickMagnitude = 0.0f; // DAT_003555f0
   };
 
 } // namespace orphen::port

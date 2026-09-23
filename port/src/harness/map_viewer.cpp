@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <set>
 
 #include "harness/entity_probe.h"
@@ -189,6 +190,11 @@ namespace orphen::harness
     // bound slot, ignoring the subdraw's own selector, the way this drew before
     // FUN_00212058's byte-6 block was ported.
     bool g_entityBoundTextureOnly = false;
+
+    // MapViewer::clutBankTexture, for the free-standing model draw. A PSC3 pass
+    // on a slot at or above 0x18 is a 4-bit page and has to be read through a
+    // CLUT bank; the 8-bit page in slotTextures is not what the GS samples.
+    std::function<unsigned int(int, int)> g_clutBankTexture;
 
     // Wall-clock for one render phase, added to `sink` on scope exit. Coarse by
     // design -- see RenderStats.
@@ -1339,14 +1345,44 @@ namespace orphen::harness
           // is bound to slot 22 (tex_0133). The window frames, the lantern
           // flames and the barrels were all reaching past their bound slot too.
           unsigned int passTexture = texture;
-          if (!g_entityBoundTextureOnly && !untexturedPass && subdraw != nullptr &&
-              (primitive.flags & 0x0800u) == 0)
+          int passSlot = object.textureSlot;
+          // Packet byte 5 minus one: the CLUT bank a 4-bit page is read with.
+          int passBank = 0;
+          if (!untexturedPass && subdraw != nullptr)
           {
             const std::uint16_t selector = subdraw->textureSlot();
             if (selector != 0 && selector != 0xF)
             {
-              const std::size_t globalSlot = static_cast<std::size_t>(selector) - 1u;
-              passTexture = globalSlot < slotTextures.size() ? slotTextures[globalSlot] : 0u;
+              if ((primitive.flags & 0x0800u) == 0)
+              {
+                if (!g_entityBoundTextureOnly)
+                {
+                  const std::size_t globalSlot = static_cast<std::size_t>(selector) - 1u;
+                  passSlot = static_cast<int>(globalSlot);
+                  passTexture = globalSlot < slotTextures.size() ? slotTextures[globalSlot] : 0u;
+                }
+              }
+              else
+              {
+                // FUN_00212058:197: `+0x3C = selector + 1`, and byte 5 is
+                // bank + 1 -- the FUN_00207DE8 convention -- so the selector is
+                // the CSA. The area map's marker (grp_0066, all `bound+7`) is
+                // the case that shows it: hardware draws it off slot 40 with
+                // PSMT4 CSA 7, the red ramp, where the 8-bit read is cream.
+                passBank = static_cast<int>(selector);
+              }
+            }
+          }
+          // FUN_002103D0:36 uploads a slot at or above 0x18 as PSMT4, so no
+          // pass on it ever samples the 8-bit page. With 0x800 clear, byte 5 is
+          // 0 or 1 (entity +0x04 bit 0x20), which both come to CSA 0.
+          if (!untexturedPass && passSlot >= orphen::ported::resource::kFirstFourBitTextureSlot &&
+              g_clutBankTexture)
+          {
+            const unsigned int banked = g_clutBankTexture(passSlot, passBank);
+            if (banked != 0)
+            {
+              passTexture = banked;
             }
           }
           // The bit-15 branch never reaches FUN_00212058's alpha/ABE block, so
@@ -3820,6 +3856,7 @@ namespace orphen::harness
     g_mapBlendDisabled = mapBlendDisabled_;
     g_mapBaseSlotOnly = mapBaseSlotOnly_;
     g_entityBoundTextureOnly = entityBoundTextureOnly_;
+    g_clutBankTexture = [this](int slot, int bank) { return clutBankTexture(slot, bank); };
     if (g_gleamProbes != nullptr)
     {
       g_gleamProbes->clear();

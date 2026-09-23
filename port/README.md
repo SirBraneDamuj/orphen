@@ -5663,6 +5663,158 @@ for why: the D-pad does not walk the character on hardware, and sharing the
 nibble with WASD made every step forward open the menu. `[` and `]` cycle the
 map, which is what Left and Right arrow used to do.
 
+## The area map, and why it is the level
+
+**Left** on the D-pad puts up a free-orbiting 3D view of the scene you are
+standing in. It is not a separate map asset and not a separate scene: it is the
+same PSM2 geometry, the same entity pool and the same projection matrix, handed
+a different view matrix and a different set of lighting globals.
+
+`FUN_00224FF0:103` is the gate, three lines below the Up/Down one that opens the
+field menu and behind all the same guards. `uGpffffb686 & 0x8000` tests event
+flag `0x512`; with it set, `FUN_00213EF0` runs and `iGpffffadbc` goes to **12**.
+Without it the press does nothing at all -- there is not even a refusal sound.
+
+**Flag `0x512` is per-scene, not story progress.** `FUN_0022A418:107` rewrites it
+on every scene load from the scene descriptor's halfword `+0x0C`: bit `0x8000`
+clear sets it, set clears it. The port had never ported those six lines, so the
+flag sat at 0 and Left did nothing in every scene. (The battle scenes and the
+title stage carry the bit.)
+
+### Mode 12 is five calls
+
+`PTR_FUN_00318A88[0xC]` is `FUN_00224418`, and its whole body is
+
+```
+FUN_00225C20, FUN_00208450, FUN_00208EE8, FUN_00208F28, FUN_0020C5A8
+if (DAT_003555F6 & 0x8040) { FUN_002241D8(); FUN_002141D8(); }
+FUN_00238608(0x138 - width, -0x60, FUN_0025B9E8(0x30), 0x80808080, 0x14, 0x16)
+```
+
+That is less than the field menu's modes 4 and 5 run. Those end
+`... FUN_0020F3E0, FUN_002192C0, FUN_0020C290`; mode 12 has none of the three,
+so the effect pools stop and the fog backdrop is gone. `FUN_002000C0` drops four
+more passes on `DAT_00354D2C == 0xC` -- the frame feedback blur, the fog,
+`FUN_00210CA0` and `FUN_00202FF8` -- and skips the `FUN_002020A8` overlays.
+
+The one thing still stepping is `FUN_00225C90(0x58BEB0)`, the marker's own
+animation, called from inside `FUN_00214300` rather than from an actor loop.
+
+`FUN_00208EE8` is where the fork lives: `iGpffffadbc == 0xC` sends it to
+`FUN_00214300` instead of `FUN_0020BEC8`. Everything downstream -- the
+visibility walk, the depth sort keys, the entity draw -- takes the matrix
+without knowing which built it.
+
+### FUN_00213EF0 is a save/restore stack
+
+`FUN_00213E68` pushes a memory region onto a scratch stack at `0x01949A10` and
+`FUN_00213EA8` pops it, and `FUN_002141D8` pops exactly what `FUN_00213EF0`
+pushed. What it swaps out, and what for:
+
+| region | replaced with |
+| --- | --- |
+| `0x00343888` +0x140 | every one of the sixteen point-light radii zeroed |
+| `0x0035566C` / `70` | ambient `0x404040`, key light `0xFFFFFF` |
+| `0x003439C8` +0x0C | the turning key light, below |
+| `0x00343A08` +0x0C | `DAT_00343A10` = -1000.0, the literal `FUN_002000C0:216` reads as "skip the fog pass" |
+| `0x00355674` / `78` | both 0 -- this is what makes the void around the level black |
+| `0x0035567C` / `80` | 500.0 and 600.0 |
+| `0x00355700` | 0, no global fade cap |
+| `0x00355628` / `2C` | 500.0 -- **this is what lets the whole level into the frustum at once** |
+| `0x005A96B0` +0x100 | the slot mask, below |
+| `0x0058BEB0` +0x1D8 | slot 0, respawned as the marker |
+| `0x003FFE00` +0x540 | slot 0's pose filter state, bones 0..20 -- without it the lead smooths back out of the marker's pose after closing, sunk into the floor |
+
+The slot mask is `FUN_00213EF0:56-72`, over slots 1..255: a slot survives only
+if `+0x08` has bit `0x2000` clear *and* its type is at or above `0x272`, with a
+type `0x38` reading its real type out of `+0x1CE` first. On the entry-state
+scene that leaves two slots live -- 0, the marker, and 10, a type `0x272`
+treasure chest. The compass roses on screen are map mesh, not entities.
+
+Slot 0 is then `FUN_00229C40(0x58BEB0, 0x256)`, respawned in place as the marker
+actor, with `0x4119` ORed into its `+0x04`. Four fields are read out before the
+respawn and written back after: `+0x20`, `+0x24`, `+0x28` and the ground height
+at `+0x4C`. **The facing is not among them** -- Ghidra's decompile shows only
+two of the four, the disassembly at `0x00214154` has all of them.
+`FUN_00214300` then rescales the marker to `2.0 / zoom` every frame, which is
+why the arrow holds its size on screen however far the view pulls back.
+
+The gate runs before the actor loop in the same frame, so the frame that opens
+the map already walks the masked pool -- the chest ticks once more than every
+other actor across an open/close cycle, and that asymmetry is the original's.
+
+### The camera
+
+`FUN_00214300` is an orbit rig. It composes
+
+```
+translate(-focus) * rotZ(yaw + pi/2) * rotX(-pi/2 - pitch)
+  * scale(-zoom, zoom, -zoom) * translate(0, 0, 5)
+```
+
+against `FUN_0020BEC8`'s `translate(-eye) * rotZ(yaw + pi/2) *
+rotX(-pi/2 - pitch) * rotZ(roll) * scale(-1, 1, -1)`. So the zoom is not a
+projection change: the world is scaled about the focus and then pushed five
+units down the view axis. The projection itself is the field camera's, constant
+for constant -- both calls to `FUN_0020BD58` pass 7680, 0.45, 32768, 65534, 1.0,
+0.3 and a stack far plane of 128.0, just out of different constant blocks.
+
+The focus starts at the player's position, the pitch at -1.22173 (-70 degrees)
+and the zoom at 0.3, both from `0x003520F8`. The yaw starts at the *field*
+camera's, so the map opens facing the way you were looking.
+
+| input | effect |
+| --- | --- |
+| left stick | pan the focus, heading `stickAngle + yaw - pi/2`, speed divided by the zoom |
+| right stick horizontal | zoom, x1.04 or /1.04 a frame, clamped to 0.04..2.0 |
+| right stick vertical | tilt, clamped to -90..-5 degrees |
+| L1 / R1 | turn, 0.0015625 rad a tick -- 0.05 a frame at the nominal 32 |
+| Cross or Left | exit |
+
+The right stick's four jobs are angular sectors, not axes: within 35 degrees of
++X zooms in, beyond 145 degrees zooms out, and 65 to 125 degrees either side
+tilts. Neither zoom step is scaled by the frame tick. The tilt and the pan both
+are.
+
+The key light is the odd one out. `DAT_00354C60` advances one degree every
+frame, unscaled by the tick, and the light direction is
+`normalise(cos, sin, -0.8)` of it -- so the level is lit by a sun that circles
+it once every six seconds. It is what makes an otherwise flat overhead view
+readable, and it is the only thing in mode 12 besides the marker's animation
+that changes on its own.
+
+Verified against hardware: three frames of full-up on the camera stick moved
+`DAT_00355A54` from -1.22173023 to -1.4137254, and the port's
+`128 * sin(1.578148) * 0.0005 * 32 * 0.03125` per frame predicts -1.4137250 --
+seven significant figures. Thirty-seven frames of full-right took the zoom from
+0.3 to 1.2803, which is `0.3 * 1.04^37`.
+
+### The marker's colour is a CLUT bank
+
+The marker model is `grp_0066` on `tex_0171`, bound to slot 40, and every one
+of its fifteen passes is `bound+7`: primitive flag `0x800` set, subdraw
+selector 7. `FUN_00212058:197` turns that into packet byte 5 = `selector + 1`,
+the same bank-plus-one convention as `FUN_00207DE8`, so the pass reads slot 40
+**4-bit with CSA 7** -- a GS dump of the map screen shows exactly that, `PSM
+0x14 CSA 7` on `tbp 14112`. Bank 7 of that sheet is a red ramp.
+
+The port used to draw every model pass from the 8-bit page, which is right for
+slots below `0x18` and never right above it: `FUN_002103D0` uploads those slots
+PSMT4, so there is no 8-bit page on the GS to read. Read 8-bit, the arrow came
+out cream. The model path now reads a slot at or above `0x18` through its bank:
+the selector with `0x800` set, CSA 0 otherwise.
+
+The arrow's brightness swings from dark red to pink as the key light circles --
+on hardware too, where three captures 90 frames apart measured (77,27,17),
+(251,158,141) and (78,27,17). Compare at matching light bearings, not at
+matching frame numbers.
+
+### On the keyboard
+
+WASD pans, `J` and `L` are L1/R1 and turn, and the camera stick is the four keys
+framing them: `U` and `O` zoom, `I` and `K` tilt. Return is Cross and closes it,
+as does Left arrow.
+
 ## The field HP gauge, and the hit reaction under it
 
 The orb in the top left corner of a field scene is pool slot 8, entity type
