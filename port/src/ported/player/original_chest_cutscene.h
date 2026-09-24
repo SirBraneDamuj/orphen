@@ -64,6 +64,7 @@
 #include "ported/entity/entity_pool.h"
 #include "ported/render/original_screen_fade.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -101,6 +102,17 @@ namespace orphen::ported::player
   constexpr std::size_t kItemGetMessage = 0;
   constexpr std::size_t kEmptyChestMessage = 1;
 
+  // FUN_00233b28's copy of every slot's +0x04 and +0x08, taken before
+  // FUN_002342c0's loop hides slots 2..255. FUN_00234400 puts them back from
+  // here -- it does not just clear the bits it set, because some of those
+  // entities were hidden before the chest was opened (the type 0x38 boxes in
+  // every s01_e012 doorway are).
+  struct ChestCutsceneEntityFlags
+  {
+    std::array<std::uint16_t, orphen::ported::entity::kEntitySlotCount> halfword04{};
+    std::array<std::uint16_t, orphen::ported::entity::kEntitySlotCount> halfword08{};
+  };
+
   struct ChestCutsceneContext
   {
     orphen::ported::entity::EntityPool *pool = nullptr;
@@ -112,6 +124,9 @@ namespace orphen::ported::player
     // kCutsceneFadeCap and FUN_00233eb8 restores it from the snapshot.
     std::uint8_t *DAT_00355700_globalFadeCap = nullptr;
     std::uint32_t frameTicks = 0;
+    // Written by state 0x0D, read back by state 0x13. The caller owns it so it
+    // outlives the per-frame context.
+    ChestCutsceneEntityFlags *entityFlagSnapshot = nullptr;
     // DAT_003437B8, the inventory: FUN_00254F60:26 adds the chest's item here.
     std::uint8_t *DAT_003437b8_itemCounts = nullptr;
 

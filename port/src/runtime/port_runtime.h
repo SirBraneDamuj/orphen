@@ -814,6 +814,8 @@ namespace orphen::port
     // rather than as three overwritten globals so applySceneEnvironment stays
     // the single place the scene's own values are read.
     bool itemSceneRenderState_ = false;
+    // FUN_00233b28's +0x04/+0x08 copy, held across the chest cutscene.
+    orphen::ported::player::ChestCutsceneEntityFlags chestEntityFlagSnapshot_;
     void setItemSceneRenderState(bool enable);
     // FUN_00254f60's item branch, and the caption it ends with.
     bool buildChestItemEntity(std::size_t chestSlot, std::int16_t itemId);

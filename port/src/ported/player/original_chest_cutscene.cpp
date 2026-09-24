@@ -133,9 +133,16 @@ namespace orphen::ported::player
       // chests, the party, the enemies, and the player's own bandana, which is
       // slot 4. Slot 0 is not in the loop, and the chest is un-hidden a few
       // lines below, which is why those two are all that is left.
+      //
+      // FUN_00233b28 snapshots +0x04 and +0x08 first; state 0x13 restores them.
       for (std::size_t slot = 2; slot < orphen::ported::entity::kEntitySlotCount; ++slot)
       {
         OriginalEntity &other = context.pool->slot(slot);
+        if (context.entityFlagSnapshot != nullptr)
+        {
+          context.entityFlagSnapshot->halfword04[slot] = other.halfword04;
+          context.entityFlagSnapshot->halfword08[slot] = other.halfword08;
+        }
         other.halfword04 = static_cast<std::uint16_t>(other.halfword04 | 0x4000);
         other.halfword08 = static_cast<std::uint16_t>(other.halfword08 | 0x0001);
       }
@@ -395,9 +402,18 @@ namespace orphen::ported::player
       for (std::size_t slot = 2; slot < orphen::ported::entity::kEntitySlotCount; ++slot)
       {
         OriginalEntity &other = context.pool->slot(slot);
-        other.halfword04 = static_cast<std::uint16_t>(other.halfword04 & 0xbfff);
-        other.halfword08 =
-            static_cast<std::uint16_t>((other.halfword08 & 0xfffe) | 0x0010);
+        if (context.entityFlagSnapshot != nullptr)
+        {
+          other.halfword04 = context.entityFlagSnapshot->halfword04[slot];
+          other.halfword08 =
+              static_cast<std::uint16_t>(context.entityFlagSnapshot->halfword08[slot] | 0x0010);
+        }
+        else
+        {
+          other.halfword04 = static_cast<std::uint16_t>(other.halfword04 & 0xbfff);
+          other.halfword08 =
+              static_cast<std::uint16_t>((other.halfword08 & 0xfffe) | 0x0010);
+        }
       }
       if (context.DAT_00355700_globalFadeCap != nullptr)
       {

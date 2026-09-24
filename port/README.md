@@ -5225,6 +5225,11 @@ Three separate things in `FUN_002342c0`, and none of them is the fade:
 slot, and `FUN_00233eb8` puts the camera, the lights, the fog and
 `DAT_00355700` back — the last from snapshot byte `+0x1DA65`.
 
+It restores those two words from `FUN_00233b28`'s copy; it does not just clear
+the bits it set. The port used to clear them, which un-hid every entity that was
+hidden before the chest opened: in `s01_e012` that is the seven `+0x08 = 0x0011`
+boxes in the doorways (slots 18..24), which came back as flat grey slabs.
+
 ### The item display
 
 States `0x10` and `0x11` are the item reveal, and they run. `FUN_00254f60`'s

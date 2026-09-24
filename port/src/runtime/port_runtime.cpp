@@ -9567,6 +9567,7 @@ namespace orphen::port
     context.camera = &fieldCamera_;
     context.DAT_00354d2c_gameMode = &DAT_00354d2c_gameMode_;
     context.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
+    context.entityFlagSnapshot = &chestEntityFlagSnapshot_;
     context.setItemSceneRenderState = [this](bool enable) { setItemSceneRenderState(enable); };
     context.DAT_003437b8_itemCounts = sceneScript_.state().DAT_003437b8_itemCounts;
     context.buildItemEntity = [this](std::size_t chestSlot, std::int16_t itemId) {
