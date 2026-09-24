@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ported/entity/entity_pool.h"
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_entity_sound.h"
 #include "ported/psm2/psm2_runtime.h"
@@ -263,6 +264,15 @@ namespace orphen::ported::player
     // it stays usable on its own.
     void bindEntity(orphen::ported::entity::OriginalEntity &slot) { entityStorage_ = &slot; }
 
+    // FUN_002262c0's four entity-vs-entity clamps walk the whole pool, so the
+    // lead's physics needs to see it. Unbound (the controller on its own), the
+    // clamps are skipped and nothing blocks the lead.
+    void bindEntityPool(orphen::ported::entity::EntityPool &pool, std::size_t slot)
+    {
+      entityPool_ = &pool;
+      entityPoolSlot_ = slot;
+    }
+
     void setScriptedStateStep(OriginalScriptedStateStep step) { scriptedStateStep_ = std::move(step); }
 
     void setActionEffectHooks(OriginalActionEffectHooks hooks) { actionEffect_ = std::move(hooks); }
@@ -317,6 +327,8 @@ namespace orphen::ported::player
   private:
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
+    orphen::ported::entity::EntityPool *entityPool_ = nullptr;
+    std::size_t entityPoolSlot_ = 0;
     OriginalScriptedStateStep scriptedStateStep_;
     OriginalActionEffectHooks actionEffect_;
     orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;

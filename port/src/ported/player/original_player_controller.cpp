@@ -1,6 +1,7 @@
 #include "ported/player/original_player_controller.h"
 
 #include "ported/entity/actor_frame_update.h"
+#include "ported/entity/entity_collision.h"
 #include "ported/entity/original_hit_test.h"
 #include "ported/original_frame_timing.h"
 
@@ -1318,6 +1319,26 @@ namespace orphen::ported::player
 
     std::uint32_t nextCollisionFlags = 0;
     const bool wasGrounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+
+    // FUN_002262c0:0x002267C4..0x00226820, the entity-vs-entity clamps. They
+    // run on slot 0 exactly as on every other slot -- FUN_002261e0 hands the
+    // lead to the same FUN_002262c0 -- and they sit directly in front of the
+    // destination's FUN_00227390 scan, narrowing +0x30/+0x34 so the lead stops
+    // flush against whatever is in the way. Without this the lead walked
+    // through chests: the terrain scan below knows nothing about entities.
+    //
+    // The 0x20/0x40 bits they raise go into the workspace result word that
+    // becomes +0x0C at :628, so they are carried into this frame's flags rather
+    // than left on last frame's copy.
+    if (entityPool_ != nullptr)
+    {
+      const std::uint32_t kept = entity().collisionFlags0c & ~0x60u;
+      entity().collisionFlags0c = kept;
+      orphen::ported::entity::FUN_002262c0_clamp_movement_against_entities(*entityPool_, entityPoolSlot_);
+      nextCollisionFlags |= entity().collisionFlags0c & 0x60u;
+      entity().collisionFlags0c = kept;
+    }
+
     const float startX = entity().positionX20;
     const float startZ = entity().positionZ24;
     const float attemptedX = startX + entity().desiredDeltaX30;

@@ -17,6 +17,10 @@ namespace orphen::port
     // the controller writes into that slot directly rather than into a private
     // copy, so script opcodes that address entity 0 see the real player.
     void bindEntity(orphen::ported::entity::OriginalEntity &slot) { controller_.bindEntity(slot); }
+    void bindEntityPool(orphen::ported::entity::EntityPool &pool, std::size_t slot)
+    {
+      controller_.bindEntityPool(pool, slot);
+    }
 
     // The player states FUN_00251ed8 dispatches that the controller does not
     // implement itself -- currently the chest cutscene, 0x0C..0x15.

@@ -91,6 +91,7 @@ namespace orphen::port
     // Bind before reset: the lead player is pool slot 0, so the controller must
     // already be writing there when resetToMap places it.
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
+    leadPlayer_.bindEntityPool(entityPool_, 0);
     leadPlayer_.setScriptedStateStep(
         [this](std::uint32_t frameTicks) { return stepScriptedPlayerState(frameTicks); });
     // The player reaches the sound engine through the same callback an actor
@@ -9493,6 +9494,7 @@ namespace orphen::port
     }
     mapViewer_.setSceneObjectViews({});
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
+    leadPlayer_.bindEntityPool(entityPool_, 0);
     leadPlayer_.resetToMap(*loadedMap, spawnOverride_);
     FUN_0022a418_stamp_lead_player_flags();
     FUN_0022a418_reset_lead_trail();
