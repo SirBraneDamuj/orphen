@@ -142,9 +142,8 @@ namespace orphen::port
     std::uint32_t enemyHpSlot = 0;
     std::uint32_t enemyHpValue = 0;
     std::uint32_t enemyHpFrame = 1;
-    bool hasSetEventFlag = false;
-    std::uint32_t setEventFlagId = 0;
-    std::uint32_t setEventFlagFrame = 1;
+    // --set-event-flag, repeatable: each entry is (flag id, frame).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> setEventFlags;
     bool hasArmStream = false;
     std::uint32_t armStreamOffset = 0;
     std::uint32_t armStreamFrame = 1;
@@ -665,9 +664,8 @@ namespace orphen::port
     std::uint32_t enemyHpSlot_ = 0;
     std::uint32_t enemyHpValue_ = 0;
     std::uint32_t enemyHpFrame_ = 1;
-    bool setEventFlagPending_ = false;
-    std::uint32_t setEventFlagId_ = 0;
-    std::uint32_t setEventFlagFrame_ = 1;
+    // (flag id, frame) probes not yet raised.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> pendingEventFlags_;
     std::uint32_t armStreamOffset_ = 0;
     std::uint32_t armStreamFrame_ = 1;
     std::vector<int> hideSlots_;

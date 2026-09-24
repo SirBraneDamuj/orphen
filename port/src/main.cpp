@@ -555,13 +555,11 @@ namespace
         }
         const std::string value{argv[++argumentIndex]};
         const std::size_t colon = value.find(':');
-        config.setEventFlagId =
-            static_cast<std::uint32_t>(std::stoul(value.substr(0, colon)));
-        config.setEventFlagFrame =
+        config.setEventFlags.emplace_back(
+            static_cast<std::uint32_t>(std::stoul(value.substr(0, colon))),
             colon == std::string::npos
                 ? 1u
-                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
-        config.hasSetEventFlag = true;
+                : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1))));
         continue;
       }
       if (argument == "--arm-stream")

@@ -360,9 +360,7 @@ namespace orphen::port
     enemyHpSlot_ = config.enemyHpSlot;
     enemyHpValue_ = config.enemyHpValue;
     enemyHpFrame_ = config.enemyHpFrame;
-    setEventFlagPending_ = config.hasSetEventFlag;
-    setEventFlagId_ = config.setEventFlagId;
-    setEventFlagFrame_ = config.setEventFlagFrame;
+    pendingEventFlags_ = config.setEventFlags;
     armStreamPending_ = config.hasArmStream;
     armStreamOffset_ = config.armStreamOffset;
     armStreamFrame_ = config.armStreamFrame;
@@ -4115,14 +4113,18 @@ namespace orphen::port
     // spell to demonstrate, so the flag has to stand before the scene loads or
     // the ladder falls through every arm. Still a harness probe, not a
     // behaviour -- the game raises these from the scene before.
-    if (setEventFlagPending_ && setEventFlagFrame_ == 0)
+    std::erase_if(pendingEventFlags_, [this](const auto &probe)
     {
-      setEventFlagPending_ = false;
-      sceneScript_.state().FUN_002663a0_setEventFlag(setEventFlagId_);
-      std::cout << "[set-event-flag] " << setEventFlagId_
+      if (probe.second != 0)
+      {
+        return false;
+      }
+      sceneScript_.state().FUN_002663a0_setEventFlag(probe.first);
+      std::cout << "[set-event-flag] " << probe.first
                 << " raised before the init entry -- a harness probe, not something the game"
                    " does here.\n";
-    }
+      return true;
+    });
 
     // FUN_0022a418:261 -> FUN_0023f318(0). The scene's encounter data is the
     // first entry of the script's own section table at header word 7; a scene
@@ -8808,12 +8810,19 @@ namespace orphen::port
                   << enemyHpValue_ << " at frame " << frameCount_
                   << " -- a harness probe, not something the game does here.\n";
       }
-      if (setEventFlagPending_ && frameCount_ >= setEventFlagFrame_ && sceneScript_.loaded())
+      if (sceneScript_.loaded())
       {
-        setEventFlagPending_ = false;
-        sceneScript_.state().FUN_002663a0_setEventFlag(setEventFlagId_);
-        std::cout << "[set-event-flag] " << setEventFlagId_ << " raised at frame " << frameCount_
-                  << " -- a harness probe, not something the game does here.\n";
+        std::erase_if(pendingEventFlags_, [this](const auto &probe)
+        {
+          if (frameCount_ < probe.second)
+          {
+            return false;
+          }
+          sceneScript_.state().FUN_002663a0_setEventFlag(probe.first);
+          std::cout << "[set-event-flag] " << probe.first << " raised at frame " << frameCount_
+                    << " -- a harness probe, not something the game does here.\n";
+          return true;
+        });
       }
       if (armStreamPending_ && frameCount_ >= armStreamFrame_ && sceneScript_.loaded())
       {
