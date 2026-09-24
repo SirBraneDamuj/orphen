@@ -47,6 +47,27 @@ namespace orphen::harness
     float maxNormalLength = 0.0f;
   };
 
+  // One entry per PSC3 model the last rendered frame drew, for the snapshot.
+  // Records what the draw actually used rather than what the entity asked for,
+  // so a model that comes out see-through can be pinned to its fade, its
+  // passes' own alpha, or a texture slot holding the wrong (or no) page.
+  struct EntityDrawProbe
+  {
+    std::size_t slot = 0;
+    std::int32_t typeId = 0;
+    float fadeAlpha = 1.0f;          // g_entityFadeAlpha, from +0x134
+    int boundSlot = -1;              // SceneObjectView::textureSlot
+    std::uint32_t boundResidentId = 0; // DAT_003429a8[boundSlot]
+    bool boundTextureUploaded = false;
+    std::size_t passes = 0;
+    std::size_t blendedPasses = 0;
+    std::size_t untexturedPasses = 0;
+    std::size_t missingTexturePasses = 0; // textured pass drawn with no GL texture
+    float minPassAlpha = 2.0f;
+    float maxPassAlpha = -1.0f;
+    std::map<int, std::size_t> passSlots; // texture slot -> passes drawn off it
+  };
+
   // Where a frame's render time goes, accumulated across a window of frames so
   // the numbers are steady enough to compare two builds.
   //
@@ -108,6 +129,8 @@ namespace orphen::harness
     // What the renderer will actually pose with, as opposed to a palette a
     // report rebuilds for itself.
     const orphen::port::SceneObjectViewList &sceneObjectViews() const { return sceneObjectViews_; }
+    // The PSC3 draws of the last rendered frame. Empty on a headless run.
+    const std::vector<EntityDrawProbe> &entityDrawProbes() const { return entityDrawProbes_; }
     // The entity texture slots, owned by the model store. Uploaded lazily on
     // the same schedule as the map's pages so headless runs never touch GL.
     void setTextureSlotCache(const orphen::ported::resource::TextureSlotCache *slots);
@@ -330,6 +353,7 @@ namespace orphen::harness
     float fogFar_ = 32.0f;
     orphen::ported::render::SceneLighting sceneLighting_;
     std::vector<GleamProbe> *gleamProbeSink_ = nullptr;
+    mutable std::vector<EntityDrawProbe> entityDrawProbes_;
     RenderStats *renderStatsSink_ = nullptr;
     DebugTextRenderer debugText_;
     std::vector<orphen::ported::debug::DebugGlyph> originalDebugGlyphs_;

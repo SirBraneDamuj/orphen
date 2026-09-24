@@ -114,6 +114,8 @@ namespace orphen::ported::entity
     std::int32_t &DAT_00355554_creatureFade() { return DAT_00355554_creatureFade_; }
     std::int32_t &DAT_0035554c_stageFade() { return DAT_0035554c_stageFade_; }
     std::uint8_t &DAT_00355550_veilAlpha() { return DAT_00355550_veilAlpha_; }
+    // For the diagnostic snapshot.
+    const std::array<std::uint32_t, 8> &DAT_0058bb00_dimSet() const { return DAT_0058bb00_dimSet_; }
 
   private:
     // DAT_0058BB00, eight words of it.

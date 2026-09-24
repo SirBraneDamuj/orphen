@@ -9,6 +9,7 @@
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
+#include "ported/entity/original_summon_stage.h"
 #include "ported/entity/entity_path_follow.h"
 #include "ported/entity/original_mast_boss.h"
 #include "ported/model/psc3_model.h"
@@ -7042,6 +7043,24 @@ namespace orphen::port
            << " parent=" << entity.parentSlot192 << " bone="
            << static_cast<int>(entity.attachBone194) << " state=" << entity.state60 << " pos=("
            << view.worldOrigin.x << "," << view.worldOrigin.y << "," << view.worldOrigin.z << ")";
+      // What the draw is handed for colour and alpha: +0x134 (0 = opaque), the
+      // +0x138 hit-flash add, and the bound texture slot with what is resident
+      // in it. A see-through model is one of these, or a pass's own alpha --
+      // which the "renderer" section below reports.
+      line << " fade134=" << static_cast<unsigned>(view.fadeLevel) << std::hex << " flash138=0x"
+           << view.fadeColor138 << std::dec << " tex=" << view.textureSlot;
+      if (view.textureSlot >= 0 &&
+          static_cast<std::size_t>(view.textureSlot) < orphen::ported::resource::kTextureSlotCount)
+      {
+        const auto &resident = store.textureSlots().slot(static_cast<std::size_t>(view.textureSlot));
+        line << "(" << std::hex << "0x" << resident.DAT_003429a8_residentId << std::dec;
+        if (binding != nullptr && binding->textureId != 0 &&
+            resident.DAT_003429a8_residentId != binding->textureId)
+        {
+          line << " WANTS 0x" << std::hex << binding->textureId << std::dec;
+        }
+        line << ")";
+      }
 
       if (binding != nullptr && binding->model != nullptr && !view.bonePalette.empty())
       {
@@ -7134,6 +7153,73 @@ namespace orphen::port
       {
         out << "  slot " << row.slot << " bone detail:\n" << row.bones;
       }
+    }
+
+    // What the last *rendered* frame actually drew each model with. Empty on a
+    // headless run. `alpha` is the per-pass vertex alpha after the fade and the
+    // pass's own ABE value; `slots` is every texture slot a pass sampled, since
+    // a subdraw can name a global slot rather than the bound one.
+    {
+      const auto &probes = mapViewer_.entityDrawProbes();
+      out << "renderer (last drawn frame, " << probes.size() << " models):\n";
+      for (const auto &probe : probes)
+      {
+        out << "  slot=" << probe.slot << " type=0x" << std::hex << probe.typeId << std::dec
+            << " fadeAlpha=" << probe.fadeAlpha << " bound=" << probe.boundSlot
+            << (probe.boundTextureUploaded ? "" : "(NO GL TEXTURE)") << " passes=" << probe.passes
+            << " blended=" << probe.blendedPasses << " untextured=" << probe.untexturedPasses
+            << " missingTex=" << probe.missingTexturePasses << " alpha=" << probe.minPassAlpha
+            << ".." << probe.maxPassAlpha << " slots=";
+        bool first = true;
+        for (const auto &[slot, count] : probe.passSlots)
+        {
+          out << (first ? "" : ",") << slot << "x" << count;
+          first = false;
+        }
+        out << "\n";
+      }
+    }
+
+    // DAT_003429a8 / DAT_00315a98: what each texture slot holds, and the cache
+    // key that put it there. Slots 0..9 are the map's pages, 10..23 and 24..39
+    // the two entity banks, 32+ the boot binds.
+    {
+      const auto &slots = store.textureSlots();
+      out << "texture slots (gen=" << slots.generation() << "):";
+      for (std::size_t slot = 0; slot < orphen::ported::resource::kTextureSlotCount; ++slot)
+      {
+        const auto &state = slots.slot(slot);
+        if (!state.occupied())
+        {
+          continue;
+        }
+        out << "  " << slot << ":0x" << std::hex << state.DAT_003429a8_residentId << std::dec;
+        if (state.DAT_00315a98_cacheKey != 0)
+        {
+          out << "/key" << state.DAT_00315a98_cacheKey;
+        }
+        if (state.texture.rgbaPixels.empty())
+        {
+          out << "(EMPTY)";
+        }
+      }
+      out << "\n";
+    }
+
+    // The summon stage outlives the creature that set it up, so a stale mask or
+    // fade here is state carried from an earlier scene.
+    {
+      auto &stage = orphen::ported::entity::DAT_0058bb00_summonStage();
+      out << "summon stage: dimSet=";
+      for (const std::uint32_t word : stage.DAT_0058bb00_dimSet())
+      {
+        out << std::hex << std::setw(8) << std::setfill('0') << word << std::dec
+            << std::setfill(' ') << " ";
+      }
+      out << "creatureFade=" << stage.DAT_00355554_creatureFade()
+          << " stageFade=" << stage.DAT_0035554c_stageFade()
+          << " veil=" << static_cast<unsigned>(stage.DAT_00355550_veilAlpha())
+          << " globalFadeCap=" << static_cast<unsigned>(DAT_00355700_globalFadeCap_) << "\n";
     }
 
     // A live entity that is *not* in the draw list was dropped by

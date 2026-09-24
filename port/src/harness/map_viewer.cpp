@@ -173,6 +173,12 @@ namespace orphen::harness
     // needing a second traversal.
     std::vector<orphen::harness::GleamProbe> *g_gleamProbes = nullptr;
 
+    // MapViewer::entityDrawProbes_ for the frame being drawn, and the entry of
+    // the model currently being drawn. Always on: one entry per model and a few
+    // increments per pass, for the snapshot to read afterwards.
+    std::vector<orphen::harness::EntityDrawProbe> *g_entityDrawProbes = nullptr;
+    orphen::harness::EntityDrawProbe *g_currentDrawProbe = nullptr;
+
     // Set for the duration of render() when a --frame-stats run is collecting.
     // Null on every other run, so the counter sites below are a predicted
     // not-taken branch rather than work.
@@ -905,6 +911,16 @@ namespace orphen::harness
                               ? 1.0f
                               : std::min(1.0f, static_cast<float>(object.fadeLevel) / 128.0f);
 
+      g_currentDrawProbe = nullptr;
+      if (g_entityDrawProbes != nullptr)
+      {
+        auto &probe = g_entityDrawProbes->emplace_back();
+        probe.slot = object.slot;
+        probe.typeId = object.typeId;
+        probe.fadeAlpha = g_entityFadeAlpha;
+        g_currentDrawProbe = &probe;
+      }
+
       // **Models are drawn double-sided.** The backface culling set up for the
       // map does not belong to this path and produces holes here: it was
       // derived from FUN_0022c6e8's corner order and the map VU1 program at
@@ -939,6 +955,11 @@ namespace orphen::harness
            static_cast<std::size_t>(object.textureSlot) < slotTextures.size())
               ? slotTextures[static_cast<std::size_t>(object.textureSlot)]
               : 0u;
+      if (g_currentDrawProbe != nullptr)
+      {
+        g_currentDrawProbe->boundSlot = object.textureSlot;
+        g_currentDrawProbe->boundTextureUploaded = texture != 0;
+      }
       if (texture != 0)
       {
         glEnable(GL_TEXTURE_2D);
@@ -1421,6 +1442,23 @@ namespace orphen::harness
           // it draws opaque -- FUN_002129b8 plants 0xFF in the alpha byte
           // outright -- and through FUN_00212cf0, the untextured colour path.
           setTexture(untexturedPass ? 0u : passTexture);
+          if (g_currentDrawProbe != nullptr)
+          {
+            auto &probe = *g_currentDrawProbe;
+            ++probe.passes;
+            probe.blendedPasses += blend ? 1u : 0u;
+            if (untexturedPass)
+            {
+              ++probe.untexturedPasses;
+            }
+            else
+            {
+              ++probe.passSlots[passSlot];
+              probe.missingTexturePasses += passTexture == 0 ? 1u : 0u;
+            }
+            probe.minPassAlpha = std::min(probe.minPassAlpha, passAlpha);
+            probe.maxPassAlpha = std::max(probe.maxPassAlpha, passAlpha);
+          }
 
           emit(0, subdraw, passAlpha, colourOverride);
           emit(1, subdraw, passAlpha, colourOverride);
@@ -3902,6 +3940,9 @@ namespace orphen::harness
             : 1.0f;
     g_gleamProbes = gleamProbeSink_;
     g_renderStats = renderStatsSink_;
+    entityDrawProbes_.clear();
+    g_entityDrawProbes = &entityDrawProbes_;
+    g_currentDrawProbe = nullptr;
     g_mapBlendDisabled = mapBlendDisabled_;
     g_mapBaseSlotOnly = mapBaseSlotOnly_;
     g_entityBoundTextureOnly = entityBoundTextureOnly_;
@@ -4323,6 +4364,8 @@ namespace orphen::harness
     }
 
     g_renderStats = nullptr;
+    g_entityDrawProbes = nullptr;
+    g_currentDrawProbe = nullptr;
   }
 
   orphen::ported::psm2::Psm2RuntimeState *MapViewer::loadedMap()
