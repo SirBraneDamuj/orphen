@@ -1893,6 +1893,121 @@ namespace orphen::ported::script
     entity->eventFlagId198 = wordValue;
   }
 
+  // 0xB1 (FUN_00263878): selector and bone. FUN_0020d9c8 drops the bone's
+  // override flag at +0x168, and +0x08 bit 0x10 makes the next pose sample snap
+  // to the animation instead of easing out of the override.
+  void SceneCommandInterpreter::FUN_00263878_clear_bone_override()
+  {
+    const std::size_t savedCurrent = currentEntity_;
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t bone = FUN_0025c258_evaluate();
+    if (halted_)
+    {
+      return;
+    }
+    orphen::ported::entity::OriginalEntity *entity = resolveEntityFrom(selector, savedCurrent);
+    if (entity == nullptr || currentEntity_ >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return;
+    }
+    if (environment_.FUN_0020d9c8_clear_bone_override)
+    {
+      environment_.FUN_0020d9c8_clear_bone_override(currentEntity_, bone);
+    }
+    entity->halfword08 = static_cast<std::uint16_t>(entity->halfword08 | 0x0010u);
+  }
+
+  // 0xB2..0xB4 share one shape: sample the bone's pose at frame 0 of +0xA0 into
+  // a zeroed seven-float buffer, overwrite some fields with script values over
+  // 100000.0, and install it through FUN_0020d8c0 with a duration of 0 -- held
+  // until 0xB1 clears it. The zeroing matters: when FUN_0020da68 bails (no
+  // model, no animation) the override carries a scale of 0.
+  void SceneCommandInterpreter::setBonePoseFields(std::uint32_t selector,
+                                                  std::size_t savedCurrent,
+                                                  std::uint32_t bone,
+                                                  std::size_t firstField,
+                                                  std::span<const std::int32_t> values,
+                                                  float scale)
+  {
+    orphen::ported::entity::OriginalEntity *entity = resolveEntityFrom(selector, savedCurrent);
+    if (entity == nullptr || currentEntity_ >= orphen::ported::entity::kEntitySlotCount ||
+        !environment_.FUN_0020d8c0_set_bone_override)
+    {
+      return;
+    }
+    std::array<float, 7> pose{};
+    if (environment_.FUN_0020da68_sample_bone_pose)
+    {
+      if (const auto sampled =
+              environment_.FUN_0020da68_sample_bone_pose(currentEntity_, bone, entity->animationA0))
+      {
+        pose = *sampled;
+      }
+    }
+    for (std::size_t index = 0; index < values.size(); ++index)
+    {
+      // The original's buffer is eight floats on the stack; field 7 is written
+      // and never passed on, so dropping it here is the same outcome.
+      if (firstField + index < pose.size())
+      {
+        pose[firstField + index] = static_cast<float>(values[index]) / scale;
+      }
+    }
+    environment_.FUN_0020d8c0_set_bone_override(currentEntity_, bone, pose, 0);
+  }
+
+  // 0xB2 (FUN_002638d8): selector, bone, scale. fGpffff8d34 is 100000.0.
+  void SceneCommandInterpreter::FUN_002638d8_set_bone_scale()
+  {
+    const std::size_t savedCurrent = currentEntity_;
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t bone = FUN_0025c258_evaluate();
+    const std::int32_t value = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return;
+    }
+    setBonePoseFields(selector, savedCurrent, bone, 6, std::span<const std::int32_t>(&value, 1),
+                      100000.0f);
+  }
+
+  // 0xB3 (FUN_00263978): selector, bone, then translation x, y, z.
+  // fGpffff8d38 is 100000.0.
+  void SceneCommandInterpreter::FUN_00263978_set_bone_translation()
+  {
+    const std::size_t savedCurrent = currentEntity_;
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t bone = FUN_0025c258_evaluate();
+    std::array<std::int32_t, 3> values{};
+    for (auto &value : values)
+    {
+      value = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    }
+    if (halted_)
+    {
+      return;
+    }
+    setBonePoseFields(selector, savedCurrent, bone, 3, values, 100000.0f);
+  }
+
+  // 0xB4 (FUN_00263a58): selector, bone, an inline field byte, then the value.
+  // Fields 0..2 are rotation in radians, 3..5 translation, 6 scale.
+  // fGpffff8d3c is 100000.0.
+  void SceneCommandInterpreter::FUN_00263a58_set_bone_pose_field()
+  {
+    const std::size_t savedCurrent = currentEntity_;
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    const std::uint32_t bone = FUN_0025c258_evaluate();
+    const std::uint8_t field = readU8();
+    const std::int32_t value = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+    if (halted_)
+    {
+      return;
+    }
+    setBonePoseFields(selector, savedCurrent, bone, field, std::span<const std::int32_t>(&value, 1),
+                      100000.0f);
+  }
+
   // 0x149 (FUN_00265790): one expression, low byte to DAT_00355656.
   //
   // Nothing in the retail executable reads it back -- FUN_0022a418 zeroes it at
@@ -4429,6 +4544,26 @@ namespace orphen::ported::script
     case 0x66:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       FUN_0025f950_convert_to_npc();
+      return 0;
+
+    case 0xB1:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_00263878_clear_bone_override();
+      return 0;
+
+    case 0xB2:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_002638d8_set_bone_scale();
+      return 0;
+
+    case 0xB3:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_00263978_set_bone_translation();
+      return 0;
+
+    case 0xB4:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_00263a58_set_bone_pose_field();
       return 0;
 
     case 0xB7:

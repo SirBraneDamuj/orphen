@@ -14,6 +14,7 @@
 #include "ported/resource/character_stats.h"
 #include "ported/script/script_trace.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -958,6 +959,19 @@ namespace orphen::ported::script
     std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
     std::function<void(std::size_t slot, int firstBone, int count)> FUN_0020dc38_hide_bones;
 
+    // Opcodes 0xB1..0xB4: the scripted bone override. FUN_0020da68 samples a
+    // bone's pose at frame 0 of the entity's +0xA0 animation, in FUN_0020d8c0's
+    // caller order (rotation xyz, translation xyz, scale); nullopt is its
+    // return-0 path, which leaves the caller's zeroed buffer untouched.
+    std::function<std::optional<std::array<float, 7>>(std::size_t slot,
+                                                      std::size_t bone,
+                                                      std::uint16_t animation)>
+        FUN_0020da68_sample_bone_pose;
+    std::function<void(std::size_t slot, std::size_t bone, const std::array<float, 7> &pose,
+                       int durationFrames)>
+        FUN_0020d8c0_set_bone_override;
+    std::function<void(std::size_t slot, std::size_t bone)> FUN_0020d9c8_clear_bone_override;
+
     // Opcode 0x142 (FUN_002606d0) past its entity selection, which is the exact
     // undo of the pair above: FUN_00265f70 destroys every entity whose +0x192
     // names this slot, FUN_00251e40 rebuilds the bandana when the entity is the
@@ -1249,6 +1263,14 @@ namespace orphen::ported::script
     std::uint32_t FUN_00263498_release_party_slot();  // 0xAD, 0xAE
     std::uint32_t FUN_002635c0_select_party_member();  // 0xAF
     std::uint32_t FUN_00260578_spawn_attached_prop(); // 0x140, 0x141
+    void FUN_00263878_clear_bone_override();          // 0xB1
+    void FUN_002638d8_set_bone_scale();               // 0xB2
+    void FUN_00263978_set_bone_translation();         // 0xB3
+    void FUN_00263a58_set_bone_pose_field();          // 0xB4
+    // The shared tail of 0xB2..0xB4: select, sample, patch, override.
+    void setBonePoseFields(std::uint32_t selector, std::size_t savedCurrent, std::uint32_t bone,
+                           std::size_t firstField, std::span<const std::int32_t> values,
+                           float scale);
     void FUN_00263c58_set_entity_short_and_word();    // 0xB7
     std::uint32_t FUN_00265790_set_global_byte();     // 0x149
     std::uint32_t FUN_00261100_arm_ramp();            // 0x90

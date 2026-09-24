@@ -6,8 +6,12 @@
  * Args: expr `selector`, expr `anim_slot`, inline byte `channel`,
  *       expr `value`.
  *
- * Like 0xB2 but writes a single float at snapshot[channel] (an 8-float
- * array starting at the snapshot base) scaled by fGpffff8d3c.
+ * CORRECTED (checked against FUN_0020da68 / FUN_0020d8c0): `anim_slot` is a
+ * BONE index and the "snapshot" is that bone's pose, sampled at frame 0 of
+ * entity +0xA0 in FUN_0020d8c0's order -- rotation xyz (0..2), translation
+ * xyz (3..5), scale (6). The patched pose is installed as a scripted bone
+ * override (DAT_004a7e00) with duration 0, held until 0xB1 clears it.
+ * fGpffff8d3c (0x00352CAC) is 100000.0, as are 0xB2's and 0xB3's scales.
  */
 
 #include <stdint.h>

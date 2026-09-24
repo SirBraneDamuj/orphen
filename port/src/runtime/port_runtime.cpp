@@ -2201,6 +2201,52 @@ namespace orphen::port
       return orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role);
     };
 
+    // Opcodes 0xB1..0xB4. The sample is the same frame-0 read the actor loop's
+    // FUN_0020da68 hook does.
+    environment.FUN_0020da68_sample_bone_pose =
+        [this](std::size_t slot, std::size_t bone, std::uint16_t animation)
+        -> std::optional<std::array<float, orphen::ported::model::kPoseFieldCount>>
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return std::nullopt;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return std::nullopt;
+      }
+      const auto &model = *binding->model;
+      const std::uint16_t column =
+          orphen::ported::model::firstPoseColumnForAnimation(model, model.blob, animation);
+      const orphen::ported::model::BonePose pose =
+          orphen::ported::model::FUN_0020d378_sample_bone(model, model.blob, bone, column);
+      return std::array<float, orphen::ported::model::kPoseFieldCount>{
+          pose.rotationRadians.x, pose.rotationRadians.y, pose.rotationRadians.z,
+          pose.translation.x,     pose.translation.y,     pose.translation.z,
+          pose.scale};
+    };
+    environment.FUN_0020d8c0_set_bone_override =
+        [this](std::size_t slot, std::size_t bone,
+               const std::array<float, orphen::ported::model::kPoseFieldCount> &pose,
+               int durationFrames)
+    {
+      if (slot < DAT_004a7e00_boneOverrides_.size())
+      {
+        orphen::ported::model::FUN_0020d8c0_set_bone_override(DAT_004a7e00_boneOverrides_[slot],
+                                                              bone, pose, durationFrames);
+      }
+    };
+    environment.FUN_0020d9c8_clear_bone_override = [this](std::size_t slot, std::size_t bone)
+    {
+      if (slot < DAT_004a7e00_boneOverrides_.size())
+      {
+        orphen::ported::model::FUN_0020d9c8_clear_bone_override(DAT_004a7e00_boneOverrides_[slot],
+                                                                bone);
+      }
+    };
+
     // Opcode 0x13F calls FUN_002d2f40 itself rather than waiting for the actor
     // loop, so the script reaches it through the same actor environment the
     // loop would have used.
