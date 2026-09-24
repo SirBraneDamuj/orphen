@@ -3102,6 +3102,49 @@ namespace orphen::port
       return;
     }
 
+    // FUN_0022a418:113-124, ahead of the script load at :130. **Flags 0..1023
+    // -- MFLG and BFLG, the first 0x80 bytes of DAT_00342B70 -- are per-map**,
+    // and a genuine map change zeroes them. Only SFLG/TFLG (1024 up) are
+    // game-wide. The exceptions are the ones that need the flags to survive:
+    // a reload of the same scene, the load-game scene s12_e001 in either
+    // direction (0x8EF records "arrived from it"), and a request carrying bit
+    // 0x20000 or 0x80000 -- which is how s14_e001's BFLG 58 reaches s14_e031.
+    //
+    // Without it s01_e012's flag 300 survived all the way to s05_e051, whose
+    // wake-up subprocess only runs while 300 is clear: it parked, and the
+    // party stayed at the fade level 3 its init had set them to.
+    //
+    // DAT_003551f4/f0 name the destination here. A group-0xE load leaves them on
+    // the departing scene, but it always carries 0x20000 and so never clears.
+    {
+      constexpr std::uint32_t kFromLoadGameSceneFlag = 0x8EF;
+      constexpr std::uint32_t kFlag508 = 0x508;
+      constexpr std::size_t kPerMapFlagBytes = 0x80;
+      constexpr int kLoadGameSection = 0xC;
+      constexpr int kLoadGameEntry = 1;
+      auto &flags = sceneScript_.state();
+      if (DAT_00354d7c_previousEntry_ == kLoadGameEntry &&
+          DAT_00354d78_previousSection_ == kLoadGameSection)
+      {
+        flags.FUN_002663a0_setEventFlag(kFromLoadGameSceneFlag);
+      }
+      else
+      {
+        flags.FUN_002663d8_clearEventFlag(kFromLoadGameSceneFlag);
+      }
+      flags.FUN_002663d8_clearEventFlag(kFlag508);
+      const bool sceneChanged = DAT_00354d7c_previousEntry_ != DAT_003551f0_sceneEntry_ ||
+                                DAT_00354d78_previousSection_ != DAT_003551f4_sceneSection_;
+      const bool toLoadGameScene = DAT_003551f0_sceneEntry_ == kLoadGameEntry &&
+                                   DAT_003551f4_sceneSection_ == kLoadGameSection;
+      if (sceneChanged && !toLoadGameScene &&
+          !flags.FUN_00266368_eventFlag(kFromLoadGameSceneFlag) &&
+          (DAT_003551ec_sceneRequest_ & 0xA0000u) == 0)
+      {
+        std::fill_n(std::begin(flags.DAT_00342b70_flags), kPerMapFlagBytes, std::uint8_t{0});
+      }
+    }
+
     // FUN_0022a418's body. The port's share of it is loadSceneForCurrentMap,
     // which reads DAT_003555d3 and DAT_003551f4 as they stand now.
     loadSceneForCurrentMap();
@@ -3994,12 +4037,13 @@ namespace orphen::port
   void PortRuntime::runSceneScript()
   {
     scriptTrace_.reset();
-    // The event flags at DAT_00342B70 are game-wide: nothing on the original's
-    // scene-load path clears them, and a scene that raises one for the next
-    // scene to read is relying on exactly that. s14_e001 sets BFLG 58 to tell
-    // s14_e031 which spell to demonstrate. Replacing the whole SceneScript here
-    // threw the array away, so every such flag arrived at zero; carry it over
-    // the way the hardware does.
+    // The event flags at DAT_00342B70 outlive the script: a scene that raises
+    // one for the next scene to read is relying on that. s14_e001 sets BFLG 58
+    // to tell s14_e031 which spell to demonstrate. Replacing the whole
+    // SceneScript here threw the array away, so every such flag arrived at
+    // zero; carry it over the way the hardware does. The per-map half (flags
+    // 0..1023) is cleared on a genuine map change, and that decision is
+    // FUN_002239c8_service_scene_change's, not this function's.
     decltype(orphen::ported::script::SceneScriptState::DAT_00342b70_flags) carriedFlags;
     std::copy(std::begin(sceneScript_.state().DAT_00342b70_flags),
               std::end(sceneScript_.state().DAT_00342b70_flags), std::begin(carriedFlags));
