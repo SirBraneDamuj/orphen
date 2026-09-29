@@ -76,14 +76,15 @@ namespace orphen::ported::entity
   }
 
   bool FUN_00251e40_attach_bandana(EntityPool &pool,
+                                   std::size_t ownerSlot,
                                    const EntityDescriptorTable &descriptors,
-                                   const orphen::ported::model::Psc3Model *playerModel)
+                                   const orphen::ported::model::Psc3Model *ownerModel)
   {
-    if (pool.leadPlayer().typeId00 != 1)
+    if (ownerSlot >= pool.slotCount() || pool.slot(ownerSlot).typeId00 != 1)
     {
       return false;
     }
-    if (playerModel == nullptr || !playerModel->valid)
+    if (ownerModel == nullptr || !ownerModel->valid)
     {
       return false;
     }
@@ -96,13 +97,14 @@ namespace orphen::ported::entity
 
     OriginalEntity &bandana = pool.slot(kBandanaSlot);
     // +0x192 is the parent's *pool slot*, which the original computes from the
-    // pointer it was handed; it is always slot 0 here, because FUN_00251e40 is
-    // only ever called with the lead player.
-    bandana.parentSlot192 = 0;
+    // pointer it was handed: `(param_1 - 0x58BEB0) / 0x1D8`, spelled as a
+    // multiply by the inverse. Slot 0 at scene load; the slot Orphen was
+    // swapped into after opcode 0xB0.
+    bandana.parentSlot192 = static_cast<std::int16_t>(ownerSlot);
     // Negated, which is what puts FUN_0020cdc0 on its position-follow branch.
     bandana.attachBone194 = static_cast<std::int8_t>(
         -static_cast<int>(orphen::ported::model::FUN_0020dd78_bone_for_role(
-            *playerModel, kBandanaAnchorBoneRole)));
+            *ownerModel, kBandanaAnchorBoneRole)));
     // Bone-local, not world: this is where the knot sits relative to the neck.
     bandana.positionX20 = 0.0f;
     bandana.positionZ24 = kuGpffff88b0_anchorOffsetY;

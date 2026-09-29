@@ -990,6 +990,12 @@ namespace orphen::ported::script
     // enough.
     std::function<void(std::size_t slot)> FUN_00265ec0_destroy_entity;
 
+    // FUN_00251e40 on an arbitrary slot: rebuild the bandana in slot 4 on this
+    // entity when it is type 1. Opcode 0xB0 calls it on both halves of a lead
+    // swap. It needs the entity's parsed model for the anchor bone, and resets
+    // the rope state the runtime keeps, so it lives on the runtime.
+    std::function<void(std::size_t slot)> FUN_00251e40_attach_bandana;
+
     // Opcodes 0xA4 and 0xA6 (FUN_00261f60 -> FUN_0022dbc8 / FUN_0022dc68).
     //
     // Both take a group mask and test it against the 0x78 terrain record's
@@ -1256,6 +1262,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_0025dfc8_release_camera();      // 0x45
     void FUN_0025f5d8_attach_and_place_entity();      // 0x63
     void FUN_0025f950_convert_to_npc();               // 0x66
+    std::uint32_t FUN_00263630_swap_lead_with_selected(); // 0xB0
     void FUN_002589c0_release_party_slot(std::size_t slot);
     std::uint32_t FUN_002631f0_bind_party_slot();     // 0xAC
     static void FUN_0023a518_apply_party_record(orphen::ported::entity::OriginalEntity &entity,

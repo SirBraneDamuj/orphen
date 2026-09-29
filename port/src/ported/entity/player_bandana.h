@@ -173,15 +173,23 @@ namespace orphen::ported::entity
                                      orphen::ported::model::EntityBoneOverrides &overrides,
                                      std::int32_t mode);
 
-  // FUN_00251e40. Does nothing unless the lead player is type 1 -- Orphen is the
-  // only party member who wears one, and this is the whole of the check: a
-  // single `*(short *)param_1 == 1`. Returns true when slot 4 was built.
+  // FUN_00251e40. Does nothing unless the entity it is handed is type 1 --
+  // Orphen is the only party member who wears one, and this is the whole of the
+  // check: a single `*(short *)param_1 == 1`. Returns true when slot 4 was
+  // built.
   //
-  // `playerModel` is grp_0001, needed for FUN_0020dd78's role lookup. Without it
-  // the anchor bone cannot be resolved and the attachment is not created, which
-  // is reported rather than silently defaulting to bone 0.
+  // `ownerSlot` is param_1 as a pool index. It is the lead at scene load, but
+  // not always: opcode 0xB0 calls this on both halves of a lead swap, so when
+  // control passes from Orphen to someone else the bandana is rebuilt on the
+  // slot Orphen was moved into.
+  //
+  // `ownerModel` is that entity's model (grp_0001), needed for FUN_0020dd78's
+  // role lookup. Without it the anchor bone cannot be resolved and the
+  // attachment is not created, which is reported rather than silently
+  // defaulting to bone 0.
   bool FUN_00251e40_attach_bandana(EntityPool &pool,
+                                   std::size_t ownerSlot,
                                    const EntityDescriptorTable &descriptors,
-                                   const orphen::ported::model::Psc3Model *playerModel);
+                                   const orphen::ported::model::Psc3Model *ownerModel);
 
 } // namespace orphen::ported::entity

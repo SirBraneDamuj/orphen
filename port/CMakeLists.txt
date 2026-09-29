@@ -207,6 +207,7 @@ target_sources(orphen_port
     src/ported/entity/original_particles.cpp
     src/ported/entity/original_particles.h
     src/ported/entity/original_hit_test.cpp
+    src/ported/entity/original_party_weapons.cpp
     src/ported/entity/original_hit_test.h
     src/ported/entity/original_hit_sparks.cpp
     src/ported/entity/original_hit_sparks.h

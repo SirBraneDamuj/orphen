@@ -13,6 +13,7 @@
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
 #include "ported/entity/original_smoke_cloud.h"
+#include "ported/entity/player_bandana.h"
 #include "ported/script/object_registers.h"
 
 #include <cmath>
@@ -2163,6 +2164,141 @@ namespace orphen::ported::script
     entity->npcWord1ca = 0;
     entity->interactPulse1cc = 0;
     entity->typeId00 = 0x38;
+  }
+
+  // 0xB0 (FUN_00263630): hand control to another character.
+  //
+  // One expression, the entity selector. The lead player is not a role the
+  // engine can point at someone else -- it *is* pool slot 0 -- so taking
+  // control of Sephy means trading the two slots' contents outright:
+  //
+  //   FUN_00265ec0(slot 4);                       // the bandana goes first
+  //   FUN_00267da0(stack, lead, 0x1d8);
+  //   FUN_00267da0(lead, selected, 0x1d8);
+  //   FUN_00267da0(selected, stack, 0x1d8);
+  //
+  // and then patching both halves so each behaves as what it now is:
+  //
+  //   selected (the old lead)          lead (the new one)
+  //   +0x02 = 0x4004                   +0x02 = 1
+  //   +0x04 = (| 0x80) & 0xDFEE        +0x04 = (| 0x3000) & 0xFFEE
+  //   +0x08 = (| 0x12) & 0xFFFB        +0x08 |= 0x14
+  //   +0xA0 = 1                        +0x74..+0x83 = selected's, i.e. the
+  //   +0x60 = 0 (class < 7 only)       old lead's own terrain masks, step-down
+  //                                    and slope limit: those stay with the slot
+  //
+  // The party roster follows: the new lead's record +0x0A (DAT_00343692) goes
+  // to 0 and its flag 0x501 + class is **set**; the displaced one's goes to
+  // 0x100 and its flag is **cleared**. FUN_002663a0 sets and FUN_002663d8
+  // clears -- analyzed/ops/0xB0 had them the other way round.
+  //
+  // The early-out is a *type* comparison, not a pointer one:
+  //
+  //   0x2636a8  lh v1, -0x4150(0x590000)   ; lead +0x00
+  //   0x2636b0  lh a0, 0x0(a1)             ; selected +0x00
+  //   0x2636b4  bne a0, v1, ...
+  //
+  // so selecting another entity of the lead's own type is also refused.
+  //
+  // The last three calls are FUN_00251e40 on the lead, FUN_00251e40 on the
+  // selected entity and FUN_00251dc0 on the lead. The first two rebuild the
+  // bandana on whichever of them is Orphen -- which after a swap away from him
+  // is the selected slot -- and the third loads the new lead's hit points,
+  // attack and defence from its party record.
+  std::uint32_t SceneCommandInterpreter::FUN_00263630_swap_lead_with_selected()
+  {
+    const std::size_t savedEntity = currentEntity_;
+    const std::uint32_t selector = FUN_0025c258_evaluate();
+    if (halted_ || environment_.entityPool == nullptr || environment_.state == nullptr)
+    {
+      return 0;
+    }
+    orphen::ported::entity::OriginalEntity *resolved = resolveEntityFrom(selector, savedEntity);
+    if (resolved == nullptr || currentEntity_ >= orphen::ported::entity::kEntitySlotCount)
+    {
+      return 0;
+    }
+    const std::size_t selectedSlot = currentEntity_;
+    auto &pool = *environment_.entityPool;
+    auto &state = *environment_.state;
+
+    // A script-driven NPC (opcode 0x66) gets its real type back first.
+    if (resolved->typeId00 == 0x38)
+    {
+      resolved->typeId00 = resolved->originalType1ce;
+    }
+    if (orphen::ported::entity::FUN_002298d0_character_class(resolved->typeId00) > 6)
+    {
+      // FUN_0026bfc0(0x34d280): an assert that prints and carries on.
+      std::cerr << "[scr] 0xB0: selected slot " << selectedSlot << " type 0x" << std::hex
+                << resolved->typeId00 << std::dec << " is not a party character\n";
+    }
+    if (resolved->typeId00 == pool.leadPlayer().typeId00)
+    {
+      return 0;
+    }
+
+    if (environment_.FUN_00265ec0_destroy_entity)
+    {
+      environment_.FUN_00265ec0_destroy_entity(orphen::ported::entity::kBandanaSlot);
+    }
+    pool.swapSlots(0, selectedSlot);
+
+    auto &lead = pool.leadPlayer();
+    auto &selected = pool.slot(selectedSlot);
+
+    selected.descriptorFlags02 = 0x4004;
+    selected.halfword08 = static_cast<std::uint16_t>((selected.halfword08 | 0x12u) & 0xFFFBu);
+    selected.halfword04 = static_cast<std::uint16_t>((selected.halfword04 | 0x80u) & 0xDFEEu);
+    selected.animationA0 = 1;
+    lead.rejectTerrainMask74 = selected.rejectTerrainMask74;
+    lead.requiredTerrainMask78 = selected.requiredTerrainMask78;
+    lead.maxStepDown7c = selected.maxStepDown7c;
+    lead.slopeLimit80 = selected.slopeLimit80;
+    lead.halfword04 = static_cast<std::uint16_t>((lead.halfword04 | 0x3000u) & 0xFFEEu);
+    lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 0x14u);
+    lead.descriptorFlags02 = 1;
+
+    // The roster. An out-of-range class indexes past the seven records in the
+    // original; the port refuses, the same way 0xAF does.
+    const int leadClass = orphen::ported::entity::FUN_002298d0_character_class(lead.typeId00);
+    if (leadClass < static_cast<int>(SceneScriptState::kPartySlotCount))
+    {
+      state.DAT_00343692_partySlots[leadClass] = 0;
+      state.FUN_002663a0_setEventFlag(static_cast<std::uint32_t>(leadClass) + 0x501);
+    }
+    const int selectedClass = orphen::ported::entity::FUN_002298d0_character_class(selected.typeId00);
+    if (selectedClass < 7)
+    {
+      state.DAT_00343692_partySlots[selectedClass] = 0x100;
+      selected.state60 = 0;
+      state.FUN_002663d8_clearEventFlag(static_cast<std::uint32_t>(selectedClass) + 0x501);
+    }
+
+    // Party slot 6 is type 0x16, which keeps a pointer to the class 1 member
+    // (type 3) at +0x19C. `lhu` then `sltiu 0x100`, so 0x100 and the 0xFFFF
+    // sentinel both skip.
+    const std::uint16_t escortSlot = state.DAT_00343692_partySlots[6];
+    if (state.FUN_00266368_eventFlag(0x507) && escortSlot < 0x100)
+    {
+      auto &escort = pool.slot(escortSlot);
+      if (orphen::ported::entity::FUN_002298d0_character_class(lead.typeId00) == 1)
+      {
+        escort.class1Slot19c = 0;
+      }
+      else if (orphen::ported::entity::FUN_002298d0_character_class(selected.typeId00) == 1)
+      {
+        escort.class1Slot19c = static_cast<std::int16_t>(selectedSlot);
+      }
+    }
+
+    if (environment_.FUN_00251e40_attach_bandana)
+    {
+      environment_.FUN_00251e40_attach_bandana(0);
+      environment_.FUN_00251e40_attach_bandana(selectedSlot);
+    }
+    state.FUN_00251dc0_load_player_stats(lead);
+    return 1;
   }
 
   // 0x44 (FUN_0025dd60, shared with 0x42): advance the scripted camera move.
@@ -4545,6 +4681,10 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       FUN_0025f950_convert_to_npc();
       return 0;
+
+    case 0xB0:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00263630_swap_lead_with_selected();
 
     case 0xB1:
       noteOpcode(opcode, OpcodeSupport::Modelled);

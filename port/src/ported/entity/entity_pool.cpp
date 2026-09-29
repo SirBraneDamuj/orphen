@@ -3,6 +3,7 @@
 #include "ported/model/psc3_skeleton.h"
 
 #include <cstring>
+#include <utility>
 
 namespace orphen::ported::entity
 {
@@ -38,6 +39,19 @@ namespace orphen::ported::entity
       slots_[index] = OriginalEntity{};
       status_[index] = SlotStatus::Free;
       clearBoneOverrides(index);
+    }
+  }
+
+  void EntityPool::swapSlots(std::size_t first, std::size_t second)
+  {
+    if (first >= kEntitySlotCount || second >= kEntitySlotCount || first == second)
+    {
+      return;
+    }
+    std::swap(slots_[first], slots_[second]);
+    if (boneOverrides_ != nullptr && first < boneOverrideCount_ && second < boneOverrideCount_)
+    {
+      std::swap(boneOverrides_[first].mode168, boneOverrides_[second].mode168);
     }
   }
 

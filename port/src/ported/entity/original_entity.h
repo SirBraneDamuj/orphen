@@ -325,6 +325,33 @@ namespace orphen::ported::entity
     // are kept in separate fields here the way eventFlagId198 and
     // interactTarget198 are.
     std::int32_t actionEffect198 = -1;
+    // +0x19C on the lead, the second half of class 4's magic (state 0x21):
+    // +0x198 holds the type 0x51 hand prop and this the type 0x52 projectile
+    // it throws. The original stores a pointer and tests it against zero; -1
+    // is that null.
+    std::int32_t actionEffect19c = -1;
+
+    // The party's own weapon props and projectiles, types 0x4E..0x56, spawned
+    // by FUN_00256BB8 and states 0x1E..0x23 for the characters who are not
+    // Orphen. See original_party_weapons.h. Each is a separate reading of the
+    // same offsets, kept apart the way every other +0x198 alias is.
+    //
+    // Type 0x4F, Sephy's orb (FUN_002d06b0 / FUN_002d07d0):
+    std::int32_t orbOwner198 = -1;         // +0x198: the caster, as a pool slot
+    std::int32_t orbTarget19c = -1;        // +0x19C: FUN_002d2ca8's pick, never read
+    std::int32_t orbWord1a0 = 0;           // +0x1A0: 0x2580, never read
+    float orbSpeed1a4 = 0.0f;              // +0x1A4: DAT_003545f0, units per tick
+    std::int16_t orbOwnerState1a8 = 0;     // +0x1A8: the caster's +0x60 at the spawn
+    std::uint32_t hitParameters1aa = 0;    // +0x1AA: FUN_00216078(caster, 1)
+    // Type 0x52, class 4's thrown projectile (FUN_002d0a30):
+    float throwSpeed19c = 0.0f;            // +0x19C: current speed, per 1/8 tick
+    float throwDecel1a0 = 0.0f;            // +0x1A0: uGpffffa6a0
+    std::int16_t throwCaster130 = 0;       // +0x130: the caster's pool slot
+    // Type 0x56, class 5's drifting projectile (FUN_002d0c00):
+    std::int32_t driftTarget19c = -1;      // +0x19C: FUN_002d2ca8's pick
+    float driftSpeed1a0 = 0.0f;            // +0x1A0: (rand % 10 + 5) / 1000 / 32
+    float driftHeading1a4 = 0.0f;          // +0x1A4: the heading being turned toward
+    float driftBobPhase1a8 = 0.0f;         // +0x1A8: the vertical bob's phase
     std::uint16_t interactParam1b8 = 0;      // +0x1B8: 0x4B00 for the chest path.
     // +0x1B0 / +0x1A4 / +0x1A8 on the **lead player**, written by FUN_00251ED8's
     // hit reaction and read by the three state handlers it hands the frame to.
@@ -343,6 +370,15 @@ namespace orphen::ported::entity
     // straight to 0x12 instead of through the item display.
     std::int32_t itemEntity19c = 0;
     std::uint8_t effectActive19e = 0;        // +0x19E: that timer's enable.
+
+    // +0x19C on the party's seventh member, type 0x16 (party slot 6, flag
+    // 0x507): a pointer to whichever entity is party class 1, type 3. The two
+    // are tied elsewhere too -- FUN_002589c0 clears 0x507 whenever it releases
+    // slot 1. Opcode 0xB0 re-aims it when a lead swap moves type 3 in or out
+    // of slot 0. The port stores the pool slot; -1 is the original's null.
+    // Nothing reads it yet: type 0x16's state table, PTR_LAB_0031e1e8, is
+    // unported.
+    std::int16_t class1Slot19c = -1;
 
     // Type 0x62's own block, all written by FUN_002cd210 and read by its states.
     std::int32_t targetIndex19c = 0;         // +0x19C: pool index of the chase target.

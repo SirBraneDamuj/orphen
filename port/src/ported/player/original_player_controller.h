@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ported/entity/actor_frame_update.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_entity_sound.h"
@@ -30,14 +31,14 @@ namespace orphen::ported::player
   // nothing at all while it is set.
   constexpr std::uint16_t kStateScriptDriven = 10;
 
-  // FUN_00256bb8's attack branch, weapon class 0 -- which is what
-  // FUN_002298d0 answers for type id 1, the lead player. Circle grounded puts
+  // FUN_00256bb8's attack branch for character class 0 -- which is what
+  // FUN_002298d0 answers for type id 1, Orphen. Circle grounded puts
   // the entity in state 0x1C with animation 0x33, and PTR_FUN_0031e160[0]
   // (FUN_00256130) owns the frame from there until the animation ends.
   constexpr std::uint16_t kStateSwordAttack = 0x1c;
 
-  // FUN_00256bb8's *use* branch, mapped action 0x10 -- Triangle. Weapon class 0
-  // again, so for the lead player it is state 0x1D with animation 0x14:
+  // FUN_00256bb8's *use* branch, mapped action 0x10 -- Triangle. Class 0
+  // again, so for Orphen it is state 0x1D with animation 0x14:
   // PTR_FUN_0031e160[1], FUN_002562b0, the homing magic projectile.
   constexpr std::uint16_t kStateMagicCast = 0x1d;
 
@@ -178,6 +179,13 @@ namespace orphen::ported::player
     // hand point straight into its +0x20. That -- not a parent link -- is how
     // it stays in the caster's palm.
     std::function<void(std::int32_t slot)> holdMagicProjectileAtHand;
+
+    // -- states 0x1E..0x23, the other characters -------------------------
+    // Everything those states reach outside slot 0 is what an actor behaviour
+    // reaches -- the pool, the descriptors, the bone lookups, the lights, the
+    // hit test -- so rather than one callback per spawn they get the same
+    // environment the actor loop builds. See original_party_weapons.h.
+    std::function<orphen::ported::entity::ActorEnvironment(std::uint32_t frameTicks)> actorEnvironment;
   };
 
 
@@ -203,6 +211,11 @@ namespace orphen::ported::player
     // on for eight frames per tap instead of one.
     std::uint32_t uGpffffb688_heldThisFrame = 0;
     std::uint32_t uGpffffb09c_pressedThisFrame = 0;
+
+    // FUN_0023B890(10), newly-pressed half: the window states 0x1E and 0x20
+    // read to chain the next swing of a combo. Two frames wider than the one
+    // FUN_00256BB8 starts the attack from.
+    std::uint32_t FUN_0023b890_pressedRecent10 = 0;
 
     // cGpffffb66a, DAT_003555DA -- the debug-active byte. It is the only gate on
     // the moon jump, and the port holds it on the way updateOriginalDebugOverlay
@@ -384,6 +397,19 @@ namespace orphen::ported::player
     void FUN_002562b0_update_magic_cast();
     // FUN_002560e8. Returns true when it ended the state.
     bool FUN_002560e8_end_on_animation_complete();
+
+    // FUN_00256BB8's attack and magic branches, dispatched on the character
+    // class. Return true when a press was taken.
+    bool FUN_00256bb8_start_attack(std::uint32_t frameTicks);
+    bool FUN_00256bb8_start_magic();
+    // PTR_FUN_0031e160[2..7]: the other characters' action states.
+    void FUN_002563e8_update_class3_attack(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_00256548_update_class3_magic(std::uint32_t frameTicks);
+    void FUN_00256620_update_class4_attack(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_002567c0_update_class4_magic(std::uint32_t frameTicks);
+    void FUN_002569d8_update_class5_magic(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    // The slot a +0x198/+0x19C word names, when it names one.
+    orphen::ported::entity::OriginalEntity *poolSlot(std::int32_t slot);
     void FUN_00253468_finish_landing();
     void FUN_00253488_apply_airborne_control(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     void FUN_00256ab0_apply_movement_impulse(float movementStep,

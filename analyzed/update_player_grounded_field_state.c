@@ -126,9 +126,11 @@ undefined4 update_player_grounded_field_state(entity *e)
   }
 
   /* --- 2. jump -------------------------------------------------------------
-   * Requires the jump action, grounded, and either no equipped item or an item
-   * whose weapon class is >= 7. The original writes this as the negation of the
-   * "not jumping" condition; it is inverted here for readability. */
+   * Requires the jump action, grounded, and not standing on a party
+   * character: +0x68 is the entity the lead is riding (FUN_00251ed8's tail
+   * carries the lead along with it), and a class below 7 there refuses the
+   * jump. It is not an equipped item. The original writes this as the negation
+   * of the "not jumping" condition; it is inverted here for readability. */
   {
     const bool jumpHeld = (mappedActions & 0x80) != 0;
     const bool grounded = (e->collisionFlags_0C & 1) != 0;
@@ -211,12 +213,11 @@ undefined4 update_player_grounded_field_state(entity *e)
       }
     }
 
-    if (weaponClass == 1 || weaponClass == 2)
-    {
-      FUN_00252d88(e); /* no attack for this class: drop back to idle */
-      return 0;
-    }
-    /* any other class falls through to locomotion */
+    /* Classes 1, 2, 5 and 6 have no attack: the press falls through to
+     * locomotion. Classes 1 and 2 take `bnel` at 0x00256D1C straight to the
+     * idle block. There is a FUN_00252d88 call behind a `class != 4` test at
+     * 0x00256D54, but only classes 3 and 4 reach that code, so it is dead --
+     * an earlier version of this note had classes 1/2 dropping to idle there. */
   }
 
   /* --- 5. use ------------------------------------------------------------

@@ -9,8 +9,9 @@
  *
  * Entered from FUN_00256bb8 (analyzed/update_player_grounded_field_state.c)
  * when the attack action is asked for while grounded and FUN_002298d0 answers
- * weapon class 0 for the entity's TYPE ID -- which it does for type 1, the lead
- * player. That branch is two calls: FUN_00225bf0(entity, 0x1C, 0x33) and
+ * character class 0 for the entity's TYPE ID -- which it does for type 1,
+ * Orphen. The other classes' states 0x1E..0x23 are in
+ * port/src/ported/entity/original_party_weapons.h. That branch is two calls: FUN_00225bf0(entity, 0x1C, 0x33) and
  * return 2. Everything below is driven by animation 0x33's own data.
  *
  * DISPATCH. FUN_00251ed8 (analyzed/update_main_character_entity.c) uses two

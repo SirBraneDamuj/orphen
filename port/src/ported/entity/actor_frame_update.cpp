@@ -12,6 +12,7 @@
 #include "ported/entity/original_summon_stage.h"
 #include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
+#include "ported/entity/original_party_weapons.h"
 
 #include "ported/battle/battle_tables.h"
 #include "ported/entity/entity_collision.h"
@@ -6955,6 +6956,12 @@ namespace orphen::ported::entity
     case 0x002D2F40u: // FUN_002d2f40, type 0x28, the close-up rig
     case 0x002D21B8u: // FUN_002d21b8, type 0x42, the sword blade
     case 0x002D2470u: // FUN_002d2470, type 0x44, the homing magic projectile
+    case 0x002D05E8u: // FUN_002d05e8, type 0x4E, Sephy's held weapon
+    case 0x002D07D0u: // FUN_002d07d0, type 0x4F, Sephy's orb
+    case 0x002D09B8u: // type 0x50, class 4's held weapon
+    case 0x002D09F0u: // type 0x51, class 4's hand prop
+    case 0x002D0A30u: // FUN_002d0a30, type 0x52, class 4's thrown projectile
+    case 0x002D0C00u: // FUN_002d0c00, type 0x56, class 5's drifting projectile
     case 0x002F13D0u: // FUN_002f13d0, type 0x1E3, the shared hit effect
     case 0x002E7328u: // FUN_002e7328, type 0x1C7, the guard shield
     case 0x002DA350u: // FUN_002da350, type 0x139, the battle sword blade
@@ -7045,6 +7052,18 @@ namespace orphen::ported::entity
       return "FUN_002d21b8 (sword blade)";
     case 0x002D2470u:
       return "FUN_002d2470 (magic projectile)";
+    case 0x002D05E8u:
+      return "FUN_002d05e8 (party held weapon 0x4E)";
+    case 0x002D07D0u:
+      return "FUN_002d07d0 (party orb 0x4F)";
+    case 0x002D09B8u:
+      return "LAB_002d09b8 (party held weapon 0x50)";
+    case 0x002D09F0u:
+      return "LAB_002d09f0 (party hand prop 0x51)";
+    case 0x002D0A30u:
+      return "FUN_002d0a30 (party thrown projectile 0x52)";
+    case 0x002D0C00u:
+      return "FUN_002d0c00 (party drifting projectile 0x56)";
     case 0x002F13D0u:
       return "FUN_002f13d0 (shared hit effect)";
     case 0x002E7328u:
@@ -7278,6 +7297,24 @@ namespace orphen::ported::entity
         break;
       case 0x002D2470u:
         FUN_002d2470_magic_projectile(entity, slot, slotEnvironment);
+        break;
+      case 0x002D05E8u:
+        FUN_002d05e8_held_weapon_4e(entity, slot, slotEnvironment);
+        break;
+      case 0x002D07D0u:
+        FUN_002d07d0_orb_4f(entity, slot, slotEnvironment);
+        break;
+      case 0x002D09B8u:
+        FUN_002d09b8_held_weapon_50(entity, slot, slotEnvironment);
+        break;
+      case 0x002D09F0u:
+        FUN_002d09f0_hand_prop_51(entity, slot, slotEnvironment);
+        break;
+      case 0x002D0A30u:
+        FUN_002d0a30_throw_52(entity, slot, slotEnvironment);
+        break;
+      case 0x002D0C00u:
+        FUN_002d0c00_drift_56(entity, slot, slotEnvironment);
         break;
       case 0x002F13D0u:
         FUN_002f13d0_shared_hit_effect(entity, slotEnvironment);

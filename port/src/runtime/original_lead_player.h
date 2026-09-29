@@ -89,6 +89,9 @@ namespace orphen::port
                 // from the eight-frame OR above, which would stretch a single
                 // press across eight frames.
                 std::uint32_t currentMappedActions,
+                // FUN_0023B890(10), packed the same way: the window the combo
+                // states 0x1E and 0x20 chain the next swing from.
+                std::uint32_t recentMappedActions10,
                 // cGpffffb66a, the debug byte. The moon jump is its only reader
                 // on this path.
                 bool debugActive,

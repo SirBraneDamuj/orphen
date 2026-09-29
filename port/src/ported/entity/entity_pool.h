@@ -118,6 +118,14 @@ namespace orphen::ported::entity
     // FUN_00265ec0, used by the map-load clear.
     void releaseSlot(std::size_t index);
 
+    // Opcode 0xB0's three FUN_00267da0(.., .., 0x1D8) copies through a stack
+    // buffer: the two slots trade all 472 bytes. That includes +0x168, which
+    // the port keeps in the bone-override side table, so the mode bytes swap
+    // with the struct. The poses they select are DAT_004A7E00, outside the
+    // slot, and stay where they are -- as do the status bytes, which the
+    // original does not touch.
+    void swapSlots(std::size_t first, std::size_t second);
+
     // Iteration helper for rendering and reporting: every slot currently holding
     // a script-spawned entity.
     template <typename Visitor>

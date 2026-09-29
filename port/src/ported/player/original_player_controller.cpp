@@ -3,6 +3,7 @@
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/original_hit_test.h"
+#include "ported/entity/original_party_weapons.h"
 #include "ported/original_frame_timing.h"
 
 #include <algorithm>
@@ -66,6 +67,31 @@ namespace orphen::ported::player
     // state starts and 0xA6 when the projectile leaves the hand.
     constexpr std::uint16_t kSoundCueMagicCast = 0xa5;
     constexpr std::uint16_t kSoundCueMagicLaunch = 0xa6;
+
+    // The other characters' action states, PTR_FUN_0031e160[2..7]. 0x22 is
+    // 0x002569D0, a bare `jr ra`, and nothing ever enters it.
+    constexpr std::uint16_t kStateClass3Attack = 0x1e; // FUN_002563e8
+    constexpr std::uint16_t kStateClass3Magic = 0x1f;  // FUN_00256548
+    constexpr std::uint16_t kStateClass4Attack = 0x20; // FUN_00256620
+    constexpr std::uint16_t kStateClass4Magic = 0x21;  // FUN_002567c0
+    constexpr std::uint16_t kStateUnused22 = 0x22;     // 0x002569d0
+    constexpr std::uint16_t kStateClass5Magic = 0x23;  // FUN_002569d8
+
+    // FUN_00257b60 / b70 / b30 / b20: one FUN_00267d38 each.
+    constexpr std::uint16_t kSoundCueClass3Swing = 0xe5;
+    constexpr std::uint16_t kSoundCueClass4Swing = 0xa4;
+    constexpr std::uint16_t kSoundCueClass4Throw = 0xeb;
+    constexpr std::uint16_t kSoundCueClass5Cast = 0xa7;
+
+    // FUN_00256548's orb spawn point: DAT_0035299c off +0x24 and DAT_003529a0
+    // up from +0x28. The first really is the ground-plane axis, not the height.
+    constexpr float kDAT_0035299c_orbBack = 0.200000003f;
+    constexpr float kDAT_003529a0_orbUp = 0.800000011f;
+
+    // FUN_00256bb8's idle block: a fidget in 0x2F is never cut short.
+    constexpr std::uint16_t kAnimationHeldIdle = 0x2f;
+    constexpr std::uint16_t kAnimationClass3Fidget = 0x6a;
+    constexpr std::uint16_t kKeyframeEvent100 = 0x0100;
 
     float horizontalMagnitude(const orphen::ported::psm2::Vec3 &value)
     {
@@ -245,6 +271,29 @@ namespace orphen::ported::player
     {
       FUN_002562b0_update_magic_cast();
     }
+    else if (entity().state60 == kStateClass3Attack)
+    {
+      FUN_002563e8_update_class3_attack(clampedFrameTicks, input);
+    }
+    else if (entity().state60 == kStateClass3Magic)
+    {
+      FUN_00256548_update_class3_magic(clampedFrameTicks);
+    }
+    else if (entity().state60 == kStateClass4Attack)
+    {
+      FUN_00256620_update_class4_attack(clampedFrameTicks, input);
+    }
+    else if (entity().state60 == kStateClass4Magic)
+    {
+      FUN_002567c0_update_class4_magic(clampedFrameTicks);
+    }
+    else if (entity().state60 == kStateUnused22)
+    {
+    }
+    else if (entity().state60 == kStateClass5Magic)
+    {
+      FUN_002569d8_update_class5_magic(clampedFrameTicks, input);
+    }
     else if (entity().state60 == kStateHitStagger)
     {
       FUN_002554d8_update_hit_stagger(clampedFrameTicks);
@@ -324,6 +373,12 @@ namespace orphen::ported::player
   void OriginalPlayerController::FUN_00252d88_return_to_idle_state()
   {
     FUN_00225bf0_set_entity_state(0, 1);
+    // +0x1B6, the idle fidget's timer, and +0x1B8 forced non-zero.
+    entity().idleTimer1b6 = 0;
+    if (entity().interactParam1b8 == 0)
+    {
+      entity().interactParam1b8 = 1;
+    }
     entity().motionFlags1bb &= static_cast<std::uint8_t>(~0x12);
     entity().pendingJumpImpulse = false;
   }
@@ -748,6 +803,9 @@ namespace orphen::ported::player
                                                                           const OriginalInteractionProbe &interactionProbe)
   {
     const bool grounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    // sVar1, +0xA0 as the function found it -- the fidget test compares
+    // against this, not against whatever the lines above it wrote.
+    const std::uint16_t entryAnimation = entity().animationA0;
 
     // 1. Forced fall. More than fGpffff8a48 above the ground under us hands off
     //    to the airborne state with the falling animation, rather than merely
@@ -760,10 +818,18 @@ namespace orphen::ported::player
       return;
     }
 
-    // 2. Jump. The original also refuses when an equipped item's weapon class is
-    //    below 7; there is no inventory here yet.
+    // 2. Jump. Not while standing on a party character: +0x68 is what the lead
+    //    is riding (FUN_00251ED8's tail carries it along), and a class below 7
+    //    there turns the press into nothing.
     const bool jumpPressed = (input.mappedPressedActions & kOriginalMappedActionJump) != 0;
-    if (jumpPressed && grounded)
+    bool standingOnParty = false;
+    if (entityPool_ != nullptr && entity().interactTarget68 >= 0 &&
+        entity().interactTarget68 < static_cast<std::int32_t>(orphen::ported::entity::kEntitySlotCount))
+    {
+      standingOnParty = orphen::ported::entity::FUN_002298d0_character_class(
+                            entityPool_->slot(static_cast<std::size_t>(entity().interactTarget68)).typeId00) < 7;
+    }
+    if (jumpPressed && grounded && !standingOnParty)
     {
       entity().verticalVelocity44 = 0.0f;
       entity().pendingJumpImpulse = true;
@@ -791,45 +857,40 @@ namespace orphen::ported::player
       return;
     }
 
-    // 4. Attack. FUN_00256bb8 dispatches on `FUN_002298d0(*entity)` -- the
-    //    entity's *type id*, not an equipped item -- and type 1, the lead
-    //    player, answers weapon class 0. Class 0 is the plain sword swing:
-    //    state 0x1C, animation 0x33, and nothing else happens here. The blade
-    //    itself is spawned a keyframe later by the state handler.
-    //
-    //    Classes 1..5 are the other things the lead can be holding (a thrown
-    //    item spawns type 0x4E or 0x50 here); none of them are reachable while
-    //    the port has no inventory, so only class 0 is reproduced.
+    // 4. Attack, then 5. use -- an `else if`, so both in the same frame is the
+    //    attack. Both dispatch on FUN_002298d0 of the lead's *type*: the class
+    //    is the character, and each has its own state, or none. A class with
+    //    no entry for the button falls through to the idle block below, as if
+    //    nothing had been pressed. See original_party_weapons.h for the table.
     if ((input.mappedPressedActions & kOriginalMappedActionAttack) != 0)
     {
-      FUN_00225bf0_set_entity_state(kStateSwordAttack, kAnimationSwordAttack);
-      return;
+      if (FUN_00256bb8_start_attack(frameTicks))
+      {
+        return;
+      }
     }
-
-    // 5. Use. Triangle, and an `else if` on the attack above -- both in the
-    //    same frame is the attack. Class 0 casts the homing magic projectile:
-    //    state 0x1D, animation 0x14, and the cue up front rather than partway
-    //    through the animation the way the sword's is.
-    //
-    //    The +0x198 clear matters. That word is shared with the sword blade and
-    //    with the interaction candidate, and FUN_002562b0 tests it against zero
-    //    to decide whether the cast produced anything; entering with a stale
-    //    slot in it would launch whatever was there.
     else if ((input.mappedPressedActions & kOriginalMappedActionUse) != 0)
     {
-      entity().actionEffect198 = -1;
-      FUN_00225bf0_set_entity_state(kStateMagicCast, kAnimationMagicCast);
-      // FUN_00257b50: FUN_00267d38(0xA5, entity), the cast.
-      if (FUN_00267d38_playSound_)
+      if (FUN_00256bb8_start_magic())
       {
-        FUN_00267d38_playSound_(kSoundCueMagicCast, entity());
+        return;
       }
-      return;
     }
 
     // 6. Locomotion or idle.
+    //
+    //   +0x60 = 0;
+    //   if (anim != 0x2F || +0x06 & 1) anim = 1;
+    //
+    // 0x2F is a held idle that is allowed to play out; everything else snaps
+    // back to the stand. The fidget is the same test one level down: it is
+    // restarted each frame it is still running, and when it completes the
+    // timer goes back to zero so the next one is another 0x8000 ticks away.
     entity().state60 = 0;
-    entity().animationA0 = kAnimationStand;
+    if (entity().animationA0 != kAnimationHeldIdle || (entity().flags06 & kAnimationComplete06) != 0)
+    {
+      entity().animationA0 = kAnimationStand;
+    }
 
     if (!hasMovementInput(input.cameraRelativeMove) || input.stickMagnitude <= 0.0f)
     {
@@ -837,11 +898,33 @@ namespace orphen::ported::player
 
       // The idle fidget fires when the 16-bit tick accumulator rolls past its
       // sign bit: 0x8000 ticks is 1024 frames, about 17 seconds at 60 fps.
-      const std::uint16_t previousTimer = entity().idleTimer1b6;
-      entity().idleTimer1b6 = static_cast<std::uint16_t>(previousTimer + static_cast<std::uint16_t>(frameTicks));
+      entity().idleTimer1b6 = static_cast<std::uint16_t>(entity().idleTimer1b6 + static_cast<std::uint16_t>(frameTicks));
       if (static_cast<std::int16_t>(entity().idleTimer1b6) < 0)
       {
-        entity().animationA0 = kAnimationIdleFidget;
+        if (entity().animationA0 == kAnimationHeldIdle)
+        {
+          return;
+        }
+        // Class 3 has its own fidget.
+        const std::uint16_t fidget =
+            orphen::ported::entity::FUN_002298d0_character_class(entity().typeId00) == 3
+                ? kAnimationClass3Fidget
+                : kAnimationIdleFidget;
+        if (entryAnimation == fidget)
+        {
+          if ((entity().flags06 & kAnimationComplete06) == 0)
+          {
+            entity().animationA0 = fidget;
+          }
+          else
+          {
+            entity().idleTimer1b6 = 0;
+          }
+        }
+        else
+        {
+          entity().animationA0 = fidget;
+        }
       }
       return;
     }
@@ -1140,6 +1223,426 @@ namespace orphen::ported::player
     if (entity().actionEffect198 >= 0 && actionEffect_.holdMagicProjectileAtHand)
     {
       actionEffect_.holdMagicProjectileAtHand(entity().actionEffect198);
+    }
+  }
+
+  orphen::ported::entity::OriginalEntity *OriginalPlayerController::poolSlot(std::int32_t slot)
+  {
+    if (entityPool_ == nullptr || slot < 0 ||
+        slot >= static_cast<std::int32_t>(orphen::ported::entity::kEntitySlotCount))
+    {
+      return nullptr;
+    }
+    return &entityPool_->slot(static_cast<std::size_t>(slot));
+  }
+
+  // FUN_00256BB8, `uVar2 & 0x20`:
+  //
+  //   class 0  FUN_00225bf0(0x1C, 0x33)                     the sword
+  //   class 3  FUN_00225bf0(0x1E, 0x33), then spawn 0x4E
+  //   class 4  FUN_00225bf0(0x20, 199),  then spawn 0x50
+  //
+  // and nothing for the rest. The state is set *before* the spawn, and a
+  // full pool returns without undoing it -- the state then runs with whatever
+  // +0x198 already held, as the original does.
+  bool OriginalPlayerController::FUN_00256bb8_start_attack(std::uint32_t frameTicks)
+  {
+    const int characterClass = orphen::ported::entity::FUN_002298d0_character_class(entity().typeId00);
+    std::int16_t weaponType = 0;
+    if (characterClass == 0)
+    {
+      FUN_00225bf0_set_entity_state(kStateSwordAttack, kAnimationSwordAttack);
+      return true;
+    }
+    if (characterClass == 3)
+    {
+      FUN_00225bf0_set_entity_state(kStateClass3Attack, kAnimationSwordAttack);
+      weaponType = orphen::ported::entity::kPartyHeldWeapon4eTypeId;
+    }
+    else if (characterClass == 4)
+    {
+      FUN_00225bf0_set_entity_state(kStateClass4Attack, 199);
+      weaponType = orphen::ported::entity::kPartyHeldWeapon50TypeId;
+    }
+    else
+    {
+      return false;
+    }
+    if (actionEffect_.actorEnvironment)
+    {
+      const std::int32_t weapon = orphen::ported::entity::FUN_00256bb8_spawn_held_weapon(
+          entity(), entityPoolSlot_, weaponType, actionEffect_.actorEnvironment(frameTicks));
+      if (weapon >= 0)
+      {
+        entity().actionEffect198 = weapon;
+      }
+    }
+    return true;
+  }
+
+  // FUN_00256BB8, `uVar2 & 0x10`:
+  //
+  //   class 0  +0x198 = 0; FUN_00225bf0(0x1D, 0x14); FUN_00257b50 (cue 0xA5)
+  //   class 3  FUN_00225bf0(0x1F, 0x14); FUN_00257b50
+  //   class 4  FUN_00225bf0(0x21, 0x14); +0x19C = +0x198 = 0; +0x06 |= 0x80
+  //   class 5  FUN_00225bf0(0x23, 0x14)
+  //
+  // The +0x198 clear matters for class 0: that word is shared with the sword
+  // blade and with the interaction candidate, and FUN_002562b0 tests it to
+  // decide whether the cast produced anything.
+  bool OriginalPlayerController::FUN_00256bb8_start_magic()
+  {
+    const int characterClass = orphen::ported::entity::FUN_002298d0_character_class(entity().typeId00);
+    const auto castCue = [this]
+    {
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(kSoundCueMagicCast, entity());
+      }
+    };
+    switch (characterClass)
+    {
+    case 0:
+      entity().actionEffect198 = -1;
+      FUN_00225bf0_set_entity_state(kStateMagicCast, kAnimationMagicCast);
+      castCue();
+      return true;
+    case 3:
+      FUN_00225bf0_set_entity_state(kStateClass3Magic, kAnimationMagicCast);
+      castCue();
+      return true;
+    case 4:
+      FUN_00225bf0_set_entity_state(kStateClass4Magic, kAnimationMagicCast);
+      entity().actionEffect198 = -1;
+      entity().actionEffect19c = -1;
+      entity().flags06 = static_cast<std::uint16_t>(entity().flags06 | 0x80u);
+      return true;
+    case 5:
+      FUN_00225bf0_set_entity_state(kStateClass5Magic, kAnimationMagicCast);
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  // FUN_002563E8, state 0x1E: class 3's three-hit combo.
+  //
+  //   0x33 --(attack within 10 frames, cursor >= 6)--> 0x30 --(same)--> 0x31
+  //
+  // with the held weapon stepped through its own animations 4 and 5 in step.
+  // The weapon is deleted on the frame 0x31's cursor reaches 10 at a keyframe
+  // expiry, and in any case when the lead's animation completes. The swing cue
+  // plays on any keyframe expiry carrying +0xAA bit 0x100.
+  void OriginalPlayerController::FUN_002563e8_update_class3_attack(std::uint32_t frameTicks,
+                                                                   const OriginalPlayerFrameInput &input)
+  {
+    const std::int32_t weaponSlot = entity().actionEffect198;
+    if (FUN_002560e8_end_on_animation_complete())
+    {
+      // `if (0 < *psVar2) FUN_00265ec0(psVar2)`: whatever is live there.
+      auto *weapon = poolSlot(weaponSlot);
+      if (weapon != nullptr && weapon->typeId00 > 0 && actionEffect_.actorEnvironment)
+      {
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            static_cast<std::size_t>(weaponSlot), actionEffect_.actorEnvironment(frameTicks));
+      }
+      return;
+    }
+
+    const bool chain = (input.FUN_0023b890_pressedRecent10 & kOriginalMappedActionAttack) != 0;
+    const auto cursor = static_cast<std::int16_t>(entity().timelineCursorA8);
+    auto *weapon = poolSlot(weaponSlot);
+    switch (entity().animationA0)
+    {
+    case 0x31:
+      if (cursor == 10 && (entity().flags06 & kAnimationExpired06) != 0 && weapon != nullptr &&
+          actionEffect_.actorEnvironment)
+      {
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            static_cast<std::size_t>(weaponSlot), actionEffect_.actorEnvironment(frameTicks));
+      }
+      break;
+    case 0x30:
+      if (cursor >= 6 && chain)
+      {
+        orphen::ported::entity::FUN_00225bc8_set_animation(entity(), 0x31);
+        if (weapon != nullptr)
+        {
+          orphen::ported::entity::FUN_00225bc8_set_animation(*weapon, 5);
+        }
+      }
+      break;
+    case 0x33:
+      if (cursor >= 6 && chain)
+      {
+        orphen::ported::entity::FUN_00225bc8_set_animation(entity(), 0x30);
+        if (weapon != nullptr)
+        {
+          orphen::ported::entity::FUN_00225bc8_set_animation(*weapon, 4);
+        }
+      }
+      break;
+    default:
+      break;
+    }
+
+    if ((entity().flagsAa & kKeyframeEvent100) != 0 && (entity().flags06 & kAnimationExpired06) != 0 &&
+        FUN_00267d38_playSound_)
+    {
+      FUN_00267d38_playSound_(kSoundCueClass3Swing, entity());
+    }
+  }
+
+  // FUN_00256548, state 0x1F: class 3's orb.
+  //
+  //   keyframe with +0xAA 0x100, on entry  spawn the orb (FUN_002D06B0) 0.2
+  //                                        back on +0x24 and 0.8 up; no orb
+  //                                        means back to idle
+  //   keyframe with +0xAA 0x200, on entry  launch it: state 1, animation 2,
+  //                                        cue 0xA6
+  void OriginalPlayerController::FUN_00256548_update_class3_magic(std::uint32_t frameTicks)
+  {
+    if (FUN_002560e8_end_on_animation_complete())
+    {
+      return;
+    }
+    const bool entered = (entity().flags06 & kAnimationStepped06) != 0;
+    if ((entity().flagsAa & kKeyframeEvent100) != 0 && entered)
+    {
+      const orphen::ported::psm2::Vec3 point{entity().positionX20,
+                                             entity().positionZ24 - kDAT_0035299c_orbBack,
+                                             entity().positionY28 + kDAT_003529a0_orbUp};
+      const std::int32_t orb =
+          actionEffect_.actorEnvironment
+              ? orphen::ported::entity::FUN_002d06b0_spawn_orb(entity(), entityPoolSlot_, point,
+                                                               actionEffect_.actorEnvironment(frameTicks))
+              : -1;
+      entity().actionEffect198 = orb;
+      if (orb < 0)
+      {
+        FUN_00252d88_return_to_idle_state();
+      }
+      return;
+    }
+    if ((entity().flagsAa & kKeyframeEventSwordEnd) != 0 && entered && entity().actionEffect198 >= 0)
+    {
+      if (auto *orb = poolSlot(entity().actionEffect198))
+      {
+        orphen::ported::entity::FUN_00225bf0_set_state_and_animation(*orb, 1, 2);
+      }
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(kSoundCueMagicLaunch, entity());
+      }
+    }
+  }
+
+  // FUN_00256620, state 0x20: class 4's three-hit combo, 199 -> 200 -> 0xC9.
+  //
+  // Unlike class 3's, the hit test is run from here, on the held weapon, and
+  // only in each swing's active window:
+  //
+  //   199   cursor 4..6   (`(cursor - 4) < 3`, unsigned -- 0x002566A0 sltiu)
+  //   200   cursor 0..2
+  //   0xC9  cursor 0..2
+  //
+  // Outside the window the next press chains, from cursor 12 on 199 and from
+  // cursor 6 on 200, clearing the weapon's already-hit set so the next swing
+  // can hit the same things again.
+  void OriginalPlayerController::FUN_00256620_update_class4_attack(std::uint32_t frameTicks,
+                                                                   const OriginalPlayerFrameInput &input)
+  {
+    const std::int32_t weaponSlot = entity().actionEffect198;
+    if (FUN_002560e8_end_on_animation_complete())
+    {
+      auto *weapon = poolSlot(weaponSlot);
+      if (weapon != nullptr && weapon->typeId00 >= 1 && actionEffect_.actorEnvironment)
+      {
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            static_cast<std::size_t>(weaponSlot), actionEffect_.actorEnvironment(frameTicks));
+      }
+      return;
+    }
+
+    auto *weapon = poolSlot(weaponSlot);
+    const bool chain = (input.FUN_0023b890_pressedRecent10 & kOriginalMappedActionAttack) != 0;
+    const auto cursor = static_cast<std::int16_t>(entity().timelineCursorA8);
+    const auto hitTest = [&]
+    {
+      if (weapon != nullptr && actionEffect_.actorEnvironment)
+      {
+        // FUN_002148a8(weapon, weapon + 0x198); a contact is FUN_00257ab0,
+        // FUN_0023bbd8(0, 3), which the port skips.
+        orphen::ported::entity::partyWeaponHitTest(*weapon, static_cast<std::size_t>(weaponSlot),
+                                                   weapon->hitParameters198,
+                                                   actionEffect_.actorEnvironment(frameTicks));
+      }
+    };
+    const auto chainTo = [&](std::uint16_t next)
+    {
+      if (weapon != nullptr)
+      {
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(*weapon);
+      }
+      orphen::ported::entity::FUN_00225bc8_set_animation(entity(), next);
+    };
+
+    switch (entity().animationA0)
+    {
+    case 200:
+      if (cursor > 2)
+      {
+        if (cursor >= 6 && chain)
+        {
+          chainTo(0xc9);
+        }
+      }
+      else
+      {
+        hitTest();
+      }
+      break;
+    case 0xc9:
+      if (cursor < 3)
+      {
+        hitTest();
+      }
+      break;
+    case 199:
+      if (static_cast<std::uint32_t>(static_cast<std::int32_t>(entity().timelineCursorA8) - 4) < 3u)
+      {
+        hitTest();
+      }
+      else if (cursor >= 12 && chain)
+      {
+        chainTo(200);
+      }
+      break;
+    default:
+      break;
+    }
+
+    if ((entity().flagsAa & kKeyframeEventSwordEnd) != 0 && (entity().flags06 & kAnimationExpired06) != 0 &&
+        FUN_00267d38_playSound_)
+    {
+      FUN_00267d38_playSound_(kSoundCueClass4Swing, entity());
+    }
+  }
+
+  // FUN_002567C0, state 0x21: class 4's throw.
+  //
+  // Animation 0x14, then 0x11:
+  //
+  //   0x14 cursor 0, keyframe expiry   the 0x51 prop appears in the hand
+  //   0x14 cursor 8, keyframe entry    the 0x52 projectile appears, held
+  //   0x14 complete                    lead to 0x11, the prop to its
+  //                                    animation 2, and the projectile is let
+  //                                    go (+0x94 = 1) with cue 0xEB
+  //   0x11 complete                    back to idle, the prop deleted
+  //
+  // Every frame of 0x14 the projectile is written to the hand, so it rides the
+  // animation until the release.
+  void OriginalPlayerController::FUN_002567c0_update_class4_magic(std::uint32_t frameTicks)
+  {
+    if (entity().animationA0 != kAnimationMagicCast)
+    {
+      if (entity().animationA0 != 0x11)
+      {
+        return;
+      }
+      if (!FUN_002560e8_end_on_animation_complete())
+      {
+        return;
+      }
+      auto *prop = poolSlot(entity().actionEffect198);
+      if (prop != nullptr && prop->typeId00 == orphen::ported::entity::kPartyHandProp51TypeId &&
+          actionEffect_.actorEnvironment)
+      {
+        orphen::ported::entity::FUN_00265ec0_destroy_entity(
+            static_cast<std::size_t>(entity().actionEffect198), actionEffect_.actorEnvironment(frameTicks));
+      }
+      return;
+    }
+    if (!actionEffect_.actorEnvironment)
+    {
+      return;
+    }
+    const auto environment = actionEffect_.actorEnvironment(frameTicks);
+
+    if ((entity().flags06 & kAnimationComplete06) == 0)
+    {
+      if (entity().timelineCursorA8 == 0 && (entity().flags06 & kAnimationExpired06) != 0)
+      {
+        const std::int32_t prop =
+            orphen::ported::entity::FUN_002567c0_spawn_hand_prop(entity(), entityPoolSlot_, environment);
+        if (prop < 0)
+        {
+          FUN_00252d88_return_to_idle_state();
+        }
+        else
+        {
+          entity().actionEffect198 = prop;
+          entity().actionEffect19c = -1;
+        }
+      }
+      else if (entity().timelineCursorA8 == 8 && (entity().flags06 & kAnimationStepped06) != 0)
+      {
+        const std::int32_t shot =
+            orphen::ported::entity::FUN_002567c0_spawn_throw(entity(), entityPoolSlot_, environment);
+        if (shot >= 0)
+        {
+          entity().actionEffect19c = shot;
+        }
+      }
+    }
+    else
+    {
+      orphen::ported::entity::FUN_00225bc8_set_animation(entity(), 0x11);
+      if (auto *prop = poolSlot(entity().actionEffect198))
+      {
+        orphen::ported::entity::FUN_00225bc8_set_animation(*prop, 2);
+      }
+      auto *shot = poolSlot(entity().actionEffect19c);
+      if (shot == nullptr)
+      {
+        return;
+      }
+      if (FUN_00267d38_playSound_)
+      {
+        FUN_00267d38_playSound_(kSoundCueClass4Throw, entity());
+      }
+      shot->spawnParam94 = 1;
+    }
+
+    if (auto *shot = poolSlot(entity().actionEffect19c))
+    {
+      orphen::ported::entity::holdAtHand(*shot, entityPoolSlot_,
+                                         orphen::ported::entity::kDAT_0031e0b8_throwHandOffset, environment);
+    }
+  }
+
+  // FUN_002569D8, state 0x23: class 5's channelled cast. It lasts exactly as
+  // long as the magic button is held -- there is no FUN_002560E8 here, so the
+  // animation's end does not stop it -- and every keyframe entry carrying
+  // +0xAA 0x100 releases one more 0x56 from the hand, with cue 0xA7.
+  void OriginalPlayerController::FUN_002569d8_update_class5_magic(std::uint32_t frameTicks,
+                                                                  const OriginalPlayerFrameInput &input)
+  {
+    if ((input.uGpffffb688_heldThisFrame & kOriginalMappedActionUse) == 0)
+    {
+      FUN_00252d88_return_to_idle_state();
+      return;
+    }
+    if ((entity().flagsAa & kKeyframeEvent100) == 0 || (entity().flags06 & kAnimationStepped06) == 0 ||
+        !actionEffect_.actorEnvironment)
+    {
+      return;
+    }
+    const std::int32_t shot = orphen::ported::entity::FUN_002569d8_spawn_drift(
+        entity(), entityPoolSlot_, actionEffect_.actorEnvironment(frameTicks));
+    if (shot >= 0 && FUN_00267d38_playSound_)
+    {
+      FUN_00267d38_playSound_(kSoundCueClass5Cast, entity());
     }
   }
 

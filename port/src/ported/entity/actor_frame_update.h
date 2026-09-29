@@ -762,6 +762,11 @@ namespace orphen::ported::entity
                                                    const orphen::ported::psm2::Vec3 &handPoint,
                                                    const ActorEnvironment &environment);
 
+  // FUN_002d2ca8: the nearest targetable entity within ten units, or -1. Shared
+  // by Orphen's magic projectile and the party's orb and drift shots.
+  std::int32_t FUN_002d2ca8_find_homing_target(const ActorEnvironment &environment,
+                                               const OriginalEntity &projectile);
+
   // A readable name for a handler address, for the report. Returns nullptr for
   // addresses with no name yet.
   const char *actorHandlerName(std::uint32_t handlerAddress);

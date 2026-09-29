@@ -192,6 +192,14 @@ namespace orphen::port
       projectile.positionY28 = hand.z;
     };
 
+    // States 0x1E..0x23 reach the pool the way an actor behaviour does.
+    actionHooks.actorEnvironment = [this](std::uint32_t frameTicks)
+    {
+      auto environment = actorEnvironment(frameTicks);
+      environment.currentSlot = 0;
+      return environment;
+    };
+
     leadPlayer_.setActionEffectHooks(std::move(actionHooks));
 
     // FUN_00251ED8's hit reaction reaches three things outside slot 0.
@@ -2391,6 +2399,26 @@ namespace orphen::port
           slot, entityPool_, &sceneScript_.state().DAT_00343888_lights);
     };
 
+    // FUN_00251e40 on whatever slot opcode 0xB0 hands it. The same rope reset
+    // the other two builders do: slot 4 is a fresh entity, so its chains and
+    // +0x168 start from nothing.
+    environment.FUN_00251e40_attach_bandana = [this](std::size_t slot)
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return;
+      }
+      const EntityModelBinding *ownerBinding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (orphen::ported::entity::FUN_00251e40_attach_bandana(
+              entityPool_, slot, descriptorTable_,
+              ownerBinding != nullptr ? ownerBinding->model : nullptr))
+      {
+        DAT_0054ee00_bandana_ = orphen::ported::entity::BandanaState{};
+        DAT_004a7e00_boneOverrides_[orphen::ported::entity::kBandanaSlot].reset();
+      }
+    };
+
     // FUN_002606d0's body, opcode 0x142.
     environment.FUN_002606d0_detach_children = [this](std::size_t slot)
     {
@@ -2423,14 +2451,15 @@ namespace orphen::port
       }
 
       // FUN_002298d0 maps type 1 to 0 and everything else to non-zero, so only
-      // the lead player reaches FUN_00251e40 -- which rebuilds the bandana the
-      // sweep above just destroyed.
+      // Orphen reaches FUN_00251e40 -- which rebuilds the bandana the sweep
+      // above just destroyed, on this slot. That is usually the lead, but after
+      // opcode 0xB0 Orphen can be anywhere in the pool.
       if (entityPool_.slot(slot).typeId00 == 1)
       {
         const EntityModelBinding *leaderBinding =
             modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
         if (orphen::ported::entity::FUN_00251e40_attach_bandana(
-                entityPool_, descriptorTable_,
+                entityPool_, slot, descriptorTable_,
                 leaderBinding != nullptr ? leaderBinding->model : nullptr))
         {
           DAT_0054ee00_bandana_ = orphen::ported::entity::BandanaState{};
@@ -4101,7 +4130,7 @@ namespace orphen::port
     // script runs. The lead player's model has to be bound first because the
     // anchor bone is looked up by role out of grp_0001.
     if (orphen::ported::entity::FUN_00251e40_attach_bandana(
-            entityPool_, descriptorTable_,
+            entityPool_, 0, descriptorTable_,
             leaderBinding != nullptr ? leaderBinding->model : nullptr))
     {
       DAT_0054ee00_bandana_ = orphen::ported::entity::BandanaState{};
@@ -9098,6 +9127,8 @@ namespace orphen::port
                            // uGpffffb688 / uGpffffb09c: the frame just pushed,
                            // which is what FUN_00251ED8 is handed.
                            DAT_00342a70_mappedActions_.FUN_0023b890_recent(1),
+                           // FUN_0023b890(10), the combo window.
+                           DAT_00342a70_mappedActions_.FUN_0023b890_recent(10),
                            // cGpffffb66a, held on the same way
                            // updateOriginalDebugOverlay holds it -- there is
                            // still no way into the debug byte from the harness,
