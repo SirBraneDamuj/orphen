@@ -3,6 +3,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 
@@ -61,8 +62,56 @@ namespace orphen::harness
       {
         std::memset(stream, 0, static_cast<std::size_t>(lengthBytes));
       }
+      device->mixMovie(samples, frames);
     }
   } // namespace
+
+  void AudioDevice::queueMoviePcm(const std::vector<std::int16_t> &interleaved)
+  {
+    const std::lock_guard<std::mutex> guard(movieLock_);
+    // Compact once the played part dominates, so a two-minute film does not
+    // keep every sample it has already played.
+    if (movieReadAt_ > 0 && movieReadAt_ * 2 > moviePcm_.size())
+    {
+      moviePcm_.erase(moviePcm_.begin(), moviePcm_.begin() + static_cast<std::ptrdiff_t>(movieReadAt_));
+      movieReadAt_ = 0;
+    }
+    moviePcm_.insert(moviePcm_.end(), interleaved.begin(), interleaved.end());
+  }
+
+  void AudioDevice::stopMovie()
+  {
+    const std::lock_guard<std::mutex> guard(movieLock_);
+    moviePcm_.clear();
+    movieReadAt_ = 0;
+    movieGain_.store(0.0f, std::memory_order_relaxed);
+    movieFramesPlayed_.store(0, std::memory_order_relaxed);
+    moviePeak_.store(0.0f, std::memory_order_relaxed);
+  }
+
+  void AudioDevice::mixMovie(float *interleavedStereo, std::size_t frames)
+  {
+    const std::lock_guard<std::mutex> guard(movieLock_);
+    const std::size_t available = (moviePcm_.size() - movieReadAt_) / 2;
+    const std::size_t count = std::min(frames, available);
+    if (count == 0)
+    {
+      return;
+    }
+    // int16 to the -1..1 the engine mixes in, then BVOL on top.
+    const float gain = movieGain_.load(std::memory_order_relaxed) / 32768.0f;
+    const std::int16_t *read = moviePcm_.data() + movieReadAt_;
+    float peak = moviePeak_.load(std::memory_order_relaxed);
+    for (std::size_t sample = 0; sample < count * 2; ++sample)
+    {
+      const float value = static_cast<float>(read[sample]) * gain;
+      interleavedStereo[sample] += value;
+      peak = std::max(peak, std::abs(value));
+    }
+    moviePeak_.store(peak, std::memory_order_relaxed);
+    movieReadAt_ += count * 2;
+    movieFramesPlayed_.fetch_add(count, std::memory_order_relaxed);
+  }
 
   AudioDevice::~AudioDevice()
   {

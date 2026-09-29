@@ -251,7 +251,17 @@ ffmpeg -fflags +genpts -i out/mv3_test/M13.mpg \
 
 `M02.MV3` was used as the audio validation case because it has clear dialogue and effects. The raw LRLR interpretation has correct timing but sounds high-pitched/tinny and syllable-shuffled. The 0x200-byte stripe reorder fixes those artifacts.
 
+## Per-movie tables
+
+- `0x00326fd0` (halfwords): the stream volume. `FUN_00207408` passes it to IOP command `0x1023`, whose handler in RSPU2DRV.IRX (`0x13290`) writes it straight to SPU2 core 0 `BVOL` (`0x1F90076C`/`0x1F90076E`), a signed 16-bit gain on the streamed input: `0x5000` for most movies, `0x4000` for 10/13/16/17/19, `0x3800` for 15.
+- `0x00326ff8` (halfwords): an event flag id `FUN_002663a0` sets before each leg plays, 1980..1996 (SFLG bank). 14, 18 and 19 share `0x7BC`.
+
+## Skip
+
+`FUN_002f2198` reads the pad once per picture. Start newly pressed (`DAT_003555f6 & 0x800`) arms `DAT_00355e36` at 1 unless `DAT_00355e35` is set; after that each picture draws `FUN_002f2758`'s black quad at alpha `counter / 2` (GIF packet at `0x327080`, ALPHA `0x44`), drops the volume by `1 + volume / 8`, and adds `0x20` to the counter. The picture after it passes `0xFE` ends the session, so a skip is an eight-picture fade.
+
+`FUN_002f1808` sets `DAT_00355e35` for movies 10 and 15, and for `0x12` the first time it plays (`DAT_0035558c`), only while the debug-active byte `DAT_003555da` is clear.
+
 ## Open questions
 
-- Decode the `0x00326fd0` per-movie table used as the third argument to `FUN_00207408`.
 - Confirm the A01 stream contents by listening to the converted WAV and identifying where it plays in script context.

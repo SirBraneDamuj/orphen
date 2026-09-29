@@ -4,6 +4,7 @@
 
 
 #include "harness/flat_bin_archive.h"
+#include "ported/movie/original_movie_session.h"
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/entity/entity_collision.h"
@@ -527,6 +528,24 @@ namespace orphen::port
                 << " (" << spawnSourceLabel_ << ")"
                 << " grounded=" << (leadState.grounded ? 1 : 0) << '\n';
     }
+
+    if (config.debugMovie > 0)
+    {
+      FUN_00269a98_debug_movie(config.debugMovie);
+    }
+  }
+
+  // FUN_00269A98, the debug menu's MOVIE No entry. It queues the movie and a
+  // scene change to s12_e099 with request 0x2001, and FUN_0022A418 does the
+  // rest on the next frame -- so this goes through exactly the path a
+  // script's opcode 0x13A does, minus the chain: the destination is section
+  // 12, and FUN_002F1808 stops after one film there.
+  void PortRuntime::FUN_00269a98_debug_movie(int movieId)
+  {
+    DAT_003555d2_movieRequest_ = static_cast<std::int8_t>(movieId);
+    DAT_003551f4_sceneSection_ = 0xC;
+    DAT_003551f0_sceneEntry_ = 99;
+    DAT_003551ec_sceneRequest_ = 0x2001;
   }
 
   void PortRuntime::loadExecutable(const PortRuntimeConfig &config)
@@ -2947,12 +2966,13 @@ namespace orphen::port
     return environment;
   }
 
-  // FUN_002F1808, the numbered-movie player, with everything but its routing
-  // removed. `\MV3\M01.MV3;1`..`M19.MV3` are on the disc and the port has no
-  // MV3 decoder, so each leg is a log line instead of a film.
+  // FUN_002F1808, the numbered-movie player: everything that touches game
+  // state, with the picture and sound handed to movieHost_. See
+  // ported/movie/original_movie_session.h for the tables and the skip rule, and
+  // harness/movie_player.h for the session loop.
   //
-  // The chain it keeps is not decoration -- FUN_002F1808's do/while re-enters
-  // itself, so one request can be several movies:
+  // The chain is not decoration -- FUN_002F1808's do/while re-enters itself, so
+  // one request can be several movies:
   //
   //     movie 2                     -> then movie 13
   //     movie 17, flag 0x55A clear  -> then movie 1, or movie 3 if 0x55B is set
@@ -2961,20 +2981,62 @@ namespace orphen::port
   // films rather than one. The `section == 12` break is the original's: the
   // title screen is section 12, and a movie session that dropped back to it
   // stops the chain.
-  void PortRuntime::FUN_002f1808_play_movie(int movieId)
+  //
+  // Each leg sets its own DAT_00326FF8 flag before it plays, whether or not
+  // anything is on screen, so a headless run leaves the same flags a windowed
+  // one does. The skip lock is decided once, before the chain.
+  //
+  // Not ported: the work-buffer carve-up out of DAT_003557B8, the scratchpad
+  // save and restore around the session, FUN_00222BE8 and the two
+  // FUN_00200C48 calls, and the four gp words cleared on the way out. Two of
+  // those are the pressed-pad words, which the port recomputes every poll.
+  void PortRuntime::FUN_002f1808_play_movie(int movieId, bool musicFading)
   {
-    const auto &eventFlags = sceneScript_.state().DAT_00342b70_flags;
-    const auto FUN_00266368_eventFlag = [&eventFlags](std::uint32_t flagId)
-    {
-      const std::size_t bucket = static_cast<std::size_t>(flagId) >> 3;
-      return bucket < orphen::ported::script::SceneScriptState::kFlagBucketCount &&
-             (eventFlags[bucket] & (1u << (flagId & 7u))) != 0;
-    };
+    namespace movie = orphen::ported::movie;
+    auto &flags = sceneScript_.state();
+
+    const bool skipLocked = movie::FUN_002f1808_skip_locked(
+        movieId, DAT_00572c38_debugText_.DAT_003555da_debugActive(), DAT_0035558c_openingMovieShown_);
+
+    // FUN_00206840 runs once per leg, inside FUN_002F2198; only the first owes
+    // the fade its 60 vblanks, because the rest start long after.
+    int holdVblanks = musicFading ? movie::kMusicFadeHoldVblanks : 0;
 
     for (;;)
     {
-      std::cout << "[movie] " << (movieId < 10 ? "M0" : "M") << movieId
-                << ".MV3 -- stubbed, the port has no MV3 decoder (frame " << frameCount_ << ")\n";
+      if (movieId < 1 || movieId > movie::kMovieCount)
+      {
+        // The original indexes its tables with no bounds check.
+        std::cout << "[movie] id " << movieId << " is outside M01..M19 -- not played\n";
+        FUN_00206840_clear_music_for_movie();
+        break;
+      }
+
+      flags.FUN_002663a0_setEventFlag(movie::DAT_00326ff8_movieFlag[movieId - 1]);
+
+      MovieRequest request;
+      request.movieId = movieId;
+      request.path = discRoot_ / "MV3" / movie::movieFileName(movieId);
+      request.volume = movie::DAT_00326fd0_movieVolume[movieId - 1];
+      request.skipLocked = skipLocked;
+      request.musicFadeHoldVblanks = holdVblanks;
+      request.FUN_00206840_replace_music = [this] { FUN_00206840_clear_music_for_movie(); };
+      holdVblanks = 0;
+
+      if (movieHost_)
+      {
+        if (movieHost_(request) == MovieOutcome::QuitRequested)
+        {
+          movieQuitRequested_ = true;
+          break;
+        }
+      }
+      else
+      {
+        request.FUN_00206840_replace_music();
+        std::cout << "[movie] " << movie::movieFileName(movieId) << " -- not played, no movie host (frame "
+                  << frameCount_ << ")\n";
+      }
 
       if (DAT_003551f4_sceneSection_ == 0xC)
       {
@@ -2985,11 +3047,60 @@ namespace orphen::port
         movieId = 13;
         continue;
       }
-      if (movieId != 0x11 || FUN_00266368_eventFlag(0x55A))
+      if (movieId != 0x11 || flags.FUN_00266368_eventFlag(0x55A))
       {
         break;
       }
-      movieId = FUN_00266368_eventFlag(0x55B) ? 3 : 1;
+      movieId = flags.FUN_00266368_eventFlag(0x55B) ? 3 : 1;
+    }
+  }
+
+  // FUN_00206680, as FUN_0022A418 reaches it just before a movie: the eight
+  // requests at DAT_0031E678 have been zeroed, so every slot fails the "same
+  // piece as before" test and takes LAB_0020676C's FUN_00206260(slot, 0xC, 0).
+  // DAT_00354BCC then records the vblank it happened on, which is what
+  // FUN_00206840 waits 60 vblanks past.
+  bool PortRuntime::FUN_00206680_fade_music_for_movie()
+  {
+    if (DAT_003551f4_sceneSection_ == 0xC && DAT_003551f0_sceneEntry_ == 1)
+    {
+      return false;
+    }
+    for (std::size_t slot = 0; slot < orphen::ported::sound::kMusicSlotCount; ++slot)
+    {
+      soundEngine_.FUN_00206260_ramp_down_slot(slot, 0xC, 0);
+    }
+    return true;
+  }
+
+  // FUN_00206840 with every request zero. The first slot whose shadow in
+  // DAT_00356A18 is not already zero gets FUN_00205938(slot, 0, 0) -- record 0
+  // loaded and left stopped -- and the loop then zeroes every later shadow,
+  // because FUN_00205938 tears down the banks from that slot upward. The
+  // port's load replaces one slot only, so the later ones are stopped by hand.
+  void PortRuntime::FUN_00206840_clear_music_for_movie()
+  {
+    if (DAT_003551f4_sceneSection_ == 0xC && DAT_003551f0_sceneEntry_ == 1)
+    {
+      return;
+    }
+    for (std::size_t slot = 0; slot < orphen::ported::sound::kMusicSlotCount; ++slot)
+    {
+      if (soundEngine_.slotRequestIndex(slot) == 0)
+      {
+        continue;
+      }
+      FUN_00205938_load_music_slot(slot, 0, false);
+      for (std::size_t later = slot + 1; later < orphen::ported::sound::kMusicSlotCount; ++later)
+      {
+        soundEngine_.FUN_00205f40_stop_slot(later);
+      }
+      break;
+    }
+    // FUN_00206840's closing copy of the requests over the shadow.
+    for (std::size_t slot = 0; slot < orphen::ported::sound::kMusicSlotCount; ++slot)
+    {
+      soundEngine_.setSlotRequestIndex(slot, 0);
     }
   }
 
@@ -3050,14 +3161,17 @@ namespace orphen::port
     // decision and the load. The movie plays over the fade the request already
     // brought down, and the next scene is loaded behind it.
     //
-    // The original also clears eight halfwords at DAT_0031E686 and calls
-    // FUN_00206680, FUN_00203AA0(4) and FUN_0022A1F8 around the playback --
-    // sound teardown and a display-mode swap for the MPEG decoder, none of which
-    // the port has anything to tear down for. Left out deliberately; the
-    // unconditional `DAT_003555d2 = 0` on the line after is not.
+    // The eight halfwords it zeroes, walking down from DAT_0031E686, are the
+    // scene's music requests, so FUN_00206680 then fades every slot out; the
+    // port has no copy of that array and passes the zeros implicitly. Not
+    // ported: FUN_00203AA0(4), a display-mode swap for the MPEG decoder, and
+    // FUN_0022A1F8, which clears the ten-halfword tables at DAT_00325350 and
+    // DAT_00325394 that nothing in the port models yet. The unconditional
+    // `DAT_003555d2 = 0` on the line after is kept.
     if (DAT_003555d2_movieRequest_ > 0)
     {
-      FUN_002f1808_play_movie(DAT_003555d2_movieRequest_);
+      const bool musicFading = FUN_00206680_fade_music_for_movie();
+      FUN_002f1808_play_movie(DAT_003555d2_movieRequest_, musicFading);
     }
     DAT_003555d2_movieRequest_ = 0;
 
@@ -8669,6 +8783,11 @@ namespace orphen::port
       returnToTitleDimHeld_ = false;
     }
     FUN_002239c8_service_scene_change(frameTicks);
+    // The window was closed while a movie had it.
+    if (movieQuitRequested_)
+    {
+      return false;
+    }
     // FUN_0023b5d8's slot: the pad's analog magnitude is published before
     // anything downstream of it runs.
     DAT_003555e8_stickMagnitude_ = input.stickMagnitude;

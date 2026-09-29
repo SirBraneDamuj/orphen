@@ -1,6 +1,7 @@
 #include "platform/sdl_gl_window.h"
 #include "harness/map_viewer.h"
 #include "harness/audio_device.h"
+#include "harness/movie_player.h"
 #include "runtime/port_runtime.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/input/original_analog_stick.h"
@@ -277,6 +278,20 @@ namespace
       if (argument == "--no-audio")
       {
         config.audio = false;
+        continue;
+      }
+      if (argument == "--no-movies")
+      {
+        config.movies = false;
+        continue;
+      }
+      if (argument == "--movie")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--movie needs an id, 1..19");
+        }
+        config.debugMovie = std::stoi(argv[++argumentIndex]);
         continue;
       }
       if (argument == "--probe")
@@ -1215,6 +1230,17 @@ int main(int argc, char **argv)
       std::cout << (audio.open(&runtime.soundEngine())
                         ? "[snd] audio device open at 48 kHz\n"
                         : "[snd] no audio device; the port runs silent\n");
+    }
+
+    // FUN_002F1808's picture and sound. Not under --screenshot, which promises
+    // one simulation step per presented frame; a film would present hundreds
+    // with no step between them. The runtime logs the movie instead, and sets
+    // the same flags either way.
+    orphen::harness::MoviePlayer moviePlayer(window, audio);
+    if (config.movies && config.screenshotPath.empty())
+    {
+      runtime.setMovieHost([&moviePlayer](const orphen::port::MovieRequest &request)
+                           { return moviePlayer.play(request); });
     }
 
     // The original is a 60 Hz title and every ported constant is per-frame, so

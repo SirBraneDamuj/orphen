@@ -10740,11 +10740,10 @@ is one line -- `DAT_003555D2 = expr` -- and the byte is spent later, by
 before the next map loads. Both halves are in now: the opcode, and the block in
 `FUN_002239c8_service_scene_change` that spends it.
 
-**The movies are stubbed, and the chain is not.** `\MV3\M01.MV3;1` through
-`M19.MV3` are on the disc and the port has no MV3 decoder, so
-`PortRuntime::FUN_002f1808_play_movie` logs a line per leg. It keeps
-`FUN_002F1808`'s do/while, though, because that loop is what decides how many
-films a request is worth:
+**The movies play, and so does the chain.** `PortRuntime::FUN_002f1808_play_movie`
+hands each leg to the movie player (see "The FMVs" below), or logs it in a
+headless run. It keeps `FUN_002F1808`'s do/while, because that loop is what
+decides how many films a request is worth:
 
 ```
 movie 2                       -> then movie 13
@@ -10806,8 +10805,61 @@ never tested.
 screen** -- section 12, entry 10 -- with no movie already queued, and clear flag
 `0x511`. That is ported now that something loads the title (see "Return to
 Title Screen"); `DAT_003555D8` is taken as retail's `0x22`, which always passes.
-The sound teardown around the playback
-(`FUN_00206680`, `FUN_00203AA0(4)`, `FUN_0022A1F8`, and the eight halfwords at
-`DAT_0031E686`) is left out for the same reason -- there is no MPEG decoder to
-hand the display to. The unconditional `DAT_003555D2 = 0` after the block is
-*not* left out.
+The music teardown around the playback is ported with the player (below);
+`FUN_00203AA0(4)` and `FUN_0022A1F8` are not. The unconditional
+`DAT_003555D2 = 0` after the block is kept.
+
+#### The FMVs
+
+`M01.MV3`..`M19.MV3` play in a windowed run: `--movie <id>` queues one the way
+the debug menu's `MOVIE No` entry does (`FUN_00269A98`: the movie, then
+`s12_e099` with request `0x2001`), and `--no-movies` goes back to logging them.
+A headless or `--screenshot` run never opens the player and leaves exactly the
+same game state behind, so `--frames` reports do not depend on it.
+
+| piece | original | port |
+| --- | --- | --- |
+| container | `FUN_002F1A70`, `FUN_002F1C98` | `ported/movie/mv3_stream.*` |
+| tables, skip rule | `FUN_002F1808`, `FUN_002F2198` | `ported/movie/original_movie_session.h` |
+| MPEG-2 decode + CSC | IPU + libmpeg | `harness/mpeg2_video_decoder.*` (FFmpeg) |
+| session loop | `FUN_002F2198`, `FUN_002F2820` | `harness/movie_player.*` |
+| stream audio | SPU2 core 0 AutoDMA at BVOL | `AudioDevice::queueMoviePcm` |
+
+**The decoder is a dependency.** The streams are interlaced MPEG-2 Main Profile
+with B-frames, and nothing of the IPU is worth porting, so CMake fetches BtbN's
+prebuilt LGPL FFmpeg 8.1 on Windows (`ORPHEN_PORT_FETCH_FFMPEG`, or point
+`ORPHEN_PORT_FFMPEG_ROOT` at your own tree) and copies `avcodec`, `avutil` and
+`swresample` beside the exe. Without it the port still builds and logs movies.
+The colour conversion is the IPU's, not FFmpeg's: BT.601 studio range with
+chroma repeated over each 2x2 block, coefficients from PCSX2's reference model
+-- not checked against a hardware capture.
+
+**What is on screen** is picture rows 16..463: `FUN_002F2198`'s display is
+640x448 at DBY 16 of a 480-line buffer, so hardware loses sixteen lines top and
+bottom. Pacing is two vblanks a picture, and a late picture resets the clock
+instead of being dropped (`FUN_002F2820`).
+
+**Each movie sets a flag** from `DAT_00326FF8` before it plays -- 1980..1996,
+the SFLG bank -- and it does so headless too. The stub did not.
+
+**The music fades first.** `FUN_0022A418` zeroes the scene's eight requests and
+calls `FUN_00206680`, which ramps every slot down at speed 12; `FUN_00206840`,
+inside the session, then waits 60 vblanks past that (`DAT_003555AC` is counted
+by the vblank handler `FUN_00203A08`) before replacing the slots. So a film
+starts about a second after the request, on a black screen, while the music
+fades. Movie volume is `DAT_00326FD0` written straight to SPU2 `BVOL`
+(RSPU2DRV.IRX's command `0x1023` handler), so `0x5000` is 0.625.
+
+**Start skips** -- Tab on the keyboard, Start on a pad (`DAT_003555F6 &
+0x800`). It is not a cut: eight pictures fade to black at `alpha = counter / 2`
+while the volume drops by `1 + volume / 8` a picture, and the ninth ends the
+film. `FUN_002F1808` locks it for movies 10 and 15 and for the opening (0x12)
+the first time it plays after power-on -- but only while the debug-active byte
+`DAT_003555DA` is clear, and the port holds that byte set, so in the port every
+film can be skipped. The lock is decided once per request, so the second film
+of a chain inherits it.
+
+Verified: M13 decodes to 600 pictures (ffprobe agrees) and 21.504 s of PCM;
+picture 150 matches FFmpeg's own RGB decode to a mean of under one level; the
+skip sequence and the locks were driven through the ported state machine. The
+skip has **not** been pressed in a live window by anything but a person.

@@ -30,6 +30,67 @@ if(NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2 AND NOT SDL2_FOUND AND ORPHEN_PORT_
     FetchContent_MakeAvailable(SDL2)
 endif()
 
+# FFmpeg's libavcodec, for the MV3 movies' MPEG-2 video. It stands in for the
+# PS2's IPU and Sony's libmpeg, so nothing about it is ported -- see
+# src/harness/mpeg2_video_decoder.h. Optional: without it the port still builds
+# and FUN_002F1808 logs each movie instead of playing it.
+#
+# On Windows the default is BtbN's prebuilt LGPL shared build. The URL tracks
+# the 8.1 branch, whose ABI is fixed, so a refreshed zip still links. Point
+# ORPHEN_PORT_FFMPEG_ROOT at any tree with include/, lib/ and bin/ to use a
+# local copy instead.
+option(ORPHEN_PORT_FETCH_FFMPEG "Download a prebuilt LGPL FFmpeg for movie playback (Windows)" ON)
+set(ORPHEN_PORT_FFMPEG_ROOT "" CACHE PATH "An FFmpeg dev tree (include/, lib/, bin/) to use instead of downloading one")
+set(ORPHEN_PORT_FFMPEG_URL
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+    CACHE STRING "Where ORPHEN_PORT_FETCH_FFMPEG downloads FFmpeg from")
+
+set(ORPHEN_FFMPEG_DIR "${ORPHEN_PORT_FFMPEG_ROOT}")
+if(NOT ORPHEN_FFMPEG_DIR AND WIN32 AND ORPHEN_PORT_FETCH_FFMPEG)
+    include(FetchContent)
+    FetchContent_Declare(
+        ffmpeg_prebuilt
+        URL "${ORPHEN_PORT_FFMPEG_URL}"
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    # The zip has no CMakeLists.txt, so this only downloads and unpacks it.
+    FetchContent_MakeAvailable(ffmpeg_prebuilt)
+    set(ORPHEN_FFMPEG_DIR "${ffmpeg_prebuilt_SOURCE_DIR}")
+endif()
+
+set(ORPHEN_HAVE_FFMPEG OFF)
+if(ORPHEN_FFMPEG_DIR)
+    find_path(ORPHEN_AVCODEC_INCLUDE_DIR libavcodec/avcodec.h
+        PATHS "${ORPHEN_FFMPEG_DIR}/include" NO_DEFAULT_PATH)
+    find_library(ORPHEN_AVCODEC_LIBRARY avcodec
+        PATHS "${ORPHEN_FFMPEG_DIR}/lib" NO_DEFAULT_PATH)
+    find_library(ORPHEN_AVUTIL_LIBRARY avutil
+        PATHS "${ORPHEN_FFMPEG_DIR}/lib" NO_DEFAULT_PATH)
+    if(ORPHEN_AVCODEC_INCLUDE_DIR AND ORPHEN_AVCODEC_LIBRARY AND ORPHEN_AVUTIL_LIBRARY)
+        set(ORPHEN_HAVE_FFMPEG ON)
+        # avcodec imports swresample as well, so all three have to sit beside
+        # the exe or it will not start at all.
+        file(GLOB ORPHEN_FFMPEG_DLLS
+            "${ORPHEN_FFMPEG_DIR}/bin/avcodec-*.dll"
+            "${ORPHEN_FFMPEG_DIR}/bin/avutil-*.dll"
+            "${ORPHEN_FFMPEG_DIR}/bin/swresample-*.dll")
+    endif()
+else()
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(ORPHEN_FFMPEG_PC IMPORTED_TARGET libavcodec libavutil)
+        if(ORPHEN_FFMPEG_PC_FOUND)
+            set(ORPHEN_HAVE_FFMPEG ON)
+        endif()
+    endif()
+endif()
+
+if(ORPHEN_HAVE_FFMPEG)
+    message(STATUS "orphen_port: movie playback enabled (FFmpeg libavcodec)")
+else()
+    message(STATUS "orphen_port: FFmpeg not found; movies will be logged, not played")
+endif()
+
 add_executable(orphen_port)
 
 target_sources(orphen_port
@@ -37,6 +98,14 @@ target_sources(orphen_port
         src/main.cpp
     src/harness/audio_device.cpp
     src/harness/audio_device.h
+    src/harness/movie_player.cpp
+    src/harness/movie_player.h
+    src/harness/mpeg2_video_decoder.cpp
+    src/harness/mpeg2_video_decoder.h
+        src/ported/movie/mv3_stream.cpp
+        src/ported/movie/mv3_stream.h
+        src/ported/movie/original_movie_session.h
+        src/runtime/movie_host.h
     src/harness/debug_text.cpp
     src/harness/debug_text.h
     src/harness/entity_probe.cpp
@@ -294,4 +363,22 @@ if(WIN32 AND TARGET SDL2::SDL2)
             $<TARGET_FILE:SDL2::SDL2>
             $<TARGET_FILE_DIR:orphen_port>
     )
+endif()
+
+if(ORPHEN_HAVE_FFMPEG)
+    target_compile_definitions(orphen_port PRIVATE ORPHEN_PORT_HAVE_FFMPEG=1)
+    if(ORPHEN_FFMPEG_PC_FOUND)
+        target_link_libraries(orphen_port PRIVATE PkgConfig::ORPHEN_FFMPEG_PC)
+    else()
+        # SYSTEM so /W4 does not report on FFmpeg's own headers.
+        target_include_directories(orphen_port SYSTEM PRIVATE "${ORPHEN_AVCODEC_INCLUDE_DIR}")
+        target_link_libraries(orphen_port PRIVATE "${ORPHEN_AVCODEC_LIBRARY}" "${ORPHEN_AVUTIL_LIBRARY}")
+        if(ORPHEN_FFMPEG_DLLS)
+            add_custom_command(TARGET orphen_port POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${ORPHEN_FFMPEG_DLLS}
+                    $<TARGET_FILE_DIR:orphen_port>
+            )
+        endif()
+    endif()
 endif()

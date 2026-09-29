@@ -3,8 +3,13 @@
  * Original: FUN_002f1808
  *
  * Top-level dispatcher for numbered MV3 movies. It allocates aligned movie work
- * buffers, resolves the movie path from the table at 0x00326f80, loads per-movie
- * audio/scene metadata from nearby tables, and calls the playback session helper.
+ * buffers, resolves the movie path from the table at 0x00326f80, sets the movie's
+ * event flag (0x00326ff8), loads its stream volume (0x00326fd0), and calls the
+ * playback session helper.
+ *
+ * uGpffffbec5 (DAT_00355e35) is the skip lock FUN_002f2198 tests: set for movies
+ * 10 and 15, and for 0x12 the first time (cGpffffb61c remembers), unless the
+ * debug-active byte cGpffffb66a (DAT_003555da) is set.
  *
  * Observed paths in strings.json are M01.MV3 through M19.MV3. The selector is
  * one-based, so movie_id 1 maps to M01.MV3.
@@ -35,8 +40,8 @@ extern void *uGpffffacbc;
 extern void *uGpffffacc0;
 
 extern const char *PTR_s__MV3_M01_MV3_1_00326f80[];
-extern u16 DAT_00326fd0[]; /* Per-movie audio/pitch-like parameter */
-extern u16 DAT_00326ff8[]; /* Per-movie metadata passed to FUN_002663a0 */
+extern u16 DAT_00326fd0[]; /* Per-movie stream volume: SPU2 core 0 BVOL via IOP cmd 0x1023 */
+extern u16 DAT_00326ff8[]; /* Per-movie event flag id; FUN_002663a0 sets it (1980..1996) */
 
 extern void FUN_002f9308(int, int);
 extern void FUN_00305110(void);

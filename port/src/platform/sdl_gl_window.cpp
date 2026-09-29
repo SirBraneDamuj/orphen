@@ -39,6 +39,9 @@ namespace orphen::port
     // Shoulder bits live in the same low byte: FUN_002000c0's fast-forward test
     // is DAT_003555f4 & 2.
     constexpr std::uint16_t kRawPadR2 = 0x0002;
+    // Start, in the high byte beside Select/L3/R3. FUN_002F2198 skips a movie
+    // on it, and FUN_00271558 leaves the title on it or Cross.
+    constexpr std::uint16_t kRawPadStart = 0x0800;
     // The D-pad occupies the high nibble. FUN_0023b358 maps these four bits to
     // a movement angle and FUN_002462c8 tests them for target cycling, so they
     // have to be in DAT_003555f4 for either to work.
@@ -291,6 +294,9 @@ namespace orphen::port
     // Xbox layout), which is what the PS2 game uses.
     bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
+    // Tab stands in for Start: free, next to WASD, and hard to hit by accident.
+    // Return was the obvious key and is already Cross.
+    bool startHeld = keys[SDL_SCANCODE_TAB] != 0;
 
     // **The D-pad does not walk the character, and it is not WASD.**
     //
@@ -405,6 +411,7 @@ namespace orphen::port
       circleHeld = circleHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B) != 0;
       crossHeld = crossHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A) != 0;
       squareHeld = squareHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X) != 0;
+      startHeld = startHeld || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START) != 0;
 
       if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK) != 0)
       {
@@ -469,6 +476,10 @@ namespace orphen::port
     if (squareHeld)
     {
       input.rawHeldPad |= kRawPadSquare;
+    }
+    if (startHeld)
+    {
+      input.rawHeldPad |= kRawPadStart;
     }
     // The bit the original's own fast forward reads, DAT_003555f4 & 2. Nothing
     // ported reads it yet; setting it keeps the pad mapping honest for whatever

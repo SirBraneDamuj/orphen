@@ -243,6 +243,10 @@ namespace orphen::ported::sound
     // DAT_00356a18. FUN_00206840 copies the scene's requests here after acting
     // on them; the port records each slot's index as it loads it.
     void setSlotRequestIndex(std::size_t slot, std::uint16_t index);
+    std::uint16_t slotRequestIndex(std::size_t slot) const
+    {
+      return slot < kMusicSlotCount ? DAT_00356a18_slotRequestIndex_[slot] : 0;
+    }
 
     bool slotPlaying(std::size_t slot) const;
     bool slotHasSequence(std::size_t slot) const;

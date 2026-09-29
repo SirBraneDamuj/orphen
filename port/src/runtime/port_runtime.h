@@ -2,6 +2,7 @@
 
 #include "harness/disc_resource_loader.h"
 #include "runtime/input_state.h"
+#include "runtime/movie_host.h"
 #include "harness/map_viewer.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
@@ -209,6 +210,12 @@ namespace orphen::port
     // --no-audio. Read by main(): headless and capture runs never open a
     // device anyway, so this only matters for a normal windowed run.
     bool audio = true;
+    // --no-movies: log each FMV instead of playing it. Read by main(), which is
+    // the only place a movie can be put on screen.
+    bool movies = true;
+    // --movie <id>: queue a movie the way the debug menu's MOVIE No entry does,
+    // so the first frame plays it and lands on s12_e099.
+    int debugMovie = 0;
     // --window <w>x<h>. The default is 4:3, which is the shape the game was
     // displayed at and so has no letterbox bars; anything else does, which is
     // the only way to see whether something respects them.
@@ -404,11 +411,16 @@ namespace orphen::port
     // MCB0 section 14. FUN_0022a418:102 passes it as a literal.
     static constexpr std::uint16_t kGroupEScene = 14;
     // DAT_003555d2, the movie request opcode 0x13A writes. Signed on purpose:
-    // FUN_0022a418:64 tests `' ' < DAT_003555d2`, so only a positive id plays.
-    // The port has no MV3 decoder, so FUN_002f1808_play_movie only logs -- but
-    // it walks the same chain the original does, because that chain is what
-    // decides how many movies the hand-off is worth.
+    // FUN_0022a418:64 tests `'\0' < DAT_003555d2`, so only a positive id plays.
     std::int8_t DAT_003555d2_movieRequest_ = 0;
+    // cGpffffb61c / DAT_0035558C: the opening movie has been asked for once
+    // since power-on, so FUN_002F1808 lets Start skip it from now on.
+    bool DAT_0035558c_openingMovieShown_ = false;
+    // Whoever puts a movie on screen; main() installs one for a windowed run.
+    // Empty means log each movie instead, which is what headless runs do.
+    MovieHost movieHost_;
+    // The window was closed during a movie. update() returns false on it.
+    bool movieQuitRequested_ = false;
     // DAT_00354d78 / DAT_00354d7c, written at FUN_0022a418:409. The scene that
     // was current when the load started, which the *next* load compares against.
     int DAT_00354d78_previousSection_ = -1;
@@ -687,9 +699,15 @@ namespace orphen::port
     // FUN_002239c8:22-33: spend a pending scene-change request, if this frame is
     // allowed to. Runs at the top of the frame, before the pad is published.
     void FUN_002239c8_service_scene_change(std::uint32_t frameTicks);
-    // FUN_002f1808, stubbed. Walks the movie chain and logs each leg; nothing
-    // decodes MV3 here yet.
-    void FUN_002f1808_play_movie(int movieId);
+    // FUN_002f1808: sets each movie's flag, decides whether Start may skip it,
+    // walks the chain, and hands each leg to movieHost_.
+    void FUN_002f1808_play_movie(int movieId, bool musicFading);
+    // FUN_0022a418:64-70's music half, with the eight scene requests already
+    // zeroed: FUN_00206680 ramps every slot down ahead of the film, and the
+    // FUN_00206840 inside the session replaces them once the fade has had its
+    // 60 vblanks. False when the destination is s12_e001, which both skip.
+    bool FUN_00206680_fade_music_for_movie();
+    void FUN_00206840_clear_music_for_movie();
     // Push DAT_00355208 into the two places that answer with it. Both setters
     // are plain assignments, so the write is safe mid-scene -- which it has to
     // be, because opcode 0x3C makes it from inside the init.
@@ -1169,6 +1187,10 @@ namespace orphen::port
   public:
     // main() owns the audio device, because only a windowed run has one.
     orphen::ported::sound::SoundEngine &soundEngine() { return soundEngine_; }
+    // main() owns the window too, so it is the one that can play a movie.
+    void setMovieHost(MovieHost host) { movieHost_ = std::move(host); }
+    // --movie <id>.
+    void FUN_00269a98_debug_movie(int movieId);
 
   private:
 
