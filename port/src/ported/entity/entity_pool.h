@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 namespace orphen::ported::model
 {
@@ -118,6 +119,21 @@ namespace orphen::ported::entity
     // FUN_00265ec0, used by the map-load clear.
     void releaseSlot(std::size_t index);
 
+    // FUN_00265EC0:0x00265F30-0x00265F54, what the scene owns of a teardown:
+    //
+    //   if (entity->+0x02 & 0x8000) {
+    //     psGpffffb79c = entity;
+    //     (*DAT_0032536C)(9);       // the scene module, mode 9
+    //     FUN_0025B9A8();           // select it, run script header word 4
+    //   }
+    //
+    // The pool does not own the script, so the runtime installs this and
+    // FUN_00265ec0_destroy_entity calls it with the slot still intact. Empty in
+    // harnesses with no scene, where the bit is never set.
+    using TeardownHook = std::function<void(std::size_t)>;
+    void setFUN_0025b9a8_teardownHook(TeardownHook hook) { teardownHook_ = std::move(hook); }
+    const TeardownHook &teardownHook() const { return teardownHook_; }
+
     // Opcode 0xB0's three FUN_00267da0(.., .., 0x1D8) copies through a stack
     // buffer: the two slots trade all 472 bytes. That includes +0x168, which
     // the port keeps in the bone-override side table, so the mode bytes swap
@@ -195,6 +211,7 @@ namespace orphen::ported::entity
     std::array<SlotStatus, kEntitySlotCount> status_{};
     orphen::ported::model::EntityBoneOverrides *boneOverrides_ = nullptr;
     std::size_t boneOverrideCount_ = 0;
+    TeardownHook teardownHook_;
   };
 
 } // namespace orphen::ported::entity

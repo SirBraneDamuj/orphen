@@ -1434,9 +1434,29 @@ namespace orphen::ported::entity
   // port kept the cloth, the slot it pointed at was recycled into the *next*
   // rig's cloth, and Orphen wore two bandanas through the whole close-up.
   //
-  // The status byte is cleared before the rescan, which is also what stops a
-  // parent cycle looping: the original zeroes DAT_005A96B0 at the top of
-  // FUN_00265EC0, before FUN_00265F70 ever runs.
+  // The status byte is cleared first, which is also what stops a parent cycle
+  // looping: the original zeroes DAT_005A96B0 at the top of FUN_00265EC0,
+  // before FUN_00265F70 ever runs, and FUN_00265F70 only visits slots whose
+  // status is positive.
+  //
+  // **The order is the original's, and the script hook depends on it.** In
+  // full, FUN_00265EC0 is:
+  //
+  //   status = 0
+  //   if (type < 1) { +0x96 = 0; type = 0; +0x95 = 0; return; }
+  //   FUN_00266098  the light
+  //   FUN_00265F70  the cascade, depth first in slot order
+  //   FUN_0020E7E0  the sound handles
+  //   if (+0x02 & 0x8000) the scene's teardown hook -- see EntityPool
+  //   +0x95 = 0; type = 0
+  //
+  // so the hook runs after every child has gone and while the entity's own
+  // fields are still there to be read. s03_e001 is what needs it: its burnable
+  // block carries +0x02 |= 0x8000 and +0x95 = 0x69, and header word 4 tests
+  // that tag to take bit 0x20000 back out of the lead's +0x74 -- the bit that
+  // kept the lead off the pillar the block stood on. With the slot blanked
+  // before the hook, as the port used to, the tag reads 0 and the pillar stays
+  // shut.
   void FUN_00265ec0_destroy_entity(std::size_t slot,
                                    EntityPool &pool,
                                    orphen::ported::render::LightTable *lights)
@@ -1446,49 +1466,57 @@ namespace orphen::ported::entity
       return;
     }
 
-    std::vector<std::size_t> pending{slot};
-    while (!pending.empty())
-    {
-      const std::size_t current = pending.back();
-      pending.pop_back();
+    pool.setStatus(slot, SlotStatus::Free);
 
-      // `*entity < 1`: FUN_00265EC0's short branch clears +0x96, the type and
-      // +0x95 and stops -- no light given back, and no cascade. The pool's
-      // release is a superset of those three writes.
-      if (pool.slot(current).typeId00 < 1)
+    // `*entity < 1`: FUN_00265EC0's short branch clears +0x96, the type and
+    // +0x95 and stops -- no light given back, and no cascade. The pool's
+    // release is a superset of those three writes.
+    if (pool.slot(slot).typeId00 < 1)
+    {
+      pool.releaseSlot(slot);
+      return;
+    }
+
+    // FUN_00266098.
+    const std::int8_t lightSlot = pool.slot(slot).lightSlot195;
+    if (lightSlot >= 0 && lights != nullptr)
+    {
+      lights->slot(static_cast<std::uint32_t>(lightSlot)).radius = 0.0f;
+    }
+    pool.slot(slot).lightSlot195 = -1;
+
+    // FUN_00265f70: every live slot whose +0x192 names this one, each of them
+    // through FUN_00265EC0 again. `lb; blez`, so only a positive status byte.
+    for (std::size_t child = 0; child < pool.slotCount(); ++child)
+    {
+      if (pool.status(child) != SlotStatus::ScriptSpawned)
       {
-        pool.releaseSlot(current);
         continue;
       }
-
-      // FUN_00266098.
-      const std::int8_t lightSlot = pool.slot(current).lightSlot195;
-      if (lightSlot >= 0 && lights != nullptr)
+      if (pool.slot(child).parentSlot192 == static_cast<std::int16_t>(slot))
       {
-        lights->slot(static_cast<std::uint32_t>(lightSlot)).radius = 0.0f;
-      }
-      pool.slot(current).lightSlot195 = -1;
-
-      // Released before the scan below, standing in for the original's leading
-      // status write. Nothing after this point reads the slot: FUN_0020E7E0's
-      // sound handles are not modelled, and the `+0x02 & 0x8000` script hook is
-      // the one piece of FUN_00265EC0 the port still does not have.
-      pool.releaseSlot(current);
-
-      // FUN_00265f70: every live slot whose +0x192 names this one, each of them
-      // through FUN_00265EC0 again.
-      for (std::size_t child = 0; child < pool.slotCount(); ++child)
-      {
-        if (child == current || pool.status(child) != SlotStatus::ScriptSpawned)
-        {
-          continue;
-        }
-        if (pool.slot(child).parentSlot192 == static_cast<std::int16_t>(current))
-        {
-          pending.push_back(child);
-        }
+        FUN_00265ec0_destroy_entity(child, pool, lights);
       }
     }
+
+    // FUN_0020E7E0's sound handles are not modelled; the port's sound path
+    // holds none per entity.
+
+    if ((pool.slot(slot).descriptorFlags02 & 0x8000u) != 0 && pool.teardownHook())
+    {
+      pool.teardownHook()(slot);
+      // The status byte is already 0, so a spawn inside the hook can be handed
+      // this very slot. The original's tail then writes only +0x95 and the
+      // type over the newcomer; do the same rather than blank it.
+      if (pool.status(slot) != SlotStatus::Free)
+      {
+        pool.slot(slot).byte95 = 0;
+        pool.slot(slot).typeId00 = 0;
+        return;
+      }
+    }
+
+    pool.releaseSlot(slot);
   }
 
   void FUN_00265ec0_destroy_entity(std::size_t slot, const ActorEnvironment &environment)

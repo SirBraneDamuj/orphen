@@ -154,9 +154,10 @@ namespace orphen::ported::script
                                    std::size_t entitySlot);
 
     // The two actor-state entries. Header word 3 is the player's interaction
-    // hook (FUN_00252828) and word 4 is the entity teardown hook (FUN_00265ec0);
-    // neither is per-frame, so neither is driven by the tick above. Reachable
-    // through runEntry when those paths are ported.
+    // hook (FUN_00252828) and word 4 is the entity teardown hook (FUN_00265ec0,
+    // for an entity with +0x02 bit 0x8000); neither is per-frame, so neither is
+    // driven by the tick above. Both go through runEntryForEntity, from
+    // PortRuntime's interaction path and the pool's teardown hook.
 
     // Reported by the last runEntry call.
     bool lastRunOverran() const { return lastRunOverran_; }

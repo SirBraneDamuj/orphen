@@ -92,6 +92,32 @@ namespace orphen::port
     entityPool_.setBoneOverrideTable(DAT_004a7e00_boneOverrides_.data(),
                                      DAT_004a7e00_boneOverrides_.size());
 
+    // FUN_00265EC0's script hook, for an entity with +0x02 bit 0x8000. Mode 9
+    // goes to the scene module first; FUN_0025B9A8 is then two statements,
+    //
+    //   iGpffffb0d4 = psGpffffb79c;          // select the dying entity
+    //   FUN_0025BC68(base + header word 4);
+    //
+    // and runEntryForEntity is exactly that. s03_e001 sets the bit on its
+    // burnable block, whose word-4 body reopens the floor the block stood on.
+    //
+    // Not reproduced: FUN_0025BC68 keeps its program counter in the global
+    // pbGpffffbd60, so a teardown reached from *inside* a running script --
+    // opcode 0x5C on a hooked entity -- leaves the outer run resuming wherever
+    // word 4 ended, still selecting the dead entity. The port's interpreter is
+    // per-run and resumes cleanly. No scene yet tears down a hooked entity
+    // from script.
+    entityPool_.setFUN_0025b9a8_teardownHook(
+        [this](std::size_t slot)
+        {
+          FUN_0032536c_scene_module(9);
+          sceneScript_.runEntryForEntity(orphen::ported::script::SceneScriptEntry::ActorStateSecondary,
+                                         scriptEnvironment(),
+                                         scriptTrace_,
+                                         slot);
+          reportTickHalt("entity teardown (header word 4)");
+        });
+
     // Bind before reset: the lead player is pool slot 0, so the controller must
     // already be writing there when resetToMap places it.
     leadPlayer_.bindEntity(entityPool_.leadPlayer());

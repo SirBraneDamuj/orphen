@@ -161,8 +161,15 @@ That makes the per-frame path far cheaper than a resumable VM, and it is why
 `analyzed/scene_script_frame_entry.c`.
 
 Header words 3 and 4 are *not* per-frame and are not driven by the tick. Word 3
-is the player's interaction probe (`FUN_00252828`) and word 4 is entity teardown
-(`FUN_00265ec0`); both are reachable through `runEntry` when those paths land.
+is the player's interaction probe (`FUN_00252828`) and word 4 is entity teardown:
+`FUN_00265EC0` runs it, through `FUN_0025B9A8`, for an entity whose `+0x02` has
+bit `0x8000`, with that entity selected and after its children have gone but
+before its own fields are cleared. `s03_e001` needs it. The block on the pillar
+at (-7.0, -23.0) gets the bit and `+0x95 = 0x69` once opcode `0xD9` makes it
+burnable. Its word-4 body is
+`if (current.+0x95 == 0x69) lead.+0x74 &= ~0x20000`. Init set that bit to keep
+the lead off the four pillar-top faces tagged `0x20000` (#1877-1880), so without
+the hook the burnt block left the path shut.
 
 **An opcode is reported at one of three support levels.** An opcode whose
 operands go unconsumed desyncs everything after it, so a genuinely unknown one
