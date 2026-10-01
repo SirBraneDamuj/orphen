@@ -9459,7 +9459,8 @@ Harness controls, which the simulation cannot see:
 - `O` toggles SCR SUBPROC DISP. It was `P` until fast forward took that key.
 - `G` dumps a pose/draw-list snapshot of the current frame and photographs it.
 - `F1` toggles the fly camera, `F2` puts it back on the game camera, `F3`
-  swaps the game's draw list for the whole map. See Fly camera, below.
+  swaps the game's draw list for the whole map, `F4` toggles the game view
+  inset. See Fly camera, below.
 
 `C` was `B` until the sword attack landed on it, at which point one key was
 firing two gameplay actions and a harness toggle. The free viewer's own pitch
@@ -9492,7 +9493,14 @@ front of it.
   game camera's eye. Billboards are put back in the world through the game
   camera's inverse view, because their quads arrive in its view space. Text and
   HUD sprites still draw in their 4:3 box.
-- A left click probes through the fly camera.
+- `F4` toggles the inset, on by default: the game camera's own frame, a third
+  of the window wide in the top-right corner. It is not a second camera. While
+  it is up, `render()` runs the ordinary game frame first, whose last step
+  already copies the finished picture into the smear's frame-feedback texture
+  (world, smear, bars, fade, subtitles, no harness text). It then clears and
+  draws the fly view, and puts that texture in the corner. That costs a second
+  full render per frame, and only the game pass feeds `--frame-stats`.
+- A left click probes through the fly camera, inset or not.
 
 It runs once per rendered frame on wall-clock time, outside `PortRuntime::update`,
 so the simulation cannot see it and `--frames` runs never touch it. Entering and

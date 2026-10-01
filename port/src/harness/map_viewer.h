@@ -358,9 +358,15 @@ namespace orphen::harness
     // F3: draw every map primitive from the fly camera instead of the list the
     // game camera's visibility pass kept.
     bool flyCameraWholeMap_ = false;
+    // F4: the game camera's own finished frame in the fly view's corner.
+    bool flyCameraInset_ = true;
     mutable std::vector<orphen::ported::render::MapDrawItem> wholeMapDrawList_;
     mutable std::uint64_t wholeMapDrawListGeneration_ = 0;
     void snapFlyCameraToGame();
+    // One full frame. render() runs it once, or twice while flying with the
+    // inset up -- the game's frame, then the fly camera's.
+    void renderPass(int framebufferWidth, int framebufferHeight, bool flying) const;
+    void drawFlyCameraInset(int framebufferWidth, int framebufferHeight) const;
     const std::vector<orphen::ported::render::MapDrawItem> &wholeMapDrawList() const;
     std::optional<orphen::ported::render::ViewProjection> renderCamera_;
     std::vector<orphen::ported::render::MapDrawItem> mapDrawList_;

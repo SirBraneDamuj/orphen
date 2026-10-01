@@ -3853,6 +3853,11 @@ namespace orphen::harness
     {
       snapFlyCameraToGame();
     }
+    if (input.toggleFlyCameraInsetRequested)
+    {
+      flyCameraInset_ = !flyCameraInset_;
+      std::cout << "[fly camera] game view inset " << (flyCameraInset_ ? "on" : "off") << '\n';
+    }
     if (input.toggleFlyCameraWholeMapRequested)
     {
       flyCameraWholeMap_ = !flyCameraWholeMap_;
@@ -4121,6 +4126,134 @@ namespace orphen::harness
 
   void MapViewer::render(int framebufferWidth, int framebufferHeight) const
   {
+    if (!flyCameraActive_)
+    {
+      renderPass(framebufferWidth, framebufferHeight, false);
+      return;
+    }
+
+    if (flyCameraInset_)
+    {
+      // The game's own frame first, exactly as it would have been shown. Its
+      // last step copies the finished picture into the frame-feedback texture
+      // -- world, smear, bars, fade and subtitles, none of the harness's text
+      // -- and that copy is the inset. Then the window is cleared back to what
+      // main() cleared it to and the fly view goes over it.
+      GLfloat clearColour[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+      glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);
+      renderPass(framebufferWidth, framebufferHeight, false);
+      glViewport(0, 0, framebufferWidth, framebufferHeight);
+      glClearColor(clearColour[0], clearColour[1], clearColour[2], clearColour[3]);
+      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    }
+    renderPass(framebufferWidth, framebufferHeight, true);
+    if (flyCameraInset_)
+    {
+      drawFlyCameraInset(framebufferWidth, framebufferHeight);
+    }
+  }
+
+  // The fly view's corner picture: the frame-feedback texture the game pass
+  // just filled, a third of the window wide in the top-right corner, framed in
+  // the gizmo's yellow.
+  void MapViewer::drawFlyCameraInset(int framebufferWidth, int framebufferHeight) const
+  {
+    if (frameFeedbackTexture_ == 0 || frameFeedbackCapturedWidth_ <= 0 || frameFeedbackCapturedHeight_ <= 0)
+    {
+      return;
+    }
+
+    constexpr float kWidthFraction = 0.33f;
+    constexpr float kMargin = 12.0f;
+    constexpr float kBorder = 2.0f;
+    const float width = static_cast<float>(framebufferWidth) * kWidthFraction;
+    const float height = width * static_cast<float>(frameFeedbackCapturedHeight_) /
+                         static_cast<float>(frameFeedbackCapturedWidth_);
+    const float left = static_cast<float>(framebufferWidth) - kMargin - width;
+    const float top = kMargin;
+    const float usedU =
+        static_cast<float>(frameFeedbackCapturedWidth_) / static_cast<float>(frameFeedbackTextureWidth_);
+    const float usedV =
+        static_cast<float>(frameFeedbackCapturedHeight_) / static_cast<float>(frameFeedbackTextureHeight_);
+
+    glViewport(0, 0, framebufferWidth, framebufferHeight);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean textureWasEnabled = glIsEnabled(GL_TEXTURE_2D);
+    const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
+    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean lightingWasEnabled = glIsEnabled(GL_LIGHTING);
+    const GLboolean alphaTestWasEnabled = glIsEnabled(GL_ALPHA_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_FOG);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_LIGHTING);
+    glDisable(GL_ALPHA_TEST);
+    // Opaque: the back buffer's alpha is whatever the last blend left there.
+    glDisable(GL_BLEND);
+
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(1.0f, 0.85f, 0.2f, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(left - kBorder, top - kBorder);
+    glVertex2f(left + width + kBorder, top - kBorder);
+    glVertex2f(left + width + kBorder, top + height + kBorder);
+    glVertex2f(left - kBorder, top + height + kBorder);
+    glEnd();
+
+    // glCopyTexSubImage2D copied bottom-up, so the picture's top is usedV.
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, frameFeedbackTexture_);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, usedV);
+    glVertex2f(left, top);
+    glTexCoord2f(usedU, usedV);
+    glVertex2f(left + width, top);
+    glTexCoord2f(usedU, 0.0f);
+    glVertex2f(left + width, top + height);
+    glTexCoord2f(0.0f, 0.0f);
+    glVertex2f(left, top + height);
+    glEnd();
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    const auto restore = [](GLenum capability, GLboolean wasEnabled) {
+      if (wasEnabled == GL_TRUE)
+      {
+        glEnable(capability);
+      }
+      else
+      {
+        glDisable(capability);
+      }
+    };
+    restore(GL_DEPTH_TEST, depthWasEnabled);
+    restore(GL_TEXTURE_2D, textureWasEnabled);
+    restore(GL_FOG, fogWasEnabled);
+    restore(GL_BLEND, blendWasEnabled);
+    restore(GL_CULL_FACE, cullWasEnabled);
+    restore(GL_LIGHTING, lightingWasEnabled);
+    restore(GL_ALPHA_TEST, alphaTestWasEnabled);
+
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+  }
+
+  void MapViewer::renderPass(int framebufferWidth, int framebufferHeight, bool flying) const
+  {
     const auto prologueStart = std::chrono::steady_clock::now();
     ensureTexturesUploaded();
     ensureSlotTexturesUploaded();
@@ -4144,7 +4277,9 @@ namespace orphen::harness
             ? static_cast<float>(frameFeedbackCapturedHeight_) / static_cast<float>(frameFeedbackTextureHeight_)
             : 1.0f;
     g_gleamProbes = gleamProbeSink_;
-    g_renderStats = renderStatsSink_;
+    // A fly frame is not a game frame, so it is not measured. With the inset
+    // up, the game pass that precedes it is.
+    g_renderStats = flying ? nullptr : renderStatsSink_;
     entityDrawProbes_.clear();
     g_entityDrawProbes = &entityDrawProbes_;
     g_currentDrawProbe = nullptr;
@@ -4165,10 +4300,9 @@ namespace orphen::harness
     // the viewer space this file has always used, so only one of the two
     // paths applies the axis remap.
     const bool useOriginalCamera = leadPlayerView_.has_value() && renderCamera_.has_value();
-    // F1. Draws the same world through the fly camera's matrices instead, over
-    // the whole window, and leaves out what only makes sense over the game's
-    // own picture: the fog, the smear, the bars, the fade.
-    const bool flying = flyCameraActive_;
+    // `flying` (F1) draws the same world through the fly camera's matrices
+    // instead, over the whole window, and leaves out what only makes sense
+    // over the game's own picture: the fog, the smear, the bars, the fade.
 
     // The original's projection is fixed, so the window has to adapt to it
     // rather than the other way round: fit a 4:3 box inside the window and put
@@ -4633,12 +4767,12 @@ namespace orphen::harness
         std::ostringstream status;
         status << "FLY CAMERA  " << (flyCameraWholeMap_ ? "WHOLE MAP" : "GAME DRAW LIST") << "  SPEED "
                << std::fixed << std::setprecision(1) << flyCamera_.speed();
-        const std::string lines[2] = {"RMB LOOK  WASD QE  WHEEL SPEED  F2 SNAP  F3 MAP",
-                                      status.str()};
+        const std::string lines[3] = {"RMB LOOK  WASD QE  WHEEL SPEED",
+                                      "F2 SNAP  F3 MAP  F4 INSET", status.str()};
         constexpr int kAdvance = 12;
         constexpr int kLinePitch = 20;
         std::vector<orphen::ported::debug::DebugGlyph> glyphs;
-        int y = debugText::kScreenHeight - 8 - 2 * kLinePitch;
+        int y = debugText::kScreenHeight - 8 - 3 * kLinePitch;
         for (const auto &line : lines)
         {
           int x = 16;

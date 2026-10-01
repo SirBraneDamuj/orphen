@@ -51,11 +51,13 @@ namespace orphen::port
 
     // F1: detach the view into the harness's fly camera (harness/fly_camera.h)
     // and back. F2 puts the fly camera back on the game camera; F3 swaps the
-    // game's culled map draw list for the whole map. All three are read once
-    // per rendered frame, never by the simulation step.
+    // game's culled map draw list for the whole map, and F4 shows or hides the
+    // game camera's own frame in the corner. All four are read once per
+    // rendered frame, never by the simulation step.
     bool toggleFlyCameraRequested = false;
     bool flyCameraSnapRequested = false;
     bool toggleFlyCameraWholeMapRequested = false;
+    bool toggleFlyCameraInsetRequested = false;
 
     // Fly camera motion. Only filled while the window has been told the fly
     // camera is up (SdlGlWindow::setFlyCameraActive), and in that mode WASD

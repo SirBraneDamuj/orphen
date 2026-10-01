@@ -287,6 +287,10 @@ namespace orphen::port
         {
           input.toggleFlyCameraWholeMapRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F4)
+        {
+          input.toggleFlyCameraInsetRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
