@@ -4,6 +4,7 @@
 #include "ported/resource/texture_slot_cache.h"
 #include "harness/scene_resource_provider.h"
 #include "harness/debug_text.h"
+#include "harness/fly_camera.h"
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
 #include "ported/entity/original_climb_graph.h"
@@ -203,6 +204,14 @@ namespace orphen::harness
     std::size_t dumpSceneResources(const std::filesystem::path &directory) const;
     void resetCamera();
     void update(float deltaSeconds, const orphen::port::InputSnapshot &input);
+    // F1's fly camera. Driven once per rendered frame on wall-clock time by
+    // main(), never from update(), so the simulation cannot see it.
+    void updateFlyCamera(float deltaSeconds, const orphen::port::InputSnapshot &input);
+    bool flyCameraActive() const { return flyCameraActive_; }
+    void placeFlyCamera(const orphen::ported::psm2::Vec3 &eye, float yawRadians, float pitchRadians)
+    {
+      flyCamera_.placeAt(eye, yawRadians, pitchRadians);
+    }
     void render(int framebufferWidth, int framebufferHeight) const;
     // FUN_0025d0e0's output: the full-screen fade quad's colour and coverage.
     // Drawn over the scene and under both debug overlays, which is where the
@@ -313,7 +322,11 @@ namespace orphen::harness
 
     // The billboard pass, FUN_0020f3e0/FUN_0020f510. Drawn after the world so
     // it tests against the depth already there.
-    void drawSpriteQuads() const;
+    //
+    // `modelView` is for a camera other than the one the quads were built for
+    // -- the fly camera -- and takes the game camera's view space to its own.
+    // Null is identity.
+    void drawSpriteQuads(const float *modelView = nullptr) const;
 
   private:
     std::optional<orphen::ported::psm2::Psm2RuntimeState> map_;
@@ -340,6 +353,15 @@ namespace orphen::harness
     float cameraYawDegrees_ = 35.0f;
     float cameraPitchDegrees_ = -55.0f;
     orphen::ported::camera::CameraPose followCameraPose_;
+    FlyCamera flyCamera_;
+    bool flyCameraActive_ = false;
+    // F3: draw every map primitive from the fly camera instead of the list the
+    // game camera's visibility pass kept.
+    bool flyCameraWholeMap_ = false;
+    mutable std::vector<orphen::ported::render::MapDrawItem> wholeMapDrawList_;
+    mutable std::uint64_t wholeMapDrawListGeneration_ = 0;
+    void snapFlyCameraToGame();
+    const std::vector<orphen::ported::render::MapDrawItem> &wholeMapDrawList() const;
     std::optional<orphen::ported::render::ViewProjection> renderCamera_;
     std::vector<orphen::ported::render::MapDrawItem> mapDrawList_;
     // Captured each frame so a click can build its ray in exactly the space the

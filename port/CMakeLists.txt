@@ -110,6 +110,8 @@ target_sources(orphen_port
     src/harness/debug_text.h
     src/harness/entity_probe.cpp
     src/harness/entity_probe.h
+    src/harness/fly_camera.cpp
+    src/harness/fly_camera.h
     src/harness/map_viewer.cpp
     src/harness/map_viewer.h
     src/harness/disc_resource_loader.cpp

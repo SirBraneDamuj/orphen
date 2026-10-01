@@ -68,6 +68,10 @@ namespace orphen::harness
     // neither tests nor writes depth, so the depth precision this costs is
     // precision nothing reads.
     constexpr float kBackgroundFarPlane = 4096.0f;
+    // The fly camera's clip range. Nothing it looks at is the game's, so
+    // these are only chosen to reach any map from anywhere in it.
+    constexpr float kFlyCameraNearPlane = 0.05f;
+    constexpr float kFlyCameraFarPlane = 2000.0f;
 
     // **There are two distance effects and they are not the same one.**
     //
@@ -3821,6 +3825,86 @@ namespace orphen::harness
     }
   }
 
+  void MapViewer::updateFlyCamera(float deltaSeconds, const orphen::port::InputSnapshot &input)
+  {
+    if (input.toggleFlyCameraRequested)
+    {
+      flyCameraActive_ = !flyCameraActive_;
+      // Every entry starts on the game camera, so the first frame of the fly
+      // view is the game's picture widened to the window.
+      if (flyCameraActive_)
+      {
+        snapFlyCameraToGame();
+      }
+      // The pose in --fly-camera's own form, so a view found by hand can be
+      // photographed again.
+      const auto &eye = flyCamera_.eye();
+      constexpr double kDegreesPerRadian = 180.0 / kPi;
+      std::cout << "[fly camera] " << (flyCameraActive_ ? "on" : "off") << " at --fly-camera "
+                << std::fixed << std::setprecision(3) << eye.x << ',' << eye.y << ',' << eye.z << ','
+                << flyCamera_.yawRadians() * kDegreesPerRadian << ','
+                << flyCamera_.pitchRadians() * kDegreesPerRadian << std::defaultfloat << '\n';
+    }
+    if (!flyCameraActive_)
+    {
+      return;
+    }
+    if (input.flyCameraSnapRequested)
+    {
+      snapFlyCameraToGame();
+    }
+    if (input.toggleFlyCameraWholeMapRequested)
+    {
+      flyCameraWholeMap_ = !flyCameraWholeMap_;
+      std::cout << "[fly camera] map: " << (flyCameraWholeMap_ ? "whole map" : "game draw list") << '\n';
+    }
+    flyCamera_.update(deltaSeconds, input);
+  }
+
+  void MapViewer::snapFlyCameraToGame()
+  {
+    if (renderCamera_.has_value())
+    {
+      flyCamera_.snapTo(*renderCamera_);
+      return;
+    }
+    // The free viewer has no game camera to start from: stand back from the
+    // map's centre along -y, looking along +y and a little down.
+    const auto centre = map_.has_value() ? boundsCenter(map_->bounds) : orphen::ported::psm2::Vec3{};
+    const float radius = map_.has_value() ? boundsRadius(map_->bounds) : 12.0f;
+    flyCamera_.placeAt({centre.x, centre.y - radius * 0.7f, centre.z + radius * 0.5f},
+                       static_cast<float>(kPi * 0.5), -0.6f);
+  }
+
+  // Every primitive the visibility pass could consider, in record order, fully
+  // opaque. Bucket INT_MIN puts every entity after the map, so models lean on
+  // the depth buffer the way the free viewer's do. Rebuilt only when the map
+  // changes.
+  const std::vector<orphen::ported::render::MapDrawItem> &MapViewer::wholeMapDrawList() const
+  {
+    if (wholeMapDrawListGeneration_ != loadedMapGeneration_)
+    {
+      wholeMapDrawList_.clear();
+      if (map_.has_value())
+      {
+        const auto &records = map_->DAT_003556ac_dRecords80;
+        for (std::size_t primitiveIndex = 0; primitiveIndex < records.size(); ++primitiveIndex)
+        {
+          if ((records[primitiveIndex].primitiveFlags & kRecord80HiddenBit) != 0)
+          {
+            continue;
+          }
+          orphen::ported::render::MapDrawItem item;
+          item.primitiveIndex = primitiveIndex;
+          item.depthBucket = std::numeric_limits<int>::min();
+          wholeMapDrawList_.push_back(item);
+        }
+      }
+      wholeMapDrawListGeneration_ = loadedMapGeneration_;
+    }
+    return wholeMapDrawList_;
+  }
+
   // FUN_0020f3e0's draw, the second entity pass.
   //
   // The quads arrive in the original's view space, so the modelview goes to
@@ -3833,7 +3917,7 @@ namespace orphen::harness
   // through the buffer -- back-to-front within a strip is the record order
   // FUN_0020f510 walks, and across entities it is the pool order, both of which
   // are already baked into the list.
-  void MapViewer::drawSpriteQuads() const
+  void MapViewer::drawSpriteQuads(const float *modelView) const
   {
     if (spriteQuads_.empty() || textureSlots_ == nullptr)
     {
@@ -3842,7 +3926,14 @@ namespace orphen::harness
 
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
-    glLoadIdentity();
+    if (modelView != nullptr)
+    {
+      glLoadMatrixf(modelView);
+    }
+    else
+    {
+      glLoadIdentity();
+    }
 
     const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
     const GLboolean fogWasEnabled = glIsEnabled(GL_FOG);
@@ -4074,12 +4165,20 @@ namespace orphen::harness
     // the viewer space this file has always used, so only one of the two
     // paths applies the axis remap.
     const bool useOriginalCamera = leadPlayerView_.has_value() && renderCamera_.has_value();
+    // F1. Draws the same world through the fly camera's matrices instead, over
+    // the whole window, and leaves out what only makes sense over the game's
+    // own picture: the fog, the smear, the bars, the fade.
+    const bool flying = flyCameraActive_;
 
     // The original's projection is fixed, so the window has to adapt to it
     // rather than the other way round: fit a 4:3 box inside the window and put
     // bars in whatever is left. Restored to the full window before the HUD,
     // which is screen-space and belongs to the harness rather than the game.
-    if (useOriginalCamera)
+    if (flying)
+    {
+      glViewport(0, 0, framebufferWidth, framebufferHeight);
+    }
+    else if (useOriginalCamera)
     {
       const ViewportRect view = gameViewportRect(framebufferWidth, framebufferHeight);
       const int viewX = view.x;
@@ -4112,6 +4211,25 @@ namespace orphen::harness
     {
       renderCameraDistance = viewerDistance(toViewerSpace(followCameraPose_.eye),
                                             toViewerSpace(followCameraPose_.target));
+    }
+    if (flying)
+    {
+      const auto camera = flyCamera_.glCamera(framebufferWidth, framebufferHeight, kFlyCameraNearPlane,
+                                              kFlyCameraFarPlane);
+      glMatrixMode(GL_PROJECTION);
+      glLoadMatrixf(camera.projection.data());
+      glMatrixMode(GL_MODELVIEW);
+      glLoadMatrixf(camera.modelView.data());
+      backgroundProjection = flyCamera_.glCamera(framebufferWidth, framebufferHeight,
+                                                 kFlyCameraNearPlane, kBackgroundFarPlane)
+                                 .projection;
+      // So a click aims through the fly camera.
+      probeModelView_ = camera.modelView;
+      probeProjection_ = camera.projection;
+      probeMatricesValid_ = true;
+    }
+    else if (useOriginalCamera)
+    {
       const auto camera = orphen::ported::render::glCameraFor(*renderCamera_,
                                                               framebufferWidth,
                                                               framebufferHeight,
@@ -4178,7 +4296,9 @@ namespace orphen::harness
       glDisable(GL_CULL_FACE);
     }
 
-    applyFogState(useOriginalCamera);
+    // The fog is a function of distance from the game camera's eye, and from
+    // anywhere else it only hides the scene the fly camera is there to see.
+    applyFogState(useOriginalCamera && !flying);
 
     if (g_renderStats != nullptr)
     {
@@ -4219,10 +4339,18 @@ namespace orphen::harness
         drawBackgroundQuads(backgroundQuads_, uploadedTextureIds_, backgroundProjection);
 
         // Bucket 2, between the backdrop and the map. See setWorldUnderlayAlpha.
-        drawWorldUnderlay();
+        // A full-screen quad, so it belongs to the game's picture only.
+        if (!flying)
+        {
+          drawWorldUnderlay();
+        }
 
-        drawMap(*map_, uploadedTextureIds_, mapDrawList_, useOriginalCamera && !wireframe_,
-                sceneObjectViews_, entityDrawList, slotTextureIds_);
+        // From the fly camera the game's list still decides what is drawn by
+        // default, so walking out of the frustum shows what the visibility
+        // pass threw away. F3 swaps in the whole map.
+        drawMap(*map_, uploadedTextureIds_,
+                flying && flyCameraWholeMap_ ? wholeMapDrawList() : mapDrawList_,
+                useOriginalCamera && !wireframe_, sceneObjectViews_, entityDrawList, slotTextureIds_);
 
         if (g_renderStats != nullptr)
         {
@@ -4243,7 +4371,17 @@ namespace orphen::harness
       }
     }
     // FUN_0020f3e0 runs after FUN_0020c5a8's pass, on the entities it refused.
-    drawSpriteQuads();
+    // The quads are in the game camera's view space; from the fly camera they
+    // go back to the world through it first.
+    if (flying && renderCamera_.has_value())
+    {
+      const auto spriteModelView = flyCamera_.viewFrom(renderCamera_->view);
+      drawSpriteQuads(spriteModelView.element.data());
+    }
+    else
+    {
+      drawSpriteQuads();
+    }
 
     // Buckets 0x1004 and 0x1005, which sort *under* the smear and the fade:
     // the Equip screen's bars, then the models FUN_0020EEC0 put in 0x1005
@@ -4317,6 +4455,12 @@ namespace orphen::harness
       glEnable(GL_DEPTH_TEST);
     }
 
+    // The game camera as seen from the fly camera, out to the draw distance.
+    if (flying && renderCamera_.has_value())
+    {
+      drawCameraFrustumGizmo(*renderCamera_, drawDistance_);
+    }
+
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
     glViewport(0, 0, framebufferWidth, framebufferHeight);
@@ -4325,12 +4469,15 @@ namespace orphen::harness
     // it: the quad is drawn inside it and the next frame's source is copied out
     // of it.
     const ViewportRect gameView =
-        useOriginalCamera ? gameViewportRect(framebufferWidth, framebufferHeight)
-                          : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
+        useOriginalCamera && !flying ? gameViewportRect(framebufferWidth, framebufferHeight)
+                                     : ViewportRect{0, 0, framebufferWidth, framebufferHeight};
 
     // FUN_00201a38, sort bucket 0x1006: over the world, under the bars and the
     // fade below.
-    drawFrameFeedbackQuad(gameView);
+    if (!flying)
+    {
+      drawFrameFeedbackQuad(gameView);
+    }
 
     // FUN_0022EB00's pips, FUN_00207DE8(0x1006): the smear's bucket, so under
     // the letterbox bars and the fade (0x1007) and every glyph of text
@@ -4344,9 +4491,12 @@ namespace orphen::harness
     // both FUN_002239c8 and FUN_00224320 submit the fade first -- insertion is
     // LIFO within a bucket, so the bars are the earlier draw and the fade tints
     // them. Every text overlay is bucket 0x1009 and lands on top of both.
-    drawLetterboxBars(framebufferWidth, framebufferHeight);
+    if (!flying)
+    {
+      drawLetterboxBars(framebufferWidth, framebufferHeight);
+    }
 
-    if (screenFadeAlpha_ != 0)
+    if (screenFadeAlpha_ != 0 && !flying)
     {
       // FUN_0025d0e0's quad. It covers the scene, so it goes down before the
       // debug overlays -- the original's debug text is drawn by FUN_00268270
@@ -4439,7 +4589,13 @@ namespace orphen::harness
     // on already has its source; gating the copy on the quad would leave that
     // first frame with nothing to sample, or worse, with whatever the last
     // burst left in the texture.
-    captureFrameFeedbackSource(gameView);
+    //
+    // Not from the fly camera: the texture keeps the last game frame, so the
+    // first frame back from F1 samples the picture it would have.
+    if (!flying)
+    {
+      captureFrameFeedbackSource(gameView);
+    }
 
     {
       PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->hudMicros : nullptr);
@@ -4451,23 +4607,56 @@ namespace orphen::harness
       // The atlas is texture slot 0x30, already resident and already uploaded
       // by ensureSlotTexturesUploaded -- FUN_00221fd8 binds it at boot and the
       // model store reproduces that bind.
+      GLuint fontTexture = 0;
+      int fontWidth = 0;
+      int fontHeight = 0;
+      if (textureSlots_ != nullptr &&
+          static_cast<std::size_t>(orphen::ported::debug::text::kFontTextureSlot) < slotTextureIds_.size())
+      {
+        fontTexture = slotTextureIds_[orphen::ported::debug::text::kFontTextureSlot];
+        const auto &slotState = textureSlots_->slot(orphen::ported::debug::text::kFontTextureSlot);
+        fontWidth = slotState.texture.width;
+        fontHeight = slotState.texture.height;
+      }
       if (originalDebugTextVisible_)
       {
-        GLuint fontTexture = 0;
-        int fontWidth = 0;
-        int fontHeight = 0;
-        if (textureSlots_ != nullptr &&
-            static_cast<std::size_t>(orphen::ported::debug::text::kFontTextureSlot) < slotTextureIds_.size())
-        {
-          fontTexture = slotTextureIds_[orphen::ported::debug::text::kFontTextureSlot];
-          const auto &slotState = textureSlots_->slot(orphen::ported::debug::text::kFontTextureSlot);
-          fontWidth = slotState.texture.width;
-          fontHeight = slotState.texture.height;
-        }
         const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
         debugText_.drawOriginalOverlay(
             framebufferWidth, framebufferHeight, fit.offsetX, fit.offsetY, fit.scaleX, fit.scaleY,
             originalDebugGlyphs_, fontTexture, fontWidth, fontHeight);
+      }
+      if (flying)
+      {
+        // The harness's own, in the same font, along the bottom of the window
+        // where the game's readout is not.
+        namespace debugText = orphen::ported::debug::text;
+        std::ostringstream status;
+        status << "FLY CAMERA  " << (flyCameraWholeMap_ ? "WHOLE MAP" : "GAME DRAW LIST") << "  SPEED "
+               << std::fixed << std::setprecision(1) << flyCamera_.speed();
+        const std::string lines[2] = {"RMB LOOK  WASD QE  WHEEL SPEED  F2 SNAP  F3 MAP",
+                                      status.str()};
+        constexpr int kAdvance = 12;
+        constexpr int kLinePitch = 20;
+        std::vector<orphen::ported::debug::DebugGlyph> glyphs;
+        int y = debugText::kScreenHeight - 8 - 2 * kLinePitch;
+        for (const auto &line : lines)
+        {
+          int x = 16;
+          for (const char character : line)
+          {
+            if (character != ' ')
+            {
+              glyphs.push_back({character, x, y});
+            }
+            x += kAdvance;
+          }
+          y += kLinePitch;
+        }
+        debugText_.drawOriginalOverlay(
+            framebufferWidth, framebufferHeight, 0.0f, 0.0f,
+            static_cast<float>(framebufferWidth) / debugText::kScreenWidth,
+            static_cast<float>(framebufferHeight) / debugText::kScreenHeight, glyphs, fontTexture,
+            fontWidth, fontHeight);
       }
     }
 

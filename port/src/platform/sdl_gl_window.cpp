@@ -194,11 +194,39 @@ namespace orphen::port
         }
         break;
       case SDL_MOUSEBUTTONDOWN:
-        if (event.button.button == SDL_BUTTON_LEFT)
+        // Not while the pointer is captured: relative mode has no meaningful
+        // pixel to aim at.
+        if (event.button.button == SDL_BUTTON_LEFT && !mouseLookHeld_)
         {
           input.probeRequested = true;
           input.probeX = event.button.x;
           input.probeY = event.button.y;
+        }
+        if (event.button.button == SDL_BUTTON_RIGHT && flyCameraActive_)
+        {
+          mouseLookHeld_ = true;
+          SDL_SetRelativeMouseMode(SDL_TRUE);
+        }
+        break;
+      case SDL_MOUSEBUTTONUP:
+        if (event.button.button == SDL_BUTTON_RIGHT && mouseLookHeld_)
+        {
+          mouseLookHeld_ = false;
+          SDL_SetRelativeMouseMode(SDL_FALSE);
+        }
+        break;
+      case SDL_MOUSEMOTION:
+        if (mouseLookHeld_)
+        {
+          input.flyLookX += static_cast<float>(event.motion.xrel);
+          input.flyLookY += static_cast<float>(event.motion.yrel);
+        }
+        break;
+      case SDL_MOUSEWHEEL:
+        if (flyCameraActive_)
+        {
+          input.flySpeedSteps += event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y
+                                                                                : event.wheel.y;
         }
         break;
       case SDL_KEYDOWN:
@@ -247,6 +275,18 @@ namespace orphen::port
         {
           input.nextMapRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F1)
+        {
+          input.toggleFlyCameraRequested = true;
+        }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F2)
+        {
+          input.flyCameraSnapRequested = true;
+        }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F3)
+        {
+          input.toggleFlyCameraWholeMapRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
@@ -260,6 +300,18 @@ namespace orphen::port
     const Uint8 *keys = SDL_GetKeyboardState(nullptr);
     input.moveX = keyAxis(keys[SDL_SCANCODE_A] != 0, keys[SDL_SCANCODE_D] != 0);
     input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0, keys[SDL_SCANCODE_W] != 0);
+    if (flyCameraActive_)
+    {
+      // The keys fly the camera instead, and the lead stands still unless a
+      // pad stick says otherwise -- everything below sees WASD as released.
+      input.flyMoveRight = input.moveX;
+      input.flyMoveForward = input.moveY;
+      input.flyMoveUp = keyAxis(keys[SDL_SCANCODE_Q] != 0, keys[SDL_SCANCODE_E] != 0);
+      input.flyFastHeld = keys[SDL_SCANCODE_LSHIFT] != 0 || keys[SDL_SCANCODE_RSHIFT] != 0;
+      input.flySlowHeld = keys[SDL_SCANCODE_LCTRL] != 0 || keys[SDL_SCANCODE_RCTRL] != 0;
+      input.moveX = 0.0f;
+      input.moveY = 0.0f;
+    }
     // J/L are the original's L1/R1, below; the free viewer borrows them for yaw
     // because it has no camera of its own. I/K pitch and Q/E zoom are gone --
     // they were map-viewer holdovers with no pad button behind them, and they
@@ -546,6 +598,16 @@ namespace orphen::port
       // angle straight out of the two axes.
       input.cameraStickMagnitude = kFullStickMagnitude;
       input.cameraStickAngle = std::atan2(keyboardCameraY, keyboardCameraX);
+    }
+  }
+
+  void SdlGlWindow::setFlyCameraActive(bool active)
+  {
+    flyCameraActive_ = active;
+    if (!active && mouseLookHeld_)
+    {
+      mouseLookHeld_ = false;
+      SDL_SetRelativeMouseMode(SDL_FALSE);
     }
   }
 

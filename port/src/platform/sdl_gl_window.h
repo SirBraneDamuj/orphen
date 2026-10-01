@@ -30,6 +30,11 @@ namespace orphen::port
     SdlGlWindow &operator=(const SdlGlWindow &) = delete;
 
     void pollEvents(InputSnapshot &input);
+
+    // While on, pollEvents routes WASD/Q/E and the mouse to the fly camera
+    // fields instead of the game's movement stick, and the right mouse button
+    // captures the pointer for mouse look. Off releases any capture.
+    void setFlyCameraActive(bool active);
     void beginFrame(float red, float green, float blue);
     void swapBuffers();
 
@@ -55,6 +60,8 @@ namespace orphen::port
     // DAT_003555fe from the previous frame; FUN_0023b5d8 keeps it in uVar1 and
     // masks the new word with it to build DAT_00355600.
     std::uint16_t previousRawStickDirection_ = 0;
+    bool flyCameraActive_ = false;
+    bool mouseLookHeld_ = false;
     void *glContext_ = nullptr;
     int width_ = 0;
     int height_ = 0;

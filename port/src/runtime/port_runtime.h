@@ -273,6 +273,11 @@ namespace orphen::port
     // --debug-overlay: start with B's in-world debug drawing on, so a
     // --screenshot can capture it.
     bool debugOverlay = false;
+    // --fly-camera: start in F1's fly camera, on the game camera ("game") or at
+    // x,y,z in game space looking along a yaw and pitch given in degrees, so a
+    // --screenshot can capture the scene from outside the game's view.
+    bool flyCamera = false;
+    std::optional<std::array<float, 5>> flyCameraPose;
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
@@ -357,6 +362,17 @@ namespace orphen::port
     // always passes the nominal 0x20 because main() drives a fixed accumulator.
     bool update(const InputSnapshot &input, std::uint32_t frameTicks = orphen::ported::kNominalFrameTicks);
     void render(int framebufferWidth, int framebufferHeight) const;
+    // The harness's F1 fly camera, once per rendered frame on wall-clock time.
+    // Outside update() so the simulation cannot see it.
+    void updateFlyCamera(float deltaSeconds, const InputSnapshot &input)
+    {
+      mapViewer_.updateFlyCamera(deltaSeconds, input);
+    }
+    bool flyCameraActive() const { return mapViewer_.flyCameraActive(); }
+    void placeFlyCamera(const orphen::ported::psm2::Vec3 &eye, float yawRadians, float pitchRadians)
+    {
+      mapViewer_.placeFlyCamera(eye, yawRadians, pitchRadians);
+    }
 
     // Reports that are only meaningful after frames have run. Called once at
     // shutdown; a no-op unless the matching flag was passed.

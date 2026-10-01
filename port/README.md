@@ -9458,12 +9458,48 @@ Harness controls, which the simulation cannot see:
 - `B` toggles the in-world debug overlay: collision boxes, entity labels, origin axes.
 - `O` toggles SCR SUBPROC DISP. It was `P` until fast forward took that key.
 - `G` dumps a pose/draw-list snapshot of the current frame and photographs it.
+- `F1` toggles the fly camera, `F2` puts it back on the game camera, `F3`
+  swaps the game's draw list for the whole map. See Fly camera, below.
 
 `C` was `B` until the sword attack landed on it, at which point one key was
 firing two gameplay actions and a harness toggle. The free viewer's own pitch
 (`I/K`) and zoom (`Q/E`) are gone with the same tidy-up: they were map-viewer
 holdovers with no pad button behind them, and the free viewer keeps yaw and pan
 off the game's own axes. `R` still restores its default framing.
+
+### Fly camera
+
+`F1` detaches the view from the game camera (`src/harness/fly_camera.*`). It
+has no counterpart in the original. It starts exactly on the game camera's eye
+and heading, fills the whole window instead of the 4:3 box, and draws the game
+camera into the world as a yellow gizmo: a pyramid from the eye to the 0.4
+near clip, a filled triangle on the near plane's top edge for up, the frustum
+out to the draw distance (`DAT_00355628`), and the view axis in orange. Each
+piece is drawn twice, faintly through geometry and solid where nothing is in
+front of it.
+
+- Hold the right mouse button to look; `W/A/S/D` fly along the view, `Q/E` go
+  down and up. Shift is x4, Ctrl x0.25, and the wheel scales the base speed.
+- While it is up, WASD stops reaching the movement stick, so the lead stands
+  still. The other game keys and a pad still drive the game, and the
+  simulation keeps running.
+- `F2` snaps back onto the game camera. `F3` toggles between the map list the
+  game camera's visibility pass kept (the default, so flying out of the
+  frustum shows what `FUN_00209140` threw away) and every non-hidden map
+  primitive, drawn opaque in record order.
+- Fog, the smear, the letterbox bars, the fade and the game-over underlay are
+  left out: they belong to the game's picture, and the fog is measured from the
+  game camera's eye. Billboards are put back in the world through the game
+  camera's inverse view, because their quads arrive in its view space. Text and
+  HUD sprites still draw in their 4:3 box.
+- A left click probes through the fly camera.
+
+It runs once per rendered frame on wall-clock time, outside `PortRuntime::update`,
+so the simulation cannot see it and `--frames` runs never touch it. Entering and
+leaving print the pose as a `--fly-camera x,y,z,yaw,pitch` argument (game space,
+degrees, yaw 0 along +x, positive pitch looking up). Pass that back with
+`--screenshot` to photograph the same view; `--fly-camera game` starts on the
+game camera.
 
 ### Fast forward
 

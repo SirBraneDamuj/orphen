@@ -9,6 +9,7 @@
 #include "ported/scene/title_screen.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -97,6 +99,10 @@ namespace
                  "                  write the 'G' diagnostic snapshot at <frame>\n"
                  "                  without a keypress, so a headless run can\n"
                  "                  produce one and two builds can be diffed.\n"
+                 "  --fly-camera <game | x,y,z,yaw,pitch>\n"
+                 "                  start in the F1 fly camera, on the game camera or\n"
+                 "                  at a game-space eye with yaw and pitch in degrees\n"
+                 "                  (yaw 0 looks along +x, positive pitch looks up).\n"
                  "  --screenshot <path>[:<frame>]\n"
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
@@ -727,6 +733,32 @@ namespace
         config.debugOverlay = true;
         continue;
       }
+      if (argument == "--fly-camera")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--fly-camera needs game or x,y,z,yaw,pitch");
+        }
+        const std::string value = argv[++argumentIndex];
+        config.flyCamera = true;
+        if (value != "game")
+        {
+          std::array<float, 5> pose{};
+          std::stringstream fields(value);
+          std::string field;
+          std::size_t count = 0;
+          while (std::getline(fields, field, ',') && count < pose.size())
+          {
+            pose[count++] = std::stof(field);
+          }
+          if (count != pose.size())
+          {
+            throw std::runtime_error("--fly-camera needs game or x,y,z,yaw,pitch");
+          }
+          config.flyCameraPose = pose;
+        }
+        continue;
+      }
       if (argument == "--scene-tree")
       {
         config.printSceneTree = true;
@@ -1291,6 +1323,8 @@ int main(int argc, char **argv)
     auto fastForwardStart = previousTick;
     std::uint32_t fastForwardSteps = 0;
     auto lastPresentTick = previousTick;
+    bool flyCameraStarted = false;
+    bool flyCameraPlaced = false;
 
     if (!config.vsync && window.swapInterval() != 0)
     {
@@ -1544,6 +1578,29 @@ int main(int argc, char **argv)
         }
       }
       loopStats.simMicros += microsSince(simStart);
+
+      // F1. On the frame's real delta, not the simulation's, so it flies the
+      // same through fast forward, a stall, or a scene with no lead. Clamped
+      // so a stall does not throw the camera across the map. After the steps,
+      // so entering it snaps to the camera this frame is about to show.
+      {
+        orphen::port::InputSnapshot flyInput = input;
+        if (config.flyCamera && !flyCameraStarted)
+        {
+          flyCameraStarted = true;
+          flyInput.toggleFlyCameraRequested = !runtime.flyCameraActive();
+        }
+        runtime.updateFlyCamera(std::min(delta.count(), 0.1f), flyInput);
+        if (config.flyCameraPose.has_value() && !flyCameraPlaced)
+        {
+          flyCameraPlaced = true;
+          constexpr float kRadiansPerDegree = 3.14159265f / 180.0f;
+          const auto &pose = *config.flyCameraPose;
+          runtime.placeFlyCamera({pose[0], pose[1], pose[2]}, pose[3] * kRadiansPerDegree,
+                                 pose[4] * kRadiansPerDegree);
+        }
+        window.setFlyCameraActive(runtime.flyCameraActive());
+      }
 
       // The swap is the expensive half to skip: with vsync on it blocks for the
       // rest of the refresh interval, which is exactly the wait the original

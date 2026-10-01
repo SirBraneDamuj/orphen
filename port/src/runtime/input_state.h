@@ -49,6 +49,29 @@ namespace orphen::port
     int probeX = 0;
     int probeY = 0;
 
+    // F1: detach the view into the harness's fly camera (harness/fly_camera.h)
+    // and back. F2 puts the fly camera back on the game camera; F3 swaps the
+    // game's culled map draw list for the whole map. All three are read once
+    // per rendered frame, never by the simulation step.
+    bool toggleFlyCameraRequested = false;
+    bool flyCameraSnapRequested = false;
+    bool toggleFlyCameraWholeMapRequested = false;
+
+    // Fly camera motion. Only filled while the window has been told the fly
+    // camera is up (SdlGlWindow::setFlyCameraActive), and in that mode WASD
+    // stops reaching moveX/moveY -- the keys fly the camera instead of walking
+    // the lead. A pad still drives the game.
+    float flyMoveRight = 0.0f;   // D/A
+    float flyMoveForward = 0.0f; // W/S
+    float flyMoveUp = 0.0f;      // E/Q
+    // Relative mouse motion in pixels while the right button is held.
+    float flyLookX = 0.0f;
+    float flyLookY = 0.0f;
+    // Mouse wheel notches, each one scaling the speed by 1.25.
+    int flySpeedSteps = 0;
+    bool flyFastHeld = false; // Shift
+    bool flySlowHeld = false; // Ctrl
+
     // Free-viewer camera yaw, used only when no player is active. It rides the
     // same J/L keys as the game's L1/R1 rather than having bindings of its own.
     // Pitch and zoom used to live here on I/K and Q/E; they were map-viewer
