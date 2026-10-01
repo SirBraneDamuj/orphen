@@ -332,6 +332,18 @@ namespace orphen::ported::entity
       return;
     }
 
+    // FUN_00305408(+0x34, +0x30) at 0x00226794 -- atan2 of the request, which
+    // is the heading the shove is applied along.
+    const float heading = std::atan2(entity.desiredDeltaZ34, entity.desiredDeltaX30);
+    FUN_002262c0_clamp_step_against_entities(pool, slot, heading, entity.desiredDeltaX30,
+                                             entity.desiredDeltaZ34);
+  }
+
+  void FUN_002262c0_clamp_step_against_entities(EntityPool &pool, std::size_t slot, float heading,
+                                                float &stepX, float &stepZ)
+  {
+    OriginalEntity &entity = pool.slot(slot);
+
     // FUN_002262c0:36 -- the gate the whole solve is behind.
     if ((entity.halfword04 & 0x100) != 0)
     {
@@ -345,13 +357,11 @@ namespace orphen::ported::entity
     solve.selfSlot = slot;
     solve.selfX = entity.positionX20;
     solve.selfY = entity.positionZ24;
-    solve.deltaX = entity.desiredDeltaX30;
-    solve.deltaY = entity.desiredDeltaZ34;
+    solve.deltaX = stepX;
+    solve.deltaY = stepZ;
     solve.height = entity.height58;
     solve.radius = entity.radius54;
-    // FUN_00305408(+0x34, +0x30) at 0x00226794 -- atan2 of the request, which
-    // is the heading the shove is applied along.
-    solve.heading = std::atan2(entity.desiredDeltaZ34, entity.desiredDeltaX30);
+    solve.heading = heading;
     solve.flags04 = entity.halfword04;
 
     // FUN_002262c0:0x002267C4..0x00226820, in this order. X resolves first, and
@@ -375,8 +385,8 @@ namespace orphen::ported::entity
       FUN_00228a90(pool, solve);
     }
 
-    entity.desiredDeltaX30 = solve.deltaX;
-    entity.desiredDeltaZ34 = solve.deltaY;
+    stepX = solve.deltaX;
+    stepZ = solve.deltaY;
   }
 
   const EntityCollisionStats &entityCollisionStats() { return g_stats; }

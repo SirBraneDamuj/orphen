@@ -242,6 +242,8 @@ target_sources(orphen_port
     src/ported/entity/original_gather_particles.cpp
     src/ported/entity/original_water_splash.cpp
     src/ported/entity/original_enemy_attack.cpp
+    src/ported/entity/original_breakable_prop.cpp
+    src/ported/entity/original_breakable_prop.h
     src/ported/entity/original_ship_fire.cpp
     src/ported/entity/original_ship_fire.h
     src/ported/entity/original_field_hp_gauge.cpp

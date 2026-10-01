@@ -24,19 +24,12 @@ namespace orphen::ported::player
     constexpr float kOriginalFullStickMagnitude = 128.0f;       // DAT_003555e8 at full deflection.
     constexpr float kOriginalJumpVelocity = 0.0529999994f;      // DAT_0035287c/DAT_00355000.
     constexpr float kOriginalGravity = 0.000750000007f;         // JUMP TEST G_FORCE 00075 at x100000 scale.
-    constexpr float kLandingTolerance = 0.05f;
     // DAT_0035246C / DAT_00352470: the landing ring sits 0.15 below the feet and
     // its puffs are 0.4 across. FUN_002262C0 passes the actor's own +0x54 for
     // both the x jitter and the ring radius, with no y jitter.
     constexpr float kDAT_0035246c_dustDrop = 0.15f;
     constexpr float kMovementEpsilon = 0.0001f;
     constexpr std::uint32_t kPhysicsFlagGrounded = 0x0001;
-    constexpr std::uint32_t kPhysicsFlagBlocked = 0x0002;
-    constexpr std::uint32_t kPhysicsFlagVerticalCollision = 0x0004;
-    constexpr std::uint32_t kPhysicsFlagRising = 0x0008;
-    constexpr std::uint32_t kPhysicsFlagFalling = 0x0010;
-    constexpr std::uint32_t kPhysicsFlagXBlocked = 0x0020;
-    constexpr std::uint32_t kPhysicsFlagZBlocked = 0x0040;
 
     // FUN_00225c90's latches on entity +0x06, the same three the animation
     // stepper writes in ported/model/entity_animation.cpp.
@@ -61,6 +54,9 @@ namespace orphen::ported::player
     constexpr float kuGpffff88c8_deathPopUp = 0.0450000018f;    // 0x00352838
     constexpr float kuGpffff88d0_knockbackSpeed = 0.00312500005f; // 0x00352840
     constexpr float kuGpffff88d4_knockbackPopUp = 0.0350000001f; // 0x00352844
+    // FUN_00251ED8:60-71's terrain-hazard entry: an airborne lead only drowns
+    // once it is falling faster than this.
+    constexpr float kfGpffff88bc_hazardFallSpeed = -0.100000001f; // 0x0035282C
 
     constexpr std::uint16_t kSoundCueSwordSwing = 0xa4;
     // FUN_00257b50 and FUN_00257b40, the two halves of the cast: 0xA5 when the
@@ -137,10 +133,18 @@ namespace orphen::ported::player
     // height let the lead ratchet 0.75 up per move and climb out of the hold.
     constexpr float kStepHeightDAT_00352434 = 0.26f;
 
-    bool canStepToHeight(float currentHeight, float destinationHeight, bool wasGrounded)
-    {
-      return !wasGrounded || destinationHeight - currentHeight < kStepHeightDAT_00352434;
-    }
+    // The rest of FUN_002262c0's constant block, read out of SLUS_200.11.
+    constexpr float kDAT_00352428_velocityFloor = -1.0e-5f; // v == 0 after gravity becomes this
+    constexpr float kDAT_00352430_holdLift = 0.02f;         // +0x38 on the LAB_00226988 hold
+    constexpr float kDAT_00352438_stepLift = 0.063f;        // the provisional raise past a step
+    constexpr float kDAT_0035243c_firstRetryScale = 0.3f;
+    constexpr float kDAT_00352440_narrowScale = 0.7f;
+    constexpr float kDAT_00352444_narrowTurn = 0.3490658f;   // 20 degrees
+    constexpr float kDAT_00352448_narrowTurnBack = 0.3490658f;
+    constexpr float kDAT_0035244c_wideTurn = 1.0471973f;     // 60 degrees
+    constexpr float kDAT_00352450_wideTurnBack = 1.0471973f;
+    constexpr float kDAT_00352454_easeWindow = 0.26f;        // +0x2C eases up steps smaller than this
+    constexpr float kDAT_00352458_easeStep = 0.04f;
 
   } // namespace
 
@@ -169,6 +173,8 @@ namespace orphen::ported::player
     // put 0.75 here and read the field as a step height, which let the lead
     // ratchet three quarters of a unit up per move and climb out of the hold.
     entity().slopeLimit80 = 0.872664626f;
+    // FUN_00229c40 seeds +0x7C to 100.0; every save-state dump has the lead on it.
+    entity().maxStepDown7c = 100.0f;
     FUN_00252d88_return_to_idle_state();
 
     if (terrainSampler)
@@ -196,6 +202,7 @@ namespace orphen::ported::player
       {
         entity().flagWord6c = surface->terrainFlags;
         entity().flagWord70 = surface->terrainFlags;
+        entity().groundPrimitive0a = surface->packedPrimitive;
       }
     }
   }
@@ -237,6 +244,40 @@ namespace orphen::ported::player
     // target, never advanced +0x1BC and never set the event flag its cutscene
     // gates on. This is the same bug the actor loop had (see the FUN_00239ce0
     // note in port/README.md); the lead's copy of it survived that fix.
+
+    // FUN_00251ED8:60-71, the terrain-hazard entry. A surface whose terrain
+    // word carries 0x1000000 -- water, lava, a pit -- takes the player into
+    // state 0x19 once it is standing on it or falling onto it. A class-1
+    // surface (top nibble 1) is the exception: it only counts below the water
+    // line DAT_003556FC. +0x04 |= 0x110 switches the physics off (0x100) so the
+    // handler can sink the body by hand; +0x134 = 0x7C is the fade it sinks
+    // through; the camera sub-mode goes into +0x1B4 and is parked at 0xFF so the
+    // view holds, and FUN_00255E40 restores both.
+    {
+      const std::uint32_t terrain = entity().flagWord6c;
+      const bool settledOrFalling = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0 ||
+                                    entity().verticalVelocity44 < kfGpffff88bc_hazardFallSpeed;
+      const float waterLine =
+          terrainHazard_.DAT_003556fc_waterLine ? terrainHazard_.DAT_003556fc_waterLine() : 0.0f;
+      if ((terrain & 0x01000000u) != 0 && entity().state60 != kStateTerrainHazard &&
+          settledOrFalling &&
+          ((terrain & 0xF0000000u) != 0x10000000u || entity().positionY28 <= waterLine))
+      {
+        FUN_00225bf0_set_entity_state(kStateTerrainHazard, kAnimationTerrainHazard);
+        entity().fadeLevel134 = 0x7C;
+        entity().halfword04 = static_cast<std::uint16_t>(entity().halfword04 | 0x110u);
+        entity().halfword08 = static_cast<std::uint16_t>(entity().halfword08 & 0xFFFBu);
+        entity().fadeRamp62 = 0;
+        // +0x1B4 is the climb's face halfword too; the two never overlap.
+        const std::uint8_t subMode =
+            terrainHazard_.cameraSubMode ? terrainHazard_.cameraSubMode() : 0;
+        entity().climbFace1b4 = static_cast<std::int16_t>(static_cast<std::int8_t>(subMode));
+        if (terrainHazard_.setCameraSubMode)
+        {
+          terrainHazard_.setCameraSubMode(0xFF);
+        }
+      }
+    }
 
     // FUN_00251ED8:97-230, ahead of the dispatch: the +0xBE mailbox. It can
     // replace the state outright, so the branch below sees the reaction the hit
@@ -801,10 +842,9 @@ namespace orphen::ported::player
   // its only writer and it tests `+0x6C & 0x1000000` -- a terrain word saying
   // the surface kills on contact -- so this is the lava-and-pit state: sink the
   // body while the tint ramps down, hide it, and count to the respawn that puts
-  // the player back on the lead trail with a hit point. The terrain entry is
-  // not ported yet, so nothing reaches this handler; it is transcribed because
-  // it was already written, and because the port used to run the real death
-  // through it.
+  // the player back on the lead trail and charges it a point of damage. The
+  // entry is at the top of update(). Checked against the disassembly at
+  // 0x002557A0 (a LAB_ block; there is no src/ file): it matches line for line.
   void OriginalPlayerController::FUN_002557a0_update_terrain_hazard(std::uint32_t frameTicks)
   {
     constexpr float kDAT_00352984_sinkPerFrame = 0.100000001f;
@@ -831,9 +871,10 @@ namespace orphen::ported::player
     if (counter >= 0x21 && onDeathRespawn_)
     {
       // FUN_00255E40: walk DAT_00355704 backwards for a primitive carrying
-      // neither 0x0800000 nor 0x1000000, drop the player there and hand it back
-      // one hit point. It needs the lead trail and the map's terrain words, so
-      // it is the caller's; with no hook installed the body stays hidden.
+      // neither 0x0800000 nor 0x1000000, drop the player there and charge it
+      // the hazard's damage. It needs the lead trail and the map's terrain
+      // words, so it is the caller's; with no hook installed the body stays
+      // hidden.
       onDeathRespawn_();
     }
   }
@@ -1786,7 +1827,8 @@ namespace orphen::ported::player
       float originalX,
       float originalZ,
       float bodyBaseHeight,
-      const OriginalTerrainSampler &terrainSampler) const
+      const OriginalTerrainSampler &terrainSampler,
+      bool applyRequiredMask) const
   {
     if (!terrainSampler)
     {
@@ -1801,6 +1843,7 @@ namespace orphen::ported::player
                                                                       {-radius, radius, 0.0f}}};
     std::optional<OriginalTerrainSample> highestSample;
     std::uint32_t commonTerrainFlags = 0xffffffff;
+    float lowestHeight = 500.0f;
 
     for (const auto &offset : footprintOffsets)
     {
@@ -1814,9 +1857,16 @@ namespace orphen::ported::player
       }
 
       commonTerrainFlags &= sample->terrainFlags;
+      lowestHeight = std::min(lowestHeight, sample->height);
       if (!highestSample.has_value() || highestSample->height < sample->height)
       {
         highestSample = sample;
+      }
+      else if (highestSample->height == sample->height)
+      {
+        // FUN_00227390: a corner level with the best so far ORs its word into
+        // workspace +0x00 rather than replacing it.
+        highestSample->terrainFlags |= sample->terrainFlags;
       }
     }
 
@@ -1824,8 +1874,10 @@ namespace orphen::ported::player
     {
       return std::nullopt;
     }
+    highestSample->lowestCornerHeight = lowestHeight;
 
-    if (entity().requiredTerrainMask78 != 0 && (commonTerrainFlags & entity().requiredTerrainMask78) == 0)
+    if (applyRequiredMask && entity().requiredTerrainMask78 != 0 &&
+        (commonTerrainFlags & entity().requiredTerrainMask78) == 0)
     {
       return std::nullopt;
     }
@@ -1861,264 +1913,340 @@ namespace orphen::ported::player
       return;
     }
 
-    std::uint32_t nextCollisionFlags = 0;
-    const bool wasGrounded = (entity().collisionFlags0c & kPhysicsFlagGrounded) != 0;
+    // The workspace result word (+0x12C), seeded at :39 and stored over +0x0C
+    // at :628. +0x0C itself is read mid-solve as *last* frame's word -- bit 0 at
+    // :276, bit 0x10000 at :311 and :582 -- so that copy is kept aside.
+    const std::uint32_t previousFlags = entity().collisionFlags0c;
+    std::uint32_t result = 0;
+    const bool gravityOn = (entity().halfword04 & 0x0008u) == 0;
 
-    // FUN_002262c0:0x002267C4..0x00226820, the entity-vs-entity clamps. They
-    // run on slot 0 exactly as on every other slot -- FUN_002261e0 hands the
-    // lead to the same FUN_002262c0 -- and they sit directly in front of the
-    // destination's FUN_00227390 scan, narrowing +0x30/+0x34 so the lead stops
-    // flush against whatever is in the way. Without this the lead walked
-    // through chests: the terrain scan below knows nothing about entities.
+    // FUN_002262c0:40. Cleared once per solve, whether or not a clamp fires.
+    entity().blockedBy64 = 0;
+
+    // FUN_002262c0:97-110, gravity. **It runs on the ground as well.** A
+    // standing actor falls a sliver every frame and the landing at :511 puts it
+    // back on +0x4C, which is what raises bit 0; a walk down a slope is the
+    // same landing against a lower +0x4C. Only +0x04 bit 3 turns it off -- the
+    // s14_e002 intro found that gate: FUN_0029C198 raises the bit for the whole
+    // carry, and without it the lead accrued a third of a unit of fall per
+    // frame under a spline that teleported it back.
     //
-    // The 0x20/0x40 bits they raise go into the workspace result word that
-    // becomes +0x0C at :628, so they are carried into this frame's flags rather
-    // than left on last frame's copy.
-    if (entityPool_ != nullptr)
+    //   dt = (float)DAT_003555bc * 0.125
+    //   +0x38 += v*dt - (g*dt)*dt*0.5;  v -= g*dt, nudged off exact zero.
+    //
+    // The port used to apply this only while airborne and paper over the gap
+    // with a 0.05 landing tolerance and a "jump startup" that zeroed +0x38
+    // through the crouch. Neither is in the original.
+    if (gravityOn)
     {
-      const std::uint32_t kept = entity().collisionFlags0c & ~0x60u;
-      entity().collisionFlags0c = kept;
-      orphen::ported::entity::FUN_002262c0_clamp_movement_against_entities(*entityPool_, entityPoolSlot_);
-      nextCollisionFlags |= entity().collisionFlags0c & 0x60u;
-      entity().collisionFlags0c = kept;
+      const float physicsStep = orphen::ported::physicsStepForFrameTicks(frameTicks);
+      const float fall = entity().verticalAcceleration48 * physicsStep;
+      entity().desiredDeltaY38 += entity().verticalVelocity44 * physicsStep - fall * physicsStep * 0.5f;
+      float velocity = entity().verticalVelocity44 - fall;
+      if (velocity == 0.0f)
+      {
+        velocity = kDAT_00352428_velocityFloor;
+      }
+      entity().verticalVelocity44 = velocity;
     }
+    // Workspace +0x10: the post-gravity speed, never written again, so the dust
+    // test below reads the speed the actor hit the ground at rather than the
+    // zero the landing leaves behind.
+    const float impactVelocity = entity().verticalVelocity44;
 
-    const float startX = entity().positionX20;
-    const float startZ = entity().positionZ24;
-    const float attemptedX = startX + entity().desiredDeltaX30;
-    const float attemptedZ = startZ + entity().desiredDeltaZ34;
+    // Not ported for the lead: the +0x0A lift block (:41-91, which needs a
+    // dynamic group), the +0xBD freeze (:93) and the embedded-corner push-out
+    // (:111-209). The non-player copy in actor_frame_update.cpp has the last two.
 
+    // FUN_002262C0:213-451, the movement loop. Entered only for a non-zero +0x30
+    // or +0x34; a body with no horizontal request makes no ground query at all,
+    // so +0x4C, +0x6C and +0x70 keep what the last one wrote and the landing
+    // below compares against that +0x4C. (The +0x0C bit 0x100 re-query on that
+    // path is riding an entity, which the port does not model.) Querying anyway
+    // let a climber hanging under a ledge find the ledge and be landed on it.
+    //
     // **There is no map-wall query here, and the original does not have one.**
     // FUN_002262c0's only geometry call is FUN_00227390; its four blocker
-    // helpers (FUN_00228380 / FUN_002285d8 / FUN_00228838 / FUN_00228a90) walk
-    // DAT_0058beb0, the entity pool, not the map. A move into a wall is refused
-    // because the destination's ground scan fails one of the tests below, and
-    // nothing else.
-    //
-    // The port used to run an invented swept-capsule test over every steep
-    // triangle (`queryPsm2ActiveBlockerAlong`), which had no FUN_* behind it and
-    // rejected anything taller than 5 cm. s01_e012 has a 10 cm door sill at
-    // y = 1.9 -- primitive 3497, a 1.0 x 0.1 strip across the doorway -- and
-    // that blocked the scripted walk in stream 0xd5e0 permanently, because a
-    // cutscene's 0xF0 cannot give up and route around.
-    auto validateMove = [&](float fromX, float fromZ, float toX, float toZ) -> std::optional<OriginalTerrainSample>
+    // helpers walk DAT_0058beb0, the entity pool, not the map. A move into a
+    // wall is refused because the destination's ground scan fails one of the
+    // tests below, and nothing else. (The port once ran an invented swept-capsule
+    // test that blocked s01_e012's 10 cm door sill and with it a scripted walk.)
+    if (entity().desiredDeltaX30 != 0.0f || entity().desiredDeltaZ34 != 0.0f)
     {
-      (void)fromX;
-      (void)fromZ;
+      const float startX = entity().positionX20;
+      const float startZ = entity().positionZ24;
+      // puVar11[0x55] / [0x56]: the request's heading and length as asked --
+      // before any clamp -- taken once and never recomputed.
+      const float requestHeading = std::atan2(entity().desiredDeltaZ34, entity().desiredDeltaX30);
+      const float requestSpeed = std::sqrt(entity().desiredDeltaX30 * entity().desiredDeltaX30 +
+                                           entity().desiredDeltaZ34 * entity().desiredDeltaZ34);
+      float stepX = entity().desiredDeltaX30;
+      float stepZ = entity().desiredDeltaZ34;
+      float retrySpeed = requestSpeed;
+      int attempt = 0;
 
-      auto ground = FUN_00227390_validate_destination(toX, toZ, entity().positionY28, terrainSampler);
-      if (!ground.has_value())
-      {
-        return std::nullopt;
-      }
+      // The entity clamps OR 0x20 / 0x40 into +0x0C as they go. Hand them a
+      // word without last frame's pair and carry what they raise into result.
+      entity().collisionFlags0c = previousFlags & ~0x60u;
 
-      // FUN_002262c0:0x00226cb4, the gate in front of the whole upward-step
-      // branch: `if ((float)puVar11[2] <= *(float *)(iVar12 + 0x80))`. This is
-      // what stops an actor walking up the hull -- the ship's plating samples
-      // about 60 degrees and the limit is 50.
-      if (ground->slopeAngle > entity().slopeLimit80)
-      {
-        return std::nullopt;
-      }
-
-      if (!canStepToHeight(entity().positionY28, ground->height, wasGrounded))
-      {
-        return std::nullopt;
-      }
-      return ground;
-    };
-
-    // FUN_002262C0:454-466. The movement block, and every FUN_00227390 in it,
-    // is entered only for a non-zero +0x30 or +0x34. A body with no horizontal
-    // request makes no ground query at all: +0x4C, +0x6C and +0x70 keep what
-    // the last one wrote, and the landing below compares against that +0x4C.
-    // (The +0x0C bit 0x100 re-query on that path is riding an entity, which
-    // the port does not model.) Querying anyway let a climber hanging under a
-    // ledge find the ledge and be landed on it.
-    const bool horizontalRequest = entity().desiredDeltaX30 != 0.0f || entity().desiredDeltaZ34 != 0.0f;
-    std::optional<OriginalTerrainSample> destinationGround;
-    if (horizontalRequest)
-    {
-      destinationGround = validateMove(startX, startZ, attemptedX, attemptedZ);
-      if (destinationGround.has_value())
-      {
-        entity().positionX20 = attemptedX;
-        entity().positionZ24 = attemptedZ;
-        entity().groundHeight4c = destinationGround->height;
-      }
-      else
-      {
-        nextCollisionFlags |= kPhysicsFlagBlocked;
-        destinationGround.reset();
-
-        if (std::abs(entity().desiredDeltaX30) > kMovementEpsilon)
+      const auto settleOn = [this](const OriginalTerrainSample &surface, float x, float z) {
+        // :266-272. Settling copies the surface's words into the entity: +0x6C
+        // is the winning corner's (ties ORed), +0x70 the AND across all four.
+        // They are the only way a *surface* reaches the script -- opcode 0x61
+        // (FUN_0025f4b8) tests one of them against a mask, +0x70 when the
+        // selector's 0x80 bit is set -- which is how a floor panel triggers.
+        entity().positionX20 = x;
+        entity().positionZ24 = z;
+        entity().flagWord6c = surface.terrainFlags;
+        entity().flagWord70 = surface.commonFootprintFlags;
+        // :266 / :352, `+0x0A = workspace +0x20`. **The followers navigate by
+        // this.** When the lead is on another level, FUN_00259520 aims a
+        // follower at the centre of the lead's +0x0A primitive and lets the
+        // graph find the way there. The lead never wrote it, so it kept
+        // whatever the last script placement left -- and in s03_e001 the party
+        // pathed to a spot the lead had long since left, arrived, found the
+        // lead still out of reach, and re-pathed to the same spot forever,
+        // walking on the spot. FUN_00227390 only replaces workspace +0x20 for
+        // a corner that names a primitive, hence the guard.
+        if (surface.packedPrimitive >= 0)
         {
-          auto xOnlyGround = validateMove(startX, startZ, attemptedX, startZ);
-          if (xOnlyGround.has_value())
+          entity().groundPrimitive0a = surface.packedPrimitive;
+        }
+      };
+
+      for (;;)
+      {
+        // :230-252. The clamps run at the top of every pass, against the step
+        // this pass is about to try, so a rotated retry still stops at an actor.
+        // Without them the lead walked through chests.
+        if (entityPool_ != nullptr)
+        {
+          orphen::ported::entity::FUN_002262c0_clamp_step_against_entities(*entityPool_, entityPoolSlot_,
+                                                                          requestHeading, stepX, stepZ);
+        }
+
+        const float feet = entity().positionY28;
+        const auto destination = FUN_00227390_validate_destination(startX + stepX, startZ + stepZ, feet,
+                                                                   terrainSampler);
+        // FUN_00227390's return value, lVar7. It ends
+        //   uVar1 = 0; if (w[5] <= entity +0x28) { uVar1 = 1; ...required mask... }
+        // so it is **1 only for a surface at or below the feet**. A move onto
+        // anything higher never takes the accept path; it falls to the step-up
+        // branch below, which is the only way up and which an airborne actor
+        // cannot take.
+        //
+        // The port had this as "accept anything while airborne". A jump beside
+        // a ledge then accepted the ledge as the destination, wrote its height
+        // into +0x4C and the landing snapped the lead up onto it -- so a jump
+        // out of s03_e001's collapsed floor went through the floor around it.
+        const bool atOrBelowFeet = destination.has_value() && destination->height <= feet;
+
+        bool accepted = false;
+        bool held = false;
+        if (!destination.has_value() ||
+            entity().groundHeight4c - destination->lowestCornerHeight > entity().maxStepDown7c ||
+            entity().maxStepDown7c < destination->height - destination->lowestCornerHeight)
+        {
+          // :256-260 -> LAB_00226884. +0x7C is 100.0, so in practice this is a
+          // footprint corner over nothing: the original reads that corner as
+          // 128 and trips the second test, and the port's sampler reports it
+          // as no answer at all.
+          result |= 0x8002u;
+        }
+        else if (atOrBelowFeet)
+        {
+          // :262-306, accepted.
+          const float surface = destination->height;
+          settleOn(*destination, startX + stepX, startZ + stepZ);
+          // :274-292. A grounded actor stepping *down* less than 0.125 is taken
+          // down with the step this frame rather than left to fall to it.
+          if (gravityOn && entity().verticalVelocity44 < 0.0f && (previousFlags & kPhysicsFlagGrounded) != 0)
           {
-            entity().positionX20 = attemptedX;
-            entity().groundHeight4c = xOnlyGround->height;
-            destinationGround = xOnlyGround;
+            const float drop = surface - entity().groundHeight4c;
+            if (drop < 0.0f && -0.125f < drop)
+            {
+              entity().desiredDeltaY38 += drop;
+            }
           }
-          else
+          entity().groundHeight4c = surface < 128.0f ? surface : entity().groundHeight4c - 0.25f;
+          accepted = true;
+        }
+        else if ((previousFlags & 0x10000u) != 0)
+        {
+          // :311 false -> LAB_00226988.
+          held = true;
+        }
+        else
+        {
+          // :311-369, the step up.
+          result |= 0x0002u;
+          // `+0x28 != +0x50` is an actor that is not settled -- mid-fall,
+          // mid-jump -- and it may not step at all. +0x50 is still last
+          // frame's +0x4C here; :482 refreshes it after the loop.
+          if (feet == entity().previousGroundHeight50 &&
+              destination->height - feet < kStepHeightDAT_00352434 &&
+              destination->slopeAngle <= entity().slopeLimit80)
           {
-            nextCollisionFlags |= kPhysicsFlagXBlocked;
+            if ((entity().halfword04 & 0x0400u) != 0)
+            {
+              result &= ~0x0002u;
+              held = true;
+            }
+            else
+            {
+              // The step is provisional: +0x28 is raised just past the
+              // surface and the destination asked again from there, on a step
+              // shortened by the slope when +0x04 bit 0x20 is up (the lead's
+              // is). Kept only if the re-query lands at or below the raised
+              // feet and still under 0.26 above where the actor stood.
+              float upX = stepX;
+              float upZ = stepZ;
+              if ((entity().halfword04 & 0x0020u) != 0)
+              {
+                const float shorten = std::cos(destination->slopeAngle);
+                upX *= shorten;
+                upZ *= shorten;
+              }
+              const float raised = destination->height + kDAT_00352438_stepLift;
+              const auto above = FUN_00227390_validate_destination(startX + upX, startZ + upZ, raised,
+                                                                   terrainSampler);
+              if (above.has_value() && above->height <= raised &&
+                  above->height - feet < kStepHeightDAT_00352434)
+              {
+                settleOn(*above, startX + upX, startZ + upZ);
+                entity().desiredDeltaY38 -= above->height - feet;
+                result &= ~0x0002u;
+                entity().groundHeight4c = above->height;
+                entity().positionY28 = above->height;
+                accepted = true;
+              }
+            }
           }
         }
 
-        if (std::abs(entity().desiredDeltaZ34) > kMovementEpsilon)
+        if (accepted)
         {
-          auto zOnlyGround = validateMove(entity().positionX20, entity().positionZ24, entity().positionX20, attemptedZ);
-          if (zOnlyGround.has_value())
-          {
-            entity().positionZ24 = attemptedZ;
-            entity().groundHeight4c = zOnlyGround->height;
-            destinationGround = zOnlyGround;
-          }
-          else
-          {
-            nextCollisionFlags |= kPhysicsFlagZBlocked;
-          }
+          break;
+        }
+        if (held)
+        {
+          // LAB_00226988: no move, a small lift, and bit 0x10000.
+          entity().desiredDeltaY38 = kDAT_00352430_holdLift;
+          result |= 0x10000u;
+          break;
         }
 
-        if (!destinationGround.has_value())
+        // LAB_00226b00, refused. **A refused move is retried on a rotated
+        // heading, not split per axis** -- +0x04 bit 2 admits the actor to the
+        // ladder (the lead's 0x3024 has it), and the five rungs are the ones
+        // documented on the non-player copy in actor_frame_update.cpp:
+        //   heading x0.3, +20 deg x0.7, -20 deg (speed kept), +60 deg x0.5,
+        //   -60 deg (speed kept), then give up.
+        // The port used to try X alone and then Z alone, and record the result
+        // in 0x20 / 0x40, which belong to the entity clamps.
+        if ((entity().halfword04 & 0x0004u) == 0 || attempt > 4)
         {
-          destinationGround = FUN_00227390_validate_destination(entity().positionX20,
-                                                                entity().positionZ24,
-                                                                entity().positionY28,
-                                                                terrainSampler);
-          if (destinationGround.has_value())
-          {
-            entity().groundHeight4c = destinationGround->height;
-          }
+          break;
         }
+        float heading = requestHeading;
+        switch (attempt)
+        {
+        case 0:
+          retrySpeed = requestSpeed * kDAT_0035243c_firstRetryScale;
+          break;
+        case 1:
+          retrySpeed = requestSpeed * kDAT_00352440_narrowScale;
+          heading += kDAT_00352444_narrowTurn;
+          break;
+        case 2:
+          heading -= kDAT_00352448_narrowTurnBack;
+          break;
+        case 3:
+          retrySpeed = requestSpeed * 0.5f;
+          heading += kDAT_0035244c_wideTurn;
+          break;
+        default:
+          heading -= kDAT_00352450_wideTurnBack;
+          break;
+        }
+        ++attempt;
+        stepX = retrySpeed * std::cos(heading);
+        stepZ = retrySpeed * std::sin(heading);
+        if (stepX == 0.0f && stepZ == 0.0f)
+        {
+          break;
+        }
+        result = (result & 0xFFFF7FFDu) | 0x4000u;
       }
+
+      result |= entity().collisionFlags0c & 0x60u;
     }
 
-    // FUN_002262c0 at 0x00226884 and 0x0022692c: settling on a surface copies
-    // that surface's first two words into the entity, at +0x6C and +0x70. They
-    // are the only way a *surface* reaches the script -- opcode 0x61
-    // (FUN_0025f4b8) tests one of them against a mask, picking +0x70 when the
-    // selector's 0x80 bit is set and +0x6C otherwise. That is how a floor panel
-    // triggers: there is no trigger entity and no volume, just terrain the
-    // player is standing on carrying a flag the scene's per-frame entry watches
-    // for. s01_e024's tick makes exactly two such tests.
-    //
-    // The port had never written either word, so both tests were permanently
-    // false and every panel in every scene was dead.
-    if (destinationGround.has_value())
-    {
-      // Both fields take the *whole* 32-bit terrain word, pinned by the EE dump:
-      // the enemies hovering over the 0x30010000 floor read 0x30010000 in both
-      // +0x6C and +0x70, and the player standing on a 0 floor reads 0 in both.
-      //
-      // Two earlier guesses were wrong and the dump killed each. +0x6C is not
-      // the record's leading word (the player reads 0 where that word is 0xa00),
-      // and the pair is not the high and low halves of the terrain word (type
-      // 0x62's required mask is 0x00010000, which only overlaps 0x30010000 when
-      // the whole word is kept).
-      //
-      // FUN_002262c0 fills them from two different workspace slots, so they can
-      // presumably differ -- probably the surface under each of two sample
-      // points. On uniform floor they agree, and the port has nothing that would
-      // tell the two apart yet.
-      entity().flagWord6c = destinationGround->terrainFlags;
-      entity().flagWord70 = destinationGround->terrainFlags;
-    }
-
+    // FUN_002262c0:482. +0x50 takes +0x4C every frame, moved or not.
     entity().previousGroundHeight50 = entity().groundHeight4c;
 
-    const bool airborneState = entity().state60 == 2;
-    const bool jumpStartup = airborneState && entity().animationA0 == kAnimationJumpRise && entity().pendingJumpImpulse && entity().timelineCursorA8 < 4;
-    if (jumpStartup)
+    // FUN_002262c0:479-521, the vertical settle. Workspace +0x0C is +0x28 as
+    // the movement loop left it -- a step up has already raised it.
+    const float previousY = entity().positionY28;
+    const float verticalDelta = entity().desiredDeltaY38;
+    if (verticalDelta > 0.0f)
     {
-      entity().desiredDeltaY38 = 0.0f;
-    }
-    else if ((entity().halfword04 & 0x0008u) != 0)
-    {
-      // FUN_002262c0:99. **Bit 3 of +0x04 turns gravity off**, and the test is
-      // ahead of everything else in the block: neither +0x38 nor +0x44 is
-      // touched, so the velocity keeps whatever it had rather than being reset.
-      // The non-player path in actor_frame_update.cpp has had this gate all
-      // along; the lead's copy did not, and the s14_e002 intro is what found
-      // it -- FUN_0029C198 raises the bit for the whole carry, and without the
-      // gate the lead accrued a third of a unit of fall per frame under a
-      // spline that teleported it back, which dragged the camera's look-at down
-      // with it.
-    }
-    else if (airborneState || !wasGrounded)
-    {
-      // FUN_002262c0: dt = (float)DAT_003555bc * 0.125, then
-      //   +0x38 += v*dt - (g*dt)*dt*0.5;  v -= g*dt.
-      const float physicsStep = orphen::ported::physicsStepForFrameTicks(frameTicks);
-      entity().desiredDeltaY38 += entity().verticalVelocity44 * physicsStep -
-                                 entity().verticalAcceleration48 * physicsStep * physicsStep * 0.5f;
-      entity().verticalVelocity44 -= entity().verticalAcceleration48 * physicsStep;
+      // A rise is provisional: +0x28 is raised and FUN_00227390 asked again
+      // from there, with the required mask zeroed (:486). Anything but 1 -- no
+      // ground, or ground above the raised feet -- gives the rise back whole
+      // and zeroes the speed. That is what stops a jump at a ceiling.
+      entity().positionY28 = previousY + verticalDelta;
+      result |= 0x0008u;
+      const auto headroom = FUN_00227390_validate_destination(entity().positionX20, entity().positionZ24,
+                                                              entity().positionY28, terrainSampler,
+                                                              false);
+      if (!headroom.has_value() || headroom->height > entity().positionY28)
+      {
+        result |= 0x000Cu;
+        entity().verticalVelocity44 = 0.0f;
+        entity().positionY28 = previousY;
+      }
     }
     else
     {
-      entity().verticalVelocity44 = 0.0f;
-      entity().desiredDeltaY38 = 0.0f;
-    }
-
-    // FUN_002262C0 keeps the post-gravity velocity in its workspace at +0x10
-    // and never writes it again, so the landing test below reads the speed the
-    // actor hit the ground at rather than the zero the landing leaves behind.
-    const float impactVelocity = entity().verticalVelocity44;
-
-    const float previousY = entity().positionY28;
-    float attemptedY = entity().positionY28 + entity().desiredDeltaY38;
-    if (entity().verticalVelocity44 > 0.0f)
-    {
-      nextCollisionFlags |= kPhysicsFlagRising;
-    }
-    else if (entity().verticalVelocity44 < 0.0f)
-    {
-      nextCollisionFlags |= kPhysicsFlagFalling;
-    }
-
-    // FUN_002262c0 at 0x00226cb4: an upward step is provisional. The original
-    // writes the raised height into entity +0x28 in the delay slot of the
-    // FUN_00227390 call, so the query is posed from where the actor is trying
-    // to get to. If it comes back 0 -- no ground, or ground above the feet --
-    // the rise is given back whole (+0x28 restored from workspace +0x0C) and
-    // the vertical velocity is zeroed, flagging 0x4 alongside the 0x8 rise.
-    // That is the only place upward motion is cancelled, and it is what stops
-    // a jump at a room's ceiling instead of passing through it.
-    if (entity().desiredDeltaY38 > 0.0f)
-    {
-      const auto headroom = FUN_00227390_validate_destination(entity().positionX20,
-                                                              entity().positionZ24,
-                                                              attemptedY,
-                                                              terrainSampler);
-      if (!headroom.has_value() || headroom->height > attemptedY)
+      if (verticalDelta < 0.0f)
       {
-        nextCollisionFlags |= kPhysicsFlagVerticalCollision;
+        result |= 0x0010u;
+      }
+      // :510-520, `if (z + dz <= +0x4C)`. No tolerance: the stored ground is
+      // the whole test.
+      entity().positionY28 = previousY + verticalDelta;
+      if (entity().positionY28 <= entity().groundHeight4c)
+      {
+        entity().positionY28 = entity().groundHeight4c;
         entity().verticalVelocity44 = 0.0f;
-        attemptedY = previousY;
+        result |= kPhysicsFlagGrounded | 0x0004u;
       }
     }
 
-    if (!jumpStartup && destinationGround.has_value() && entity().verticalVelocity44 <= 0.0f &&
-        attemptedY <= destinationGround->height + kLandingTolerance)
+    // :522-533. With gravity off nothing lands, so standing exactly on +0x4C
+    // is what counts as grounded.
+    const float y = entity().positionY28;
+    if (!gravityOn && y == entity().groundHeight4c)
     {
-      attemptedY = destinationGround->height;
-      entity().verticalVelocity44 = 0.0f;
-      nextCollisionFlags |= kPhysicsFlagGrounded | kPhysicsFlagVerticalCollision;
-    }
-    else if (!horizontalRequest && !jumpStartup && entity().desiredDeltaY38 <= 0.0f &&
-             attemptedY <= entity().groundHeight4c)
-    {
-      // FUN_002262C0:0x00226D14, `if (z + dz <= +0x4C)`: no query happened, so
-      // the stored ground is the whole test.
-      attemptedY = entity().groundHeight4c;
-      entity().verticalVelocity44 = 0.0f;
-      nextCollisionFlags |= kPhysicsFlagGrounded | kPhysicsFlagVerticalCollision;
+      result |= kPhysicsFlagGrounded;
     }
 
-    if (!airborneState && (nextCollisionFlags & kPhysicsFlagGrounded) != 0)
+    // :534-555, +0x2C: the height eased up a step at 0.04 a frame while
+    // grounded, and equal to +0x28 otherwise.
+    if (y != entity().previousY2c)
     {
-      attemptedY = entity().groundHeight4c;
+      if ((result & kPhysicsFlagGrounded) != 0 && entity().previousY2c < y &&
+          y - kDAT_00352454_easeWindow < entity().previousY2c)
+      {
+        const float eased = entity().previousY2c + kDAT_00352458_easeStep;
+        result |= 0x20000u;
+        entity().previousY2c = eased <= y ? eased : y;
+      }
+      else
+      {
+        entity().previousY2c = y;
+      }
     }
 
     // FUN_002262C0:576-601, immediately before +0x0C is written -- the dust a
@@ -2136,14 +2264,10 @@ namespace orphen::ported::player
     // reaches -0.034 -- which is -4.35, truncating to -4 -- and does not.
     // Rounding instead of truncating would put dust under the knockback too.
     //
-    // It is skipped when the actor was already grounded last frame, and on a
+    // It needs this frame grounded (or 0x10000), last frame not, and no
     // killing surface (+0x6C bit 0x1000000).
-    //
-    // The original also accepts +0x0C bit 0x10000 as grounded. The port has no
-    // such bit -- nothing it models ever sets one -- so the test is bit 0 alone.
-    if (static_cast<int>(impactVelocity * 128.0f) < -4 &&
-        (nextCollisionFlags & kPhysicsFlagGrounded) != 0 && !wasGrounded &&
-        (entity().flagWord6c & 0x01000000u) == 0)
+    if (static_cast<int>(impactVelocity * 128.0f) < -4 && (result & 0x10001u) != 0 &&
+        (previousFlags & 0x10001u) == 0 && (entity().flagWord6c & 0x01000000u) == 0)
     {
       // The top nibble of +0x6C is the surface kind. Only 0 and 3 raise dust --
       // the rest are water, which gets FUN_002D4108's ripple instead -- and the
@@ -2152,18 +2276,14 @@ namespace orphen::ported::player
       if ((surfaceKind == 0 || surfaceKind == 3) && FUN_00219af0_landingDust_)
       {
         FUN_00219af0_landingDust_(entity().positionX20, entity().positionZ24,
-                                  attemptedY - kDAT_0035246c_dustDrop, entity().radius54,
+                                  y - kDAT_0035246c_dustDrop, entity().radius54,
                                   surfaceKind != 0);
       }
-      // +0x0C bit 0x800, the "dust went out this frame" marker. Nothing in the
-      // port reads it yet; it is set so that anything that later does sees what
-      // the original would have left.
-      nextCollisionFlags |= 0x0800u;
+      // +0x0C bit 0x800, the "dust went out this frame" marker.
+      result |= 0x0800u;
     }
 
-    entity().positionY28 = attemptedY;
-    entity().previousY2c = previousY;
-    entity().collisionFlags0c = nextCollisionFlags;
+    entity().collisionFlags0c = result;
     entity().desiredDeltaX30 = 0.0f;
     entity().desiredDeltaZ34 = 0.0f;
     entity().desiredDeltaY38 = 0.0f;

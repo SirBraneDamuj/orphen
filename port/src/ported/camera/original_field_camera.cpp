@@ -217,6 +217,15 @@ namespace orphen::ported::camera
     cGpffffb6e3_snapRequest_ = 1;
   }
 
+  void OriginalFieldCamera::FUN_00216a18_place_behind(float facing,
+                                                      const orphen::ported::psm2::Vec3 &target)
+  {
+    DAT_0058c0a8_eye_.x = target.x - fGpffffad28_distance_ * std::cos(facing);
+    DAT_0058c0a8_eye_.y = target.y - fGpffffad28_distance_ * std::sin(facing);
+    cGpffffb6e3_snapRequest_ = 1;
+    DAT_0058c0a8_eye_.z = target.z + fGpffffbafc_verticalFollow_;
+  }
+
   void OriginalFieldCamera::FUN_00217d70_set_manual_camera(const orphen::ported::psm2::Vec3 &eye,
                                                            const orphen::ported::psm2::Vec3 &lookAt)
   {

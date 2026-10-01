@@ -42,6 +42,14 @@ namespace orphen::port
     }
 
     void setDeathHook(std::function<void()> hook) { controller_.setDeathHook(std::move(hook)); }
+    void setDeathRespawnHook(std::function<void()> hook)
+    {
+      controller_.setDeathRespawnHook(std::move(hook));
+    }
+    void setTerrainHazardHooks(orphen::ported::player::OriginalPlayerController::TerrainHazardHooks hooks)
+    {
+      controller_.setTerrainHazardHooks(std::move(hooks));
+    }
 
     void setLandingDustHook(
         std::function<void(float x, float y, float z, float radius, bool lit)> hook)

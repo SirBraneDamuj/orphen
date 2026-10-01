@@ -8,6 +8,8 @@
 
 #include "runtime/psm2_ground_query.h"
 #include "ported/entity/entity_collision.h"
+#include "ported/entity/original_entity_sound.h"
+#include "ported/entity/original_hit_test.h"
 #include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
 #include "ported/entity/original_summon_stage.h"
@@ -218,6 +220,19 @@ namespace orphen::port
               x, y, z, kDAT_00352470_landingDustSize, radius, 0.0f, radius, 0x1E, 1, 5, 0, lit,
               [this] { return FUN_00216868_random(); });
         });
+    // FUN_00251ED8:60-71 and FUN_00255E40, the terrain hazard: the camera
+    // sub-mode the entry parks and the respawn restores, the water line a
+    // class-1 surface measures against, and the respawn itself.
+    {
+      orphen::ported::player::OriginalPlayerController::TerrainHazardHooks hazard;
+      hazard.cameraSubMode = [this] { return fieldCamera_.cGpffffb6e1_subMode(); };
+      hazard.setCameraSubMode = [this](std::uint8_t mode)
+      { fieldCamera_.cGpffffb6e1_setSubMode(mode); };
+      hazard.DAT_003556fc_waterLine = [this]
+      { return sceneScript_.state().DAT_003556fc_effectGroundZ; };
+      leadPlayer_.setTerrainHazardHooks(std::move(hazard));
+      leadPlayer_.setDeathRespawnHook([this] { FUN_00255e40_respawn_from_hazard(); });
+    }
     leadPlayer_.setDeathHook(
         [this]
         {
@@ -608,6 +623,8 @@ namespace orphen::port
     environment.entityPool = &entityPool_;
     environment.frameTicks = frameTicks;
     environment.DAT_00354d68_stats = &characterStats_;
+    environment.uGpffffadf4_objectStats = &DAT_00354d64_objectStats_;
+    environment.DAT_00355208_mapPropBank = DAT_00355208_mapPropBank_;
     environment.DAT_003151c8_hitList = &DAT_003151c8_hitList_;
 
     environment.modelForSlot = [this](std::size_t slot) -> const orphen::ported::model::Psc3Model *
@@ -1084,6 +1101,21 @@ namespace orphen::port
     // of the ground query -- entity flags 2, no body band, no reject mask --
     // and it hands back DAT_00354d4e as well as the height, because the graph
     // is built out of *which primitive answered*, not out of how high it was.
+    environment.iGpffffb0e8_sceneScript = sceneScript_.blob();
+    environment.FUN_00225c90_advance_slot = [this, frameTicks](std::size_t slot)
+    {
+      if (slot >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return;
+      }
+      auto &entity = entityPool_.slot(slot);
+      const EntityModelBinding *binding = modelStore_.bindingForTypeId(entity.effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return;
+      }
+      orphen::ported::model::FUN_00225c90_advance_animation(entity, *binding->model, frameTicks);
+    };
     environment.followerNavmesh = &followerNavmesh_;
     environment.psm2Map = mapViewer_.loadedMap();
     environment.DAT_00355020_climbGraph = &DAT_00355020_climbGraph_;
@@ -1448,6 +1480,157 @@ namespace orphen::port
     {
       DAT_00355708_leadTrailCursor_ = 0;
     }
+  }
+
+  // FUN_00255E40, the terrain-hazard respawn. FUN_002557A0 jumps here 0x21
+  // frames after the body has sunk out of sight. Every step is the original's,
+  // in its order:
+  //
+  //   1. Walk the lead trail backwards from the newest entry, at most 511 of
+  //      them, probing the ground under each with FUN_00227798. The first one
+  //      over a primitive carrying neither 0x0800000 nor 0x1000000 wins. None
+  //      found: return, and the next frame tries again.
+  //   2. The damage. With no opcode 0xD8 record, +0xC2 = 0 and +0xBE = 1: one
+  //      point, spent by FUN_00251ED8's mailbox next frame as an ordinary
+  //      knockback. With one, FUN_00216128(record, lead, lead) -- the lead hits
+  //      itself, its +0x12C swapped for the script's value for the call.
+  //   3. Stand the lead on that primitive's centre, 0.2 above the ground there,
+  //      facing away from the trail point (+0xC4 is the hit's direction, and the
+  //      knockback turns the body to face back along it).
+  //   4. Any following party member already touching the lead gets +0x1C4 =
+  //      0x1E0 and +0x04 bit 0, which lets the two overlap.
+  //   5. Camera eye behind the lead, a 1e-5 nudge in +0x30 so the physics
+  //      queries the ground next frame, the cached surface cleared, physics back
+  //      on, fade cleared, and the camera sub-mode +0x1B4 saved put back.
+  void PortRuntime::FUN_00255e40_respawn_from_hazard()
+  {
+    using orphen::ported::entity::OriginalEntity;
+    auto *loadedMap = mapViewer_.loadedMap();
+    if (loadedMap == nullptr)
+    {
+      return;
+    }
+    OriginalEntity &lead = entityPool_.leadPlayer();
+
+    const auto probe = [loadedMap](float x, float y, float z) {
+      return FUN_00227070_sample_ground(*loadedMap, x, y, z, 0.0f, 0.0f, 2u, 0u);
+    };
+
+    std::int32_t cursor = DAT_00355708_leadTrailCursor_;
+    const orphen::ported::entity::ActorEnvironment::LeadTrailPoint *chosen = nullptr;
+    std::size_t primitive = 0;
+    for (std::int32_t remaining = 0x1FF; remaining != 0; --remaining)
+    {
+      cursor -= 1;
+      if (cursor < 0)
+      {
+        cursor = static_cast<std::int32_t>(kLeadTrailCapacity) - 1;
+      }
+      const auto &point = DAT_00355704_leadTrail_[static_cast<std::size_t>(cursor)];
+      const auto sample = probe(point.x, point.z, point.groundHeight);
+      if (!sample.found || sample.packedPrimitive < 0)
+      {
+        continue;
+      }
+      const std::size_t index = static_cast<std::size_t>(sample.packedPrimitive) & 0x3FFFu;
+      if (index >= loadedMap->DAT_003556b0_dRecords78.size() ||
+          index >= loadedMap->DAT_003556ac_dRecords80.size())
+      {
+        continue;
+      }
+      if ((loadedMap->DAT_003556b0_dRecords78[index].terrainFlags & 0x01800000u) == 0)
+      {
+        chosen = &point;
+        primitive = index;
+        break;
+      }
+    }
+    if (chosen == nullptr)
+    {
+      return;
+    }
+
+    auto &script = sceneScript_.state();
+    if (!script.iGpffffb0b8_hazardRecordSet)
+    {
+      lead.hitFlagsC2 = 0;
+      lead.pendingDamageBe = 1;
+    }
+    else
+    {
+      const auto blob = sceneScript_.blob();
+      const std::uint32_t offset = script.iGpffffb0b8_hazardRecordOffset;
+      if (static_cast<std::size_t>(offset) + 4u <= blob.size())
+      {
+        const std::uint32_t word = static_cast<std::uint32_t>(blob[offset]) |
+                                   (static_cast<std::uint32_t>(blob[offset + 1]) << 8) |
+                                   (static_cast<std::uint32_t>(blob[offset + 2]) << 16) |
+                                   (static_cast<std::uint32_t>(blob[offset + 3]) << 24);
+        const std::uint16_t savedPower = lead.attackPower12c;
+        lead.attackPower12c = script.uGpffffb0bc_hazardRecordValue;
+        orphen::ported::entity::HitScratch scratch;
+        orphen::ported::entity::FUN_00216140_apply_hit(
+            lead, orphen::ported::resource::HitParameters::unpack(word), lead, 0,
+            hitTestEnvironment_, scratch);
+        lead.attackPower12c = savedPower;
+      }
+    }
+
+    lead.hitReactionBc = 0;
+    lead.verticalVelocity44 = 0.0f;
+    const auto &centre = loadedMap->DAT_003556ac_dRecords80[primitive].center;
+    lead.positionX20 = centre.x;
+    lead.positionZ24 = centre.y;
+    const float ground = probe(centre.x, centre.y, centre.z + 0.5f).height;
+    lead.groundHeight4c = ground;
+    constexpr float kfGpffff8a20_respawnLift = 0.200000003f; // 0x00352990
+    lead.positionY28 = ground + kfGpffff8a20_respawnLift;
+    lead.hitDirectionC4 = std::atan2(lead.positionZ24 - chosen->z, lead.positionX20 - chosen->x);
+
+    const int leadClass = orphen::ported::entity::FUN_002298d0_character_class(lead.typeId00);
+    for (int index = 0; index < 7; ++index)
+    {
+      if (index == leadClass || index == 6)
+      {
+        continue;
+      }
+      const std::uint16_t member = script.DAT_00343692_partySlots[index];
+      if (static_cast<std::uint16_t>(member - 1u) >= 0xFFu)
+      {
+        continue;
+      }
+      OriginalEntity &follower = entityPool_.slot(member);
+      if (follower.typeId00 != 0x37)
+      {
+        continue;
+      }
+      // FUN_0023A4E8: the flat distance between the two.
+      const float dx = follower.positionX20 - lead.positionX20;
+      const float dz = follower.positionZ24 - lead.positionZ24;
+      if (std::sqrt(dx * dx + dz * dz) < lead.radius54 + follower.radius54)
+      {
+        // +0x1C4 halfword. Nothing in the follower's own code reads it, and
+        // nothing found yet clears the +0x04 bit; both are written as the
+        // original writes them. alertState1c4 is the same two bytes.
+        follower.alertState1c4 = 0x1E0;
+        follower.halfword04 = static_cast<std::uint16_t>(follower.halfword04 | 1u);
+      }
+    }
+
+    fieldCamera_.FUN_00216a18_place_behind(
+        lead.facingRadians5c,
+        orphen::ported::psm2::Vec3{lead.positionX20, lead.positionZ24, lead.positionY28});
+    constexpr float kuGpffff8a24_respawnNudge = 9.99999975e-06f; // 0x00352994
+    lead.desiredDeltaX30 = kuGpffff8a24_respawnNudge;
+    lead.groundPrimitive0a = -1;
+    lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | 4u);
+    lead.halfword04 = static_cast<std::uint16_t>(lead.halfword04 & 0xFEFFu);
+    lead.collisionFlags0c &= 0xFFFFFFFEu;
+    lead.flagWord6c = 0;
+    lead.flagWord70 = 0;
+    lead.fadeLevel134 = 0;
+    fieldCamera_.cGpffffb6e1_setSubMode(
+        static_cast<std::uint8_t>(static_cast<std::int8_t>(lead.climbFace1b4)));
   }
 
   // The battle VM's view of the world. FUN_0023fd30 builds this on the stack
@@ -9798,6 +9981,15 @@ namespace orphen::port
       base = descriptor->halfword0x18;
     }
     lead.halfword04 = static_cast<std::uint16_t>((base & 0xFFE7u) | 0x3000u);
+
+    // FUN_0022a418:205, `DAT_0058bf24 = 0x8000000` -- the lead's +0x74 reject
+    // mask, assigned outright (FUN_00229c40's 0x04000000 does not survive).
+    // 0x08000000 is the class s03_e001's pool floor carries (0x08800000), so
+    // the floor is not ground for the lead, and FUN_002262c0's +0x7C gate
+    // refuses a step whose corners find nothing: you cannot walk off the
+    // causeway. A hardware dump there reads 0x08020000; the port lead had
+    // 0x00020000 and walked straight down into the pool.
+    lead.rejectTerrainMask74 = 0x08000000u;
   }
 
   void PortRuntime::resetLeadPlayerForLoadedMap()

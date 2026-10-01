@@ -109,6 +109,14 @@ namespace orphen::ported::player
     // test (entity +0x78) reads it; it is deliberately not the same thing as
     // terrainFlags, which is the settled surface's own word.
     std::uint32_t commonFootprintFlags = 0;
+    // FUN_00227390's workspace +0x18 (w[6]): the lowest of the four corners,
+    // where `height` is the highest (w[5]). FUN_002262c0 gates a move on the
+    // spread between them against entity +0x7C.
+    float lowestCornerHeight = 0.0f;
+    // Workspace +0x20: the winning corner's primitive packed as
+    // `primitive | (half << 14)`, which FUN_002262c0 copies into entity +0x0A
+    // when it settles. -1 when the corner had none.
+    std::int16_t packedPrimitive = -1;
 
     // The surface's stored slope, record78 +0x70 + subTriangle*4. FUN_00227840
     // stages it in the scan workspace's +0x54, FUN_00227390 copies it to +0x08
@@ -322,6 +330,18 @@ namespace orphen::ported::player
     void setDeathHook(std::function<void()> hook) { onDeath_ = std::move(hook); }
     // FUN_00255E40, the respawn. Left uninstalled means the body stays down.
     void setDeathRespawnHook(std::function<void()> hook) { onDeathRespawn_ = std::move(hook); }
+    // What FUN_00251ED8:60-71's terrain-hazard entry reads and writes outside
+    // slot 0: bGpffffb6e1, the camera sub-mode it parks at 0xFF and stashes in
+    // +0x1B4, and fGpffffb78c (DAT_003556FC), the water line a class-1 surface
+    // only drowns you below. Uninstalled, the camera is left alone and the
+    // water line reads 0.
+    struct TerrainHazardHooks
+    {
+      std::function<std::uint8_t()> cameraSubMode;
+      std::function<void(std::uint8_t)> setCameraSubMode;
+      std::function<float()> DAT_003556fc_waterLine;
+    };
+    void setTerrainHazardHooks(TerrainHazardHooks hooks) { terrainHazard_ = std::move(hooks); }
     // Everything states 0x1A and 0x1B reach outside slot 0. Left uninstalled,
     // the two states still run -- the player keeps its own fields -- but the
     // room, the lights and the camera stay as they were.
@@ -368,6 +388,7 @@ namespace orphen::ported::player
     std::uint32_t uGpffffbd54_moonJumpArmed_ = 0;
     std::function<void()> onDeath_;
     std::function<void()> onDeathRespawn_;
+    TerrainHazardHooks terrainHazard_;
     GameOverHooks gameOver_;
     std::function<void()> FUN_00217e18_releaseCamera_;
     std::function<void(float x, float y, float z, float radius, bool lit)> FUN_00219af0_landingDust_;
@@ -440,10 +461,13 @@ namespace orphen::ported::player
     // a parameter rather than a read of the entity because FUN_002262c0 raises
     // +0x28 before re-querying and hands the *raised* height to FUN_00227390.
     OriginalTerrainQuery terrainQueryForEntity(float bodyBaseHeight) const;
+    // applyRequiredMask is workspace +0x130: FUN_002262c0 loads it from +0x78
+    // for the movement loop and zeroes it for the rise test.
     std::optional<OriginalTerrainSample> FUN_00227390_validate_destination(float originalX,
                                                                            float originalZ,
                                                                            float bodyBaseHeight,
-                                                                           const OriginalTerrainSampler &terrainSampler) const;
+                                                                           const OriginalTerrainSampler &terrainSampler,
+                                                                           bool applyRequiredMask = true) const;
     void FUN_002262c0_integrate_physics(std::uint32_t frameTicks,
                                         const OriginalTerrainSampler &terrainSampler);
   };

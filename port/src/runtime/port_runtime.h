@@ -492,6 +492,7 @@ namespace orphen::port
     orphen::ported::input::MappedActionHistory DAT_00342a70_mappedActions_;
     void FUN_0022a418_reset_lead_trail();
     void FUN_00224060_record_lead_trail();
+    void FUN_00255e40_respawn_from_hazard();
 
     // DAT_003555e8, this frame's analog magnitude. FUN_0023b5d8 publishes it
     // at the top of the frame; behaviours downstream of the pad read it, and

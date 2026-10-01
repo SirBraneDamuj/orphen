@@ -629,6 +629,15 @@ namespace orphen::ported::entity
     NavProbeFn FUN_00227798_probe;
     bool *DAT_00355030_skipCornerCut = nullptr;
 
+    // iGpffffb0e8's blob, the loaded scene script. A streamed prop's break
+    // table (+0x1A8, from opcode 0xD9) points into it.
+    std::span<const std::uint8_t> iGpffffb0e8_sceneScript;
+
+    // FUN_00225C90 on one slot, called directly by a spawner the way
+    // FUN_002D0058 steps each piece once before it randomises the cursor. A
+    // no-op when the slot has no model, as the per-frame pass is.
+    std::function<void(std::size_t slot)> FUN_00225c90_advance_slot;
+
     // FUN_0020da68: one bone's pose out of an animation, in FUN_0020d8c0's
     // field order (rotation xyz, translation xyz, scale). The look-at reads the
     // rest pose before twisting it, so it needs the model the entity layer has

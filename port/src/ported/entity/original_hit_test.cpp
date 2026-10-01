@@ -166,12 +166,19 @@ namespace orphen::ported::entity
     else
     {
       // FUN_0025ba98: the streamed-type table, SCR.BIN resource 0xBD rather
-      // than 0xBF. **Not reachable from the sword or the bolt**: both carry
-      // +0x02 bit 0x1000, which selects candidate mask 0x2048, and a streamed
-      // prop's +0x02 is 0x0180 -- so it is never a candidate. Left as the
-      // all-hundreds fill rather than guessed at, and this comment is the
-      // record of the one input that is missing if some other attacker ever
-      // reaches it.
+      // than 0xBF, its row's +0x18 tail. A streamed prop's +0x02 is 0x0180,
+      // which no attacker's candidate mask matches, until opcode 0xD9 ORs in
+      // 0x2000 -- s03_e001's burnable trees. A missing row keeps the
+      // all-hundreds fill; the original would read whatever FUN_00229688 left.
+      if (environment.uGpffffadf4_objectStats != nullptr)
+      {
+        const auto record = environment.uGpffffadf4_objectStats->FUN_0025ba98_record(
+            environment.DAT_00355208_mapPropBank, statType);
+        if (record.has_value())
+        {
+          resistance = record->tail18;
+        }
+      }
     }
 
     // The element: the lowest set bit of the record's flags, capped at 15. Bit

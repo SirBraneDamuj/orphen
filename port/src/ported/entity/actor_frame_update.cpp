@@ -7,6 +7,7 @@
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
+#include "ported/entity/original_breakable_prop.h"
 #include "ported/entity/original_ship_fire.h"
 #include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_summon_stage.h"
@@ -1105,9 +1106,23 @@ namespace orphen::ported::entity
         {
           return false;
         }
-        // FUN_00227390's `fVar6 <= entity +0x28`.
+        // FUN_00227390's `fVar6 <= entity +0x28`, and then its required-mask
+        // test: workspace +0x130 is +0x78, and the surface only answers 1 if
+        // the AND of all four corners' flags shares a bit with it. Otherwise
+        // it answers 0 and raises +0x0C bit 0x200. The step-up branch below
+        // re-queries with the same mask, so a refusal here is final.
+        //
+        // This is what keeps the party off s03_e001's collapsing tiles: the
+        // script gives both members +0x78 = 0x10 (register 0x0B), every
+        // causeway surface carries 0x10, and the tiles (0x20000080) do not.
         if (at->height <= entity.positionY28)
         {
+          if (entity.requiredTerrainMask78 != 0 &&
+              (at->terrainFlagsAll & entity.requiredTerrainMask78) == 0)
+          {
+            entity.collisionFlags0c |= 0x0200u;
+            return false;
+          }
           return true;
         }
         // The step up. `+0x28 != +0x50` is an actor that is not settled on the
@@ -1120,7 +1135,18 @@ namespace orphen::ported::entity
         {
           return false;
         }
-        return at->slopeAngle <= entity.slopeLimit80;
+        if (!(at->slopeAngle <= entity.slopeLimit80))
+        {
+          return false;
+        }
+        // The provisional raise's re-query runs under the same +0x78.
+        if (entity.requiredTerrainMask78 != 0 &&
+            (at->terrainFlagsAll & entity.requiredTerrainMask78) == 0)
+        {
+          entity.collisionFlags0c |= 0x0200u;
+          return false;
+        }
+        return true;
       };
 
       // **A refused move is retried on a rotated heading, not split per axis.**
@@ -1230,10 +1256,14 @@ namespace orphen::ported::entity
         entity.positionX20 = startX;
         entity.positionZ24 = startZ;
         surface = sampleAt(startX, startZ);
+        // This re-sample is the port's, not the original's, so it must not
+        // leave a 0x200 of its own in +0x0C.
+        const std::uint32_t flagsBefore = entity.collisionFlags0c;
         if (!walkable(surface))
         {
           surface.reset();
         }
+        entity.collisionFlags0c = flagsBefore;
       }
 
       if (surface.has_value())
@@ -7022,6 +7052,9 @@ namespace orphen::ported::entity
     case 0x002ED9A0u: // FUN_002ed9a0, type 0x1AC, one link of its fire ring
     case 0x002EDC40u: // FUN_002edc40, type 0x1AE, the mast creature's wash
     case 0x002D8CE0u: // FUN_002d8ce0, type 0x118, the status aura
+    case kFUN_002cfe08_streamedProp: // every map-streamed type; states 4..9 are not
+    case 0x002D04E0u: // FUN_002d04e0, type 0x45, what a broken prop leaves
+    case 0x002D05C0u: // 0x002d05c0,   type 0x47, one piece of a broken prop
       return true;
     default:
       return false;
@@ -7183,6 +7216,10 @@ namespace orphen::ported::entity
       return "FUN_0028b848 (target dummy 0x8b)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
+    case 0x002D04E0u:
+      return "FUN_002d04e0 (break remnant 0x45)";
+    case 0x002D05C0u:
+      return "LAB_002d05c0 (break piece 0x47)";
     default:
       return nullptr;
     }
@@ -7377,6 +7414,15 @@ namespace orphen::ported::entity
         break;
       case 0x002D8CE0u:
         FUN_002d8ce0_status_aura(entity, slot, environment);
+        break;
+      case kFUN_002cfe08_streamedProp:
+        FUN_002cfe08_streamed_prop(entity, slot, slotEnvironment);
+        break;
+      case 0x002D04E0u:
+        FUN_002d04e0_break_remnant(entity, slot, slotEnvironment);
+        break;
+      case 0x002D05C0u:
+        LAB_002d05c0_break_piece(entity, slot, slotEnvironment);
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);

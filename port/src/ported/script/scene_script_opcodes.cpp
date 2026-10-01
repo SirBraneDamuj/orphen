@@ -5225,7 +5225,7 @@ namespace orphen::ported::script
 
     // 0xD8 (FUN_00264DE8): a stream offset and one expression, stored as the
     // terrain-hazard respawn's damage record. See iGpffffb0b8_hazardRecordSet.
-    // The respawn (FUN_00255E40) is not ported, so nothing reads it yet.
+    // PortRuntime::FUN_00255e40_respawn_from_hazard reads it.
     case 0xD8:
     {
       noteOpcode(opcode, OpcodeSupport::Modelled);
@@ -5241,16 +5241,94 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0xD9 (FUN_00264E30): a selector and a stream offset. Makes a map-streamed
+    // prop breakable: +0x1A8 = the breakage table (see breakTable1a8), +0x04
+    // loses 0x10 so the hit tests stop skipping it, and +0x02 gains 0x2000, the
+    // bit a player-side attack's target mask looks for.
+    //
+    // **The writes land on the entity selected before the opcode ran**, not on
+    // the one the selector picks: the original latches DAT_00355044 into s0
+    // first and writes through s0 after FUN_0025d6c0. s03_e001 passes 0x100,
+    // where the two are the same.
+    case 0xD9:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedEntity = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      const std::uint32_t tableOffset = FUN_0025c1d0_readStreamU32();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (selector != orphen::ported::entity::kCurrentEntityIndex)
+      {
+        if (selector < orphen::ported::entity::kEntitySlotCount)
+        {
+          currentEntity_ = selector;
+        }
+      }
+      else
+      {
+        currentEntity_ = savedEntity;
+      }
+      if (environment_.entityPool == nullptr ||
+          savedEntity >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return 0;
+      }
+      auto &prop = environment_.entityPool->slot(savedEntity);
+      prop.breakTable1a8 = tableOffset;
+      prop.halfword04 = static_cast<std::uint16_t>(prop.halfword04 & 0xFFEFu);
+      prop.descriptorFlags02 = static_cast<std::uint16_t>(prop.descriptorFlags02 | 0x2000u);
+      return 0;
+    }
+
+    // 0xCE (FUN_00264700): a selector, then FUN_0026BF38(DAT_00355044) -- and
+    // FUN_0026BF38 is a bare `jr ra; nop` in the retail build, a hook with its
+    // body compiled out. All the opcode does is select.
+    case 0xCE:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedEntity = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (selector != orphen::ported::entity::kCurrentEntityIndex)
+      {
+        if (selector < orphen::ported::entity::kEntitySlotCount)
+        {
+          currentEntity_ = selector;
+        }
+      }
+      else
+      {
+        currentEntity_ = savedEntity;
+      }
+      return 0;
+    }
+
     // 0xD7 FUN_00264d90  a palette slot and its byte.
     case 0xD7:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 2);
 
-    // 0xD5 (FUN_00264d40): one expression into uGpffffb084, a renderer mode
-    // byte. s01_e012's own handoff sets it to 1 on the way out of the opening.
+    // 0xD5 (FUN_00264d40): one expression, its low byte into uGpffffb084. Not
+    // a renderer mode as this note used to say: its only reader is type 0x6B's
+    // FUN_002D58E8, which folds it into the animation it shows. See
+    // uGpffffb084_hudVariant.
     case 0xD5:
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      return consumeOnly(opcode, 1);
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t value = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      environment_.state->uGpffffb084_hudVariant = static_cast<std::uint8_t>(value);
+      return 0;
+    }
 
     // 0xBD (FUN_00263e80): selector, method, and two arguments, into
     // FUN_00242a18 -- a second dispatcher with its own instruction set. Methods

@@ -16,65 +16,60 @@
  * 6. Velocity and acceleration processing
  * 7. Sound effect triggering for physics events
  *
- * Entity Data Structure Offsets (based on analysis):
- * - 0x02: Entity type/flags
- * - 0x04: Status flags (bit 0x100 = skip processing, bit 0x800 = disabled)
- * - 0x08: Additional status flags (bit 0x20 = special mode)
- * - 0x0A: Ground/surface ID
- * - 0x0C: Movement/collision flags
- * - 0x20: X position (float)
- * - 0x24: Z position (float)
- * - 0x28: Y position/height (float)
- * - 0x2C: Previous Y position
- * - 0x30: X velocity/movement delta
- * - 0x34: Z velocity/movement delta
- * - 0x38: Y velocity/vertical movement
- * - 0x44: Gravity/vertical acceleration
- * - 0x48: Drag/friction coefficient
- * - 0x4C: Ground height/collision height
- * - 0x50: Previous ground height
- * - 0x54: Entity radius/size
- * - 0x58: Entity height/vertical size
- * - 0x5C: Rotation angle
- * - 0x68: Movement state/direction index
- * - 0x6C: Ground surface properties
- * - 0x78: Z-buffer/depth value
- * - 0x7C: Collision tolerance
- * - 0x80: Maximum step height
- * - 0x84-0x90: Collision bounds (4 heights for directional collision)
+ * Entity offsets, checked against the decompilation (2026-09-30):
+ * - 0x04: attribute flags, copied to workspace +0x160. 0x100 = skip everything,
+ *         0x08 = no gravity, 0x04 = may retry a refused move on a rotated
+ *         heading, 0x20 = shorten a step-up by cos(slope), 0x400 = hold instead
+ *         of stepping up, 0x02 = do not publish +0x84..+0x90
+ * - 0x08: bit 0x20 = take part in the embedded-corner push-out
+ * - 0x0A: ground primitive | (half << 14), -1 for none
+ * - 0x0C: result flags, rebuilt every call from the workspace word +0x12C
+ * - 0x20/0x24/0x28: position (x, ground-plane y, height)
+ * - 0x2C: height eased up small steps at DAT_00352458 (0.04) a frame
+ * - 0x30/0x34/0x38: this frame's movement request, zeroed on exit
+ * - 0x44: vertical velocity; 0x48: gravity (0.00075 on the lead)
+ * - 0x4C: ground height; 0x50: last call's 0x4C
+ * - 0x54/0x58: radius / height
+ * - 0x64: blocking entity slot (cleared to 0 every call)
+ * - 0x68: entity being ridden (FUN_00228cf0), 0 for none
+ * - 0x6C/0x70: settled surface words -- winning corner (ties ORed) / AND of all four
+ * - 0x74/0x78: terrain reject mask / required mask
+ * - 0x7C: 100.0 from FUN_00229c40 (every dump agrees); gates a move on the
+ *         destination's corner spread, so in practice a corner over nothing
+ * - 0x80: walkable slope limit in radians (0.8727 = 50 deg), NOT a step height
+ * - 0x84-0x90: the four corner heights of the last settled footprint
  *
- * Stack Frame Structure (param_2):
- * - 0x4A: Entity pointer
- * - 0x4B: Physics state flags
- * - 0x4C: Collision test mode
- * - 0x4D: Test X position
- * - 0x4E: Test Z position
- * - 0x4F: Original Y position
- * - 0x50: X movement delta
- * - 0x51: Z movement delta
- * - 0x52: Y movement delta
- * - 0x53: Entity radius
- * - 0x54: Entity height
- * - 0x55: Movement angle
- * - 0x56: Movement distance
- * - 0x58: Entity flags (copied from entity)
- * - 0x162: Collision direction flags (bits 1,2,4,8 for 4 directions)
- * - 0x163: Movement attempt counter
+ * Result flags (+0x0C):
+ * - 0x0001: landed on +0x4C this call (or, gravity off, standing exactly on it)
+ * - 0x0002: horizontal move refused (or stepping up, provisionally)
+ * - 0x0004: vertical collision -- landed, or a rise given back
+ * - 0x0008: rose this call; 0x0010: fell this call
+ * - 0x0020 / 0x0040: an entity clamp narrowed X / Y (FUN_00228380.. / FUN_00228838..)
+ * - 0x0100: riding an entity; 0x0200: required mask failed
+ * - 0x0400: water entry; 0x0800: landing dust spawned
+ * - 0x4000: the retry fan ran; 0x8000: refused by the +0x7C spread gate
+ * - 0x10000: held (LAB_00226988) -- no move, +0x38 = 0.02; read back next call
+ * - 0x20000: +0x2C is easing up a step
  *
- * Physics State Flags (0x4B):
- * - 0x0001: On ground/surface
- * - 0x0002: Collision detected
- * - 0x0004: Ground collision
- * - 0x0008: Y collision
- * - 0x0010: Falling
- * - 0x0020: Rising
- * - 0x0100: Has momentum
- * - 0x0400: Special collision mode
- * - 0x0800: Out of bounds
- * - 0x4000: Movement active
- * - 0x8000: Complex movement
- * - 0x10000: Physics disabled
- * - 0x20000: Smooth height transition
+ * The move decision (0x00226884..0x00226cb4), per destination:
+ *
+ *   lVar7 = FUN_00227390(dest);   // 1 only if w[5] (highest corner) <= +0x28
+ *   if (+0x4C - w[6] > +0x7C || +0x7C < w[5] - w[6])   refuse, |= 0x8002
+ *   else if (lVar7)                                     accept, +0x4C = w[5]
+ *   else if (+0x0C & 0x10000)                           hold
+ *   else { |= 2;
+ *     if (+0x28 == +0x50 && w[5] - +0x28 < 0.26 && w[2] <= +0x80)
+ *       raise +0x28 to w[5] + 0.063, re-query (step * cos(w[2]) if +0x04 & 0x20),
+ *       accept if it answers 1 and is still under 0.26 above the old feet
+ *   }
+ *
+ * So a surface above the feet is reachable only by the 0.26 step, and only
+ * while settled: an actor in mid-jump is refused until its feet clear the
+ * destination. A refusal with +0x04 & 4 retries at heading x0.3, +20 deg x0.7,
+ * -20 deg, +60 deg x0.5, -60 deg; the entity clamps re-run on every pass.
+ * Gravity runs every call, grounded or not; the landing is the plain
+ * `+0x28 + +0x38 <= +0x4C`, and a grounded step down of less than 0.125 is
+ * folded into +0x38 so slopes are followed without leaving the ground.
  */
 
 #include "orphen_globals.h"
@@ -140,10 +135,10 @@ void process_entity_physics_and_collision(void *entity_ptr, void *stack_frame)
    * Key entity offsets identified:
    * - 0x04: Status flags (0x100=skip, 0x800=disabled)
    * - 0x20/0x24/0x28: X/Z/Y positions
-   * - 0x30/0x34/0x38: X/Z/Y velocities
-   * - 0x44: Gravity, 0x48: Drag
-   * - 0x4C: Ground height, 0x5C: Rotation
-   * - 0x68: Movement state, 0x6C: Surface properties
+   * - 0x30/0x34/0x38: this frame's X/Z/Y movement request
+   * - 0x44: vertical velocity, 0x48: gravity
+   * - 0x4C: Ground height, 0x5C: facing
+   * - 0x68: entity being ridden, 0x6C: settled surface word
    *
    * Stack frame workspace offsets:
    * - 0x4D/0x4E: Test positions, 0x50/0x51: Movement deltas

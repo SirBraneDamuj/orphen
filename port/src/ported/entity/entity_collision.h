@@ -36,6 +36,14 @@ namespace orphen::ported::entity
   // A no-op when the entity is not asking to move, which is the common case.
   void FUN_002262c0_clamp_movement_against_entities(EntityPool &pool, std::size_t slot);
 
+  // The same four clamps on one candidate step rather than on +0x30/+0x34.
+  // FUN_002262c0 runs them at the top of every pass of its retry loop, against
+  // the workspace step (+0x140/+0x144) that pass is about to try, while the
+  // shove heading stays the request's original one (+0x154). Does not touch
+  // +0x64; the caller clears it once per solve.
+  void FUN_002262c0_clamp_step_against_entities(EntityPool &pool, std::size_t slot, float heading,
+                                                float &stepX, float &stepZ);
+
   // Counters so a run can say whether any of this executed. Dead collision code
   // and correct collision code look identical from the outside when nothing in
   // the scene happens to be in anyone's way.

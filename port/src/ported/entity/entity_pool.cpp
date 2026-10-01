@@ -180,6 +180,7 @@ namespace orphen::ported::entity
     entity.blockedBy64 = 0;
     entity.collisionFlags0c = 0x1000u;
     entity.placementRecordIndex98 = -1;
+    entity.maxStepDown7c = 100.0f;
 
     // FUN_00229c40's last three lines. Everything whose +0x02 clears 0x200 --
     // which is every type this scene spawns -- starts with the keyframe blend

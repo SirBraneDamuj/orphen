@@ -87,13 +87,13 @@ namespace orphen::ported::entity
     std::uint32_t flagWord70 = 0;            // +0x70: opcode 0x61's alternate word.
     std::uint32_t rejectTerrainMask74 = 0;   // +0x74: reject terrain when 0x78-record +0x04 overlaps this mask.
     std::uint32_t requiredTerrainMask78 = 0; // +0x78: require common footprint terrain flags to overlap this mask.
-    // +0x7C: how far this entity will follow the floor *down* in one step.
-    // FUN_002262c0:256 is its only reader -- a drop bigger than this leaves the
-    // actor in the air instead of snapping it to the new surface. The lead's
-    // copy is 10.0 (FUN_002b1568), and FUN_002596c8 stamps that same value onto
-    // a follower so it takes the same drops the lead just took. The port's
-    // movement step does not consult it yet; it is written because the original
-    // writes it, so the field is there when that step grows the branch.
+    // +0x7C: how far below the lowest corner of a destination this entity may
+    // stand and still take the step. FUN_002262c0:256-258 refuses a move when
+    // `+0x4C - lowest > +0x7C` or `+0x7C < highest - lowest`. FUN_00229c40
+    // seeds it to 100.0, and every one of ~30 save-state dumps reads 100.0 on
+    // the lead, so in practice only a corner over nothing (128) trips it.
+    // Climbing over a lip parks it and writes 128.0 (FUN_002537A0), and
+    // FUN_002596c8 stamps the lead's value onto a follower.
     float maxStepDown7c = 0.0f;
     // +0x80 is the **maximum walkable slope**, in radians, not a step height.
     // FUN_002262c0's only use of it is
@@ -777,6 +777,27 @@ namespace orphen::ported::entity
     // it overwrites +0x00 with the 0x6C..0x74 element type the readout knows.
     // Nothing reads it back yet; it is stored because the original stores it.
     std::int16_t elementOriginalType19e = 0;
+
+    // +0x1A8 on a map-streamed prop: its breakage table, written by opcode 0xD9
+    // (FUN_00264E30). A run of 0x24-byte records in the scene script, ended by
+    // a 0xFFFF halfword; FUN_002CFE08 drains +0xBE from +0x12A only when the
+    // hit's +0xC2 has the bit a record's halfword 0 names, and hands that record
+    // to FUN_002D0058 when the prop breaks. The original stores an absolute
+    // pointer; the port stores the blob offset, 0 for none.
+    std::uint32_t breakTable1a8 = 0;
+    // +0x1AC / +0x1B0 / +0x1B4 on the same prop. FUN_002D0058 copies a break
+    // record's +0x10 into +0x1AC (the type state 3 spawns once its timer runs
+    // out, 0 for none) and its +0x12 / 100 into +0x1B0 (that entity's scale).
+    // State 2, FUN_002CFEE8, reads +0x1B0 as a speed instead, bleeding 0.005 a
+    // frame off it while it pushes the prop along heading +0x1B4. One word, two
+    // readings, as in the original.
+    std::uint16_t breakSpawnType1ac = 0;
+    float breakSpeedOrScale1b0 = 0.0f;
+    float pushHeading1b4 = 0.0f;
+    // +0x198 on what a break leaves behind -- the type 0x47 pieces and the
+    // type 0x45 a prop's state 3 spawns: the prop they came from. The original
+    // stores a pointer; the port stores the pool slot, -1 for none.
+    std::int16_t breakParent198 = -1;
 
     // The type 0x192 target cursor, FUN_002d73e8 -- the marker drawn over an
     // enemy while a battle is running. One is spawned per bound actor record by

@@ -608,9 +608,15 @@ namespace orphen::ported::entity
       }
 
       // fGpffff8afc: inside 1.2 units of the lead there is nothing left to
-      // route around, so the walk ends and idle takes over.
+      // route around, so the walk ends and idle takes over. That is the
+      // `fGpffff8afc <= d` test failing straight through to LAB_00259f48, the
+      // same give-up block as the other exits -- not a bare return. Returning
+      // left a follower that caught up mid-path in state 4 for good: walk
+      // animation playing, no step requested, and nothing that would ever
+      // move it on.
       if (FUN_0023a3a0_distance3_to_lead(entity, lead) < kfGpffff8afc_pathArrivalRadius)
       {
+        abandon();
         return;
       }
 

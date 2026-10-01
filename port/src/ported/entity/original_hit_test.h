@@ -61,6 +61,12 @@ namespace orphen::ported::entity
     // 3 nor bits 0-1 -- not to no damage at all.
     const orphen::ported::resource::CharacterStats *DAT_00354d68_stats = nullptr;
 
+    // uGpffffadf4, SCR.BIN 0xBD, and DAT_00355208: what FUN_0025BA98 reads for
+    // a streamed victim (type >= 0x272). Reached once opcode 0xD9 has made a
+    // prop a candidate -- s03_e001's trees.
+    const orphen::ported::resource::CharacterStats *uGpffffadf4_objectStats = nullptr;
+    int DAT_00355208_mapPropBank = 0;
+
     // FUN_002206a8: the hit sparks (original_hit_sparks.h). Called for every
     // contact that gets past the guard test, with the victim and uVar12 -- the
     // "player-side victim" flag, which the burst stores in each spark's +0x28

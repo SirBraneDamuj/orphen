@@ -17,6 +17,8 @@ namespace orphen::port
       sample.terrainFlags = groundHit.terrainFlags;
       sample.sampledByOriginalTerrain = groundHit.sampledByOriginalTerrain;
       sample.slopeAngle = groundHit.slopeAngle;
+      sample.packedPrimitive = static_cast<std::int16_t>(groundHit.primitiveIndex |
+                                                         (groundHit.subTriangle << 14));
       return sample;
     }
 

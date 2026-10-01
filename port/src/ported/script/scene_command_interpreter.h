@@ -140,12 +140,20 @@ namespace orphen::ported::script
     // FUN_00251CD0 at scene load. An attack record in the script blob and the
     // value FUN_00255E40 -- the terrain-hazard respawn -- swaps into the
     // player's +0x12C while it charges that record through FUN_00216128. With
-    // none set the respawn restores the player to one hit point instead. The
+    // none set the respawn writes 1 into +0xBE instead -- one point of pending
+    // damage, not a hit point restored. The
     // original stores an absolute pointer and tests it for zero; the port
     // stores the blob offset and a flag, since offset 0 is a real offset.
     bool iGpffffb0b8_hazardRecordSet = false;
     std::uint32_t iGpffffb0b8_hazardRecordOffset = 0;
     std::uint16_t uGpffffb0bc_hazardRecordValue = 0;
+
+    // uGpffffb084 (DAT_00354FF4), a byte opcode 0xD5 writes and FUN_00251CD0
+    // resets to 1 at scene load. Its one reader is FUN_002D58E8, type 0x6B's
+    // behaviour, which adds `!= 0` into the animation it picks. s03_e001's
+    // forest-fire cutscene clears it on the way in and sets it on the way out;
+    // no type 0x6B is live there, so nothing shows it yet.
+    std::uint8_t uGpffffb084_hudVariant = 1;
 
     // DAT_003437b8: the inventory -- how many of each item id the party holds.
     // Opcode 0xBC adds one, capped at 99, and reports whether there was room.

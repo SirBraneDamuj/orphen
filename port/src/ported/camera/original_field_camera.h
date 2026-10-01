@@ -123,6 +123,16 @@ namespace orphen::ported::camera
     // camera over test for it before they do, because a path can only be
     // installed on top of one that is already there.
     std::uint8_t cGpffffb6e1_subMode() const { return cGpffffb6e1_subMode_; }
+    // A raw write of the same byte. FUN_00251ED8's terrain-hazard entry parks
+    // it at 0xFF -- any non-zero value takes the frame away from the follow
+    // camera, so the view holds while the body sinks -- and FUN_00255E40 puts
+    // the saved value back.
+    void cGpffffb6e1_setSubMode(std::uint8_t mode) { cGpffffb6e1_subMode_ = mode; }
+
+    // FUN_00216A18(facing, entity): drop the eye straight behind a target at
+    // the follow distance, raised by the vertical follow offset, and request a
+    // snap. FUN_00255E40 uses it to put the view back behind a respawned lead.
+    void FUN_00216a18_place_behind(float facing, const orphen::ported::psm2::Vec3 &target);
 
     // The pose itself. The battle camera reads both back before stepping them
     // (FUN_0023DB98 turns the look point about a pivot rather than recomputing
