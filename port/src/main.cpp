@@ -103,6 +103,11 @@ namespace
                  "                  start in the F1 fly camera, on the game camera or\n"
                  "                  at a game-space eye with yaw and pitch in degrees\n"
                  "                  (yaw 0 looks along +x, positive pitch looks up).\n"
+                 "  --select-entity <slot>\n"
+                 "                  with --fly-camera, select that pool slot in the\n"
+                 "                  entity tree as a click would: frame it and open\n"
+                 "                  the inspector. A --screenshot then also writes\n"
+                 "                  the inspector beside it, as <path>-inspector.ppm.\n"
                  "  --screenshot <path>[:<frame>]\n"
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
@@ -759,6 +764,15 @@ namespace
         }
         continue;
       }
+      if (argument == "--select-entity")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--select-entity needs a pool slot");
+        }
+        config.selectEntity = static_cast<std::size_t>(std::stoul(argv[++argumentIndex]));
+        continue;
+      }
       if (argument == "--scene-tree")
       {
         config.printSceneTree = true;
@@ -1325,6 +1339,8 @@ int main(int argc, char **argv)
     auto lastPresentTick = previousTick;
     bool flyCameraStarted = false;
     bool flyCameraPlaced = false;
+    std::string inspectorTitle;
+    bool entitySelected = false;
 
     if (!config.vsync && window.swapInterval() != 0)
     {
@@ -1347,6 +1363,16 @@ int main(int argc, char **argv)
       if (input.quitRequested)
       {
         break;
+      }
+
+      // A click on the fly view's entity tree is the tree's, not a probe ray
+      // through it. Moved before any step can see it.
+      if (input.probeRequested && runtime.entityTreeCovers(input.probeX, input.probeY))
+      {
+        input.probeRequested = false;
+        input.entityTreeClickRequested = true;
+        input.entityTreeClickX = input.probeX;
+        input.entityTreeClickY = input.probeY;
       }
 
       if (input.resetRequested)
@@ -1599,7 +1625,20 @@ int main(int argc, char **argv)
           runtime.placeFlyCamera({pose[0], pose[1], pose[2]}, pose[3] * kRadiansPerDegree,
                                  pose[4] * kRadiansPerDegree);
         }
+        if (config.selectEntity.has_value() && !entitySelected && runtime.flyCameraActive())
+        {
+          entitySelected = runtime.selectEntity(*config.selectEntity);
+        }
         window.setFlyCameraActive(runtime.flyCameraActive());
+
+        // The selected entity's inspector window, open exactly while there is
+        // one to show.
+        std::string title = runtime.entityInspectorTitle();
+        if (title != inspectorTitle)
+        {
+          inspectorTitle = std::move(title);
+          window.setInspectorWindowOpen(!inspectorTitle.empty(), inspectorTitle.c_str());
+        }
       }
 
       // The swap is the expensive half to skip: with vsync on it blocks for the
@@ -1624,6 +1663,14 @@ int main(int argc, char **argv)
         const auto swapStart = std::chrono::steady_clock::now();
         window.swapBuffers();
         loopStats.swapMicros += microsSince(swapStart);
+
+        // After the main swap, so its wait for the refresh covers both.
+        if (window.inspectorWindowOpen())
+        {
+          window.beginInspectorFrame(0.06f, 0.07f, 0.08f);
+          runtime.renderEntityInspector(window.inspectorWidth(), window.inspectorHeight());
+          window.endInspectorFrame();
+        }
         ++loopStats.displayedFrames;
         lastPresentTick = std::chrono::steady_clock::now();
 
@@ -1645,6 +1692,15 @@ int main(int argc, char **argv)
         const bool wrote = window.captureFramebuffer(config.screenshotPath.c_str());
         std::cout << (wrote ? "[screenshot] wrote " : "[screenshot] FAILED to write ")
                   << config.screenshotPath << " at frame " << renderedFrames << '\n';
+        if (window.inspectorWindowOpen())
+        {
+          std::filesystem::path inspectorPath(config.screenshotPath);
+          inspectorPath.replace_filename(inspectorPath.stem().string() + "-inspector" +
+                                         inspectorPath.extension().string());
+          const bool wroteInspector = window.captureInspector(inspectorPath.string().c_str());
+          std::cout << (wroteInspector ? "[screenshot] wrote " : "[screenshot] FAILED to write ")
+                    << inspectorPath.string() << '\n';
+        }
         break;
       }
 

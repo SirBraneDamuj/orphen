@@ -71,7 +71,10 @@ namespace orphen::harness
                               const std::vector<orphen::ported::debug::DebugGlyph> &glyphs,
                               unsigned int fontAtlasTexture,
                               int fontAtlasWidth,
-                              int fontAtlasHeight) const;
+                              int fontAtlasHeight,
+                              float red = 1.0f,
+                              float green = 1.0f,
+                              float blue = 1.0f) const;
 
   private:
     // originY is the cell's baseline; the glyph box grows upward from it.

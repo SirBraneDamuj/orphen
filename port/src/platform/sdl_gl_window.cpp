@@ -117,6 +117,8 @@ namespace orphen::port
 
     window_ = window;
     glContext_ = context;
+    vsync_ = config.vsync;
+    windowId_ = SDL_GetWindowID(window);
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
@@ -130,31 +132,49 @@ namespace orphen::port
 
   bool SdlGlWindow::captureFramebuffer(const char *path) const
   {
-    std::vector<unsigned char> pixels(static_cast<std::size_t>(width_) *
-                                      static_cast<std::size_t>(height_) * 3u);
+    return writeFrontBuffer(path, width_, height_);
+  }
+
+  bool SdlGlWindow::captureInspector(const char *path) const
+  {
+    if (inspectorWindow_ == nullptr)
+    {
+      return false;
+    }
+    SDL_GL_MakeCurrent(static_cast<SDL_Window *>(inspectorWindow_), glContext_);
+    const bool wrote = writeFrontBuffer(path, inspectorWidth_, inspectorHeight_);
+    SDL_GL_MakeCurrent(static_cast<SDL_Window *>(window_), glContext_);
+    return wrote;
+  }
+
+  bool SdlGlWindow::writeFrontBuffer(const char *path, int width, int height)
+  {
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width) *
+                                      static_cast<std::size_t>(height) * 3u);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, width_, height_, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
 
     std::ofstream output(path, std::ios::binary);
     if (!output)
     {
       return false;
     }
-    output << "P6\n" << width_ << ' ' << height_ << "\n255\n";
+    output << "P6\n" << width << ' ' << height << "\n255\n";
     // GL reads bottom-up; PPM is top-down.
-    for (int row = height_ - 1; row >= 0; --row)
+    for (int row = height - 1; row >= 0; --row)
     {
       output.write(reinterpret_cast<const char *>(
                        pixels.data() + static_cast<std::size_t>(row) *
-                                           static_cast<std::size_t>(width_) * 3u),
-                   static_cast<std::streamsize>(width_) * 3);
+                                           static_cast<std::size_t>(width) * 3u),
+                   static_cast<std::streamsize>(width) * 3);
     }
     return output.good();
   }
 
   SdlGlWindow::~SdlGlWindow()
   {
+    setInspectorWindowOpen(false, nullptr);
     if (glContext_ != nullptr)
     {
       SDL_GL_DeleteContext(glContext_);
@@ -186,14 +206,37 @@ namespace orphen::port
         input.quitRequested = true;
         break;
       case SDL_WINDOWEVENT:
+        if (inspectorWindowId_ != 0 && event.window.windowID == inspectorWindowId_)
+        {
+          if (event.window.event == SDL_WINDOWEVENT_CLOSE)
+          {
+            input.entityInspectorCloseRequested = true;
+          }
+          if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+          {
+            inspectorWidth_ = event.window.data1;
+            inspectorHeight_ = event.window.data2;
+          }
+          break;
+        }
         if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
         {
           width_ = event.window.data1;
           height_ = event.window.data2;
           glViewport(0, 0, width_, height_);
         }
+        // With a second window up, closing this one is no longer the last
+        // window closing, so SDL sends no SDL_QUIT for it.
+        if (event.window.event == SDL_WINDOWEVENT_CLOSE)
+        {
+          input.quitRequested = true;
+        }
         break;
       case SDL_MOUSEBUTTONDOWN:
+        if (inspectorWindowId_ != 0 && event.button.windowID == inspectorWindowId_)
+        {
+          break;
+        }
         // Not while the pointer is captured: relative mode has no meaningful
         // pixel to aim at.
         if (event.button.button == SDL_BUTTON_LEFT && !mouseLookHeld_)
@@ -223,7 +266,13 @@ namespace orphen::port
         }
         break;
       case SDL_MOUSEWHEEL:
-        if (flyCameraActive_)
+        if (inspectorWindowId_ != 0 && event.wheel.windowID == inspectorWindowId_)
+        {
+          input.entityInspectorScrollSteps += event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED
+                                                  ? -event.wheel.y
+                                                  : event.wheel.y;
+        }
+        else if (flyCameraActive_)
         {
           input.flySpeedSteps += event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y
                                                                                 : event.wheel.y;
@@ -291,6 +340,10 @@ namespace orphen::port
         {
           input.toggleFlyCameraInsetRequested = true;
         }
+        if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_F5)
+        {
+          input.toggleEntityTreeRequested = true;
+        }
         if (event.key.keysym.sym == SDLK_ESCAPE)
         {
           input.quitRequested = true;
@@ -301,8 +354,14 @@ namespace orphen::port
       }
     }
 
+    if (SDL_GetMouseFocus() == static_cast<SDL_Window *>(window_) && !mouseLookHeld_)
+    {
+      input.pointerInWindow = true;
+      SDL_GetMouseState(&input.pointerX, &input.pointerY);
+    }
+
     const Uint8 *keys = SDL_GetKeyboardState(nullptr);
-    input.moveX = keyAxis(keys[SDL_SCANCODE_A] != 0, keys[SDL_SCANCODE_D] != 0);
+    input.moveX =keyAxis(keys[SDL_SCANCODE_A] != 0, keys[SDL_SCANCODE_D] != 0);
     input.moveY = keyAxis(keys[SDL_SCANCODE_S] != 0, keys[SDL_SCANCODE_W] != 0);
     if (flyCameraActive_)
     {
@@ -625,6 +684,90 @@ namespace orphen::port
   void SdlGlWindow::swapBuffers()
   {
     SDL_GL_SwapWindow(static_cast<SDL_Window *>(window_));
+  }
+
+  void SdlGlWindow::setInspectorWindowOpen(bool open, const char *title)
+  {
+    if (!open)
+    {
+      if (inspectorWindow_ != nullptr)
+      {
+        SDL_DestroyWindow(static_cast<SDL_Window *>(inspectorWindow_));
+        inspectorWindow_ = nullptr;
+        inspectorWindowId_ = 0;
+        SDL_GL_MakeCurrent(static_cast<SDL_Window *>(window_), glContext_);
+      }
+      return;
+    }
+    if (inspectorWindow_ != nullptr)
+    {
+      SDL_SetWindowTitle(static_cast<SDL_Window *>(inspectorWindow_), title);
+      return;
+    }
+
+    // Beside the main window when the desktop has room, over its right edge
+    // when it does not.
+    constexpr int kWidth = 560;
+    constexpr int kHeight = 720;
+    constexpr int kGap = 8;
+    auto *main = static_cast<SDL_Window *>(window_);
+    int mainX = 0;
+    int mainY = 0;
+    int mainWidth = 0;
+    int mainHeight = 0;
+    SDL_GetWindowPosition(main, &mainX, &mainY);
+    SDL_GetWindowSize(main, &mainWidth, &mainHeight);
+    int x = mainX + mainWidth + kGap;
+    SDL_Rect desktop{};
+    if (SDL_GetDisplayUsableBounds(std::max(0, SDL_GetWindowDisplayIndex(main)), &desktop) == 0 &&
+        x + kWidth > desktop.x + desktop.w)
+    {
+      x = std::max(desktop.x, desktop.x + desktop.w - kWidth);
+    }
+    const int height = std::min(kHeight, std::max(240, mainHeight));
+
+    // The context's pixel format is the one the SDL_GL_* attributes asked
+    // for, and those are still set, so this window gets the same one and can
+    // share it.
+    SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
+    auto *inspector = SDL_CreateWindow(title, x, mainY, kWidth, height,
+                                       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "0");
+    if (inspector == nullptr)
+    {
+      return;
+    }
+    inspectorWindow_ = inspector;
+    inspectorWindowId_ = SDL_GetWindowID(inspector);
+    SDL_GetWindowSize(inspector, &inspectorWidth_, &inspectorHeight_);
+    SDL_RaiseWindow(main);
+  }
+
+  void SdlGlWindow::beginInspectorFrame(float red, float green, float blue)
+  {
+    if (inspectorWindow_ == nullptr)
+    {
+      return;
+    }
+    SDL_GL_MakeCurrent(static_cast<SDL_Window *>(inspectorWindow_), glContext_);
+    // The main window's swap already waited for the refresh; this one must
+    // not wait for a second.
+    SDL_GL_SetSwapInterval(0);
+    glViewport(0, 0, inspectorWidth_, inspectorHeight_);
+    glClearColor(red, green, blue, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+  }
+
+  void SdlGlWindow::endInspectorFrame()
+  {
+    if (inspectorWindow_ == nullptr)
+    {
+      return;
+    }
+    SDL_GL_SwapWindow(static_cast<SDL_Window *>(inspectorWindow_));
+    SDL_GL_MakeCurrent(static_cast<SDL_Window *>(window_), glContext_);
+    SDL_GL_SetSwapInterval(vsync_ ? 1 : 0);
+    glViewport(0, 0, width_, height_);
   }
 
 } // namespace orphen::port

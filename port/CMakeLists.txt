@@ -110,6 +110,8 @@ target_sources(orphen_port
     src/harness/debug_text.h
     src/harness/entity_probe.cpp
     src/harness/entity_probe.h
+    src/harness/entity_tree.cpp
+    src/harness/entity_tree.h
     src/harness/fly_camera.cpp
     src/harness/fly_camera.h
     src/harness/map_viewer.cpp
@@ -317,6 +319,7 @@ target_sources(orphen_port
     src/ported/camera/original_camera_path.h
         src/runtime/port_runtime.cpp
         src/runtime/port_runtime_equip.cpp
+        src/runtime/port_runtime_inspector.cpp
         src/runtime/port_runtime.h
         src/runtime/original_lead_player.cpp
         src/runtime/original_lead_player.h

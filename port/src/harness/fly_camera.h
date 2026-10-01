@@ -26,6 +26,10 @@ namespace orphen::harness
     // Roll is dropped: the fly camera has none.
     void snapTo(const orphen::ported::render::ViewProjection &gameCamera);
     void placeAt(const orphen::ported::psm2::Vec3 &eye, float yawRadians, float pitchRadians);
+    // Keep the heading and pitch and back the eye off along the view until a
+    // sphere of `radius` around `centre` sits in the middle of the picture with
+    // room around it. The entity tree's click.
+    void frame(const orphen::ported::psm2::Vec3 &centre, float radius);
 
     // WASD along the view, Q/E down and up, the mouse to look, the wheel to
     // change speed, Shift and Ctrl for fast and slow. See InputSnapshot.

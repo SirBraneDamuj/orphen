@@ -4,6 +4,7 @@
 #include "ported/resource/texture_slot_cache.h"
 #include "harness/scene_resource_provider.h"
 #include "harness/debug_text.h"
+#include "harness/entity_tree.h"
 #include "harness/fly_camera.h"
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
@@ -212,6 +213,23 @@ namespace orphen::harness
     {
       flyCamera_.placeAt(eye, yawRadians, pitchRadians);
     }
+    // The fly view's entity tree (harness/entity_tree.h). The runtime owns the
+    // pool, so it hands the tree over before updateFlyCamera and the selected
+    // entity's inspector lines after it.
+    void setEntityTree(EntityTree tree) { entityTree_ = std::move(tree); }
+    // Whether a click at this window pixel belongs to the tree rather than to
+    // the probe. Measured against the last frame drawn, which is what the
+    // pointer was aimed at.
+    bool entityTreeCovers(int pixelX, int pixelY) const;
+    // The slot the inspector window should show, while there is one to show:
+    // flying, and something selected.
+    std::optional<std::size_t> inspectedEntitySlot() const;
+    // What a click on the slot's row does. False when it is not in the tree
+    // or the fly camera is not up.
+    bool selectEntity(std::size_t slot);
+    void setEntityInspectorLines(InspectorLines lines) { entityInspectorLines_ = std::move(lines); }
+    // The inspector window's picture, into whatever window is current.
+    void renderEntityInspector(int framebufferWidth, int framebufferHeight) const;
     void render(int framebufferWidth, int framebufferHeight) const;
     // FUN_0025d0e0's output: the full-screen fade quad's colour and coverage.
     // Drawn over the scene and under both debug overlays, which is where the
@@ -362,6 +380,18 @@ namespace orphen::harness
     bool flyCameraInset_ = true;
     mutable std::vector<orphen::ported::render::MapDrawItem> wholeMapDrawList_;
     mutable std::uint64_t wholeMapDrawListGeneration_ = 0;
+    // F5 hides the tree; a click on a row selects the entity and frames it.
+    EntityTree entityTree_;
+    bool entityTreeVisible_ = true;
+    int entityTreeScroll_ = 0;
+    int entityTreeHoveredRow_ = -1;
+    std::optional<std::size_t> selectedEntitySlot_;
+    InspectorLines entityInspectorLines_;
+    int entityInspectorScroll_ = 0;
+    void updateEntityTree(const orphen::port::InputSnapshot &input);
+    EntityTreeLayout entityTreeLayout(int framebufferWidth, int framebufferHeight) const;
+    // Texture slot 0x30, the game's debug font, when it is resident.
+    DebugFont debugFont() const;
     void snapFlyCameraToGame();
     // One full frame. render() runs it once, or twice while flying with the
     // inset up -- the game's frame, then the fly camera's.

@@ -3863,7 +3863,120 @@ namespace orphen::harness
       flyCameraWholeMap_ = !flyCameraWholeMap_;
       std::cout << "[fly camera] map: " << (flyCameraWholeMap_ ? "whole map" : "game draw list") << '\n';
     }
-    flyCamera_.update(deltaSeconds, input);
+    updateEntityTree(input);
+    orphen::port::InputSnapshot flyInput = input;
+    if (input.pointerInWindow && entityTreeCovers(input.pointerX, input.pointerY))
+    {
+      // The wheel scrolled the tree instead.
+      flyInput.flySpeedSteps = 0;
+    }
+    flyCamera_.update(deltaSeconds, flyInput);
+  }
+
+  void MapViewer::updateEntityTree(const orphen::port::InputSnapshot &input)
+  {
+    if (input.toggleEntityTreeRequested)
+    {
+      entityTreeVisible_ = !entityTreeVisible_;
+    }
+    // An entity that has left the pool takes its selection with it, and the
+    // inspector window closes.
+    if (selectedEntitySlot_.has_value() &&
+        std::none_of(entityTree_.begin(), entityTree_.end(),
+                     [&](const EntityTreeEntry &entry) { return entry.slot == *selectedEntitySlot_; }))
+    {
+      selectedEntitySlot_.reset();
+    }
+    if (input.entityInspectorCloseRequested)
+    {
+      selectedEntitySlot_.reset();
+    }
+    if (!selectedEntitySlot_.has_value())
+    {
+      entityInspectorLines_.clear();
+      entityInspectorScroll_ = 0;
+    }
+    entityInspectorScroll_ = std::clamp(entityInspectorScroll_ - input.entityInspectorScrollSteps * 3, 0,
+                                        std::max(0, static_cast<int>(entityInspectorLines_.size()) - 1));
+
+    entityTreeHoveredRow_ = -1;
+    if (!entityTreeVisible_ || entityTree_.empty())
+    {
+      return;
+    }
+    const EntityTreeLayout layout = entityTreeLayout(lastFramebufferWidth_, lastFramebufferHeight_);
+    entityTreeScroll_ = layout.firstRow;
+    if (input.pointerInWindow && layout.covers(input.pointerX, input.pointerY))
+    {
+      entityTreeScroll_ = std::clamp(entityTreeScroll_ - input.flySpeedSteps * 3, 0,
+                                     std::max(0, layout.rowCount - layout.visibleRows));
+      entityTreeHoveredRow_ = layout.rowAt(input.pointerX, input.pointerY);
+    }
+    if (input.entityTreeClickRequested)
+    {
+      const int row = layout.rowAt(input.entityTreeClickX, input.entityTreeClickY);
+      if (row >= 0)
+      {
+        // Clicking the selected row again frames it again, which is how to
+        // catch up with something that has walked off.
+        selectEntity(entityTree_[static_cast<std::size_t>(row)].slot);
+      }
+    }
+  }
+
+  bool MapViewer::selectEntity(std::size_t slot)
+  {
+    const auto entry = std::find_if(entityTree_.begin(), entityTree_.end(),
+                                    [&](const EntityTreeEntry &candidate) { return candidate.slot == slot; });
+    if (!flyCameraActive_ || entry == entityTree_.end())
+    {
+      return false;
+    }
+    if (selectedEntitySlot_ != slot)
+    {
+      entityInspectorScroll_ = 0;
+    }
+    selectedEntitySlot_ = slot;
+    const float halfHeight = entry->height * 0.5f;
+    flyCamera_.frame({entry->origin.x, entry->origin.y, entry->origin.z + halfHeight},
+                     std::max({entry->radius, halfHeight, 0.25f}));
+    return true;
+  }
+
+  EntityTreeLayout MapViewer::entityTreeLayout(int framebufferWidth, int framebufferHeight) const
+  {
+    return layoutEntityTree(framebufferWidth, framebufferHeight, entityTree_, entityTreeScroll_);
+  }
+
+  bool MapViewer::entityTreeCovers(int pixelX, int pixelY) const
+  {
+    return flyCameraActive_ && entityTreeVisible_ && !entityTree_.empty() &&
+           entityTreeLayout(lastFramebufferWidth_, lastFramebufferHeight_).covers(pixelX, pixelY);
+  }
+
+  std::optional<std::size_t> MapViewer::inspectedEntitySlot() const
+  {
+    return flyCameraActive_ ? selectedEntitySlot_ : std::nullopt;
+  }
+
+  void MapViewer::renderEntityInspector(int framebufferWidth, int framebufferHeight) const
+  {
+    drawEntityInspector(debugText_, debugFont(), framebufferWidth, framebufferHeight, entityInspectorLines_,
+                        entityInspectorScroll_);
+  }
+
+  DebugFont MapViewer::debugFont() const
+  {
+    DebugFont font;
+    if (textureSlots_ != nullptr &&
+        static_cast<std::size_t>(orphen::ported::debug::text::kFontTextureSlot) < slotTextureIds_.size())
+    {
+      font.texture = slotTextureIds_[orphen::ported::debug::text::kFontTextureSlot];
+      const auto &slotState = textureSlots_->slot(orphen::ported::debug::text::kFontTextureSlot);
+      font.width = slotState.texture.width;
+      font.height = slotState.texture.height;
+    }
+    return font;
   }
 
   void MapViewer::snapFlyCameraToGame()
@@ -4594,6 +4707,16 @@ namespace orphen::harness
     {
       drawCameraFrustumGizmo(*renderCamera_, drawDistance_);
     }
+    if (flying && selectedEntitySlot_.has_value())
+    {
+      for (const auto &entry : entityTree_)
+      {
+        if (entry.slot == *selectedEntitySlot_)
+        {
+          drawEntityHighlight(entry.origin, entry.radius, entry.height);
+        }
+      }
+    }
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
@@ -4741,17 +4864,10 @@ namespace orphen::harness
       // The atlas is texture slot 0x30, already resident and already uploaded
       // by ensureSlotTexturesUploaded -- FUN_00221fd8 binds it at boot and the
       // model store reproduces that bind.
-      GLuint fontTexture = 0;
-      int fontWidth = 0;
-      int fontHeight = 0;
-      if (textureSlots_ != nullptr &&
-          static_cast<std::size_t>(orphen::ported::debug::text::kFontTextureSlot) < slotTextureIds_.size())
-      {
-        fontTexture = slotTextureIds_[orphen::ported::debug::text::kFontTextureSlot];
-        const auto &slotState = textureSlots_->slot(orphen::ported::debug::text::kFontTextureSlot);
-        fontWidth = slotState.texture.width;
-        fontHeight = slotState.texture.height;
-      }
+      const DebugFont font = debugFont();
+      const GLuint fontTexture = font.texture;
+      const int fontWidth = font.width;
+      const int fontHeight = font.height;
       if (originalDebugTextVisible_)
       {
         const ScreenFit fit = originalScreenFit(framebufferWidth, framebufferHeight);
@@ -4768,7 +4884,7 @@ namespace orphen::harness
         status << "FLY CAMERA  " << (flyCameraWholeMap_ ? "WHOLE MAP" : "GAME DRAW LIST") << "  SPEED "
                << std::fixed << std::setprecision(1) << flyCamera_.speed();
         const std::string lines[3] = {"RMB LOOK  WASD QE  WHEEL SPEED",
-                                      "F2 SNAP  F3 MAP  F4 INSET", status.str()};
+                                      "F2 SNAP  F3 MAP  F4 INSET  F5 TREE", status.str()};
         constexpr int kAdvance = 12;
         constexpr int kLinePitch = 20;
         std::vector<orphen::ported::debug::DebugGlyph> glyphs;
@@ -4791,6 +4907,12 @@ namespace orphen::harness
             static_cast<float>(framebufferWidth) / debugText::kScreenWidth,
             static_cast<float>(framebufferHeight) / debugText::kScreenHeight, glyphs, fontTexture,
             fontWidth, fontHeight);
+        if (entityTreeVisible_ && !entityTree_.empty())
+        {
+          drawEntityTree(debugText_, font, framebufferWidth, framebufferHeight,
+                         entityTreeLayout(framebufferWidth, framebufferHeight), entityTree_,
+                         selectedEntitySlot_.value_or(static_cast<std::size_t>(-1)), entityTreeHoveredRow_);
+        }
       }
     }
 

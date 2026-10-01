@@ -179,7 +179,10 @@ namespace orphen::harness
       const std::vector<orphen::ported::debug::DebugGlyph> &glyphs,
       unsigned int fontAtlasTexture,
       int fontAtlasWidth,
-      int fontAtlasHeight) const
+      int fontAtlasHeight,
+      float red,
+      float green,
+      float blue) const
   {
     namespace text = orphen::ported::debug::text;
 
@@ -218,7 +221,8 @@ namespace orphen::harness
 
     // FUN_00268410 passes 0x80808080 as the vertex colour, which is x1.0
     // through the GS's (Ct * Cv) >> 7 -- so the glyph shows its own texels.
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    // The harness's own panels tint it; the game's overlay never does.
+    glColor4f(red, green, blue, 1.0f);
 
     float lowestY = 0.0f;
 
@@ -278,6 +282,7 @@ namespace orphen::harness
 
       glEnd();
     }
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
     if (blendWasEnabled == GL_FALSE)
     {

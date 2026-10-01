@@ -9460,7 +9460,7 @@ Harness controls, which the simulation cannot see:
 - `G` dumps a pose/draw-list snapshot of the current frame and photographs it.
 - `F1` toggles the fly camera, `F2` puts it back on the game camera, `F3`
   swaps the game's draw list for the whole map, `F4` toggles the game view
-  inset. See Fly camera, below.
+  inset, `F5` toggles the entity tree. See Fly camera, below.
 
 `C` was `B` until the sword attack landed on it, at which point one key was
 firing two gameplay actions and a harness toggle. The free viewer's own pitch
@@ -9500,7 +9500,45 @@ front of it.
   (world, smear, bars, fade, subtitles, no harness text). It then clears and
   draws the fly view, and puts that texture in the corner. That costs a second
   full render per frame, and only the game pass feeds `--frame-stats`.
-- A left click probes through the fly camera, inset or not.
+- A left click probes through the fly camera, inset or not, except over the
+  entity tree.
+
+#### Entity tree and inspector
+
+The fly view lists every occupied pool slot down its left side
+(`src/harness/entity_tree.*`, filled by `src/runtime/port_runtime_inspector.cpp`).
+It is a tree because the pool has one: entity `+0x192` is the slot an entity is
+attached to, the link `FUN_0020dc88` walks to the root of a chain, so the
+lead's bandana sits under the lead and a held weapon under whoever holds it.
+Slot 0, the lead, is listed although it is built outside the allocator. Each
+row is the slot, the type id, and the noun from the type's handler name; a type
+0x38 role also shows the type opcode 0x66 parked at `+0x1CE`.
+
+- `F5` hides and shows it. The wheel scrolls it while the pointer is over it.
+- Clicking a row selects the entity and frames it: the heading and pitch stay
+  put and the eye backs off along the view until the entity's collision volume
+  sits in the middle of the picture. Clicking the selected row again re-frames
+  it, which is how to catch something that has walked off. The selection is
+  drawn in the world as a cyan cylinder at its `+0x54`/`+0x58` size.
+- Selecting opens a second window, the inspector, next to the main one. It
+  shows what the port knows about the entity, live: status, the type's handler
+  and whether it is ported, parent and children, position and world origin,
+  facing, velocity, floor and contact, state, animation and pose, the flag
+  words, combat numbers when there are any, links to other slots, and the
+  descriptor, mesh and texture ids. The wheel scrolls it. Closing it clears the
+  selection, as does the entity leaving the pool or `F1` turning the fly
+  camera off.
+- The inspector shares the main window's GL context, so it draws with the
+  textures already uploaded. Its swap runs with a swap interval of 0, after the
+  main window's, so it does not wait for a second refresh; the frame rate with
+  it open measured the same as without.
+- An attached entity's `+0x20..+0x28` are bone-local, so the tree frames the
+  world origin its `SceneObjectView` was given, or its parent's when it is not
+  drawn.
+
+`--select-entity <slot>` does the click from the command line once the fly
+camera is up. With `--screenshot` the inspector is written beside the capture
+as `<path>-inspector.ppm`.
 
 It runs once per rendered frame on wall-clock time, outside `PortRuntime::update`,
 so the simulation cannot see it and `--frames` runs never touch it. Entering and

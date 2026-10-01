@@ -278,6 +278,9 @@ namespace orphen::port
     // --screenshot can capture the scene from outside the game's view.
     bool flyCamera = false;
     std::optional<std::array<float, 5>> flyCameraPose;
+    // --select-entity: select this pool slot in the fly view's entity tree once
+    // it is up, framing it and opening the inspector, as a click would.
+    std::optional<std::size_t> selectEntity;
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
@@ -364,11 +367,19 @@ namespace orphen::port
     void render(int framebufferWidth, int framebufferHeight) const;
     // The harness's F1 fly camera, once per rendered frame on wall-clock time.
     // Outside update() so the simulation cannot see it.
-    void updateFlyCamera(float deltaSeconds, const InputSnapshot &input)
-    {
-      mapViewer_.updateFlyCamera(deltaSeconds, input);
-    }
+    // Also drives the fly view's entity tree and its inspector window, which
+    // read the pool here and nowhere else (port_runtime_inspector.cpp).
+    void updateFlyCamera(float deltaSeconds, const InputSnapshot &input);
     bool flyCameraActive() const { return mapViewer_.flyCameraActive(); }
+    bool entityTreeCovers(int pixelX, int pixelY) const { return mapViewer_.entityTreeCovers(pixelX, pixelY); }
+    // --select-entity's click. False until the slot is in the tree.
+    bool selectEntity(std::size_t slot);
+    // Empty when the inspector window should be closed.
+    std::string entityInspectorTitle() const;
+    void renderEntityInspector(int framebufferWidth, int framebufferHeight) const
+    {
+      mapViewer_.renderEntityInspector(framebufferWidth, framebufferHeight);
+    }
     void placeFlyCamera(const orphen::ported::psm2::Vec3 &eye, float yawRadians, float pitchRadians)
     {
       mapViewer_.placeFlyCamera(eye, yawRadians, pitchRadians);
@@ -777,6 +788,8 @@ namespace orphen::port
                      const orphen::ported::psm2::Vec3 &position);
     void printScriptReport() const;
     void printActorReport() const;
+    orphen::harness::EntityTree buildEntityTree() const;
+    orphen::harness::InspectorLines describeEntity(std::size_t slot) const;
     void printRenderReport() const;
     void printModelReport() const;
     void printEntityModelBindings() const;

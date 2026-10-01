@@ -124,6 +124,18 @@ namespace orphen::harness
     pitchRadians_ = std::clamp(pitchRadians, -kPitchLimit, kPitchLimit);
   }
 
+  void FlyCamera::frame(const Vec3 &centre, float radius)
+  {
+    // A sphere touches the top and bottom of the picture at radius / sin(fov /
+    // 2); the margin leaves room around it.
+    constexpr float kMargin = 1.6f;
+    constexpr float kMinimumDistance = 1.5f;
+    const float distance =
+        std::max(kMinimumDistance, kMargin * radius / std::sin(kVerticalFovRadians * 0.5f));
+    const CameraFrame view = frameFor(eye_, yawRadians_, pitchRadians_);
+    eye_ = sum(centre, scaled(view.forward, -distance));
+  }
+
   void FlyCamera::update(float deltaSeconds, const orphen::port::InputSnapshot &input)
   {
     if (input.flySpeedSteps != 0)
