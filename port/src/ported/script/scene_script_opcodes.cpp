@@ -4030,7 +4030,10 @@ namespace orphen::ported::script
           entity->rejectTerrainMask74);
       if (height.has_value())
       {
-        entity->groundHeight4c = *height;
+        entity->groundHeight4c = height->height;
+        entity->groundPrimitive0a = height->packedPrimitive;
+        entity->flagWord6c = height->terrainFlagsWinning;
+        entity->flagWord70 = height->terrainFlagsAll;
         grounded = true;
 
         // The placement landed inside something: the query answered above the
@@ -4039,11 +4042,11 @@ namespace orphen::ported::script
         // only thing that undoes it, and it needs DAT_003555d0 up on *this*
         // frame -- one frame later is already too late. Report both so a
         // missed ejection can be told from a mis-timed one.
-        if (*height > z + 0.001f)
+        if (height->height > z + 0.001f)
         {
           std::cout << "[embed] frame " << environment_.frameNumber << " slot "
                     << currentEntity_ << " placed at (" << x << ", " << y << ", " << z
-                    << ") but the floor there is " << *height << " -- DAT_003555d0="
+                    << ") but the floor there is " << height->height << " -- DAT_003555d0="
                     << (environment_.DAT_003555d0_collisionGroupMoved ? 1 : 0) << '\n';
         }
       }

@@ -247,7 +247,9 @@ namespace
         const float angle = std::stof(value.substr(0, comma));
         const std::size_t secondComma = comma == std::string::npos ? comma : value.find(',', comma + 1);
         const float magnitude = comma == std::string::npos ? 128.0f : std::stof(value.substr(comma + 1));
-        config.holdStick = std::make_pair(angle, magnitude);
+        orphen::port::PortRuntimeConfig::HoldStickWindow window;
+        window.angle = angle;
+        window.magnitude = magnitude;
         if (secondComma != std::string::npos)
         {
           const std::string range = value.substr(secondComma + 1);
@@ -255,8 +257,9 @@ namespace
           const auto first = static_cast<std::uint32_t>(std::stoul(range.substr(0, dash)));
           const auto last =
               dash == std::string::npos ? first : static_cast<std::uint32_t>(std::stoul(range.substr(dash + 1)));
-          config.holdStickFrames = std::make_pair(first, last);
+          window.frames = std::make_pair(first, last);
         }
+        config.holdSticks.push_back(window);
         continue;
       }
       if (argument == "--window")
@@ -719,6 +722,11 @@ namespace
         config.loadOnly = true;
         continue;
       }
+      if (argument == "--debug-overlay")
+      {
+        config.debugOverlay = true;
+        continue;
+      }
       if (argument == "--scene-tree")
       {
         config.printSceneTree = true;
@@ -1145,12 +1153,19 @@ int main(int argc, char **argv)
           }
         }
 
-        if (config.holdStick.has_value() &&
-            (!config.holdStickFrames.has_value() ||
-             (frameIndex + 1 >= config.holdStickFrames->first && frameIndex + 1 <= config.holdStickFrames->second)))
+        const orphen::port::PortRuntimeConfig::HoldStickWindow *heldStick = nullptr;
+        for (const auto &window : config.holdSticks)
         {
-          input.stickAngle = config.holdStick->first;
-          input.stickMagnitude = config.holdStick->second;
+          if (!window.frames.has_value() ||
+              (frameIndex + 1 >= window.frames->first && frameIndex + 1 <= window.frames->second))
+          {
+            heldStick = &window;
+          }
+        }
+        if (heldStick != nullptr)
+        {
+          input.stickAngle = heldStick->angle;
+          input.stickMagnitude = heldStick->magnitude;
           input.moveX = std::cos(input.stickAngle);
           input.moveY = std::sin(input.stickAngle);
           // DAT_003555FE and DAT_00355600, which FUN_0023B5D8 keeps beside the
@@ -1165,7 +1180,7 @@ int main(int argc, char **argv)
               static_cast<std::uint16_t>(stickDirection & ~input.rawStickDirection);
           input.rawStickDirection = stickDirection;
         }
-        else if (config.holdStickFrames.has_value())
+        else if (!config.holdSticks.empty())
         {
           // Outside the range: the stick is let go.
           input.stickAngle = 0.0f;
@@ -1359,6 +1374,38 @@ int main(int argc, char **argv)
         constexpr std::uint16_t kRawPadCross = 0x0040;
         stepInput.rawPressedPad = static_cast<std::uint16_t>(stepInput.rawPressedPad | kRawPadCross);
         stepInput.rawHeldPad = static_cast<std::uint16_t>(stepInput.rawHeldPad | kRawPadCross);
+      }
+
+      if (config.debugOverlay && renderedFrames == 0)
+      {
+        stepInput.toggleDebugOverlayRequested = true;
+      }
+
+      // --hold-stick, as the headless loop applies it, so a capture can walk.
+      // Outside every window the real stick or keyboard is left alone.
+      {
+        const orphen::port::PortRuntimeConfig::HoldStickWindow *heldStick = nullptr;
+        for (const auto &window : config.holdSticks)
+        {
+          if (!window.frames.has_value() ||
+              (renderedFrames + 1 >= window.frames->first && renderedFrames + 1 <= window.frames->second))
+          {
+            heldStick = &window;
+          }
+        }
+        if (heldStick != nullptr)
+        {
+          stepInput.stickAngle = heldStick->angle;
+          stepInput.stickMagnitude = heldStick->magnitude;
+          stepInput.moveX = std::cos(stepInput.stickAngle);
+          stepInput.moveY = std::sin(stepInput.stickAngle);
+          const std::uint16_t stickDirection =
+              orphen::ported::input::FUN_0023b4e8_stick_direction_bits(stepInput.stickMagnitude,
+                                                                      stepInput.stickAngle);
+          stepInput.rawPressedStickDirection =
+              static_cast<std::uint16_t>(stickDirection & ~stepInput.rawStickDirection);
+          stepInput.rawStickDirection = stickDirection;
+        }
       }
 
       // --damage, the same thing for the harness's damage keys.

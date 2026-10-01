@@ -270,6 +270,9 @@ namespace orphen::port
     // A list, because the chest cutscene needs two: one to open the chest and
     // one to dismiss the item caption.
     std::vector<std::uint32_t> pressConfirmFrames;
+    // --debug-overlay: start with B's in-world debug drawing on, so a
+    // --screenshot can capture it.
+    bool debugOverlay = false;
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
@@ -307,10 +310,18 @@ namespace orphen::port
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
     // 0..128; above 100 is a run.
-    std::optional<std::pair<float, float>> holdStick;
+    //
     // `--hold-stick <angle>,<magnitude>,<first>-<last>`: only on those frames
-    // (inclusive, headless runs only). Absent is every frame.
-    std::optional<std::pair<std::uint32_t, std::uint32_t>> holdStickFrames;
+    // (inclusive, headless runs only). Given more than once, each window holds
+    // its own direction; outside every window the stick is let go. One with no
+    // range holds every frame.
+    struct HoldStickWindow
+    {
+      float angle = 0.0f;
+      float magnitude = 128.0f;
+      std::optional<std::pair<std::uint32_t, std::uint32_t>> frames;
+    };
+    std::vector<HoldStickWindow> holdSticks;
     // Fires the next-map request every N headless frames, so the map-cycle
     // scene reload can be exercised without a window.
     std::uint32_t cycleMapEveryFrames = 0;
@@ -530,6 +541,8 @@ namespace orphen::port
     // one-shot "no corner cut on this step" flag FUN_0025a500 raises around
     // its FUN_00259378 call.
     orphen::ported::entity::FollowerNavmesh followerNavmesh_;
+    // DAT_00355020, built by FUN_00257610 at FUN_0022A418:328.
+    orphen::ported::entity::ClimbGraph DAT_00355020_climbGraph_;
     bool DAT_00355030_skipCornerCut_ = false;
 
     // FUN_002582d0. Called once per map load with the lead's spawn point, and
@@ -852,10 +865,6 @@ namespace orphen::port
     void FUN_00237a08_return_to_title();
     // FUN_002294D0, the new-game reset FUN_0022A418 runs behind flag 0x500.
     void FUN_002294d0_new_game_reset();
-    // FUN_00232FA8's FUN_0025D0E0 dim. The original re-issues it every frame
-    // the confirm draws; the port's overlay is sticky, so it is released at the
-    // top of the next frame and put back if the confirm is still up.
-    bool returnToTitleDimHeld_ = false;
     // FUN_00231A98's seven labels and FUN_00231C50's caption, out of SCR.BIN
     // resource 1. They are plain NUL-terminated ASCII, not dialogue streams.
     std::string FUN_0025b9e8_text(std::size_t messageIndex) const;

@@ -28,6 +28,8 @@ namespace orphen::port
     float bodyHeight = 0.0f;
     bool grounded = false;
     bool running = false;
+    // The climbable face the lead is holding, or -1.
+    std::int16_t climbFace = -1;
   };
 
 } // namespace orphen::port

@@ -185,6 +185,18 @@ namespace orphen::ported::player
         entity().previousY2c = groundSample->height;
         entity().collisionFlags0c = kPhysicsFlagGrounded;
       }
+      // FUN_0022A418:219 is `+0x4C = FUN_00227070(x, y, lead)`, and FUN_00227070
+      // leaves the surface's words in +0x6C / +0x70 as well. A lead that is
+      // placed and never moves reads them from here and nowhere else: the
+      // physics only queries the ground for a horizontal move.
+      if (const auto surface = FUN_00227390_validate_destination(entity().positionX20,
+                                                                 entity().positionZ24,
+                                                                 entity().positionY28,
+                                                                 terrainSampler))
+      {
+        entity().flagWord6c = surface->terrainFlags;
+        entity().flagWord70 = surface->terrainFlags;
+      }
     }
   }
 
@@ -259,6 +271,18 @@ namespace orphen::ported::player
     {
       FUN_002534d8_update_airborne_state(clampedFrameTicks, input);
     }
+    else if (entity().state60 == kStateClimbHold)
+    {
+      FUN_002537a0_update_climb_hold(clampedFrameTicks, input);
+    }
+    else if (entity().state60 == kStateClimbMove)
+    {
+      FUN_00253be8_update_climb_move(clampedFrameTicks, input);
+    }
+    else if (entity().state60 == kStateClimbOver)
+    {
+      FUN_002540d0_update_climb_over(clampedFrameTicks);
+    }
     else if (entity().state60 == kStateSwordAttack)
     {
       // FUN_00251ed8 sends states >= 0x1C through PTR_FUN_0031e160, whose first
@@ -322,7 +346,17 @@ namespace orphen::ported::player
     }
     else
     {
-      FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
+      // PTR_FUN_0031E0E8[0] and [1], FUN_002533C0 and FUN_00253430: both call
+      // FUN_00256BB8 and then FUN_00252DE0, the climb, whatever the first one
+      // did. The climb reads Cross too, and only an interaction clears it first.
+      // States 6..9 also land here; they are not ported.
+      const std::uint16_t entryState = entity().state60;
+      const bool padCleared =
+          FUN_00256bb8_update_grounded_field_state(clampedFrameTicks, input, interactionProbe);
+      if ((entryState == 0 || entryState == 1) && !padCleared)
+      {
+        FUN_00252de0_start_climb(clampedFrameTicks, input);
+      }
     }
 
     FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler);
@@ -348,7 +382,9 @@ namespace orphen::ported::player
             entity().verticalVelocity44,
             entity().height58,
             grounded,
-            entity().running};
+            entity().running,
+            entity().state60 >= kStateClimbHold && entity().state60 <= kStateClimbOver ? entity().climbFace1b4
+                                                                                      : std::int16_t{-1}};
   }
 
   std::optional<std::uint32_t> OriginalPlayerController::currentSurfaceTerrainFlags() const
@@ -435,11 +471,15 @@ namespace orphen::ported::player
     entity().rotationX154 = 0.0f;
     entity().desiredDeltaX30 = kDAT_00352888_settleStep;
     entity().idleTimer1b6 = 0;
-    entity().playerKnockbackSpeed1b0 = 0.0f;
+    // 0x00253778 is `sw $zero, 0x1a0($s0)` -- the climb's turn rate, not the
+    // +0x1B0 speed, which the knockback that follows reads as it stands.
+    entity().climbTurnRate1a0 = 0.0f;
     if (FUN_00217e18_releaseCamera_)
     {
       FUN_00217e18_releaseCamera_();
     }
+    // DAT_003555D1, the push-out suspension FUN_00252DE0 raised.
+    orphen::ported::entity::DAT_003555d1_suspendPushOut() = false;
   }
 
   // FUN_00251ED8:97-227. The lead's own damage drain -- the counterpart of the
@@ -517,11 +557,11 @@ namespace orphen::ported::player
         // is rather than be launched off the edge that killed it.
         if (entity().state60 == kStateTerrainHazard)
         {
-          entity().playerKnockbackSpeed1b0 = 0.0f;
+          entity().playerSpeed1b0 = 0.0f;
         }
         else
         {
-          entity().playerKnockbackSpeed1b0 = kuGpffff88c0_deathKnockback;
+          entity().playerSpeed1b0 = kuGpffff88c0_deathKnockback;
         }
         entity().verticalVelocity44 = kuGpffff88c8_deathPopUp;
         entity().facingRadians5c = entity().hitDirectionC4 + kfGpffff88c4_pi;
@@ -587,7 +627,7 @@ namespace orphen::ported::player
             FUN_00225bf0_set_entity_state(kStateHitKnockback, kAnimationHitKnockback);
             entity().collisionFlags0c &= 0xFFFFFFFEu;
             entity().fadeRamp62 = entity().hitSourceC0 != 0 ? entity().hitSourceC0 : 0x100;
-            entity().playerKnockbackSpeed1b0 = entity().hitReactionBc == kHitReactionKnockback
+            entity().playerSpeed1b0 = entity().hitReactionBc == kHitReactionKnockback
                                                    ? kuGpffff88d0_knockbackSpeed
                                                    : 0.0f;
             entity().verticalVelocity44 = kuGpffff88d4_knockbackPopUp;
@@ -730,21 +770,21 @@ namespace orphen::ported::player
       }
       if ((entity().collisionFlags0c & 0x262u) == 0)
       {
-        if (entity().playerKnockbackSpeed1b0 != 0.0f)
+        if (entity().playerSpeed1b0 != 0.0f)
         {
-          const float step = entity().playerKnockbackSpeed1b0 * static_cast<float>(frameTicks);
+          const float step = entity().playerSpeed1b0 * static_cast<float>(frameTicks);
           entity().desiredDeltaX30 += step * std::cos(entity().hitDirectionC4);
           entity().desiredDeltaZ34 += step * std::sin(entity().hitDirectionC4);
-          entity().playerKnockbackSpeed1b0 -= kDAT_00352980_knockbackDecay;
-          if (entity().playerKnockbackSpeed1b0 < 0.0f)
+          entity().playerSpeed1b0 -= kDAT_00352980_knockbackDecay;
+          if (entity().playerSpeed1b0 < 0.0f)
           {
-            entity().playerKnockbackSpeed1b0 = 0.0f;
+            entity().playerSpeed1b0 = 0.0f;
           }
         }
       }
       else
       {
-        entity().playerKnockbackSpeed1b0 = 0.0f;
+        entity().playerSpeed1b0 = 0.0f;
       }
       return;
     }
@@ -798,7 +838,7 @@ namespace orphen::ported::player
     }
   }
 
-  void OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
+  bool OriginalPlayerController::FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
                                                                           const OriginalPlayerFrameInput &input,
                                                                           const OriginalInteractionProbe &interactionProbe)
   {
@@ -815,7 +855,7 @@ namespace orphen::ported::player
       entity().motionFlags1bb = static_cast<std::uint8_t>((entity().motionFlags1bb & 0xef) | 2);
       entity().collisionFlags0c &= ~kPhysicsFlagGrounded;
       FUN_00225bf0_set_entity_state(2, kAnimationJumpFall);
-      return;
+      return false;
     }
 
     // 2. Jump. Not while standing on a party character: +0x68 is what the lead
@@ -846,7 +886,7 @@ namespace orphen::ported::player
             entity());
       }
       FUN_00225bf0_set_entity_state(2, kAnimationJumpRise);
-      return;
+      return false;
     }
 
     // 3. Interact. `uGpffffb68a & 0x40` is Cross, the confirm button, and a hit
@@ -854,7 +894,7 @@ namespace orphen::ported::player
     //    take a step on the frame a chest opens.
     if (input.interactPressed && interactionProbe && interactionProbe())
     {
-      return;
+      return true;
     }
 
     // 4. Attack, then 5. use -- an `else if`, so both in the same frame is the
@@ -866,14 +906,14 @@ namespace orphen::ported::player
     {
       if (FUN_00256bb8_start_attack(frameTicks))
       {
-        return;
+        return false;
       }
     }
     else if ((input.mappedPressedActions & kOriginalMappedActionUse) != 0)
     {
       if (FUN_00256bb8_start_magic())
       {
-        return;
+        return false;
       }
     }
 
@@ -903,7 +943,7 @@ namespace orphen::ported::player
       {
         if (entity().animationA0 == kAnimationHeldIdle)
         {
-          return;
+          return false;
         }
         // Class 3 has its own fidget.
         const std::uint16_t fidget =
@@ -926,7 +966,7 @@ namespace orphen::ported::player
           entity().animationA0 = fidget;
         }
       }
-      return;
+      return false;
     }
 
     // Walk below a stick magnitude of 100, run above it.
@@ -949,6 +989,7 @@ namespace orphen::ported::player
                                         input.cameraRelativeMove);
 
     entity().animationA0 = entity().running ? kAnimationRun : kAnimationWalk;
+    return false;
   }
 
   void OriginalPlayerController::FUN_002534d8_update_airborne_state(std::uint32_t frameTicks,
@@ -1887,57 +1928,69 @@ namespace orphen::ported::player
       return ground;
     };
 
-    std::optional<OriginalTerrainSample> destinationGround = validateMove(startX, startZ, attemptedX, attemptedZ);
-    if (destinationGround.has_value())
+    // FUN_002262C0:454-466. The movement block, and every FUN_00227390 in it,
+    // is entered only for a non-zero +0x30 or +0x34. A body with no horizontal
+    // request makes no ground query at all: +0x4C, +0x6C and +0x70 keep what
+    // the last one wrote, and the landing below compares against that +0x4C.
+    // (The +0x0C bit 0x100 re-query on that path is riding an entity, which
+    // the port does not model.) Querying anyway let a climber hanging under a
+    // ledge find the ledge and be landed on it.
+    const bool horizontalRequest = entity().desiredDeltaX30 != 0.0f || entity().desiredDeltaZ34 != 0.0f;
+    std::optional<OriginalTerrainSample> destinationGround;
+    if (horizontalRequest)
     {
-      entity().positionX20 = attemptedX;
-      entity().positionZ24 = attemptedZ;
-      entity().groundHeight4c = destinationGround->height;
-    }
-    else
-    {
-      nextCollisionFlags |= kPhysicsFlagBlocked;
-      destinationGround.reset();
-
-      if (std::abs(entity().desiredDeltaX30) > kMovementEpsilon)
+      destinationGround = validateMove(startX, startZ, attemptedX, attemptedZ);
+      if (destinationGround.has_value())
       {
-        auto xOnlyGround = validateMove(startX, startZ, attemptedX, startZ);
-        if (xOnlyGround.has_value())
-        {
-          entity().positionX20 = attemptedX;
-          entity().groundHeight4c = xOnlyGround->height;
-          destinationGround = xOnlyGround;
-        }
-        else
-        {
-          nextCollisionFlags |= kPhysicsFlagXBlocked;
-        }
+        entity().positionX20 = attemptedX;
+        entity().positionZ24 = attemptedZ;
+        entity().groundHeight4c = destinationGround->height;
       }
-
-      if (std::abs(entity().desiredDeltaZ34) > kMovementEpsilon)
+      else
       {
-        auto zOnlyGround = validateMove(entity().positionX20, entity().positionZ24, entity().positionX20, attemptedZ);
-        if (zOnlyGround.has_value())
-        {
-          entity().positionZ24 = attemptedZ;
-          entity().groundHeight4c = zOnlyGround->height;
-          destinationGround = zOnlyGround;
-        }
-        else
-        {
-          nextCollisionFlags |= kPhysicsFlagZBlocked;
-        }
-      }
+        nextCollisionFlags |= kPhysicsFlagBlocked;
+        destinationGround.reset();
 
-      if (!destinationGround.has_value())
-      {
-        destinationGround = FUN_00227390_validate_destination(entity().positionX20,
-                                                              entity().positionZ24,
-                                                              entity().positionY28,
-                                                              terrainSampler);
-        if (destinationGround.has_value())
+        if (std::abs(entity().desiredDeltaX30) > kMovementEpsilon)
         {
-          entity().groundHeight4c = destinationGround->height;
+          auto xOnlyGround = validateMove(startX, startZ, attemptedX, startZ);
+          if (xOnlyGround.has_value())
+          {
+            entity().positionX20 = attemptedX;
+            entity().groundHeight4c = xOnlyGround->height;
+            destinationGround = xOnlyGround;
+          }
+          else
+          {
+            nextCollisionFlags |= kPhysicsFlagXBlocked;
+          }
+        }
+
+        if (std::abs(entity().desiredDeltaZ34) > kMovementEpsilon)
+        {
+          auto zOnlyGround = validateMove(entity().positionX20, entity().positionZ24, entity().positionX20, attemptedZ);
+          if (zOnlyGround.has_value())
+          {
+            entity().positionZ24 = attemptedZ;
+            entity().groundHeight4c = zOnlyGround->height;
+            destinationGround = zOnlyGround;
+          }
+          else
+          {
+            nextCollisionFlags |= kPhysicsFlagZBlocked;
+          }
+        }
+
+        if (!destinationGround.has_value())
+        {
+          destinationGround = FUN_00227390_validate_destination(entity().positionX20,
+                                                                entity().positionZ24,
+                                                                entity().positionY28,
+                                                                terrainSampler);
+          if (destinationGround.has_value())
+          {
+            entity().groundHeight4c = destinationGround->height;
+          }
         }
       }
     }
@@ -2050,6 +2103,15 @@ namespace orphen::ported::player
         attemptedY <= destinationGround->height + kLandingTolerance)
     {
       attemptedY = destinationGround->height;
+      entity().verticalVelocity44 = 0.0f;
+      nextCollisionFlags |= kPhysicsFlagGrounded | kPhysicsFlagVerticalCollision;
+    }
+    else if (!horizontalRequest && !jumpStartup && entity().desiredDeltaY38 <= 0.0f &&
+             attemptedY <= entity().groundHeight4c)
+    {
+      // FUN_002262C0:0x00226D14, `if (z + dz <= +0x4C)`: no query happened, so
+      // the stored ground is the whole test.
+      attemptedY = entity().groundHeight4c;
       entity().verticalVelocity44 = 0.0f;
       nextCollisionFlags |= kPhysicsFlagGrounded | kPhysicsFlagVerticalCollision;
     }

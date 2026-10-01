@@ -78,6 +78,8 @@ namespace orphen::port
     void update(std::uint32_t frameTicks,
                 const orphen::ported::psm2::Vec3 &movementRequest,
                 float stickMagnitude,
+                // fGpffffb674, the stick's angle. The climbing state steers by it.
+                float stickAngle,
                 // FUN_0023b890(8): the last eight frames of mapped actions
                 // ORed together, held in the high half and newly-pressed in
                 // the low half. This is one word rather than a jump flag

@@ -31,6 +31,12 @@ namespace orphen::ported::player
   // nothing at all while it is set.
   constexpr std::uint16_t kStateScriptDriven = 10;
 
+  // PTR_FUN_0031E0E8[3], [4] and [5]: hanging on a climbable face, moving to
+  // the next one, and climbing over the lip at the top.
+  constexpr std::uint16_t kStateClimbHold = 3;
+  constexpr std::uint16_t kStateClimbMove = 4;
+  constexpr std::uint16_t kStateClimbOver = 5;
+
   // FUN_00256bb8's attack branch for character class 0 -- which is what
   // FUN_002298d0 answers for type id 1, Orphen. Circle grounded puts
   // the entity in state 0x1C with animation 0x33, and PTR_FUN_0031e160[0]
@@ -200,6 +206,10 @@ namespace orphen::ported::player
     // confirm button -- before running the interaction probe.
     bool interactPressed = false;
 
+    // fGpffffb674, DAT_003555E4: the movement stick's angle, atan2(up, right).
+    // Only the climbing state reads it -- it picks the direction to climb.
+    float stickAngle = 0.0f;
+
     // fGpffffb678. FUN_00256bb8 walks at or below 100.0 and runs above it;
     // FUN_00253488 scales air control by it directly. Full deflection is 128.
     float stickMagnitude = 0.0f;
@@ -237,6 +247,8 @@ namespace orphen::ported::player
     float bodyHeight = 0.0f;
     bool grounded = false;
     bool running = false;
+    // +0x1B4 while climbing (states 3..5), else -1.
+    std::int16_t climbFace = -1;
   };
 
   class OriginalPlayerController
@@ -387,9 +399,19 @@ namespace orphen::ported::player
     // FUN_00251C80 + FUN_00267D38, the three hurt cues.
     void playCharacterCue(int soundIndex);
     void FUN_00252d88_return_to_idle_state();
-    void FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
+    // Returns true when the interaction probe took the press -- FUN_002686A0
+    // then zeroes the pad words, which is what keeps FUN_00252DE0 from seeing
+    // the same Cross.
+    bool FUN_00256bb8_update_grounded_field_state(std::uint32_t frameTicks,
                                                   const OriginalPlayerFrameInput &input,
                                                   const OriginalInteractionProbe &interactionProbe);
+    // Climbing. FUN_00252DE0 is run by the state 0 and 1 handlers after
+    // FUN_00256BB8; PTR_FUN_0031E0E8[3..5] are the hold, the move to the next
+    // face, and the climb over the lip. See original_player_climb.cpp.
+    bool FUN_00252de0_start_climb(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_002537a0_update_climb_hold(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_00253be8_update_climb_move(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
+    void FUN_002540d0_update_climb_over(std::uint32_t frameTicks);
     void FUN_002534d8_update_airborne_state(std::uint32_t frameTicks, const OriginalPlayerFrameInput &input);
     // PTR_FUN_0031e160[0], state 0x1C: the grounded sword swing.
     void FUN_00256130_update_sword_attack();

@@ -1086,6 +1086,7 @@ namespace orphen::port
     // is built out of *which primitive answered*, not out of how high it was.
     environment.followerNavmesh = &followerNavmesh_;
     environment.psm2Map = mapViewer_.loadedMap();
+    environment.DAT_00355020_climbGraph = &DAT_00355020_climbGraph_;
     environment.DAT_00355030_skipCornerCut = &DAT_00355030_skipCornerCut_;
     if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
     {
@@ -1718,7 +1719,8 @@ namespace orphen::port
 
       environment.FUN_00227070_sample_ground =
           [loadedMap](float x, float y, float feetHeight, float bodyHeight, float radius,
-                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask) -> std::optional<float>
+                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask)
+          -> std::optional<orphen::ported::script::ScriptEnvironment::GroundSample>
       {
         const auto sample = orphen::port::FUN_00227070_sample_ground(
             *loadedMap, x, y, feetHeight, bodyHeight, radius, entityFlags04, rejectTerrainMask);
@@ -1726,7 +1728,12 @@ namespace orphen::port
         {
           return std::nullopt;
         }
-        return sample.height;
+        orphen::ported::script::ScriptEnvironment::GroundSample result;
+        result.height = sample.height;
+        result.packedPrimitive = static_cast<std::int16_t>(sample.packedPrimitive);
+        result.terrainFlagsWinning = sample.terrainFlagsWinning;
+        result.terrainFlagsAll = sample.terrainFlagsAll;
+        return result;
       };
     }
 
@@ -4327,6 +4334,23 @@ namespace orphen::port
     const std::uint16_t initHaltOpcode = sceneScript_.lastHaltOpcode();
     const std::uint32_t initHaltOffset = sceneScript_.lastHaltOffset();
     const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
+
+    // FUN_0022A418:328. The climbable faces depend only on the map, so where in
+    // the load this runs changes nothing.
+    if (const auto *loadedMap = mapViewer_.loadedMap(); loadedMap != nullptr)
+    {
+      DAT_00355020_climbGraph_ = orphen::ported::entity::FUN_00257610_build_climb_graph(*loadedMap);
+      mapViewer_.setClimbGraph(DAT_00355020_climbGraph_);
+      if (!DAT_00355020_climbGraph_.empty())
+      {
+        std::cout << "[climb] " << DAT_00355020_climbGraph_.size() << " climbable faces\n";
+      }
+    }
+    else
+    {
+      DAT_00355020_climbGraph_.clear();
+      mapViewer_.setClimbGraph({});
+    }
 
     // FUN_0022A418:369, `(*DAT_0032536c)(3); FUN_0025b728();`. Mode 3 is the
     // hook a scene module builds its opening shot in, and it runs between the
@@ -7498,8 +7522,9 @@ namespace orphen::port
           << " liveFrames=" << DAT_003555d0_liveFrames_ << " pushOuts=" << pushOutCount_ << "\n";
       out << "fade: in=0x" << std::hex << DAT_00571dc0_screenFade_.DAT_00571dc0_fadeInLevel()
           << " out=0x" << DAT_00571dc0_screenFade_.DAT_00571dd0_fadeOutLevel() << " overlay=0x"
-          << DAT_00571dc0_screenFade_.overlay().colour << "/"
-          << static_cast<unsigned>(DAT_00571dc0_screenFade_.overlay().alpha) << std::dec << "\n";
+          << mapViewer_.screenFadeRgb() << "/"
+          << static_cast<unsigned>(mapViewer_.screenFadeAlpha()) << std::dec
+          << " (last drawn frame)\n";
     }
 
     out << "\n=== end snapshot ===\n";
@@ -8803,14 +8828,13 @@ namespace orphen::port
     // does. A scene change asked for last frame lands here, so no part of a
     // frame ever runs half on one scene and half on the next.
     //
-    // Ahead of it, the release of last frame's Return-to-Title dim: the
-    // original's quad was only in last frame's packet list. After Yes the fade
-    // FUN_00237A08 armed takes the overlay over from here.
-    if (returnToTitleDimHeld_)
-    {
-      DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(0, 0);
-      returnToTitleDimHeld_ = false;
-    }
+    // Ahead of it, the release of last frame's full-screen quad. FUN_0025D0E0
+    // puts it in *this* frame's packet list, so in the original a frame whose
+    // callers stop asking for it -- the fade steppers, 0x89, the menu and save
+    // dims -- is not covered at all. s03_e001's Sephy handoff depends on it:
+    // the script steps a fade-out to black, swaps the lead, and ends without
+    // ever fading back in.
+    DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(0, 0);
     FUN_002239c8_service_scene_change(frameTicks);
     // The window was closed while a movie had it.
     if (movieQuitRequested_)
@@ -9078,7 +9102,6 @@ namespace orphen::port
           DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(
               orphen::ported::scene::kReturnToTitleDimColour,
               orphen::ported::scene::kReturnToTitleDimAlpha);
-          returnToTitleDimHeld_ = true;
         }
         if (menuStep.closed)
         {
@@ -9123,6 +9146,7 @@ namespace orphen::port
         leadPlayer_.update(frameTicks,
                            movementRequest,
                            input.stickMagnitude,
+                           input.stickAngle,
                            DAT_00342a70_mappedActions_.FUN_0023b890_recent(8),
                            // uGpffffb688 / uGpffffb09c: the frame just pushed,
                            // which is what FUN_00251ED8 is handed.
@@ -9213,6 +9237,21 @@ namespace orphen::port
         entity.positionX20 = placed.position.x;
         entity.positionZ24 = placed.position.y;
         entity.positionY28 = placed.position.z;
+        // And the ground under it, the way opcode 0x55 resamples it: physics
+        // only queries for a horizontal move, so a body put down and left
+        // standing would otherwise keep the +0x4C of wherever it came from.
+        if (loadedMap != nullptr)
+        {
+          const auto sample = FUN_00227070_sample_ground(
+              *loadedMap, entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
+              entity.radius54, entity.halfword04, entity.rejectTerrainMask74);
+          if (sample.found)
+          {
+            entity.groundHeight4c = sample.height;
+            entity.flagWord6c = sample.terrainFlagsWinning;
+            entity.flagWord70 = sample.terrainFlagsAll;
+          }
+        }
       }
 
       if (!uiFrame)
@@ -10075,11 +10114,9 @@ namespace orphen::port
       releaseLead();
     }
 
-    // The tail: the dim. The port's overlay is sticky, so it is released at the
-    // top of the next frame alongside the Return-to-Title one.
+    // The tail: the dim, re-issued every frame the prompt is up.
     DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(scene::kSavePromptDimColour,
                                                       scene::kSavePromptDimAlpha);
-    returnToTitleDimHeld_ = true;
 
     if (step.closed || step.openSaveScreen)
     {

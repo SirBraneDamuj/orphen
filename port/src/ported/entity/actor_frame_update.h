@@ -6,6 +6,7 @@
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
 #include "ported/entity/follower_navmesh.h"
+#include "ported/entity/original_climb_graph.h"
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_dust_pool.h"
 #include "ported/entity/original_hit_test.h"
@@ -623,6 +624,8 @@ namespace orphen::ported::entity
     // not per entity.
     FollowerNavmesh *followerNavmesh = nullptr;
     const orphen::ported::psm2::Psm2RuntimeState *psm2Map = nullptr;
+    // DAT_00355020, FUN_00257610's climbable-face list for the loaded map.
+    const ClimbGraph *DAT_00355020_climbGraph = nullptr;
     NavProbeFn FUN_00227798_probe;
     bool *DAT_00355030_skipCornerCut = nullptr;
 

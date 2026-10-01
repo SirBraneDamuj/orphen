@@ -26,6 +26,11 @@
 // Not ported: FUN_0025d0e0's GS packet itself (a screen-sized sprite through
 // FUN_00207de8) and the DAT_0035505c bits it raises for the frame's draw list.
 // The port hands the colour to the renderer instead.
+//
+// The original's quad lives for one frame, so nothing here persists on its
+// own: PortRuntime::update clears the overlay at the top of each frame, and a
+// frame whose callers stop stepping a block is uncovered even though the level
+// may still sit at 0x1FE0.
 
 #include <cstdint>
 

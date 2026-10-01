@@ -360,9 +360,25 @@ namespace orphen::ported::entity
     // it flattens to zero, so it can put them back. Other types overlay the same
     // three words with their own fields -- see the type-specific blocks below --
     // and none of them ever runs these handlers.
-    float playerKnockbackSpeed1b0 = 0.0f;
+    //
+    // +0x1B0 is also the climbing speed in states 3..5, and it is one word: a
+    // hit taken on a wall goes to the knockback without rewriting it, so the
+    // body is thrown at climbing speed. Hence one field under a neutral name.
+    float playerSpeed1b0 = 0.0f;
     float playerSavedScaleZ1a4 = 1.0f;
     float playerSavedHeight1a8 = 0.0f;
+    // The rest of the lead's climbing block -- FUN_00252DE0 fills it and states
+    // 3..5 (FUN_002537A0, FUN_00253BE8, FUN_002540D0) read it. The original
+    // overlays +0x1A4 / +0x1A8 with the flatten's two words above; no state
+    // reads one after the other has written it, so they are kept apart here.
+    float climbTurnRate1a0 = 0.0f;       // +0x1A0: how fast +0x1A4 swings round a corner
+    float climbHeading1a4 = 0.0f;        // +0x1A4: the camera's heading, eased to the face's
+    float climbSavedStepDown1a8 = 0.0f;  // +0x1A8: +0x7C, parked while climbing over the lip
+    float climbStartGround1ac = 0.0f;    // +0x1AC: +0x4C when the climb began
+    std::int16_t climbFace1b4 = -1;      // +0x1B4: the primitive being climbed
+    // +0x1BA: FUN_00252658's steep-slope slide counter. That function is not
+    // ported, so this stays 0; FUN_00256BB8 and FUN_00252DE0 both read it.
+    std::uint8_t slopeSlide1ba = 0;
     std::uint16_t effectTimer19c = 0;        // +0x19C: type 0x3A one-shot effect timer.
     // +0x19C on the *lead player*: the entity holding the item a chest just
     // gave up, as a pool slot rather than the original's pointer. Zero means

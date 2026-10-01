@@ -220,6 +220,8 @@ target_sources(orphen_port
     src/ported/entity/actor_frame_update.cpp
     src/ported/entity/entity_collision.cpp
     src/ported/entity/follower_navmesh.cpp
+    src/ported/entity/original_climb_graph.cpp
+    src/ported/player/original_player_climb.cpp
     src/ported/entity/original_battle_enemy.cpp
     src/ported/entity/original_summon_stage.cpp
     src/ported/entity/original_boss_camera.cpp

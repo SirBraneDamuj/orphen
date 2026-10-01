@@ -674,7 +674,19 @@ namespace orphen::ported::script
     // is one. Unlike `terrainHeight` above (which is FUN_00227798's body-less
     // point query) this samples four corners of the entity's collision radius
     // and keeps the highest, unless entity +0x04 bit 1 says otherwise.
-    std::function<std::optional<float>(float x,
+    //
+    // It writes more than the height: +0x0A (the packed primitive), +0x6C (the
+    // winning sample's terrain word) and +0x70 (the AND over all four) are
+    // left on the entity as well, which is how a script placement tells the
+    // floor triggers what the body is standing on.
+    struct GroundSample
+    {
+      float height = 128.0f;
+      std::int16_t packedPrimitive = -1;
+      std::uint32_t terrainFlagsWinning = 0;
+      std::uint32_t terrainFlagsAll = 0;
+    };
+    std::function<std::optional<GroundSample>(float x,
                                        float y,
                                        float feetHeight,
                                        float bodyHeight,

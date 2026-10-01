@@ -2752,12 +2752,11 @@ namespace orphen::ported::entity
       return value;
     }
 
-    // **FUN_0025D0E0 is per-frame in the original and sticky here.** There it
-    // pushes one screen-sized sprite into *this* frame's draw list, so a caller
-    // that stops calling it stops covering the screen. The port's ScreenFade
-    // holds the last value it was given and the runtime pushes that to the
-    // renderer every frame, so anything that paints the overlay has to take it
-    // back down when it is finished. Both of the boss's users do, here.
+    // FUN_0025D0E0 is per-frame: it pushes one screen-sized sprite into *this*
+    // frame's draw list, so a caller that stops calling it stops covering the
+    // screen. PortRuntime::update now clears the overlay at the top of every
+    // frame to match, which makes this release redundant; it is kept so the
+    // boss does not depend on where in the frame it runs.
     void mast_release_overlay(const ActorEnvironment &environment)
     {
       if (environment.DAT_0025d0e0_screenFade != nullptr)

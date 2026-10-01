@@ -517,6 +517,14 @@ namespace orphen::port
       {
         input.stickMagnitude = kFullStickMagnitude;
         input.stickAngle = std::atan2(input.moveY, input.moveX);
+        if (input.moveY == 0.0f && input.moveX < 0.0f)
+        {
+          // A dead-level left reads as pi, past the top of the climb's left
+          // sector (FUN_002537A0, <= DAT_003528A8 = 0x40490FD8). Hardware's
+          // atan2f gives 3.1415925 there and misses it too, but a thumb is
+          // never that level; a stick one raw step off is, at atan2(1, -128).
+          input.stickAngle = std::atan2(1.0f, -128.0f);
+        }
         input.moveX /= moveLength;
         input.moveY /= moveLength;
       }

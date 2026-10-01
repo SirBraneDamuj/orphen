@@ -6,6 +6,7 @@
 #include "harness/debug_text.h"
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
+#include "ported/entity/original_climb_graph.h"
 #include "ported/psm2/psm2_runtime.h"
 #include "ported/render/original_background_model.h"
 #include "ported/render/original_hud_quads.h"
@@ -126,6 +127,9 @@ namespace orphen::harness
     bool cycleDiscScene(int direction);
     void setLeadPlayerView(std::optional<orphen::port::PlayerViewState> playerView);
     void setSceneObjectViews(orphen::port::SceneObjectViewList objects);
+    // DAT_00355020, for the B overlay to draw. A copy: it is small and only
+    // changes on a map load.
+    void setClimbGraph(orphen::ported::entity::ClimbGraph graph) { climbGraph_ = std::move(graph); }
     // What the renderer will actually pose with, as opposed to a palette a
     // report rebuilds for itself.
     const orphen::port::SceneObjectViewList &sceneObjectViews() const { return sceneObjectViews_; }
@@ -204,6 +208,8 @@ namespace orphen::harness
     // Drawn over the scene and under both debug overlays, which is where the
     // original's own overlay sits relative to the debug text.
     void setScreenFadeOverlay(std::uint32_t packedRgb, std::uint8_t alpha);
+    std::uint32_t screenFadeRgb() const { return screenFadeRgb_; }
+    std::uint8_t screenFadeAlpha() const { return screenFadeAlpha_; }
 
     // FUN_00255CE8's quad, the game over's own black overlay. It goes into GS
     // sort bucket **2** rather than the fade's 0x1007, which puts it under the
@@ -395,6 +401,7 @@ namespace orphen::harness
     // from the overlay above, which is screen-space text. Off by default,
     // because it covers the game's picture.
     bool debugOverlayVisible_ = false;
+    orphen::ported::entity::ClimbGraph climbGraph_;
     bool wireframe_ = false;
     bool mapBlendDisabled_ = false;
     bool screenSmearDisabled_ = false;

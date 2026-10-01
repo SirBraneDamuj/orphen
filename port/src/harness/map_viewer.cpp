@@ -731,6 +731,120 @@ namespace orphen::harness
       glLineWidth(1.0f);
     }
 
+    // The climbable faces FUN_00257610 linked into DAT_00355020: walls green,
+    // climb-over lips orange, the face the lead holds yellow. A line joins
+    // each face's centre to every neighbour it can move to -- a gap in the
+    // lines is a gap the stick cannot cross.
+    void drawClimbFaces(const orphen::ported::psm2::Psm2RuntimeState &map,
+                        const orphen::ported::entity::ClimbGraph &graph,
+                        std::int16_t heldFace)
+    {
+      const auto &positions = map.DAT_0035569c_sectionCRecords;
+      const std::size_t count = std::min(map.DAT_003556b0_dRecords78.size(), map.DAT_003556ac_dRecords80.size());
+      const auto valid = [&](std::int16_t primitive)
+      { return primitive >= 0 && static_cast<std::size_t>(primitive) < count; };
+      // A little off the face along its normal, so the lines are not buried in it.
+      const auto lifted = [&](std::int16_t primitive)
+      {
+        const auto &record80 = map.DAT_003556ac_dRecords80[static_cast<std::size_t>(primitive)];
+        return toViewerSpace({record80.center.x + record80.normal.x * 0.05f,
+                              record80.center.y + record80.normal.y * 0.05f,
+                              record80.center.z + record80.normal.z * 0.05f});
+      };
+
+      glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT | GL_LINE_BIT |
+                   GL_CURRENT_BIT);
+      glDisable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glDisable(GL_CULL_FACE);
+      glEnable(GL_DEPTH_TEST);
+      glDepthMask(GL_FALSE);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+      glEnable(GL_POLYGON_OFFSET_FILL);
+      glPolygonOffset(-2.0f, -2.0f);
+
+      const auto faceColour = [&](std::int16_t primitive, float alpha)
+      {
+        if (primitive == heldFace)
+        {
+          glColor4f(1.0f, 0.95f, 0.15f, alpha + 0.25f);
+        }
+        else if (orphen::ported::entity::isClimbLipTerrain(
+                     map.DAT_003556b0_dRecords78[static_cast<std::size_t>(primitive)].terrainFlags))
+        {
+          glColor4f(1.0f, 0.55f, 0.1f, alpha);
+        }
+        else
+        {
+          glColor4f(0.2f, 0.95f, 0.35f, alpha);
+        }
+      };
+      const auto corners = [&](std::int16_t primitive, auto &&emit)
+      {
+        const auto &indices = map.DAT_003556b0_dRecords78[static_cast<std::size_t>(primitive)].vertexIndices;
+        const std::size_t cornerCount = indices[2] == indices[3] ? 3 : 4;
+        for (std::size_t corner = 0; corner < cornerCount; ++corner)
+        {
+          if (indices[corner] < positions.size())
+          {
+            const auto vertex = toViewerSpace(positions[indices[corner]].position);
+            emit(vertex);
+          }
+        }
+      };
+
+      for (const auto &record : graph)
+      {
+        if (!valid(record.primitive))
+        {
+          continue;
+        }
+        faceColour(record.primitive, 0.28f);
+        glBegin(GL_POLYGON);
+        corners(record.primitive, [](const auto &v) { glVertex3f(v.x, v.y, v.z); });
+        glEnd();
+      }
+
+      glLineWidth(1.5f);
+      for (const auto &record : graph)
+      {
+        if (!valid(record.primitive))
+        {
+          continue;
+        }
+        faceColour(record.primitive, 0.7f);
+        glBegin(GL_LINE_LOOP);
+        corners(record.primitive, [](const auto &v) { glVertex3f(v.x, v.y, v.z); });
+        glEnd();
+      }
+
+      glLineWidth(2.0f);
+      glColor4f(0.3f, 0.85f, 1.0f, 0.9f);
+      glBegin(GL_LINES);
+      for (const auto &record : graph)
+      {
+        if (!valid(record.primitive))
+        {
+          continue;
+        }
+        for (const std::int16_t neighbour : record.neighbours)
+        {
+          if (valid(neighbour))
+          {
+            const auto from = lifted(record.primitive);
+            const auto to = lifted(neighbour);
+            glVertex3f(from.x, from.y, from.z);
+            glVertex3f(to.x, to.y, to.z);
+          }
+        }
+      }
+      glEnd();
+
+      glPopAttrib();
+    }
+
     // Draws a short label at a world position, facing the camera. The basis
     // comes out of the current modelview matrix rather than being passed in, so
     // this works from either camera path without either of them knowing.
@@ -4184,6 +4298,10 @@ namespace orphen::harness
     if (debugOverlayVisible_)
     {
       PhaseTimer timer(g_renderStats != nullptr ? &g_renderStats->overlayMicros : nullptr);
+      if (map_.has_value() && !climbGraph_.empty())
+      {
+        drawClimbFaces(*map_, climbGraph_, leadPlayerView_.has_value() ? leadPlayerView_->climbFace : -1);
+      }
       if (leadPlayerView_.has_value())
       {
         drawLeadPlayer(*leadPlayerView_);

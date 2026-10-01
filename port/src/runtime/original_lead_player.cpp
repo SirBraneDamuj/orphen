@@ -161,6 +161,7 @@ namespace orphen::port
   void OriginalLeadPlayer::update(std::uint32_t frameTicks,
                                   const orphen::ported::psm2::Vec3 &movementRequest,
                                   float stickMagnitude,
+                                  float stickAngle,
                                   std::uint32_t recentMappedActions,
                                   std::uint32_t currentMappedActions,
                                   std::uint32_t recentMappedActions10,
@@ -186,6 +187,7 @@ namespace orphen::port
     input.mappedPressedActions = recentMappedActions & 0xFFFFu;
     input.interactPressed = interactPressed;
     input.stickMagnitude = stickMagnitude;
+    input.stickAngle = stickAngle;
     input.uGpffffb688_heldThisFrame = (currentMappedActions >> 16) & 0xFFFFu;
     input.uGpffffb09c_pressedThisFrame = currentMappedActions & 0xFFFFu;
     input.cGpffffb66a_debugActive = debugActive;
@@ -240,6 +242,7 @@ namespace orphen::port
     viewState_.bodyHeight = originalState_.bodyHeight;
     viewState_.grounded = originalState_.grounded;
     viewState_.running = originalState_.running;
+    viewState_.climbFace = originalState_.climbFace;
     if (originalState_.grounded)
     {
       viewState_.groundHit = queryPsm2GroundAt(map, originalState_.position.x, originalState_.position.y, originalState_.position.z);
