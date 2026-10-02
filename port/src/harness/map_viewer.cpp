@@ -6,6 +6,7 @@
 #include <set>
 
 #include "harness/entity_probe.h"
+#include "harness/map_pick.h"
 
 #include "ported/model/psc3_skeleton.h"
 #include "ported/psm2/psm2_uv_animation.h"
@@ -3864,6 +3865,7 @@ namespace orphen::harness
       std::cout << "[fly camera] map: " << (flyCameraWholeMap_ ? "whole map" : "game draw list") << '\n';
     }
     updateEntityTree(input);
+    updateWorldPick(input);
     orphen::port::InputSnapshot flyInput = input;
     if (input.pointerInWindow && entityTreeCovers(input.pointerX, input.pointerY))
     {
@@ -3887,11 +3889,19 @@ namespace orphen::harness
     {
       selectedEntitySlot_.reset();
     }
+    // So does a primitive whose map has been replaced under it.
+    if (selectedMapPrimitive_.has_value() &&
+        (selectedMapPrimitiveGeneration_ != loadedMapGeneration_ || !map_.has_value() ||
+         *selectedMapPrimitive_ >= map_->DAT_003556ac_dRecords80.size()))
+    {
+      selectedMapPrimitive_.reset();
+    }
     if (input.entityInspectorCloseRequested)
     {
       selectedEntitySlot_.reset();
+      selectedMapPrimitive_.reset();
     }
-    if (!selectedEntitySlot_.has_value())
+    if (!selectedEntitySlot_.has_value() && !selectedMapPrimitive_.has_value())
     {
       entityInspectorLines_.clear();
       entityInspectorScroll_ = 0;
@@ -3924,7 +3934,7 @@ namespace orphen::harness
     }
   }
 
-  bool MapViewer::selectEntity(std::size_t slot)
+  bool MapViewer::selectEntity(std::size_t slot, bool frame)
   {
     const auto entry = std::find_if(entityTree_.begin(), entityTree_.end(),
                                     [&](const EntityTreeEntry &candidate) { return candidate.slot == slot; });
@@ -3937,10 +3947,99 @@ namespace orphen::harness
       entityInspectorScroll_ = 0;
     }
     selectedEntitySlot_ = slot;
+    selectedMapPrimitive_.reset();
+    if (!frame)
+    {
+      return true;
+    }
     const float halfHeight = entry->height * 0.5f;
     flyCamera_.frame({entry->origin.x, entry->origin.y, entry->origin.z + halfHeight},
                      std::max({entry->radius, halfHeight, 0.25f}));
     return true;
+  }
+
+  void MapViewer::updateWorldPick(const orphen::port::InputSnapshot &input)
+  {
+    hoveredMapPrimitive_.reset();
+    if (!map_.has_value() || !probeMatricesValid_)
+    {
+      return;
+    }
+    // Last frame's matrices, the picture the pointer is over. The probe in
+    // update() builds its ray the same way.
+    const auto rayThrough = [&](int pixelX, int pixelY, orphen::ported::psm2::Vec3 &origin,
+                                orphen::ported::psm2::Vec3 &direction) {
+      return unprojectPixel(probeModelView_, probeProjection_, lastFramebufferWidth_, lastFramebufferHeight_,
+                            pixelX, pixelY, origin, direction);
+    };
+    const auto &drawList = flyViewMapDrawList();
+
+    // Map primitives only: the entity probe poses every drawn triangle, which
+    // is fine once per click and not wanted every frame. So an entity standing
+    // in front of a primitive does not stop the primitive tinting.
+    orphen::ported::psm2::Vec3 origin{};
+    orphen::ported::psm2::Vec3 direction{};
+    if (input.pointerInWindow && !entityTreeCovers(input.pointerX, input.pointerY) &&
+        rayThrough(input.pointerX, input.pointerY, origin, direction))
+    {
+      if (const auto hit = pickMapPrimitive(*map_, drawList, origin, direction); hit.has_value())
+      {
+        hoveredMapPrimitive_ = hit->primitiveIndex;
+      }
+    }
+
+    // main() has already moved a click on the tree out of probeRequested.
+    if (!input.probeRequested || !rayThrough(input.probeX, input.probeY, origin, direction))
+    {
+      return;
+    }
+    // Whichever is nearer along the ray: the map, or an entity triangle that
+    // was drawn.
+    const auto mapHit = pickMapPrimitive(*map_, drawList, origin, direction);
+    const auto entityHits = probeEntityRay(sceneObjectViews_, origin, direction);
+    const auto entityHit = std::find_if(entityHits.begin(), entityHits.end(), [](const ProbeHit &hit) {
+      return hit.skipReason == ProbeSkipReason::kDrawn;
+    });
+    if (entityHit != entityHits.end() && (!mapHit.has_value() || entityHit->distance <= mapHit->distance) &&
+        selectEntity(entityHit->slot, false))
+    {
+      std::cout << "[pick] entity slot " << entityHit->slot << " type 0x" << std::hex << entityHit->typeId
+                << std::dec << '\n';
+      return;
+    }
+    if (mapHit.has_value())
+    {
+      if (selectedMapPrimitive_ != mapHit->primitiveIndex)
+      {
+        entityInspectorScroll_ = 0;
+      }
+      selectedMapPrimitive_ = mapHit->primitiveIndex;
+      selectedMapPrimitiveGeneration_ = loadedMapGeneration_;
+      selectedEntitySlot_.reset();
+      std::cout << "[pick] map primitive #" << mapHit->primitiveIndex << '\n';
+    }
+  }
+
+  const std::vector<orphen::ported::render::MapDrawItem> &MapViewer::flyViewMapDrawList() const
+  {
+    return flyCameraWholeMap_ ? wholeMapDrawList() : mapDrawList_;
+  }
+
+  std::optional<std::size_t> MapViewer::inspectedMapPrimitive() const
+  {
+    return flyCameraActive_ ? selectedMapPrimitive_ : std::nullopt;
+  }
+
+  std::optional<orphen::ported::render::MapDrawItem> MapViewer::flyViewDrawItem(std::size_t primitiveIndex) const
+  {
+    for (const auto &item : flyViewMapDrawList())
+    {
+      if (item.primitiveIndex == primitiveIndex)
+      {
+        return item;
+      }
+    }
+    return std::nullopt;
   }
 
   EntityTreeLayout MapViewer::entityTreeLayout(int framebufferWidth, int framebufferHeight) const
@@ -4595,8 +4694,7 @@ namespace orphen::harness
         // From the fly camera the game's list still decides what is drawn by
         // default, so walking out of the frustum shows what the visibility
         // pass threw away. F3 swaps in the whole map.
-        drawMap(*map_, uploadedTextureIds_,
-                flying && flyCameraWholeMap_ ? wholeMapDrawList() : mapDrawList_,
+        drawMap(*map_, uploadedTextureIds_, flying ? flyViewMapDrawList() : mapDrawList_,
                 useOriginalCamera && !wireframe_, sceneObjectViews_, entityDrawList, slotTextureIds_);
 
         if (g_renderStats != nullptr)
@@ -4706,6 +4804,17 @@ namespace orphen::harness
     if (flying && renderCamera_.has_value())
     {
       drawCameraFrustumGizmo(*renderCamera_, drawDistance_);
+    }
+    if (flying && map_.has_value())
+    {
+      if (hoveredMapPrimitive_.has_value() && hoveredMapPrimitive_ != selectedMapPrimitive_)
+      {
+        drawMapPrimitiveHighlight(*map_, *hoveredMapPrimitive_, false);
+      }
+      if (selectedMapPrimitive_.has_value())
+      {
+        drawMapPrimitiveHighlight(*map_, *selectedMapPrimitive_, true);
+      }
     }
     if (flying && selectedEntitySlot_.has_value())
     {
@@ -4883,7 +4992,7 @@ namespace orphen::harness
         std::ostringstream status;
         status << "FLY CAMERA  " << (flyCameraWholeMap_ ? "WHOLE MAP" : "GAME DRAW LIST") << "  SPEED "
                << std::fixed << std::setprecision(1) << flyCamera_.speed();
-        const std::string lines[3] = {"RMB LOOK  WASD QE  WHEEL SPEED",
+        const std::string lines[3] = {"RMB LOOK  LMB PICK  WASD QE  WHEEL SPEED",
                                       "F2 SNAP  F3 MAP  F4 INSET  F5 TREE", status.str()};
         constexpr int kAdvance = 12;
         constexpr int kLinePitch = 20;

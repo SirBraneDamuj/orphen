@@ -4,6 +4,8 @@
 
 #include "runtime/port_runtime.h"
 
+#include "ported/entity/original_climb_graph.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -113,6 +115,10 @@ namespace orphen::port
     {
       mapViewer_.setEntityInspectorLines(describeEntity(*slot));
     }
+    else if (const auto primitive = mapViewer_.inspectedMapPrimitive(); primitive.has_value())
+    {
+      mapViewer_.setEntityInspectorLines(describeMapPrimitive(*primitive));
+    }
   }
 
   bool PortRuntime::selectEntity(std::size_t slot)
@@ -130,6 +136,10 @@ namespace orphen::port
     const auto slot = mapViewer_.inspectedEntitySlot();
     if (!slot.has_value())
     {
+      if (const auto primitive = mapViewer_.inspectedMapPrimitive(); primitive.has_value())
+      {
+        return "Map primitive " + std::to_string(*primitive);
+      }
       return {};
     }
     const auto &actor = entityPool_.slot(*slot);
@@ -477,6 +487,157 @@ namespace orphen::port
     else
     {
       line(lines, "drawn     no");
+    }
+    return lines;
+  }
+
+  // A map primitive picked in the fly view: the 0x78 collision record and the
+  // 0x80 draw record, which share an index, and who is standing on it.
+  orphen::harness::InspectorLines PortRuntime::describeMapPrimitive(std::size_t primitiveIndex) const
+  {
+    InspectorLines lines;
+    const auto *map = mapViewer_.loadedMap();
+    if (map == nullptr || primitiveIndex >= map->DAT_003556ac_dRecords80.size() ||
+        primitiveIndex >= map->DAT_003556b0_dRecords78.size())
+    {
+      line(lines, "no such primitive");
+      return lines;
+    }
+    const auto &record80 = map->DAT_003556ac_dRecords80[primitiveIndex];
+    const auto &record78 = map->DAT_003556b0_dRecords78[primitiveIndex];
+    const auto &indices = record78.vertexIndices;
+    const bool triangle = indices[2] == indices[3];
+
+    heading(lines, "MAP PRIMITIVE " + std::to_string(primitiveIndex));
+    line(lines, std::string("shape     ") + (triangle ? "triangle" : "quad") + "  drawn as " +
+                    std::to_string(record80.triangleCount) + " tri");
+    line(lines, "centre    " + vec(record80.center.x, record80.center.y, record80.center.z) + "  r " +
+                    fixed(record80.radius));
+    const Vec3 &normal = record78.unitNormal[0];
+    line(lines, "normal    " + vec(normal.x, normal.y, normal.z) + "  slope " +
+                    fixed(record78.slopeAngle[0] * kDegreesPerRadian, 1) + " deg");
+    if (record78.bounds.valid)
+    {
+      line(lines, "bounds    " + vec(record78.bounds.min.x, record78.bounds.min.y, record78.bounds.min.z));
+      line(lines, "       to " + vec(record78.bounds.max.x, record78.bounds.max.y, record78.bounds.max.z));
+    }
+    if (const auto item = mapViewer_.flyViewDrawItem(primitiveIndex); item.has_value())
+    {
+      line(lines, "fly view  drawn  fade " +
+                      (item->fade == 0 ? std::string("opaque") : "0x" + hex(item->fade, 2)) +
+                      (item->nearClipped ? "  near clipped" : ""));
+    }
+    else
+    {
+      line(lines, "fly view  not in the draw list");
+    }
+
+    // record78 +0x00. The bits named here are the ones psm2_ground_query.cpp
+    // tests; anything else shows only in the hex.
+    heading(lines, "COLLISION (0x78 RECORD)");
+    {
+      const std::uint32_t word = record78.leadingWord;
+      std::string notes = (word & 0x800u) != 0 ? "ground" : "not ground";
+      if ((word & 0x100u) != 0)
+      {
+        notes += " ceiling";
+      }
+      if ((word & 0x200u) != 0)
+      {
+        notes += " flat-height";
+      }
+      if ((word & 0x10000u) != 0)
+      {
+        notes += " dynamic";
+      }
+      line(lines, "+00       0x" + hex(word, 8) + "  " + notes);
+    }
+    {
+      const std::uint32_t terrain = record78.terrainFlags;
+      std::string notes;
+      if (entity::isClimbLipTerrain(terrain))
+      {
+        notes += "  climb-lip";
+      }
+      else if (entity::isClimbableTerrain(terrain))
+      {
+        notes += "  climbable";
+      }
+      if ((terrain & 0x01000000u) != 0)
+      {
+        notes += "  hazard";
+      }
+      line(lines, "terrain   0x" + hex(terrain, 8) + " (+04)" + notes);
+    }
+    line(lines, "selector  0x" + hex(record78.selector, 4) + "  +12 0x" + hex(record78.byte12, 2) + "  +13 0x" +
+                    hex(record78.byte13, 2));
+
+    heading(lines, "DRAW (0x80 RECORD)");
+    line(lines, "flags     0x" + hex(record80.primitiveFlags, 8) + " (+70)" +
+                    ((record80.primitiveFlags & 0x20u) != 0 ? "  hidden" : ""));
+    line(lines, "alpha     0x" + hex(record80.staticAlpha, 2) + " (+2D)  fade 0x" + hex(record80.dynamicFade, 2) +
+                    " (+2E)");
+    line(lines, "blend     0x" + hex(record80.blendParam, 2) + " (+2C)  colour " +
+                    std::to_string(record80.colourIndex) + "  normal " + std::to_string(record80.normalIndex));
+    for (std::size_t slot = 0; slot < record80.materialSlots.size(); ++slot)
+    {
+      const auto &material = record80.materialSlots[slot];
+      if (!material.present())
+      {
+        continue;
+      }
+      line(lines, "slot " + std::to_string(slot) + "    type 0x" + hex(material.type, 2) + "  a 0x" +
+                      hex(material.alpha, 2) + "  f 0x" + hex(material.flags, 2));
+      if (material.textured())
+      {
+        std::string text = "          uv";
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          text += " " + std::to_string(material.textureCoordinates[corner * 2]) + ":" +
+                  std::to_string(material.textureCoordinates[corner * 2 + 1]);
+        }
+        line(lines, text);
+      }
+      else
+      {
+        line(lines, "          flat 0x" + hex(material.flatColour(), 6));
+      }
+    }
+
+    heading(lines, "CORNERS");
+    const std::size_t cornerCount = triangle ? 3 : 4;
+    for (std::size_t corner = 0; corner < cornerCount; ++corner)
+    {
+      const std::uint16_t vertex = indices[corner];
+      std::string text = std::to_string(corner) + "  v" + std::to_string(vertex);
+      if (vertex < map->DAT_0035569c_sectionCRecords.size())
+      {
+        const auto &position = map->DAT_0035569c_sectionCRecords[vertex].position;
+        text += "  " + vec(position.x, position.y, position.z);
+      }
+      line(lines, text);
+    }
+
+    // +0x0A, the primitive each entity's last ground sample landed on.
+    heading(lines, "STANDING HERE (+0A)");
+    bool anyone = false;
+    for (std::size_t slot = 0; slot < entity::kEntitySlotCount; ++slot)
+    {
+      if (slot != 0 && entityPool_.status(slot) == entity::SlotStatus::Free)
+      {
+        continue;
+      }
+      const auto &actor = entityPool_.slot(slot);
+      if (actor.groundPrimitive0a >= 0 && static_cast<std::size_t>(actor.groundPrimitive0a) == primitiveIndex)
+      {
+        line(lines, "slot " + std::to_string(slot) + "  type 0x" +
+                        hex(static_cast<std::uint16_t>(actor.typeId00), 4));
+        anyone = true;
+      }
+    }
+    if (!anyone)
+    {
+      line(lines, "nobody");
     }
     return lines;
   }

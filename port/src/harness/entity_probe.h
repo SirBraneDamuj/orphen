@@ -113,6 +113,15 @@ namespace orphen::harness
     int fanTriangle = 0;
   };
 
+  // Moller-Trumbore, two-sided. `distance` is along `direction` in its units.
+  // Shared with the map tile pick (harness/map_pick.h).
+  bool rayHitsTriangle(const orphen::ported::psm2::Vec3 &origin,
+                       const orphen::ported::psm2::Vec3 &direction,
+                       const orphen::ported::psm2::Vec3 &a,
+                       const orphen::ported::psm2::Vec3 &b,
+                       const orphen::ported::psm2::Vec3 &c,
+                       float &distance);
+
   // Every entity triangle the ray crosses, nearest first.
   std::vector<ProbeHit> probeEntityRay(const orphen::port::SceneObjectViewList &objects,
                                        const orphen::ported::psm2::Vec3 &origin,

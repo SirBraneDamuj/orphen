@@ -114,6 +114,8 @@ target_sources(orphen_port
     src/harness/entity_tree.h
     src/harness/fly_camera.cpp
     src/harness/fly_camera.h
+    src/harness/map_pick.cpp
+    src/harness/map_pick.h
     src/harness/map_viewer.cpp
     src/harness/map_viewer.h
     src/harness/disc_resource_loader.cpp

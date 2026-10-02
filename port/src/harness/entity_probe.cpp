@@ -18,47 +18,6 @@ namespace orphen::harness
     }
     float dot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-    // Moller-Trumbore, two-sided: a probe that ignored backfaces could not tell
-    // "nothing here" from "only the inside of the far wall here", which is the
-    // distinction a hole turns on.
-    bool rayTriangle(const Vec3 &origin,
-                     const Vec3 &direction,
-                     const Vec3 &a,
-                     const Vec3 &b,
-                     const Vec3 &c,
-                     float &distance)
-    {
-      constexpr float kEpsilon = 1e-8f;
-      const Vec3 edge1 = sub(b, a);
-      const Vec3 edge2 = sub(c, a);
-      const Vec3 h = cross(direction, edge2);
-      const float det = dot(edge1, h);
-      if (std::fabs(det) < kEpsilon)
-      {
-        return false;
-      }
-      const float inverseDet = 1.0f / det;
-      const Vec3 s = sub(origin, a);
-      const float u = dot(s, h) * inverseDet;
-      if (u < 0.0f || u > 1.0f)
-      {
-        return false;
-      }
-      const Vec3 q = cross(s, edge1);
-      const float v = dot(direction, q) * inverseDet;
-      if (v < 0.0f || u + v > 1.0f)
-      {
-        return false;
-      }
-      const float t = dot(edge2, q) * inverseDet;
-      if (t <= kEpsilon)
-      {
-        return false;
-      }
-      distance = t;
-      return true;
-    }
-
     // Column-major 4x4 inverse, the layout glGetFloatv hands back.
     bool invert(const std::array<float, 16> &m, std::array<float, 16> &out)
     {
@@ -202,6 +161,47 @@ namespace orphen::harness
     return true;
   }
 
+  // Moller-Trumbore, two-sided: a probe that ignored backfaces could not tell
+  // "nothing here" from "only the inside of the far wall here", which is the
+  // distinction a hole turns on.
+  bool rayHitsTriangle(const Vec3 &origin,
+                       const Vec3 &direction,
+                       const Vec3 &a,
+                       const Vec3 &b,
+                       const Vec3 &c,
+                       float &distance)
+  {
+    constexpr float kEpsilon = 1e-8f;
+    const Vec3 edge1 = sub(b, a);
+    const Vec3 edge2 = sub(c, a);
+    const Vec3 h = cross(direction, edge2);
+    const float det = dot(edge1, h);
+    if (std::fabs(det) < kEpsilon)
+    {
+      return false;
+    }
+    const float inverseDet = 1.0f / det;
+    const Vec3 s = sub(origin, a);
+    const float u = dot(s, h) * inverseDet;
+    if (u < 0.0f || u > 1.0f)
+    {
+      return false;
+    }
+    const Vec3 q = cross(s, edge1);
+    const float v = dot(direction, q) * inverseDet;
+    if (v < 0.0f || u + v > 1.0f)
+    {
+      return false;
+    }
+    const float t = dot(edge2, q) * inverseDet;
+    if (t <= kEpsilon)
+    {
+      return false;
+    }
+    distance = t;
+    return true;
+  }
+
   std::vector<ProbeHit> probeEntityRay(const orphen::port::SceneObjectViewList &objects,
                                        const Vec3 &origin,
                                        const Vec3 &direction)
@@ -256,7 +256,7 @@ namespace orphen::harness
 
         const auto test = [&](std::size_t a, std::size_t b, std::size_t c, int fan) {
           float distance = 0.0f;
-          if (!rayTriangle(origin, direction, points[a], points[b], points[c], distance))
+          if (!rayHitsTriangle(origin, direction, points[a], points[b], points[c], distance))
           {
             return;
           }

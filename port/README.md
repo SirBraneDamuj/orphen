@@ -9501,7 +9501,7 @@ front of it.
   draws the fly view, and puts that texture in the corner. That costs a second
   full render per frame, and only the game pass feeds `--frame-stats`.
 - A left click probes through the fly camera, inset or not, except over the
-  entity tree.
+  entity tree. It also picks: see Map tile pick, below.
 
 #### Entity tree and inspector
 
@@ -9539,6 +9539,37 @@ row is the slot, the type id, and the noun from the type's handler name; a type
 `--select-entity <slot>` does the click from the command line once the fly
 camera is up. With `--screenshot` the inspector is written beside the capture
 as `<path>-inspector.ppm`.
+
+#### Map tile pick
+
+The map primitive under the pointer is tinted amber every frame
+(`src/harness/map_pick.*`). A left click in the fly view selects whatever is
+nearest along the ray: a map primitive, or an entity triangle that was drawn.
+The camera stays put. A selected primitive is tinted cyan, and its outline shows
+faintly through walls. The inspector then shows it instead of an entity:
+
+- shape, centre, normal and slope, and whether the fly view drew it this frame
+- the 0x78 collision record: `+0x00` with the ground-scan bits named
+  (`0x800` ground, `0x100` ceiling, `0x200` flat-height, `0x10000` dynamic),
+  the terrain word at `+0x04` (climbable, climb-lip, the `0x1000000` hazard),
+  and the selector
+- the 0x80 draw record: `+0x70` flags, alpha and fade, and each material slot
+  with its UVs or flat colour
+- the corners as vertex indices and positions, which are live, so a moving door
+  reads where it is now
+- every entity whose `+0x0A` (the primitive its last ground sample landed on)
+  names this one
+
+The pick tests the triangles the renderer draws, against the list the fly view
+is drawing: the game's culled list by default, or the whole map under `F3`. So
+a primitive the view is not drawing cannot be picked through. The hover tests
+map primitives only. Posing every entity triangle each frame is not worth it,
+so a primitive behind a character still tints. A pick costs about 13 us on
+`s01_e012`'s 3,496-primitive whole map in Release.
+
+`--pick-pixel <x>,<y>` does the click from the command line, two frames after the
+fly camera comes up, and prints `[pick] map primitive #N` or
+`[pick] entity slot N`.
 
 It runs once per rendered frame on wall-clock time, outside `PortRuntime::update`,
 so the simulation cannot see it and `--frames` runs never touch it. Entering and

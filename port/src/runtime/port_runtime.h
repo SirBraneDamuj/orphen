@@ -281,6 +281,8 @@ namespace orphen::port
     // --select-entity: select this pool slot in the fly view's entity tree once
     // it is up, framing it and opening the inspector, as a click would.
     std::optional<std::size_t> selectEntity;
+    // --pick-pixel: a left click at this window pixel once the fly view is up.
+    std::optional<std::array<int, 2>> pickPixel;
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
@@ -374,7 +376,8 @@ namespace orphen::port
     bool entityTreeCovers(int pixelX, int pixelY) const { return mapViewer_.entityTreeCovers(pixelX, pixelY); }
     // --select-entity's click. False until the slot is in the tree.
     bool selectEntity(std::size_t slot);
-    // Empty when the inspector window should be closed.
+    // Empty when the inspector window should be closed. Names the selected
+    // entity or map primitive, whichever the selection holds.
     std::string entityInspectorTitle() const;
     void renderEntityInspector(int framebufferWidth, int framebufferHeight) const
     {
@@ -790,6 +793,7 @@ namespace orphen::port
     void printActorReport() const;
     orphen::harness::EntityTree buildEntityTree() const;
     orphen::harness::InspectorLines describeEntity(std::size_t slot) const;
+    orphen::harness::InspectorLines describeMapPrimitive(std::size_t primitiveIndex) const;
     void printRenderReport() const;
     void printModelReport() const;
     void printEntityModelBindings() const;

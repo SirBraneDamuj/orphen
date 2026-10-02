@@ -108,6 +108,11 @@ namespace
                  "                  entity tree as a click would: frame it and open\n"
                  "                  the inspector. A --screenshot then also writes\n"
                  "                  the inspector beside it, as <path>-inspector.ppm.\n"
+                 "  --pick-pixel <x>,<y>\n"
+                 "                  with --fly-camera, left-click that window pixel\n"
+                 "                  once the fly view has been drawn: select the map\n"
+                 "                  primitive or entity under it and open the\n"
+                 "                  inspector.\n"
                  "  --screenshot <path>[:<frame>]\n"
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
@@ -773,6 +778,22 @@ namespace
         config.selectEntity = static_cast<std::size_t>(std::stoul(argv[++argumentIndex]));
         continue;
       }
+      if (argument == "--pick-pixel")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--pick-pixel needs x,y");
+        }
+        const std::string value = argv[++argumentIndex];
+        const std::size_t comma = value.find(',');
+        if (comma == std::string::npos)
+        {
+          throw std::runtime_error("--pick-pixel needs x,y");
+        }
+        config.pickPixel =
+            std::array<int, 2>{std::stoi(value.substr(0, comma)), std::stoi(value.substr(comma + 1))};
+        continue;
+      }
       if (argument == "--scene-tree")
       {
         config.printSceneTree = true;
@@ -1341,6 +1362,8 @@ int main(int argc, char **argv)
     bool flyCameraPlaced = false;
     std::string inspectorTitle;
     bool entitySelected = false;
+    std::optional<std::uint32_t> flyFirstFrame;
+    bool pixelPicked = false;
 
     if (!config.vsync && window.swapInterval() != 0)
     {
@@ -1615,6 +1638,20 @@ int main(int argc, char **argv)
         {
           flyCameraStarted = true;
           flyInput.toggleFlyCameraRequested = !runtime.flyCameraActive();
+        }
+        if (runtime.flyCameraActive() && !flyFirstFrame.has_value())
+        {
+          flyFirstFrame = renderedFrames;
+        }
+        // Two frames in: one to place the camera, one drawn from where it was
+        // placed, whose matrices the click is aimed through.
+        if (config.pickPixel.has_value() && !pixelPicked && flyFirstFrame.has_value() &&
+            renderedFrames >= *flyFirstFrame + 2)
+        {
+          pixelPicked = true;
+          flyInput.probeRequested = true;
+          flyInput.probeX = (*config.pickPixel)[0];
+          flyInput.probeY = (*config.pickPixel)[1];
         }
         runtime.updateFlyCamera(std::min(delta.count(), 0.1f), flyInput);
         if (config.flyCameraPose.has_value() && !flyCameraPlaced)

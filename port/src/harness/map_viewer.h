@@ -225,8 +225,15 @@ namespace orphen::harness
     // flying, and something selected.
     std::optional<std::size_t> inspectedEntitySlot() const;
     // What a click on the slot's row does. False when it is not in the tree
-    // or the fly camera is not up.
-    bool selectEntity(std::size_t slot);
+    // or the fly camera is not up. A click in the world selects without
+    // `frame`, so the camera stays where it was aimed from.
+    bool selectEntity(std::size_t slot, bool frame = true);
+    // The map primitive the inspector should show instead, while flying. A
+    // selection holds either an entity or a primitive, never both.
+    std::optional<std::size_t> inspectedMapPrimitive() const;
+    // Whether the primitive was in the fly view's draw list on the last frame,
+    // and with what fade byte. For the inspector.
+    std::optional<orphen::ported::render::MapDrawItem> flyViewDrawItem(std::size_t primitiveIndex) const;
     void setEntityInspectorLines(InspectorLines lines) { entityInspectorLines_ = std::move(lines); }
     // The inspector window's picture, into whatever window is current.
     void renderEntityInspector(int framebufferWidth, int framebufferHeight) const;
@@ -386,9 +393,18 @@ namespace orphen::harness
     int entityTreeScroll_ = 0;
     int entityTreeHoveredRow_ = -1;
     std::optional<std::size_t> selectedEntitySlot_;
+    // A click in the fly view that lands on the map selects the primitive; the
+    // one under the pointer is tinted every frame (harness/map_pick.h). The
+    // generation drops a selection when the map it indexed is replaced.
+    std::optional<std::size_t> selectedMapPrimitive_;
+    std::uint64_t selectedMapPrimitiveGeneration_ = 0;
+    std::optional<std::size_t> hoveredMapPrimitive_;
     InspectorLines entityInspectorLines_;
     int entityInspectorScroll_ = 0;
     void updateEntityTree(const orphen::port::InputSnapshot &input);
+    void updateWorldPick(const orphen::port::InputSnapshot &input);
+    // The map list the fly view draws: the game's culled one, or F3's whole map.
+    const std::vector<orphen::ported::render::MapDrawItem> &flyViewMapDrawList() const;
     EntityTreeLayout entityTreeLayout(int framebufferWidth, int framebufferHeight) const;
     // Texture slot 0x30, the game's debug font, when it is resident.
     DebugFont debugFont() const;
