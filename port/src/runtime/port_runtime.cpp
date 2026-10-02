@@ -368,6 +368,7 @@ namespace orphen::port
     }
     runScriptTick_ = config.runScriptTick;
     printActorReport_ = config.printActorReport;
+    printInventoryReport_ = config.printInventoryReport;
     printBattleReport_ = config.printBattleReport;
     printSoundReport_ = config.printSoundReport;
     printRenderReport_ = config.printRenderReport;
@@ -4270,8 +4271,7 @@ namespace orphen::port
     // after FUN_0025B6D0 -- which is where the marker table is installed.
     FUN_0032536c_scene_module(0);
     FUN_0032536c_scene_module(1);
-    battleParty_.FUN_0022a418_propagate_loadout();
-    battleParty_.FUN_002239c8_fill_empty_loadout_slots(DAT_003551f4_sceneSection_);
+    battleParty_.FUN_0022a418_propagate_loadout(DAT_003555d3_groupEScene_);
 
     // Models bind before the script runs, so the spawn path can report a
     // missing model at the moment it spawns the entity that wanted it.
@@ -7200,6 +7200,10 @@ namespace orphen::port
     {
       printActorReport();
     }
+    if (printInventoryReport_)
+    {
+      printInventoryReport();
+    }
     if (printBattleReport_)
     {
       printBattleReport();
@@ -9053,6 +9057,10 @@ namespace orphen::port
     // FUN_0023b5d8's slot: the pad's analog magnitude is published before
     // anything downstream of it runs.
     DAT_003555e8_stickMagnitude_ = input.stickMagnitude;
+    // FUN_002239c8:35-67, straight after FUN_0023B5D8: refill empty loadout
+    // slots. Every frame, not at load -- the scene load above is the same
+    // frame's, so a fresh scene is covered before anything reads the loadout.
+    battleParty_.FUN_002239c8_fill_empty_loadout_slots(DAT_003551f4_sceneSection_);
     scriptTrace_.setFrame(static_cast<std::uint32_t>(frameCount_));
     dialogueStream_.setFrame(static_cast<std::uint32_t>(frameCount_));
     // FUN_00237de8's slot in the frame: the stream ages before the script runs,

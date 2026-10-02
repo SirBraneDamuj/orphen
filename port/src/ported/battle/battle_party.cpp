@@ -138,11 +138,17 @@ namespace orphen::ported::battle
     DAT_003437a0_ = defaultLoadout_;
   }
 
-  void BattleParty::FUN_0022a418_propagate_loadout()
+  void BattleParty::FUN_0022a418_propagate_loadout(bool DAT_003555d3_groupEScene)
   {
-    // FUN_0022a418:269-275. Ghidra spells it as three scalar copies of
-    // DAT_003437a0 -- rows 1, 2 and 6 slot 0 -- but the save state holds
-    // `05 07 01` on rows 0, 1, 2 and 6 alike, so all three slots travel.
+    // FUN_0022a418:268-279, nine byte copies: rows 1, 2 and 6 take row 0's
+    // three items. **Only on a section-14 scene** -- the block is inside
+    // `if (DAT_003555d3 != '\0')`. battle_logo_loaded.p2s (a battle) holds
+    // `05 07 01` on rows 0, 1, 2 and 6 alike; a new game's s01_e012 on hardware
+    // holds `00 00 00` on rows 1 and 6 and the new-game default on row 2.
+    if (!DAT_003555d3_groupEScene)
+    {
+      return;
+    }
     for (const std::size_t row : {std::size_t{1}, std::size_t{2}, std::size_t{6}})
     {
       for (std::size_t slot = 0; slot < kLoadoutSlots; ++slot)
@@ -154,12 +160,21 @@ namespace orphen::ported::battle
 
   void BattleParty::FUN_002239c8_fill_empty_loadout_slots(std::int32_t iGpffffb284)
   {
-    // FUN_002239c8:35-67. Skips rows 1, 2 and 6 -- the ones the copy above has
-    // just filled -- and only runs while the scene id is neither 0 nor 0xC.
+    // FUN_002239c8:35-67, every frame, in every game mode -- FUN_002000C0 calls
+    // FUN_002239c8 unconditionally and the mode dispatch is inside it. Skips
+    // rows 1, 2 and 6, and only runs while the section is neither 0 nor 0xC.
+    //
+    // An empty slot does *not* get its own default back. Each row has one item
+    // it fills any empty slot with, whichever slot it is: the write pointer
+    // walks from DAT_003437a0 by slot and adds a per-row constant (`*puVar7`,
+    // `puVar7[9]`, `[0xc]`, `[0xf]`), so row 0 gets the Sword (1) in any slot.
+    // Rows 1, 2 and 6 have no case at all, so they would never be filled even
+    // without the skip.
     if (iGpffffb284 == 0xC || iGpffffb284 == 0)
     {
       return;
     }
+    static constexpr std::array<std::uint8_t, kLoadoutRows> kFillItem = {0x01, 0, 0, 0x14, 0x21, 0x2D, 0};
     for (std::size_t row = 0; row < kLoadoutRows; ++row)
     {
       if (row == 1 || row == 2 || row == 6)
@@ -171,7 +186,7 @@ namespace orphen::ported::battle
         const std::size_t at = row * kLoadoutSlots + slot;
         if (DAT_003437a0_[at] == 0)
         {
-          DAT_003437a0_[at] = defaultLoadout_[at];
+          DAT_003437a0_[at] = kFillItem[row];
         }
       }
     }

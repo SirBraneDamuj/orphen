@@ -95,6 +95,8 @@ namespace orphen::port
     // text every time they change, next to what the renderer actually drew.
     bool printGlyphReport = false;
     bool printActorReport = false;
+    // --inventory-report: the loadout and item counts at the end of the run.
+    bool printInventoryReport = false;
     // --battle-report: the loadout -> button -> mask binding, the party the
     // scene built, and every frame the player's action byte or state changed.
     bool printBattleReport = false;
@@ -674,6 +676,8 @@ namespace orphen::port
     std::uint32_t reportedBattleBoots_ = 0;
     void reportPanelActivity();
     bool printActorReport_ = false;
+    bool printInventoryReport_ = false;
+    void printInventoryReport() const;
     bool printBattleReport_ = false;
     orphen::ported::text::DialogueStream dialogueStream_;
     bool printScriptReport_ = false;

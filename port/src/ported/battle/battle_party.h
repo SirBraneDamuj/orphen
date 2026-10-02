@@ -148,14 +148,16 @@ namespace orphen::ported::battle
     // party record 0. So it is seeded to 1 here.
     void FUN_0023f288_reset();
 
-    // FUN_0022a418:269-275, at scene load: rows 1, 2 and 6 take row 0's items.
-    // Then FUN_002239c8:35-67 fills any slot still empty from the defaults.
-    void FUN_0022a418_propagate_loadout();
+    // FUN_0022a418:268-279, at scene load, on a section-14 scene only: rows 1,
+    // 2 and 6 take row 0's items.
+    void FUN_0022a418_propagate_loadout(bool DAT_003555d3_groupEScene);
 
     // FUN_002294B8, called from FUN_002294D0 on a new game: the 0x15-byte
     // default loadout back over DAT_003437A0. The same function's clear of the
     // item counts is the runtime's -- the table lives in SceneScriptState.
     void FUN_002294d0_new_game_reset();
+    // FUN_002239c8:35-67, every frame: an empty slot on rows 0, 3, 4 or 5 gets
+    // that row's one fill item (the Sword, for Orphen), whichever slot it is.
     void FUN_002239c8_fill_empty_loadout_slots(std::int32_t iGpffffb284);
 
     // The 0xBD methods, by their handler addresses.

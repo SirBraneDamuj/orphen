@@ -9596,6 +9596,25 @@ tables the same way (see the Equip screen section for both):
   count goes up one. Nothing else is written, which is all the real swap
   writes too.
 
+`--inventory-report` hexdumps both tables at the end of a run, laid out from
+`0x003437A0` exactly as `pcsx2_read` prints the same span, so the two diff line
+for line. A new game's `s01_e012` matches hardware byte for byte:
+`05 07 01 | 00 00 00 | 05 07 01 | 18 1C 14 | 25 2A 21 | 2D 31 35 | 00 00 00`,
+then 128 zero counts. Two things had to change to get there:
+
+- `FUN_0022A418`'s copy of row 0 into rows 1, 2 and 6 is inside
+  `if (DAT_003555D3 != 0)`, so it happens on section-14 (battle) scenes only.
+  The port copied on every load, which put `05 07 01` on rows 1 and 6 in the
+  field.
+- `FUN_002239C8:35-67` refills empty slots **every frame**, not at load, and
+  not from the defaults. Each of rows 0, 3, 4 and 5 has one item it puts in any
+  empty slot (`01` the Sword for Orphen, then `14`, `21`, `2D`).
+
+Equipped spells are not counted, so a new game shows every count at zero with
+Pyro, Lightning and the Sword equipped, on hardware too. The spell-earn scene
+(`s14_e031`) equips the spell it demonstrates into Triangle with `0xBD` method
+`0x78`, which is the same swap, so after the crab Hand of Pyro reads one.
+
 A battle builds its button bindings from the loadout when it starts
 (`FUN_002432D8`), so a loadout change made mid-battle shows in the next one.
 

@@ -7,7 +7,9 @@
 #include "ported/scene/title_screen.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 
 namespace orphen::port
@@ -1452,6 +1454,35 @@ namespace orphen::port
     }
     view.canSwap.fill(anyHeld);
     return view;
+  }
+
+  // --inventory-report. DAT_003437A0's 21 loadout bytes, three of padding, then
+  // DAT_003437B8's counts for items 0..0x7F, sixteen to a line from 0x003437A0
+  // exactly as pcsx2_read prints the same span, so the two diff line for line.
+  // The three bytes between the tables are not modelled and print as 00.
+  void PortRuntime::printInventoryReport() const
+  {
+    constexpr std::uint32_t kBase = 0x003437A0;
+    constexpr std::size_t kCountsOffset = 0x18;
+    constexpr std::size_t kLength = kCountsOffset + 0x80;
+    std::array<std::uint8_t, kLength> bytes{};
+    const auto loadout = battleParty_.DAT_003437a0_loadout();
+    std::copy(loadout.begin(), loadout.end(), bytes.begin());
+    const auto &counts = sceneScript_.state().DAT_003437b8_itemCounts;
+    std::copy(std::begin(counts), std::begin(counts) + 0x80, bytes.begin() + kCountsOffset);
+
+    std::cout << "[inventory] DAT_003437A0 loadout, DAT_003437B8 counts\n";
+    const auto flags = std::cout.flags();
+    for (std::size_t line = 0; line < kLength; line += 16)
+    {
+      std::cout << std::hex << std::setfill('0') << std::setw(8) << (kBase + line) << ' ';
+      for (std::size_t at = line; at < std::min(line + 16, kLength); ++at)
+      {
+        std::cout << ' ' << std::setw(2) << static_cast<int>(bytes[at]);
+      }
+      std::cout << '\n';
+    }
+    std::cout.flags(flags);
   }
 
   void PortRuntime::adjustItemCountFromHarness(int item, int delta)

@@ -59,6 +59,10 @@ namespace
                  "                  and its object-script slots. On by default.\n"
                  "  --actor-report  print which actor behavior each spawned entity\n"
                  "                  dispatches to, and which of them are ported.\n"
+                 "  --inventory-report\n"
+                 "                  at the end of the run, hexdump DAT_003437A0 (the\n"
+                 "                  loadout) through DAT_003437B8's 128 item counts\n"
+                 "                  laid out as at 0x003437A0, to diff against PCSX2.\n"
                  "  --battle-report print the battle module's loadout-to-button\n"
                  "                  binding, the party the scene built, and every\n"
                  "                  frame the player's action byte or state moved.\n"
@@ -217,6 +221,11 @@ namespace
       if (argument == "--actor-report")
       {
         config.printActorReport = true;
+        continue;
+      }
+      if (argument == "--inventory-report")
+      {
+        config.printInventoryReport = true;
         continue;
       }
       if (argument == "--battle-report")
