@@ -4986,36 +4986,13 @@ namespace orphen::harness
       }
       if (flying)
       {
-        // The harness's own, in the same font, along the bottom of the window
-        // where the game's readout is not.
-        namespace debugText = orphen::ported::debug::text;
+        // The harness's own, in a panel like the tree's, bottom left.
         std::ostringstream status;
         status << "FLY CAMERA  " << (flyCameraWholeMap_ ? "WHOLE MAP" : "GAME DRAW LIST") << "  SPEED "
                << std::fixed << std::setprecision(1) << flyCamera_.speed();
-        const std::string lines[3] = {"RMB LOOK  LMB PICK  WASD QE  WHEEL SPEED",
-                                      "F2 SNAP  F3 MAP  F4 INSET  F5 TREE", status.str()};
-        constexpr int kAdvance = 12;
-        constexpr int kLinePitch = 20;
-        std::vector<orphen::ported::debug::DebugGlyph> glyphs;
-        int y = debugText::kScreenHeight - 8 - 3 * kLinePitch;
-        for (const auto &line : lines)
-        {
-          int x = 16;
-          for (const char character : line)
-          {
-            if (character != ' ')
-            {
-              glyphs.push_back({character, x, y});
-            }
-            x += kAdvance;
-          }
-          y += kLinePitch;
-        }
-        debugText_.drawOriginalOverlay(
-            framebufferWidth, framebufferHeight, 0.0f, 0.0f,
-            static_cast<float>(framebufferWidth) / debugText::kScreenWidth,
-            static_cast<float>(framebufferHeight) / debugText::kScreenHeight, glyphs, fontTexture,
-            fontWidth, fontHeight);
+        drawHelpPanel(debugText_, font, framebufferWidth, framebufferHeight,
+                      {status.str(), "RMB LOOK  LMB PICK  WASD QE  WHEEL SPEED",
+                       "F2 SNAP  F3 MAP  F4 INSET  F5 TREE"});
         if (entityTreeVisible_ && !entityTree_.empty())
         {
           drawEntityTree(debugText_, font, framebufferWidth, framebufferHeight,

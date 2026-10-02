@@ -80,6 +80,17 @@ namespace orphen::harness
                       std::size_t selectedSlot,
                       int hoveredRow);
 
+  // The fly camera's key help, bottom left, in the tree's panel and text size
+  // rather than the game's own debug-text scale, so it does not read as part of
+  // the original's overlay. The first line is drawn as a heading. The tree
+  // leaves room above it for kHelpPanelLines lines.
+  inline constexpr int kHelpPanelLines = 3;
+  void drawHelpPanel(const DebugTextRenderer &text,
+                     const DebugFont &font,
+                     int framebufferWidth,
+                     int framebufferHeight,
+                     const std::vector<std::string> &lines);
+
   // The inspector window's whole picture: one line per row, headings in the
   // gizmo's yellow, starting `scroll` lines down.
   void drawEntityInspector(const DebugTextRenderer &text,

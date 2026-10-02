@@ -24,11 +24,10 @@ namespace orphen::harness
     constexpr int kMinimumColumns = 26;
     constexpr int kMaximumColumns = 48;
 
-    // Room left at the bottom for the fly camera's three lines of help, which
-    // are laid out on the original's 640x448 screen from y = 448 - 8 - 60.
-    constexpr float kBottomReserveFraction = 76.0f / debugText::kScreenHeight;
-
     float scaleFor(int framebufferHeight) { return framebufferHeight >= 1400 ? 2.0f : 1.0f; }
+
+    // The help panel's height in layout units, which the tree stops short of.
+    float helpPanelHeight(int lineCount) { return static_cast<float>(lineCount * kRowPitch + 2 * kPadding); }
 
     int rowsTop(const EntityTreeLayout &layout) { return static_cast<int>(layout.top) + kPadding + kRowPitch + 4; }
 
@@ -181,8 +180,8 @@ namespace orphen::harness
     layout.left = static_cast<float>(kMargin);
     layout.top = static_cast<float>(kMargin);
     layout.width = static_cast<float>(layout.columns * kAdvance + 2 * kPadding);
-    const float available =
-        screenHeight * (1.0f - kBottomReserveFraction) - static_cast<float>(rowsTop(layout)) - kPadding;
+    const float available = screenHeight - helpPanelHeight(kHelpPanelLines) - 2.0f * kMargin -
+                            static_cast<float>(rowsTop(layout)) - kPadding;
     layout.visibleRows = std::max(1, static_cast<int>(available) / kRowPitch);
     layout.visibleRows = std::min(layout.visibleRows, std::max(1, layout.rowCount));
     layout.firstRow = std::clamp(scroll, 0, std::max(0, layout.rowCount - layout.visibleRows));
@@ -252,6 +251,46 @@ namespace orphen::harness
       appendText(rows, rowText(tree[index]), textLeft, firstRowTop + row * kRowPitch, layout.columns);
     }
     drawGlyphs(text, font, framebufferWidth, framebufferHeight, scale, rows, 1.0f, 1.0f, 1.0f);
+  }
+
+  void drawHelpPanel(const DebugTextRenderer &text,
+                     const DebugFont &font,
+                     int framebufferWidth,
+                     int framebufferHeight,
+                     const std::vector<std::string> &lines)
+  {
+    if (lines.empty())
+    {
+      return;
+    }
+    const float scale = scaleFor(framebufferHeight);
+    const float screenHeight = static_cast<float>(framebufferHeight) / scale;
+    int widest = 0;
+    for (const auto &line : lines)
+    {
+      widest = std::max(widest, static_cast<int>(line.size()));
+    }
+    const float width = static_cast<float>(widest * kAdvance + 2 * kPadding);
+    const float height = helpPanelHeight(static_cast<int>(lines.size()));
+    const float left = static_cast<float>(kMargin);
+    const float top = screenHeight - kMargin - height;
+    {
+      OverlayState state(framebufferWidth, framebufferHeight);
+      fillRect(scale, left, top, width, height, 0.04f, 0.05f, 0.06f, 0.78f);
+    }
+
+    // The first line is the status, in the tree's heading yellow.
+    std::vector<orphen::ported::debug::DebugGlyph> heading;
+    std::vector<orphen::ported::debug::DebugGlyph> body;
+    const int textLeft = static_cast<int>(left) + kPadding;
+    int y = static_cast<int>(top) + kPadding;
+    for (std::size_t index = 0; index < lines.size(); ++index)
+    {
+      appendText(index == 0 ? heading : body, lines[index], textLeft, y, widest);
+      y += kRowPitch;
+    }
+    drawGlyphs(text, font, framebufferWidth, framebufferHeight, scale, heading, 1.0f, 0.85f, 0.2f);
+    drawGlyphs(text, font, framebufferWidth, framebufferHeight, scale, body, 1.0f, 1.0f, 1.0f);
   }
 
   void drawEntityInspector(const DebugTextRenderer &text,
