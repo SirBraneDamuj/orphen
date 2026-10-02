@@ -16,6 +16,7 @@ namespace orphen::port
   {
     namespace scene = orphen::ported::scene;
     namespace entity = orphen::ported::entity;
+    namespace battle = orphen::ported::battle;
     using orphen::ported::model::FUN_00216690_wrap_angle;
     using orphen::ported::psm2::Vec3;
 
@@ -1382,6 +1383,139 @@ namespace orphen::port
     draw.itemBrowseLine = !equipItemLine_.empty();
     draw.itemLine = equipItemLine_;
     return scene::FUN_0022e910_layout(draw, dialogueFont_);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The fly view's Inventory panel. A harness shortcut to what the Equip screen
+  // and opcode 0xBC do, writing the same two tables in the same way: the
+  // DAT_003437B8 counts and the lead's DAT_003437A0 loadout row. PC-only; it
+  // runs between simulation steps.
+  // ---------------------------------------------------------------------------
+
+  namespace
+  {
+    // FUN_00230910:32-56's test for a spell slot: the item record carries
+    // both the character's roster bit and 0x100.
+    std::uint16_t spellSlotMask(int roster)
+    {
+      return static_cast<std::uint16_t>(((1u << (roster & 0x1F)) & 0xFFFFu) | scene::kItemFlagSpellSlot);
+    }
+
+    // Opcode 0xBC's cap.
+    constexpr int kItemCountCap = 99;
+  } // namespace
+
+  orphen::harness::InventoryView PortRuntime::inventoryView() const
+  {
+    orphen::harness::InventoryView view;
+    const int roster = FUN_002298d0_roster(entityPool_.leadPlayer().typeId00);
+    const auto loadout = battleParty_.DAT_003437a0_loadout();
+    const bool leadPresent = entityPool_.status(0) != entity::SlotStatus::Free || mapViewer_.hasLeadPlayerView();
+    if (!leadPresent || static_cast<std::size_t>(roster + 1) * battle::kLoadoutSlots > loadout.size())
+    {
+      return view;
+    }
+    view.available = true;
+    view.loadoutRow = roster;
+
+    const auto &counts = sceneScript_.state().DAT_003437b8_itemCounts;
+    const std::uint16_t mask = spellSlotMask(roster);
+    for (std::size_t slot = 0; slot < battle::kLoadoutSlots; ++slot)
+    {
+      view.loadout[slot] = loadout[static_cast<std::size_t>(roster) * battle::kLoadoutSlots + slot];
+      view.loadoutNames[slot] = itemDatabase_.FUN_00229688_name(view.loadout[slot]);
+    }
+    bool anyHeld = false;
+    // Every item this lead could put in a spell slot -- the ring's own filter
+    // without its "count is not zero", so a spell not yet learned is listed
+    // too, at zero.
+    for (int item = 1; item < 0x80; ++item)
+    {
+      const auto record = itemDatabase_.FUN_00229688_record(item);
+      if (!record || (record->ids[0] & mask) != mask)
+      {
+        continue;
+      }
+      orphen::harness::InventoryItemView row;
+      row.item = item;
+      row.name = itemDatabase_.FUN_00229688_name(item);
+      row.count = counts[item];
+      for (std::size_t slot = 0; slot < battle::kLoadoutSlots; ++slot)
+      {
+        if (view.loadout[slot] == item)
+        {
+          row.equippedSlot = static_cast<int>(slot);
+        }
+      }
+      anyHeld = anyHeld || row.count > 0;
+      view.items.push_back(std::move(row));
+    }
+    view.canSwap.fill(anyHeld);
+    return view;
+  }
+
+  void PortRuntime::adjustItemCountFromHarness(int item, int delta)
+  {
+    auto &counts = sceneScript_.state().DAT_003437b8_itemCounts;
+    if (item <= 0 || item >= static_cast<int>(std::size(counts)))
+    {
+      return;
+    }
+    counts[item] = static_cast<std::uint8_t>(std::clamp(counts[item] + delta, 0, kItemCountCap));
+    std::cout << "[debug] item 0x" << std::hex << item << std::dec << " ("
+              << itemDatabase_.FUN_00229688_name(item) << ") count " << static_cast<int>(counts[item]) << '\n';
+  }
+
+  void PortRuntime::cycleLoadoutFromHarness(int slot, int delta)
+  {
+    const int roster = FUN_002298d0_roster(entityPool_.leadPlayer().typeId00);
+    const auto loadout = battleParty_.DAT_003437a0_loadout();
+    const std::size_t at = static_cast<std::size_t>(roster) * battle::kLoadoutSlots + static_cast<std::size_t>(slot);
+    if (slot < 0 || slot >= static_cast<int>(battle::kLoadoutSlots) || at >= loadout.size())
+    {
+      return;
+    }
+    auto &counts = sceneScript_.state().DAT_003437b8_itemCounts;
+    const std::uint16_t mask = spellSlotMask(roster);
+    // What the ring would offer: held, and allowed in a spell slot.
+    std::vector<int> held;
+    for (int item = 1; item < 0x80; ++item)
+    {
+      const auto record = itemDatabase_.FUN_00229688_record(item);
+      if (counts[item] != 0 && record && (record->ids[0] & mask) == mask)
+      {
+        held.push_back(item);
+      }
+    }
+    if (held.empty())
+    {
+      return;
+    }
+    // The next held id after the equipped one, or the one before it, wrapping.
+    const int current = loadout[at];
+    int next = 0;
+    if (delta > 0)
+    {
+      const auto after = std::upper_bound(held.begin(), held.end(), current);
+      next = after != held.end() ? *after : held.front();
+    }
+    else
+    {
+      const auto before = std::lower_bound(held.begin(), held.end(), current);
+      next = before != held.begin() ? *std::prev(before) : held.back();
+    }
+
+    // FUN_0022F620:52-57, the swap's three writes: the incoming item leaves the
+    // inventory, the loadout byte takes it, and the outgoing item goes back.
+    counts[next] = static_cast<std::uint8_t>(counts[next] - 1);
+    battleParty_.FUN_0022f620_set_loadout(at, static_cast<std::uint8_t>(next));
+    if (current > 0 && current < static_cast<int>(std::size(counts)))
+    {
+      counts[current] = static_cast<std::uint8_t>(counts[current] + 1);
+    }
+    std::cout << "[debug] loadout row " << roster << " slot " << slot << ": "
+              << itemDatabase_.FUN_00229688_name(current) << " -> " << itemDatabase_.FUN_00229688_name(next)
+              << '\n';
   }
 
 } // namespace orphen::port

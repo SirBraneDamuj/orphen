@@ -12,118 +12,18 @@ namespace orphen::harness
 
   namespace
   {
-    namespace debugText = orphen::ported::debug::text;
+    using namespace panel;
     using orphen::ported::psm2::Vec3;
 
-    constexpr int kAdvance = debugText::kGlyphCellWidth;
-    constexpr int kRowPitch = debugText::kGlyphCellHeight;
-    constexpr int kPadding = 6;
-    constexpr int kMargin = 8;
     // "255  ": the slot column and the gap after it.
     constexpr int kSlotColumns = 5;
     constexpr int kMinimumColumns = 26;
     constexpr int kMaximumColumns = 48;
 
-    float scaleFor(int framebufferHeight) { return framebufferHeight >= 1400 ? 2.0f : 1.0f; }
-
     // The help panel's height in layout units, which the tree stops short of.
     float helpPanelHeight(int lineCount) { return static_cast<float>(lineCount * kRowPitch + 2 * kPadding); }
 
     int rowsTop(const EntityTreeLayout &layout) { return static_cast<int>(layout.top) + kPadding + kRowPitch + 4; }
-
-    void appendText(std::vector<orphen::ported::debug::DebugGlyph> &glyphs, const std::string &text, int x, int y,
-                    int columns)
-    {
-      for (int index = 0; index < static_cast<int>(text.size()) && index < columns; ++index)
-      {
-        if (text[index] != ' ')
-        {
-          glyphs.push_back({text[index], x + index * kAdvance, y});
-        }
-      }
-    }
-
-    // Glyphs are in layout units; this is the one place they become pixels.
-    void drawGlyphs(const DebugTextRenderer &text, const DebugFont &font, int framebufferWidth,
-                    int framebufferHeight, float scale,
-                    const std::vector<orphen::ported::debug::DebugGlyph> &glyphs, float red, float green,
-                    float blue)
-    {
-      text.drawOriginalOverlay(framebufferWidth, framebufferHeight, 0.0f, 0.0f, scale, scale, glyphs,
-                               font.texture, font.width, font.height, red, green, blue);
-    }
-
-    // A flat rectangle in layout units, over whatever is there.
-    void fillRect(float scale, float left, float top, float width, float height, float red, float green,
-                  float blue, float alpha)
-    {
-      glColor4f(red, green, blue, alpha);
-      glBegin(GL_QUADS);
-      glVertex2f(left * scale, top * scale);
-      glVertex2f((left + width) * scale, top * scale);
-      glVertex2f((left + width) * scale, (top + height) * scale);
-      glVertex2f(left * scale, (top + height) * scale);
-      glEnd();
-    }
-
-    // The 2D state the panels draw in, and back.
-    struct OverlayState
-    {
-      GLboolean depth, texture, fog, blend, cull, lighting, alphaTest;
-
-      OverlayState(int framebufferWidth, int framebufferHeight)
-          : depth(glIsEnabled(GL_DEPTH_TEST)), texture(glIsEnabled(GL_TEXTURE_2D)), fog(glIsEnabled(GL_FOG)),
-            blend(glIsEnabled(GL_BLEND)), cull(glIsEnabled(GL_CULL_FACE)), lighting(glIsEnabled(GL_LIGHTING)),
-            alphaTest(glIsEnabled(GL_ALPHA_TEST))
-      {
-        glViewport(0, 0, framebufferWidth, framebufferHeight);
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadIdentity();
-        glOrtho(0.0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight), 0.0, -1.0,
-                1.0);
-        glMatrixMode(GL_MODELVIEW);
-        glPushMatrix();
-        glLoadIdentity();
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_FOG);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_LIGHTING);
-        glDisable(GL_ALPHA_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      }
-
-      ~OverlayState()
-      {
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        restore(GL_DEPTH_TEST, depth);
-        restore(GL_TEXTURE_2D, texture);
-        restore(GL_FOG, fog);
-        restore(GL_BLEND, blend);
-        restore(GL_CULL_FACE, cull);
-        restore(GL_LIGHTING, lighting);
-        restore(GL_ALPHA_TEST, alphaTest);
-        glMatrixMode(GL_MODELVIEW);
-        glPopMatrix();
-        glMatrixMode(GL_PROJECTION);
-        glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
-      }
-
-      static void restore(GLenum capability, GLboolean wasEnabled)
-      {
-        if (wasEnabled == GL_TRUE)
-        {
-          glEnable(capability);
-        }
-        else
-        {
-          glDisable(capability);
-        }
-      }
-    };
 
     std::string rowText(const EntityTreeEntry &entry)
     {
@@ -178,7 +78,7 @@ namespace orphen::harness
     layout.columns = std::clamp(widest, kMinimumColumns, std::max(kMinimumColumns, std::min(kMaximumColumns, roomFor)));
 
     layout.left = static_cast<float>(kMargin);
-    layout.top = static_cast<float>(kMargin);
+    layout.top = static_cast<float>(kMenuBarHeight + kMargin);
     layout.width = static_cast<float>(layout.columns * kAdvance + 2 * kPadding);
     const float available = screenHeight - helpPanelHeight(kHelpPanelLines) - 2.0f * kMargin -
                             static_cast<float>(rowsTop(layout)) - kPadding;
@@ -205,7 +105,7 @@ namespace orphen::harness
     const int firstRowTop = rowsTop(layout);
     {
       OverlayState state(framebufferWidth, framebufferHeight);
-      fillRect(scale, layout.left, layout.top, layout.width, layout.height, 0.04f, 0.05f, 0.06f, 0.78f);
+      fillPanel(scale, layout.left, layout.top, layout.width, layout.height);
       for (int row = 0; row < layout.visibleRows; ++row)
       {
         const int index = layout.firstRow + row;
@@ -276,7 +176,7 @@ namespace orphen::harness
     const float top = screenHeight - kMargin - height;
     {
       OverlayState state(framebufferWidth, framebufferHeight);
-      fillRect(scale, left, top, width, height, 0.04f, 0.05f, 0.06f, 0.78f);
+      fillPanel(scale, left, top, width, height);
     }
 
     // The first line is the status, in the tree's heading yellow.

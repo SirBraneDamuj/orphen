@@ -110,9 +110,10 @@ namespace
                  "                  the inspector beside it, as <path>-inspector.ppm.\n"
                  "  --pick-pixel <x>,<y>\n"
                  "                  with --fly-camera, left-click that window pixel\n"
-                 "                  once the fly view has been drawn: select the map\n"
-                 "                  primitive or entity under it and open the\n"
-                 "                  inspector.\n"
+                 "                  once the fly view has been drawn, as a real click\n"
+                 "                  would: a menu, a panel, the tree, or a pick in the\n"
+                 "                  world. Repeatable, one click a frame, and the\n"
+                 "                  pointer stays on the last so captures show hover.\n"
                  "  --screenshot <path>[:<frame>]\n"
                  "                  run one simulation step per frame, write a PPM at\n"
                  "                  <frame> and exit. Deterministic, so two builds can\n"
@@ -790,8 +791,8 @@ namespace
         {
           throw std::runtime_error("--pick-pixel needs x,y");
         }
-        config.pickPixel =
-            std::array<int, 2>{std::stoi(value.substr(0, comma)), std::stoi(value.substr(comma + 1))};
+        config.pickPixels.push_back(
+            std::array<int, 2>{std::stoi(value.substr(0, comma)), std::stoi(value.substr(comma + 1))});
         continue;
       }
       if (argument == "--scene-tree")
@@ -1363,7 +1364,7 @@ int main(int argc, char **argv)
     std::string inspectorTitle;
     bool entitySelected = false;
     std::optional<std::uint32_t> flyFirstFrame;
-    bool pixelPicked = false;
+    std::size_t pixelClicks = 0;
 
     if (!config.vsync && window.swapInterval() != 0)
     {
@@ -1388,14 +1389,35 @@ int main(int argc, char **argv)
         break;
       }
 
-      // A click on the fly view's entity tree is the tree's, not a probe ray
-      // through it. Moved before any step can see it.
-      if (input.probeRequested && runtime.entityTreeCovers(input.probeX, input.probeY))
+      // --pick-pixel's clicks, one a frame from two frames after the fly camera
+      // came up: one frame to place the camera, one drawn from where it was
+      // placed, whose matrices the first click is aimed through. Injected
+      // here, so the routing below treats them as it would a real click. The
+      // pointer stays on the last one, so a capture shows its hover.
+      if (flyFirstFrame.has_value() && pixelClicks < config.pickPixels.size() &&
+          renderedFrames >= *flyFirstFrame + 2)
+      {
+        const auto &click = config.pickPixels[pixelClicks++];
+        input.probeRequested = true;
+        input.probeX = click[0];
+        input.probeY = click[1];
+      }
+      if (pixelClicks > 0)
+      {
+        input.pointerInWindow = true;
+        input.pointerX = config.pickPixels[pixelClicks - 1][0];
+        input.pointerY = config.pickPixels[pixelClicks - 1][1];
+      }
+
+      // A click on the fly view's own UI -- the menu bar, an open menu, a panel,
+      // the entity tree -- is the UI's, not a probe ray through it. Moved
+      // before any step can see it.
+      if (input.probeRequested && runtime.harnessUiCovers(input.probeX, input.probeY))
       {
         input.probeRequested = false;
-        input.entityTreeClickRequested = true;
-        input.entityTreeClickX = input.probeX;
-        input.entityTreeClickY = input.probeY;
+        input.harnessUiClickRequested = true;
+        input.harnessUiClickX = input.probeX;
+        input.harnessUiClickY = input.probeY;
       }
 
       if (input.resetRequested)
@@ -1642,16 +1664,6 @@ int main(int argc, char **argv)
         if (runtime.flyCameraActive() && !flyFirstFrame.has_value())
         {
           flyFirstFrame = renderedFrames;
-        }
-        // Two frames in: one to place the camera, one drawn from where it was
-        // placed, whose matrices the click is aimed through.
-        if (config.pickPixel.has_value() && !pixelPicked && flyFirstFrame.has_value() &&
-            renderedFrames >= *flyFirstFrame + 2)
-        {
-          pixelPicked = true;
-          flyInput.probeRequested = true;
-          flyInput.probeX = (*config.pickPixel)[0];
-          flyInput.probeY = (*config.pickPixel)[1];
         }
         runtime.updateFlyCamera(std::min(delta.count(), 0.1f), flyInput);
         if (config.flyCameraPose.has_value() && !flyCameraPlaced)

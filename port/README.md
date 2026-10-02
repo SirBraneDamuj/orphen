@@ -9540,6 +9540,72 @@ row is the slot, the type id, and the noun from the type's handler name; a type
 camera is up. With `--screenshot` the inspector is written beside the capture
 as `<path>-inspector.ppm`.
 
+#### Menu bar and Player Params
+
+A menu bar runs along the top of the fly view (`src/harness/harness_menu.*`,
+drawn with the tree's panel kit in `src/harness/harness_panel.*`). Click a title
+to open it. With one open, sliding along the bar opens the next, and a click
+anywhere else closes it without reaching the world.
+
+- **VIEW** has the `F2`..`F5` toggles, with a check box showing which are on.
+  Keys and items go through the same `MapViewer::runMenuCommand`, so they
+  cannot disagree.
+- **PLAYER** opens the Player Params panel, and has Heal and the five test hits
+  the `0`..`5` keys already did (`PortRuntime::applyDebugDamageKeys`). Those
+  hits are stamped straight into the lead's hit mailbox, so they skip
+  `FUN_00216140` and its defence subtraction. Only a real enemy hit shows a
+  DEF edit.
+
+The Player Params panel is the debug menu's SET PLAYER PARAM page,
+`FUN_0026bc50`. Its rows come from the pointer table at `0x0034E228`, read out of
+`SLUS_200.11`: `0x0058BFDA`/`DC`/`DE`, the lead's (pool slot 0's) `+0x12A` hit
+points, `+0x12C` strength and `+0x12E` defence. All three are live in the port:
+`+0x12C` seeds every attack the lead throws, and `+0x12E` is what
+`original_hit_test.cpp` subtracts from an incoming hit. The four buttons per row
+are the page's four pad bits, and each click is one call of the page's step
+rule, ported as `FUN_0026bc50_step_player_param`
+(`src/ported/debug/original_player_param_menu.*`):
+
+- `+1` / `-1` (Right / Left) wrap 999 to 0 and 0 to 999.
+- `+10` / `-10` (R1 / L1) are not a modulo: past 999 lands on old - 989, so 995
+  goes to 6, and below 0 lands on old + 989.
+- After every step `+0x128` takes `+0x12A`, floored at 1, so an HP edit sets
+  the maximum too. The original makes that copy on every frame the page is
+  open; the panel only makes it when a button is pressed.
+
+Edits are applied between simulation steps, never inside one, so `--frames`
+runs cannot see them. A battle reseeds the lead's HP and strength from the
+roster when it starts (`battle_party.cpp`), so an edit made in the field does
+not survive into one.
+
+PLAYER > INVENTORY opens a second panel, stacked under Player Params. It is a
+shortcut to what the Equip screen and opcode `0xBC` do, and writes the same two
+tables the same way (see the Equip screen section for both):
+
+- **Spells.** Every item the lead could put in a spell slot is listed: the ring's
+  own filter in `FUN_00230910`, an item record carrying the lead's roster bit
+  and `0x100`, without its "count is not zero". Next to each is its
+  `DAT_003437B8` count. There is no unlock bitfield: a spell is learned when
+  its count is above zero, or when it is equipped, since equipping takes it out
+  of the count. Not learned is drawn dim. `-` and `+` step the count between 0
+  and 99, opcode `0xBC`'s cap.
+- **Equipped.** The lead's `DAT_003437A0` row, Triangle / Circle / Cross, with
+  the row picked by `FUN_002298D0` as the Equip screen picks it. `<` and `>` swap
+  in the previous or next held spell by id, with `FUN_0022F620`'s three writes:
+  the incoming count goes down one, the loadout byte takes it, the outgoing
+  count goes up one. Nothing else is written, which is all the real swap
+  writes too.
+
+A battle builds its button bindings from the loadout when it starts
+(`FUN_002432D8`), so a loadout change made mid-battle shows in the next one.
+
+The panels are drawn after the game view inset, so they lie over it, and the
+menu bar is drawn after the panels, so an open menu lies over them.
+
+`--pick-pixel` is repeatable, one click a frame, which is how a capture drives
+the menus: `--pick-pixel 90,12 --pick-pixel 130,32` opens PLAYER and then the
+panel, at 960x720.
+
 #### Map tile pick
 
 The map primitive under the pointer is tinted amber every frame

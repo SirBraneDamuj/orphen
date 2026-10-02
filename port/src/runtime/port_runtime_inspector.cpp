@@ -4,12 +4,14 @@
 
 #include "runtime/port_runtime.h"
 
+#include "ported/debug/original_player_param_menu.h"
 #include "ported/entity/original_climb_graph.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 
 namespace orphen::port
@@ -109,8 +111,25 @@ namespace orphen::port
     if (mapViewer_.flyCameraActive() || input.toggleFlyCameraRequested)
     {
       mapViewer_.setEntityTree(buildEntityTree());
+      mapViewer_.setPlayerParams(leadPlayerParams());
+      if (mapViewer_.inventoryVisible())
+      {
+        mapViewer_.setInventory(inventoryView());
+      }
     }
     mapViewer_.updateFlyCamera(deltaSeconds, input);
+    // Between steps, never inside one: a --frames run cannot click a menu.
+    // Then the panels again, so an edit -- or a panel opened this frame --
+    // shows on the frame it was made.
+    applyHarnessRequests(mapViewer_.takeHarnessRequests());
+    if (mapViewer_.flyCameraActive())
+    {
+      mapViewer_.setPlayerParams(leadPlayerParams());
+      if (mapViewer_.inventoryVisible())
+      {
+        mapViewer_.setInventory(inventoryView());
+      }
+    }
     if (const auto slot = mapViewer_.inspectedEntitySlot(); slot.has_value())
     {
       mapViewer_.setEntityInspectorLines(describeEntity(*slot));
@@ -119,6 +138,58 @@ namespace orphen::port
     {
       mapViewer_.setEntityInspectorLines(describeMapPrimitive(*primitive));
     }
+  }
+
+  orphen::harness::PlayerParamsView PortRuntime::leadPlayerParams() const
+  {
+    orphen::harness::PlayerParamsView view;
+    // Slot 0 is built from its own descriptor rather than allocated, so it
+    // counts as present whenever the viewer has a lead to draw.
+    view.available = entityPool_.status(0) != entity::SlotStatus::Free || mapViewer_.hasLeadPlayerView();
+    const auto &lead = entityPool_.leadPlayer();
+    view.hitPoints = static_cast<std::int16_t>(lead.staggerTimer12a);
+    view.maxHitPoints = static_cast<std::int16_t>(lead.maxHitPoints128);
+    view.strength = static_cast<std::int16_t>(lead.attackPower12c);
+    view.defence = static_cast<std::int16_t>(lead.defence12e);
+    return view;
+  }
+
+  bool PortRuntime::applyHarnessRequests(const std::vector<orphen::harness::HarnessRequest> &requests)
+  {
+    using Request = orphen::harness::HarnessRequest;
+    for (const auto &request : requests)
+    {
+      switch (request.kind)
+      {
+      case Request::Kind::StepPlayerParam:
+      {
+        auto &lead = entityPool_.leadPlayer();
+        orphen::ported::debug::FUN_0026bc50_step_player_param(lead, request.param, request.step);
+        std::cout << "[debug] player params hp " << static_cast<std::int16_t>(lead.staggerTimer12a) << '/'
+                  << static_cast<std::int16_t>(lead.maxHitPoints128) << " str "
+                  << static_cast<std::int16_t>(lead.attackPower12c) << " def "
+                  << static_cast<std::int16_t>(lead.defence12e) << '\n';
+        break;
+      }
+      case Request::Kind::Heal:
+      case Request::Kind::Hit:
+      {
+        // The 0..5 keys' own path, so a menu item and its key do the same.
+        InputSnapshot keys;
+        keys.debugHealRequested = request.kind == Request::Kind::Heal;
+        keys.debugDamageKind = request.kind == Request::Kind::Hit ? request.hitKind : 0;
+        applyDebugDamageKeys(keys);
+        break;
+      }
+      case Request::Kind::AdjustItemCount:
+        adjustItemCountFromHarness(request.item, request.delta);
+        break;
+      case Request::Kind::CycleLoadout:
+        cycleLoadoutFromHarness(request.slot, request.delta);
+        break;
+      }
+    }
+    return !requests.empty();
   }
 
   bool PortRuntime::selectEntity(std::size_t slot)

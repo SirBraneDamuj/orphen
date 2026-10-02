@@ -114,6 +114,12 @@ target_sources(orphen_port
     src/harness/entity_tree.h
     src/harness/fly_camera.cpp
     src/harness/fly_camera.h
+    src/harness/harness_menu.cpp
+    src/harness/harness_menu.h
+    src/harness/harness_panel.cpp
+    src/harness/harness_panel.h
+    src/harness/tool_panel.cpp
+    src/harness/tool_panel.h
     src/harness/map_pick.cpp
     src/harness/map_pick.h
     src/harness/map_viewer.cpp
@@ -141,6 +147,8 @@ target_sources(orphen_port
         src/ported/debug/original_debug_text.h
         src/ported/debug/original_position_display.cpp
         src/ported/debug/original_position_display.h
+        src/ported/debug/original_player_param_menu.cpp
+        src/ported/debug/original_player_param_menu.h
         src/ported/player/original_chest_cutscene.cpp
         src/ported/player/original_chest_cutscene.h
         src/ported/player/original_item_window.cpp

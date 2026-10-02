@@ -5,6 +5,7 @@
 #include "harness/scene_resource_provider.h"
 #include "harness/debug_text.h"
 #include "harness/entity_tree.h"
+#include "harness/harness_menu.h"
 #include "harness/fly_camera.h"
 #include "runtime/input_state.h"
 #include "ported/camera/original_camera_state.h"
@@ -221,6 +222,15 @@ namespace orphen::harness
     // the probe. Measured against the last frame drawn, which is what the
     // pointer was aimed at.
     bool entityTreeCovers(int pixelX, int pixelY) const;
+    // The same for all of the fly view's own UI: the menu bar, an open menu
+    // (which takes every click), the panels and the tree.
+    bool harnessUiCovers(int pixelX, int pixelY) const;
+    // The menu bar (harness/harness_menu.h). The runtime hands over the lead's
+    // numbers before updateFlyCamera and takes what the menus asked for after.
+    void setPlayerParams(const PlayerParamsView &view) { playerParams_ = view; }
+    void setInventory(InventoryView view) { inventory_ = std::move(view); }
+    bool inventoryVisible() const { return flyCameraActive_ && inventoryVisible_; }
+    std::vector<HarnessRequest> takeHarnessRequests();
     // The slot the inspector window should show, while there is one to show:
     // flying, and something selected.
     std::optional<std::size_t> inspectedEntitySlot() const;
@@ -401,6 +411,33 @@ namespace orphen::harness
     std::optional<std::size_t> hoveredMapPrimitive_;
     InspectorLines entityInspectorLines_;
     int entityInspectorScroll_ = 0;
+    // The menu bar's state. Commands from the menus, the F-keys and the panels
+    // all go through runMenuCommand, so a key and its menu item cannot drift.
+    int openMenu_ = -1;
+    bool playerParamsVisible_ = false;
+    PlayerParamsView playerParams_;
+    bool inventoryVisible_ = false;
+    InventoryView inventory_;
+    // The open panels, built for this framebuffer from the current numbers,
+    // in draw order.
+    struct OpenToolPanel
+    {
+      ToolPanelKind kind;
+      ToolPanel panel;
+    };
+    std::vector<OpenToolPanel> toolPanels(int framebufferWidth, int framebufferHeight) const;
+    bool &toolPanelVisible(ToolPanelKind kind);
+    void drawMenusAndPanels(int framebufferWidth, int framebufferHeight) const;
+    std::vector<HarnessRequest> harnessRequests_;
+    // The pointer as of the last update, for hover highlights in render().
+    bool pointerInWindow_ = false;
+    int pointerX_ = 0;
+    int pointerY_ = 0;
+    MenuBar menuBar() const;
+    void runMenuCommand(MenuCommand command);
+    // Takes the click and the hover when they land on the menus, so the tree
+    // and the world pick under them do not see them as well.
+    void updateMenuBar(orphen::port::InputSnapshot &input);
     void updateEntityTree(const orphen::port::InputSnapshot &input);
     void updateWorldPick(const orphen::port::InputSnapshot &input);
     // The map list the fly view draws: the game's culled one, or F3's whole map.

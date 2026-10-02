@@ -1,6 +1,7 @@
 #pragma once
 
 #include "harness/debug_text.h"
+#include "harness/harness_panel.h"
 #include "ported/psm2/psm2_runtime.h"
 
 #include <cstddef>
@@ -63,13 +64,6 @@ namespace orphen::harness
   // `scroll` is the requested first row; the layout clamps it.
   EntityTreeLayout layoutEntityTree(int framebufferWidth, int framebufferHeight, const EntityTree &tree,
                                     int scroll);
-
-  struct DebugFont
-  {
-    unsigned int texture = 0;
-    int width = 0;
-    int height = 0;
-  };
 
   void drawEntityTree(const DebugTextRenderer &text,
                       const DebugFont &font,

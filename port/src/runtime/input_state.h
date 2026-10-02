@@ -77,15 +77,16 @@ namespace orphen::port
     // The fly camera's entity tree (harness/entity_tree.h). F5 hides it. The
     // pointer is the main window's, in window pixels, for hovering and for the
     // wheel, which scrolls the tree instead of changing speed while over it.
-    // A left click on the tree is moved out of probeRequested and into
-    // entityTreeClick by main(), before any step can see the probe.
+    // A left click on the tree, the menu bar or a harness panel is moved out
+    // of probeRequested and into harnessUiClick by main(), before any step can
+    // see the probe.
     bool toggleEntityTreeRequested = false;
     bool pointerInWindow = false;
     int pointerX = 0;
     int pointerY = 0;
-    bool entityTreeClickRequested = false;
-    int entityTreeClickX = 0;
-    int entityTreeClickY = 0;
+    bool harnessUiClickRequested = false;
+    int harnessUiClickX = 0;
+    int harnessUiClickY = 0;
     // The inspector window's own: its close button, and its wheel.
     bool entityInspectorCloseRequested = false;
     int entityInspectorScrollSteps = 0;

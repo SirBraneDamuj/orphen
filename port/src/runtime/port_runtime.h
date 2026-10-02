@@ -281,8 +281,9 @@ namespace orphen::port
     // --select-entity: select this pool slot in the fly view's entity tree once
     // it is up, framing it and opening the inspector, as a click would.
     std::optional<std::size_t> selectEntity;
-    // --pick-pixel: a left click at this window pixel once the fly view is up.
-    std::optional<std::array<int, 2>> pickPixel;
+    // --pick-pixel, repeatable: left clicks at these window pixels, one a
+    // frame, once the fly view is up.
+    std::vector<std::array<int, 2>> pickPixels;
     // The same, for Circle: --press-attack. FUN_00256bb8's attack branch is not
     // reachable from a headless run any other way.
     std::vector<std::uint32_t> pressAttackFrames;
@@ -373,7 +374,7 @@ namespace orphen::port
     // read the pool here and nowhere else (port_runtime_inspector.cpp).
     void updateFlyCamera(float deltaSeconds, const InputSnapshot &input);
     bool flyCameraActive() const { return mapViewer_.flyCameraActive(); }
-    bool entityTreeCovers(int pixelX, int pixelY) const { return mapViewer_.entityTreeCovers(pixelX, pixelY); }
+    bool harnessUiCovers(int pixelX, int pixelY) const { return mapViewer_.harnessUiCovers(pixelX, pixelY); }
     // --select-entity's click. False until the slot is in the tree.
     bool selectEntity(std::size_t slot);
     // Empty when the inspector window should be closed. Names the selected
@@ -794,6 +795,14 @@ namespace orphen::port
     orphen::harness::EntityTree buildEntityTree() const;
     orphen::harness::InspectorLines describeEntity(std::size_t slot) const;
     orphen::harness::InspectorLines describeMapPrimitive(std::size_t primitiveIndex) const;
+    orphen::harness::PlayerParamsView leadPlayerParams() const;
+    // What the fly view's menus asked for this frame. True when there was any.
+    bool applyHarnessRequests(const std::vector<orphen::harness::HarnessRequest> &requests);
+    // The fly view's Inventory panel (port_runtime_equip.cpp, beside the Equip
+    // screen it shortcuts).
+    orphen::harness::InventoryView inventoryView() const;
+    void adjustItemCountFromHarness(int item, int delta);
+    void cycleLoadoutFromHarness(int slot, int delta);
     void printRenderReport() const;
     void printModelReport() const;
     void printEntityModelBindings() const;

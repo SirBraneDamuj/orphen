@@ -3852,34 +3852,242 @@ namespace orphen::harness
     }
     if (input.flyCameraSnapRequested)
     {
-      snapFlyCameraToGame();
+      runMenuCommand(MenuCommand::SnapToGame);
     }
     if (input.toggleFlyCameraInsetRequested)
     {
-      flyCameraInset_ = !flyCameraInset_;
-      std::cout << "[fly camera] game view inset " << (flyCameraInset_ ? "on" : "off") << '\n';
+      runMenuCommand(MenuCommand::ToggleInset);
     }
     if (input.toggleFlyCameraWholeMapRequested)
     {
-      flyCameraWholeMap_ = !flyCameraWholeMap_;
-      std::cout << "[fly camera] map: " << (flyCameraWholeMap_ ? "whole map" : "game draw list") << '\n';
+      runMenuCommand(MenuCommand::ToggleWholeMap);
     }
-    updateEntityTree(input);
-    updateWorldPick(input);
+
+    // The menu bar and its panels sit over everything else, so they see the
+    // pointer first. Whatever they take -- the click, the hover -- the tree
+    // and the world pick underneath do not also get.
+    orphen::port::InputSnapshot underMenus = input;
+    updateMenuBar(underMenus);
+    updateEntityTree(underMenus);
+    updateWorldPick(underMenus);
     orphen::port::InputSnapshot flyInput = input;
-    if (input.pointerInWindow && entityTreeCovers(input.pointerX, input.pointerY))
+    if (input.pointerInWindow && harnessUiCovers(input.pointerX, input.pointerY))
     {
-      // The wheel scrolled the tree instead.
+      // The wheel scrolled the tree, or was over a menu.
       flyInput.flySpeedSteps = 0;
     }
     flyCamera_.update(deltaSeconds, flyInput);
+  }
+
+  MenuBar MapViewer::menuBar() const
+  {
+    const auto item = [](const char *label, const char *shortcut, MenuCommand command) {
+      return MenuItem{label, shortcut, command, false, false};
+    };
+    const auto check = [](const char *label, const char *shortcut, MenuCommand command, bool checked) {
+      return MenuItem{label, shortcut, command, true, checked};
+    };
+    return MenuBar{
+        Menu{"VIEW",
+             {check("ENTITY TREE", "F5", MenuCommand::ToggleEntityTree, entityTreeVisible_),
+              check("GAME VIEW INSET", "F4", MenuCommand::ToggleInset, flyCameraInset_),
+              check("WHOLE MAP", "F3", MenuCommand::ToggleWholeMap, flyCameraWholeMap_),
+              item("SNAP TO GAME CAMERA", "F2", MenuCommand::SnapToGame)}},
+        Menu{"PLAYER",
+             {check("PLAYER PARAMS", "", MenuCommand::TogglePlayerParams, playerParamsVisible_),
+              check("INVENTORY", "", MenuCommand::ToggleInventory, inventoryVisible_),
+              item("HEAL", "0", MenuCommand::Heal), item("HIT: SCRATCH", "1", MenuCommand::HitScratch),
+              item("HIT: HIT", "2", MenuCommand::HitHit), item("HIT: KNOCKBACK", "3", MenuCommand::HitKnockback),
+              item("HIT: FLATTEN", "4", MenuCommand::HitFlatten), item("HIT: LETHAL", "5", MenuCommand::HitLethal)}},
+    };
+  }
+
+  void MapViewer::runMenuCommand(MenuCommand command)
+  {
+    const auto hit = [this](int kind) {
+      HarnessRequest request;
+      request.kind = HarnessRequest::Kind::Hit;
+      request.hitKind = kind;
+      harnessRequests_.push_back(request);
+    };
+    switch (command)
+    {
+    case MenuCommand::ToggleEntityTree:
+      entityTreeVisible_ = !entityTreeVisible_;
+      break;
+    case MenuCommand::ToggleInset:
+      flyCameraInset_ = !flyCameraInset_;
+      std::cout << "[fly camera] game view inset " << (flyCameraInset_ ? "on" : "off") << '\n';
+      break;
+    case MenuCommand::ToggleWholeMap:
+      flyCameraWholeMap_ = !flyCameraWholeMap_;
+      std::cout << "[fly camera] map: " << (flyCameraWholeMap_ ? "whole map" : "game draw list") << '\n';
+      break;
+    case MenuCommand::SnapToGame:
+      snapFlyCameraToGame();
+      break;
+    case MenuCommand::TogglePlayerParams:
+      playerParamsVisible_ = !playerParamsVisible_;
+      break;
+    case MenuCommand::ToggleInventory:
+      inventoryVisible_ = !inventoryVisible_;
+      break;
+    case MenuCommand::Heal:
+    {
+      HarnessRequest request;
+      request.kind = HarnessRequest::Kind::Heal;
+      harnessRequests_.push_back(request);
+      break;
+    }
+    case MenuCommand::HitScratch: hit(1); break;
+    case MenuCommand::HitHit: hit(2); break;
+    case MenuCommand::HitKnockback: hit(3); break;
+    case MenuCommand::HitFlatten: hit(4); break;
+    case MenuCommand::HitLethal: hit(5); break;
+    }
+  }
+
+  void MapViewer::updateMenuBar(orphen::port::InputSnapshot &input)
+  {
+    pointerInWindow_ = input.pointerInWindow;
+    pointerX_ = input.pointerX;
+    pointerY_ = input.pointerY;
+
+    const MenuBar bar = menuBar();
+    MenuBarLayout layout = layoutMenuBar(lastFramebufferWidth_, lastFramebufferHeight_, bar, openMenu_);
+    // With a menu open, sliding along the bar opens the one under the pointer,
+    // the way a desktop menu bar does.
+    if (openMenu_ >= 0 && input.pointerInWindow)
+    {
+      const int title = layout.titleAt(input.pointerX, input.pointerY);
+      if (title >= 0 && title != openMenu_)
+      {
+        openMenu_ = title;
+        layout = layoutMenuBar(lastFramebufferWidth_, lastFramebufferHeight_, bar, openMenu_);
+      }
+    }
+    const std::vector<OpenToolPanel> panels = toolPanels(lastFramebufferWidth_, lastFramebufferHeight_);
+    const auto overMenus = [&](int x, int y) {
+      return layout.covers(x, y) ||
+             std::any_of(panels.begin(), panels.end(), [&](const OpenToolPanel &open) { return open.panel.covers(x, y); });
+    };
+
+    if (input.harnessUiClickRequested)
+    {
+      const int x = input.harnessUiClickX;
+      const int y = input.harnessUiClickY;
+      bool consumed = true;
+      // Panels are hit-tested top-most first, which is the reverse of the
+      // order they are drawn in.
+      const auto panel = std::find_if(panels.rbegin(), panels.rend(),
+                                      [&](const OpenToolPanel &open) { return open.panel.covers(x, y); });
+      if (const int title = layout.titleAt(x, y); title >= 0)
+      {
+        openMenu_ = openMenu_ == title ? -1 : title;
+      }
+      else if (openMenu_ >= 0)
+      {
+        // An item runs; anywhere else just closes the menu. Either way the
+        // click is spent.
+        if (const int item = layout.itemAt(x, y); item >= 0)
+        {
+          runMenuCommand(bar[static_cast<std::size_t>(openMenu_)].items[static_cast<std::size_t>(item)].command);
+        }
+        openMenu_ = -1;
+      }
+      else if (panel != panels.rend())
+      {
+        if (panel->panel.closeAt(x, y))
+        {
+          toolPanelVisible(panel->kind) = false;
+        }
+        else if (const auto button = panel->panel.buttonAt(x, y); button.has_value())
+        {
+          if (const auto request = toolPanelRequest(panel->kind, *button); request.has_value())
+          {
+            harnessRequests_.push_back(*request);
+          }
+        }
+      }
+      else
+      {
+        consumed = layout.covers(x, y);
+      }
+      if (consumed)
+      {
+        input.harnessUiClickRequested = false;
+      }
+    }
+    if (input.pointerInWindow && (openMenu_ >= 0 || overMenus(input.pointerX, input.pointerY)))
+    {
+      // Nothing under an open menu or a panel hovers.
+      input.pointerInWindow = false;
+    }
+  }
+
+  bool &MapViewer::toolPanelVisible(ToolPanelKind kind)
+  {
+    return kind == ToolPanelKind::PlayerParams ? playerParamsVisible_ : inventoryVisible_;
+  }
+
+  std::vector<MapViewer::OpenToolPanel> MapViewer::toolPanels(int framebufferWidth, int framebufferHeight) const
+  {
+    std::vector<OpenToolPanel> panels;
+    const float scale = panel::scaleFor(framebufferHeight);
+    const float screenWidth = static_cast<float>(framebufferWidth) / scale;
+    float top = static_cast<float>(panel::kMenuBarHeight + panel::kMargin);
+    const auto add = [&](ToolPanelKind kind, auto build) {
+      // Built once to measure it, then again centred.
+      const float width = build(0.0f).box().width;
+      ToolPanel built = build(std::max(static_cast<float>(panel::kMargin), (screenWidth - width) * 0.5f));
+      top += built.box().height + panel::kMargin;
+      panels.push_back(OpenToolPanel{kind, std::move(built)});
+    };
+    // Down the middle of the view, between the tree and the game inset at the
+    // window sizes the harness usually runs at, in a fixed order.
+    if (playerParamsVisible_)
+    {
+      add(ToolPanelKind::PlayerParams,
+          [&](float left) { return buildPlayerParamsPanel(scale, left, top, playerParams_); });
+    }
+    if (inventoryVisible_)
+    {
+      add(ToolPanelKind::Inventory, [&](float left) { return buildInventoryPanel(scale, left, top, inventory_); });
+    }
+    return panels;
+  }
+
+  bool MapViewer::harnessUiCovers(int pixelX, int pixelY) const
+  {
+    if (!flyCameraActive_)
+    {
+      return false;
+    }
+    // An open menu takes every click: the one that lands outside it closes it.
+    if (openMenu_ >= 0)
+    {
+      return true;
+    }
+    const MenuBarLayout layout = layoutMenuBar(lastFramebufferWidth_, lastFramebufferHeight_, menuBar(), openMenu_);
+    const auto panels = toolPanels(lastFramebufferWidth_, lastFramebufferHeight_);
+    return layout.covers(pixelX, pixelY) ||
+           std::any_of(panels.begin(), panels.end(),
+                       [&](const OpenToolPanel &open) { return open.panel.covers(pixelX, pixelY); }) ||
+           entityTreeCovers(pixelX, pixelY);
+  }
+
+  std::vector<HarnessRequest> MapViewer::takeHarnessRequests()
+  {
+    std::vector<HarnessRequest> requests;
+    requests.swap(harnessRequests_);
+    return requests;
   }
 
   void MapViewer::updateEntityTree(const orphen::port::InputSnapshot &input)
   {
     if (input.toggleEntityTreeRequested)
     {
-      entityTreeVisible_ = !entityTreeVisible_;
+      runMenuCommand(MenuCommand::ToggleEntityTree);
     }
     // An entity that has left the pool takes its selection with it, and the
     // inspector window closes.
@@ -3922,9 +4130,9 @@ namespace orphen::harness
                                      std::max(0, layout.rowCount - layout.visibleRows));
       entityTreeHoveredRow_ = layout.rowAt(input.pointerX, input.pointerY);
     }
-    if (input.entityTreeClickRequested)
+    if (input.harnessUiClickRequested)
     {
-      const int row = layout.rowAt(input.entityTreeClickX, input.entityTreeClickY);
+      const int row = layout.rowAt(input.harnessUiClickX, input.harnessUiClickY);
       if (row >= 0)
       {
         // Clicking the selected row again frames it again, which is how to
@@ -4363,6 +4571,26 @@ namespace orphen::harness
     {
       drawFlyCameraInset(framebufferWidth, framebufferHeight);
     }
+    drawMenusAndPanels(framebufferWidth, framebufferHeight);
+  }
+
+  // After the inset, so a panel or an open menu lies over it; the menu bar
+  // last, so a dropdown lies over every panel.
+  void MapViewer::drawMenusAndPanels(int framebufferWidth, int framebufferHeight) const
+  {
+    const DebugFont font = debugFont();
+    const bool pointer = pointerInWindow_ && openMenu_ < 0;
+    for (const auto &open : toolPanels(framebufferWidth, framebufferHeight))
+    {
+      open.panel.draw(debugText_, font, framebufferWidth, framebufferHeight,
+                      pointer ? open.panel.buttonAt(pointerX_, pointerY_) : std::nullopt,
+                      pointer && open.panel.closeAt(pointerX_, pointerY_));
+    }
+    const MenuBar bar = menuBar();
+    const MenuBarLayout menuLayout = layoutMenuBar(framebufferWidth, framebufferHeight, bar, openMenu_);
+    drawMenuBar(debugText_, font, framebufferWidth, framebufferHeight, menuLayout, bar,
+                pointerInWindow_ ? menuLayout.titleAt(pointerX_, pointerY_) : -1,
+                pointerInWindow_ ? menuLayout.itemAt(pointerX_, pointerY_) : -1);
   }
 
   // The fly view's corner picture: the frame-feedback texture the game pass
@@ -4382,7 +4610,8 @@ namespace orphen::harness
     const float height = width * static_cast<float>(frameFeedbackCapturedHeight_) /
                          static_cast<float>(frameFeedbackCapturedWidth_);
     const float left = static_cast<float>(framebufferWidth) - kMargin - width;
-    const float top = kMargin;
+    // Below the fly view's menu bar.
+    const float top = kMargin + static_cast<float>(panel::kMenuBarHeight) * panel::scaleFor(framebufferHeight);
     const float usedU =
         static_cast<float>(frameFeedbackCapturedWidth_) / static_cast<float>(frameFeedbackTextureWidth_);
     const float usedV =
