@@ -217,6 +217,9 @@ namespace orphen::ported::scene
     // iGpffffadbc while the panel owns the frame: 4 or 5.
     int DAT_00354d2c_mode() const { return DAT_00354d2c_mode_; }
     int uGpffffae34_selected() const { return uGpffffae34_selected_; }
+    // FUN_0022EAD0 writes the row too, sending the battle pause to the Equip
+    // screen as row 6.
+    void setUGpffffae34_selected(int row) { uGpffffae34_selected_ = row; }
     const std::string &label(int index) const { return labels_[static_cast<std::size_t>(index)]; }
     bool available(int index) const
     {

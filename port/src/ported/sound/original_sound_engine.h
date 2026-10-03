@@ -249,6 +249,9 @@ namespace orphen::ported::sound
     }
 
     bool slotPlaying(std::size_t slot) const;
+    // FUN_00206238 and FUN_002061F8: a ramp in flight, and the fader (+0xB4).
+    bool slotRamping(std::size_t slot) const;
+    int slotFader(std::size_t slot) const;
     bool slotHasSequence(std::size_t slot) const;
     const SequencePlayer &musicSlot(std::size_t slot) const { return musicSlots_[slot]; }
 
@@ -332,7 +335,7 @@ namespace orphen::ported::sound
     std::array<float, 3> lastSource_{};
     std::array<float, 3> lastListener_{};
 
-    std::mutex mixLock_;
+    mutable std::mutex mixLock_;
     std::vector<KeyOn> pending_;
     // 22 is the pool FUN_002057c8 polls before it starts a cue.
     std::array<Voice, 22> voices_{};

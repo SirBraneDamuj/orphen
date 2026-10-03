@@ -145,6 +145,8 @@ namespace orphen::ported::sound
     // retail data; if it does, the parser and the format have diverged.
     bool desynced() const { return desynced_; }
     int fader() const { return static_cast<int>(fader_); }
+    // FUN_00206238: a ramp is in flight (the state byte's 3 or 4).
+    bool ramping() const { return ramping_; }
     // Still making sound: either running, or holding voices through a release
     // after the last event. Rendering only while `playing_` would cut the tail
     // off every piece.

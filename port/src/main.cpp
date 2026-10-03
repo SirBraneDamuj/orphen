@@ -79,6 +79,8 @@ namespace
                  "  --hold-right    <first>-<last>   so a range is one step: Left and\n"
                  "                  Right walk the enemies one at a time and Up and\n"
                  "                  Down jump half the table across.\n"
+                 "  --hold-start    <first>-<last>   hold Start the same way; in the\n"
+                 "                  field a press pauses and the next one resumes.\n"
                  "  --spell-power-scale <f>\n"
                  "                  multiply the player's spell power by <f> on the\n"
                  "                  way into the party record. A debug cheat for\n"
@@ -896,7 +898,8 @@ namespace
             {"--hold-triangle", 0}, {"--hold-circle", 1},
             {"--hold-cross", 2},    {"--hold-square", 3},
             {"--hold-up", 4},       {"--hold-right", 5},
-            {"--hold-down", 6},     {"--hold-left", 7}};
+            {"--hold-down", 6},     {"--hold-left", 7},
+            {"--hold-start", 8}};
         bool matched = false;
         for (const auto &entry : kHoldFlags)
         {
@@ -1209,9 +1212,9 @@ int main(int argc, char **argv)
         // for the whole inclusive range, pressed only on its first frame, which
         // is exactly what FUN_002462c8's press-then-release pair reads.
         {
-          constexpr std::uint16_t kHoldBits[8] = {0x0010, 0x0020, 0x0040, 0x0080,
-                                                  0x1000, 0x2000, 0x4000, 0x8000};
-          for (int index = 0; index < 8; ++index)
+          constexpr std::uint16_t kHoldBits[9] = {0x0010, 0x0020, 0x0040, 0x0080,
+                                                  0x1000, 0x2000, 0x4000, 0x8000, 0x0800};
+          for (int index = 0; index < 9; ++index)
           {
             for (const auto &range : config.holdFaceButtons[index])
             {
@@ -1574,9 +1577,9 @@ int main(int argc, char **argv)
       // button, so a screenshot "during a guard" was of a character standing
       // still.
       {
-        constexpr std::uint16_t kHoldBits[8] = {0x0010, 0x0020, 0x0040, 0x0080,
-                                                0x1000, 0x2000, 0x4000, 0x8000};
-        for (int index = 0; index < 8; ++index)
+        constexpr std::uint16_t kHoldBits[9] = {0x0010, 0x0020, 0x0040, 0x0080,
+                                                0x1000, 0x2000, 0x4000, 0x8000, 0x0800};
+        for (int index = 0; index < 9; ++index)
         {
           for (const auto &range : config.holdFaceButtons[index])
           {

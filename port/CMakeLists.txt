@@ -158,6 +158,7 @@ target_sources(orphen_port
         src/ported/scene/equip_screen.cpp
         src/ported/scene/equip_screen.h
         src/ported/scene/field_menu.cpp
+        src/ported/scene/battle_pause.cpp
         src/ported/scene/save_prompt.cpp
         src/ported/scene/field_menu.h
         src/ported/scene/title_screen.h

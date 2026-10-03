@@ -310,6 +310,26 @@ namespace orphen::ported::sound
     return slot < kMusicSlotCount && musicSlots_[slot].playing();
   }
 
+  bool SoundEngine::slotRamping(std::size_t slot) const
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return false;
+    }
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    return musicSlots_[slot].ramping();
+  }
+
+  int SoundEngine::slotFader(std::size_t slot) const
+  {
+    if (slot >= kMusicSlotCount)
+    {
+      return 0;
+    }
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    return musicSlots_[slot].fader();
+  }
+
   bool SoundEngine::slotHasSequence(std::size_t slot) const
   {
     return slot < kMusicSlotCount && musicSlots_[slot].hasSequence();

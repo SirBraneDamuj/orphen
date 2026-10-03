@@ -14,6 +14,8 @@
 #include "ported/scene/area_map.h"
 #include "ported/scene/equip_screen.h"
 #include "ported/scene/field_menu.h"
+#include "ported/scene/field_pause.h"
+#include "ported/scene/battle_pause.h"
 #include "ported/scene/save_prompt.h"
 #include "ported/sound/original_sound_engine.h"
 #include "ported/sound/original_voice_index.h"
@@ -318,7 +320,7 @@ namespace orphen::port
     // Four face buttons, then the four D-pad directions -- the target cycler
     // reads the pad's newly-pressed word, so a "hold" is one step at the start
     // of the range, which is exactly one cycle.
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[8];
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[9];
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -915,6 +917,36 @@ namespace orphen::port
     // FUN_00231A98's seven labels and FUN_00231C50's caption, out of SCR.BIN
     // resource 1. They are plain NUL-terminated ASCII, not dialogue streams.
     std::string FUN_0025b9e8_text(std::size_t messageIndex) const;
+
+    // --- the field pause, game mode 2 -------------------------------------
+    // See ported/scene/field_pause.h. Start through the same FUN_00224FF0
+    // gate raises it; FUN_00224320 is the paused frame and ends it.
+    //
+    // FUN_00224FF0:12-49, the guards every branch of the gate shares.
+    bool FUN_00224ff0_shared_guards_pass() const;
+    // FUN_00224FF0:122-152, Start in the field. False when it did nothing.
+    bool FUN_00224ff0_pause(const InputSnapshot &input);
+    // FUN_00224FF0:84-99 in mode 2, Start's half of the unpause: the music
+    // back up and DAT_00354E96 cleared. False, doing nothing, when the shared
+    // guards close the gate or `pressed` has no Start in it.
+    bool FUN_00224ff0_unpause(std::uint16_t pressed);
+    // FUN_00224320. True on the frame Start ends the pause, which then runs
+    // FUN_00224218's FUN_002261E0 and effect pools like a field frame.
+    bool FUN_00224320_step_pause(const InputSnapshot &input, std::uint32_t frameTicks);
+    // 0x00224268, mode 1: the battle pause's panel, then mode 2. The caller
+    // runs FUN_00224218's tail after it.
+    void FUN_00224268_open_battle_pause();
+    // FUN_00225340, the battle pause's step, from inside FUN_00224320.
+    void FUN_00225340_step_battle_pause(const InputSnapshot &input, std::uint32_t frameTicks);
+    orphen::ported::scene::BattlePause battlePause_;
+    // gp-0x43A8: music slots 0 and 1's faders from the moment of the pause, or
+    // -1 for a slot that was not ducked.
+    std::array<int, 2> pausedMusicFaders_{-1, -1};
+    // FUN_00224320's caption, for buildDialogueSprites.
+    bool pauseDrawn_ = false;
+    // cGpffffb6d0 (DAT_00355640), raised by FUN_00251ED8's death branch and
+    // cleared by FUN_00251CD0 at scene load. It closes the whole gate.
+    bool cGpffffb6d0_deathLatch_ = false;
 
     // --- the save prompt, game modes 0x10 and 0x11 ------------------------
     // See ported/scene/save_prompt.h. Opcode 0xE1 raises it; the handlers are

@@ -5758,6 +5758,78 @@ for why: the D-pad does not walk the character on hardware, and sharing the
 nibble with WASD made every step forward open the menu. `[` and `]` cycle the
 map, which is what Left and Right arrow used to do.
 
+## The pause, game mode 2
+
+Start in the field (Tab on the keyboard, `--hold-start` from the command line)
+goes through the same gate as the menu, `FUN_00224FF0`, and raises mode 2
+(`src/ported/scene/field_pause.h`):
+
+- **Guards.** Only the first half of the gate's guards apply to Start. Those
+  are event flag `0x508`, the cinematic bars, a scene change, anything in pool
+  slot 5, sections 0/`0xC`/`0xD`, and the death latch `cGpffffb6d0`, which the
+  port now raises in the death branch and clears at scene load. The menu's own
+  guards are tested after Start, so **Start pauses mid-action and with a
+  dialogue up**, where Up does nothing. Start or Cross takes the pause branch,
+  so Up and Cross on one frame open nothing.
+- **Music.** Slots 0 and 1, if playing and not already ramping, save their
+  fader and ramp to 500 (half) at speed `0x19`. Start again ramps them back
+  to the saved value.
+- **The paused frame**, `FUN_00224320`: the `0x50` black dim, message `0x25`
+  ("Paused") centred at y `0xB`, the bars and the draw tail. There is no
+  `FUN_002192C0`, so unlike the field menu the effect pools stop too, and no
+  `FUN_00237FC0`, so the dialogue window is not drawn.
+- **Resume.** The handler calls `FUN_00224FF0` first. Start with the guards
+  passing restores the music, zeroes `DAT_00354E96`, and runs `FUN_002241D8`
+  (mode 0 and a cleared action ring) and `FUN_00224218`, so that frame has
+  `FUN_002261E0` and the effect pools in it.
+
+### The battle pause, modes 1 then 2
+
+In a section-14 scene Start raises **mode 1** instead (`0x00224268`, not in
+`src/`; `src/ported/scene/battle_pause.*`). That frame:
+
+- cuts a speaking spell line (`FUN_00206CE0`)
+- sets up a two-line panel at `0x005609C0`
+- sets mode 2
+- runs `FUN_00224218`'s tail
+
+From then on mode 2 draws `FUN_00225340` in place of the "Paused" caption:
+
+- **The lines** are messages `0x59`/`0x5A`, "Return to Battle" and "Change
+  Equipment and Return to Battle". Battle entries `0x39`..`0x3F` use
+  `0x5B`/`0x5C`, the Battle Training pair. Each line is centred, at y 0 and
+  `-0x16`, with message `0x29`'s "Press ✕ to Select △ to Cancel" at `-0xA0`.
+- **The cursor.** Up or Down flips it with cue 1. The selected line's alpha
+  ramps to `0x80` and the other's to `0x20` (`FUN_002318C0`).
+- **Start, Triangle or Cross** play cue 2, and that frame draws nothing.
+  - Line 0, or Triangle, resumes. Start is forced into the pressed word and
+    `FUN_00224FF0` runs, so the music comes back the same way. Unlike Start's
+    own resume, this one does not run `FUN_00224218`.
+  - Line 1 in an ordinary battle is `FUN_0022EAD0`: the Equip screen at
+    state 1, row 6, with lead `+0x04` bit `0x100` set. The music stays
+    ducked. The Equip screen already leaves a battle by reloading it, so
+    Triangle out of it comes back to a fresh `s14_e012`.
+  - Line 1 in Battle Training loads `s12_e010` with request `0x2003`.
+
+Start itself still resumes from the panel, because `FUN_00224320` tests it
+before `FUN_00225340` runs. Battle entry `0x1F` (`s14_e031`, the spell-earn
+scene) cannot be paused at all.
+
+Checked in captures of `s14_e012`: the panel; resume by Triangle and by
+Start; Down then Cross into the Equip screen; and Triangle back out into the
+reloaded battle. The Battle Training branch is untested.
+
+Not ported:
+
+- **`FUN_00225C20`**, which zeroes `+0x13C` on live slots. The menu modes
+  leave it out too.
+- **The play clock** (`uGpffffb6c8`), which mode 2 does not advance. The port
+  has no play clock.
+
+The dim alpha goes through the same `FUN_0025D0E0` path as the save prompt's
+`0x50`, which draws it as `0x50/0xFF`. Whether the GS reads that byte against
+`0x80` instead has not been checked on hardware.
+
 ## The Equip screen, and how spells are learned
 
 ### Spells are items

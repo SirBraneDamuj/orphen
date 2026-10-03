@@ -262,6 +262,9 @@ namespace orphen::port
     leadPlayer_.setDeathHook(
         [this]
         {
+          // FUN_00251ED8:127, cGpffffb6d0. Nothing pauses or opens a menu once
+          // the lead is dead.
+          cGpffffb6d0_deathLatch_ = true;
           // FUN_00265EC0(0x58CD70): the field HP gauge goes with the player.
           orphen::ported::entity::FUN_00265ec0_destroy_entity(
               orphen::ported::entity::kDAT_0058cd70_fieldHpGaugeSlot, entityPool_,
@@ -4272,6 +4275,9 @@ namespace orphen::port
     FUN_0032536c_scene_module(0);
     FUN_0032536c_scene_module(1);
     battleParty_.FUN_0022a418_propagate_loadout(DAT_003555d3_groupEScene_);
+    // FUN_00251CD0, the player controller's reset under FUN_0022A418: among
+    // its dozen clears, the death latch that closes FUN_00224FF0.
+    cGpffffb6d0_deathLatch_ = false;
 
     // Models bind before the script runs, so the spawn path can report a
     // missing model at the moment it spawns the entity that wanted it.
@@ -9144,9 +9150,26 @@ namespace orphen::port
     {
       savePrompt_.clearDrawn();
     }
+    // And slot 2, the field pause. FUN_00224320 is the draw tail alone, less
+    // even than the menu: no FUN_002192C0, so the effect pools stop as well.
+    const bool pauseFrame =
+        DAT_00354d2c_gameMode_ == static_cast<std::uint32_t>(orphen::ported::scene::kGameModePause);
+    if (!pauseFrame)
+    {
+      pauseDrawn_ = false;
+      battlePause_.clearDrawn();
+    }
+    // And slot 1, the battle pause's way in: 0x00224268 sets its panel up,
+    // raises mode 2 and ends in FUN_00224218.
+    const bool pauseMenuOpenFrame =
+        DAT_00354d2c_gameMode_ == static_cast<std::uint32_t>(orphen::ported::scene::kGameModePauseMenu);
     // Everything below that either handler leaves out, which is the whole
     // simulation half of the frame.
-    const bool uiFrame = menuFrame || mapFrame || equipFrame || saveFrame;
+    const bool uiFrame = menuFrame || mapFrame || equipFrame || saveFrame || pauseFrame || pauseMenuOpenFrame;
+    // A pause frame that ends in FUN_00224218 -- mode 1's, and the one Start
+    // resumes on: FUN_002261E0 and the effect pools run, as under the save
+    // prompt.
+    bool pauseFieldTail = false;
 
     auto *loadedMap = mapViewer_.loadedMap();
     if (loadedMap != nullptr)
@@ -9334,6 +9357,22 @@ namespace orphen::port
           DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(fieldMenu_.DAT_00354d2c_mode());
         }
       }
+      else if (pauseFrame)
+      {
+        // FUN_00224320. Neither player controller runs.
+        pauseFieldTail = FUN_00224320_step_pause(input, frameTicks);
+        if (pauseFieldTail)
+        {
+          leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
+        }
+      }
+      else if (pauseMenuOpenFrame)
+      {
+        // 0x00224268, then its FUN_00224218 tail.
+        FUN_00224268_open_battle_pause();
+        pauseFieldTail = true;
+        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
+      }
       else if (saveFrame)
       {
         // 0x00224BA8 / 0x00224E68 ahead of their FUN_00224218 tail. Neither
@@ -9493,7 +9532,8 @@ namespace orphen::port
       // pools keep stepping while the panel is up even though nothing else
       // does -- rain outside a window goes on falling. FUN_002D3218, the
       // impact-dust pool above it, is *not* in either handler.
-      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame || saveFrame)
+      if (DAT_00354d2c_gameMode_ == orphen::ported::player::kGameModeField || menuFrame || saveFrame ||
+          pauseFieldTail)
       {
         if (!uiFrame)
         {
@@ -9677,7 +9717,7 @@ namespace orphen::port
       // Neither menu handler runs it: both jump from FUN_00208450 straight to
       // FUN_00208EE8, so a body left mid-fall stays where it is. The Equip
       // screen's handler does run it, second, right after FUN_0022E910.
-      if (!uiFrame || equipFrame || saveFrame)
+      if (!uiFrame || equipFrame || saveFrame || pauseFieldTail)
       {
         orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
       }
@@ -9714,7 +9754,7 @@ namespace orphen::port
       // the lead's idle loop stopped too. Mode 3 calls it, and on hardware
       // Orphen breathes on the Equip screen. The publish below it is
       // FUN_0020C5A8, which every handler calls.
-      if (!uiFrame || equipFrame || saveFrame)
+      if (!uiFrame || equipFrame || saveFrame || pauseFieldTail)
       {
         advanceEntityAnimations(frameTicks);
       }
@@ -10260,19 +10300,6 @@ namespace orphen::port
   // behind it, so the mask is the unconditional 0xFFFF the entry-state scene
   // reads back on hardware, and the one conditional item is noted rather than
   // guessed at.
-  // FUN_00224FF0:88-98, the gate that opens the panel. The guards above the
-  // press test that the port can answer, in the original's order:
-  //
-  //   iGpffffb0e4  the cinematic bars      (DAT_00355054)
-  //   iGpffffb27c  a scene change in flight (DAT_003551EC)
-  //   cGpffffb663  battle mode -- there is no field menu in a battle
-  //   DAT_0058bf10 the lead's state, +0x60: no menu mid-action
-  //   FUN_00237c60 a dialogue or item window is up
-  //
-  // The ones it cannot: sGpffffb0ec and cGpffffb6d0, two flags nothing else in
-  // the port reads; cGpffffb656, the attract-mode demo; event flag 0x508; and
-  // iGpffffb284 == 0 / 0xC / 0xD, which keeps the panel off the boot and title
-  // scenes -- the port's own title path never reaches this code.
   // PTR_FUN_00318A88[0x10] and [0x11]: the prompt's step or the wait's, and
   // the FUN_0025D0E0(0x50000000, 1) dim both put ahead of FUN_00224218.
   void PortRuntime::FUN_00224ba8_step_save_prompt(const InputSnapshot &input, std::uint32_t frameTicks)
@@ -10353,6 +10380,209 @@ namespace orphen::port
     DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(savePrompt_.DAT_00354d2c_mode());
   }
 
+  // FUN_00224FF0, the field frame's gate: Start pauses, Up or Down opens the
+  // field menu, Left the area map. See ported/scene/field_pause.h for how the
+  // guards split between the three. The menu's own, in the original's order:
+  //
+  //   cGpffffb663  battle mode -- there is no field menu in a battle
+  //   DAT_0058bf10 the lead's state, +0x60: no menu mid-action
+  //   FUN_00237c60 a dialogue or item window is up
+  bool PortRuntime::FUN_00224ff0_shared_guards_pass() const
+  {
+    namespace scene = orphen::ported::scene;
+    // :11-49, in order. sGpffffb0ec and cGpffffb656, the attract demo, are not
+    // modelled; nothing in the port sets either.
+    if (sceneScript_.state().FUN_00266368_eventFlag(scene::kPauseBlockedEventFlag))
+    {
+      return false;
+    }
+    if (DAT_00355054_letterbox_.DAT_00355054_mode() != 0 || DAT_003551ec_sceneRequest_ != 0)
+    {
+      return false;
+    }
+    // DAT_0058C7E8, read raw: whatever stands in pool slot 5.
+    if (entityPool_.slot(scene::kPauseBlockingSlot).typeId00 > 0)
+    {
+      return false;
+    }
+    if (DAT_003555d3_groupEScene_)
+    {
+      if (DAT_003551f8_groupEntry_ == scene::kPauseBlockedBattleEntry)
+      {
+        return false;
+      }
+    }
+    else if (DAT_003551f4_sceneSection_ == scene::kPauseBlockedSectionBoot ||
+             DAT_003551f4_sceneSection_ == scene::kPauseBlockedSectionTitle ||
+             DAT_003551f4_sceneSection_ == scene::kPauseBlockedSectionD)
+    {
+      return false;
+    }
+    return !cGpffffb6d0_deathLatch_;
+  }
+
+  bool PortRuntime::FUN_00224ff0_pause(const InputSnapshot &input)
+  {
+    namespace scene = orphen::ported::scene;
+    // :116-121 is Cross ending the attract demo; outside it, only Start.
+    if ((input.rawPressedPad & scene::kPausePadStart) == 0)
+    {
+      return false;
+    }
+    // :122-142. A slot that is stopped or already ramping is left alone and
+    // remembered as -1.
+    for (std::size_t slot = 0; slot < pausedMusicFaders_.size(); ++slot)
+    {
+      if (!soundEngine_.slotPlaying(slot) || soundEngine_.slotRamping(slot))
+      {
+        pausedMusicFaders_[slot] = -1;
+        continue;
+      }
+      pausedMusicFaders_[slot] = soundEngine_.slotFader(slot);
+      soundEngine_.FUN_00206260_ramp_down_slot(slot, scene::kPauseMusicSpeed, scene::kPauseMusicFader);
+    }
+    // :143-148. A battle (or the debug byte, which the port never has up)
+    // goes by way of mode 1 and its panel.
+    DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(
+        DAT_003555d3_groupEScene_ ? scene::kGameModePauseMenu : scene::kGameModePause);
+    soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(scene::kPauseCue));
+    std::cout << "[pause] paused at frame " << frameCount_ << (DAT_003555d3_groupEScene_ ? " (battle)" : "")
+              << '\n';
+    return true;
+  }
+
+  bool PortRuntime::FUN_00224ff0_unpause(std::uint16_t pressed)
+  {
+    namespace scene = orphen::ported::scene;
+    // Square with the debug byte up would also flip bGpffffb66c; there is no
+    // debug byte.
+    if (!FUN_00224ff0_shared_guards_pass() || (pressed & scene::kPausePadStart) == 0)
+    {
+      return false;
+    }
+    for (std::size_t slot = 0; slot < pausedMusicFaders_.size(); ++slot)
+    {
+      if (pausedMusicFaders_[slot] >= 0)
+      {
+        soundEngine_.FUN_002063c8_ramp_up_slot(slot, scene::kPauseMusicSpeed, pausedMusicFaders_[slot]);
+      }
+    }
+    // uGpffffaf26, the target-cycle display timer.
+    battleParty_.setDAT_00354e96_displayTimer(0);
+    return true;
+  }
+
+  bool PortRuntime::FUN_00224320_step_pause(const InputSnapshot &input, std::uint32_t frameTicks)
+  {
+    namespace scene = orphen::ported::scene;
+    // :11-15. DAT_003555C7 is the debug byte, never up in the port.
+    if (FUN_00224ff0_unpause(static_cast<std::uint16_t>(input.rawPressedPad)))
+    {
+      // FUN_002241D8: mode 0 and FUN_0023BAE8, so the Start is not left in the
+      // action ring. FUN_00224218 is the caller's.
+      DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+      DAT_00342a70_mappedActions_.reset();
+      pauseDrawn_ = false;
+      battlePause_.clearDrawn();
+      std::cout << "[pause] resumed at frame " << frameCount_ << '\n';
+      return true;
+    }
+    // :16. The bars and the draw tail are the render's.
+    DAT_00571dc0_screenFade_.FUN_0025d0e0_set_overlay(scene::kPauseDimColour, scene::kPauseDimAlpha);
+    if (!DAT_003555d3_groupEScene_)
+    {
+      pauseDrawn_ = true;
+    }
+    else
+    {
+      FUN_00225340_step_battle_pause(input, frameTicks);
+    }
+    return false;
+  }
+
+  void PortRuntime::FUN_00224268_open_battle_pause()
+  {
+    // FUN_00206CE0: a spell line still speaking is cut. The original marks
+    // DAT_00356788 0xFF and the IOP's key-off clears it; the port clears it at
+    // once.
+    if (DAT_00356788_voiceHoldTicks_ != 0)
+    {
+      DAT_00356788_voiceHoldTicks_ = 0;
+      soundEngine_.FUN_00206a48_stop_voice_line();
+    }
+    battlePause_.FUN_00224268_open(DAT_003555d3_groupEScene_, DAT_003551f8_groupEntry_, false);
+    DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(orphen::ported::scene::kGameModePause);
+  }
+
+  void PortRuntime::FUN_00225340_step_battle_pause(const InputSnapshot &input, std::uint32_t frameTicks)
+  {
+    namespace scene = orphen::ported::scene;
+    scene::FieldMenuPad pad;
+    pad.uGpffffb684_held = static_cast<std::uint16_t>(input.rawHeldPad);
+    pad.uGpffffb686_pressed = static_cast<std::uint16_t>(input.rawPressedPad);
+    pad.uGpffffb68e_stickDirection = static_cast<std::uint16_t>(input.rawStickDirection);
+    const scene::BattlePauseStep step = battlePause_.FUN_00225340_step(pad, frameTicks, fieldMenu_);
+    if (step.cue >= 0)
+    {
+      soundEngine_.FUN_00267d38_play_flat(static_cast<std::uint16_t>(step.cue));
+    }
+
+    // FUN_002241D8, which every action starts or ends with.
+    const auto close = [this] {
+      DAT_00354d2c_gameMode_ = orphen::ported::player::kGameModeField;
+      DAT_00342a70_mappedActions_.reset();
+    };
+    switch (step.action)
+    {
+    case scene::BattlePauseStep::Action::None:
+      return;
+    case scene::BattlePauseStep::Action::Resume:
+      // :28-35. Start forced into the pressed word, so FUN_00224FF0 takes the
+      // unpause branch -- if its guards let it.
+      FUN_00224ff0_unpause(scene::kPausePadStart);
+      close();
+      battleParty_.setDAT_00354e96_displayTimer(0);
+      std::cout << "[pause] battle pause: resumed at frame " << frameCount_ << '\n';
+      return;
+    case scene::BattlePauseStep::Action::Close:
+      close();
+      DAT_00355054_letterbox_.reset();
+      return;
+    case scene::BattlePauseStep::Action::ChangeEquipment:
+    {
+      close();
+      DAT_00355054_letterbox_.reset();
+      // FUN_0022EAD0: the Equip screen, entered at state 1 with row 6 chosen
+      // and the lead's physics off (+0x04 bit 0x100). The music stays ducked:
+      // the screen leaves a battle by reloading it.
+      DAT_00354d2c_gameMode_ = static_cast<std::uint32_t>(scene::kGameModeEquipScreen);
+      fieldMenu_.setUGpffffae34_selected(scene::kFieldMenuEquipItem);
+      auto &lead = entityPool_.leadPlayer();
+      lead.halfword04 = static_cast<std::uint16_t>(lead.halfword04 | 0x100u);
+      DAT_00354da0_equipState_ = scene::kEquipStateEnter;
+      std::cout << "[pause] battle pause: Change Equipment at frame " << frameCount_ << '\n';
+      return;
+    }
+    case scene::BattlePauseStep::Action::QuitToTitle:
+      close();
+      DAT_00355054_letterbox_.reset();
+      if (step.clearReturnedFlag)
+      {
+        sceneScript_.state().FUN_002663d8_clearEventFlag(scene::kReturnedFromGameFlag);
+      }
+      // LAB_00225414. FUN_00237B38(0) points the window at no stream, which
+      // is the port's close(); its event-flag writes are not modelled.
+      DAT_003555d2_movieRequest_ = -1;
+      itemWindow_.close();
+      DAT_003551ec_sceneRequest_ = scene::kBattlePauseQuitRequest;
+      DAT_003551f4_sceneSection_ = scene::kTitleSceneSection;
+      DAT_003551f0_sceneEntry_ = scene::kTitleSceneEntry;
+      DAT_00571dc0_screenFade_.FUN_0025d1c0_arm(true, 0x0C, 0);
+      std::cout << "[pause] battle pause: quit to s12_e010 at frame " << frameCount_ << '\n';
+      return;
+    }
+  }
+
   void PortRuntime::FUN_00224ff0_field_menu_gate(const InputSnapshot &input)
   {
     // 0x5000: Up or Down newly pressed, and 0x8000 Left. Not the stick --
@@ -10360,7 +10590,10 @@ namespace orphen::port
     // folding in of uGpffffb68e, so the movement stick opens neither.
     constexpr std::uint16_t kPadUpOrDown = 0x5000;
     constexpr std::uint16_t kPadLeft = 0x8000;
-    if ((input.rawPressedPad & (kPadUpOrDown | kPadLeft)) == 0)
+    // :84, `uGpffffb686 & 0x840`: Start or Cross takes the pause branch, and
+    // a Cross there does nothing -- so Up and Cross on one frame open nothing.
+    constexpr std::uint16_t kPadStartOrCross = 0x0840;
+    if ((input.rawPressedPad & (kPadUpOrDown | kPadLeft | kPadStartOrCross)) == 0)
     {
       return;
     }
@@ -10368,10 +10601,17 @@ namespace orphen::port
     {
       return;
     }
-    if (DAT_00355054_letterbox_.DAT_00355054_mode() != 0 || DAT_003551ec_sceneRequest_ != 0)
+    if (!FUN_00224ff0_shared_guards_pass())
     {
       return;
     }
+    if ((input.rawPressedPad & kPadStartOrCross) != 0)
+    {
+      FUN_00224ff0_pause(input);
+      return;
+    }
+
+    // :85-95, the guards only the menu and the map have.
     if (battleParty_.battleActive(DAT_003555d3_groupEScene_) || battleParty_.battleRunning())
     {
       return;
@@ -10736,6 +10976,33 @@ namespace orphen::port
     {
       return fieldMenu_.FUN_00231c50_layout(
           FUN_0025b9e8_text(orphen::ported::scene::kFieldMenuCaptionMessage), dialogueFont_);
+    }
+
+    // FUN_00224320:17-19, the whole of what mode 2 draws over the world:
+    // message 0x25 centred on x 0, at y 0xB. The dialogue windows are not
+    // drawn, since the handler has no FUN_00237FC0.
+    // FUN_00225340's three lines, the battle pause's in place of that.
+    if (battlePause_.drawn())
+    {
+      namespace scene = orphen::ported::scene;
+      scene::BattlePauseText strings;
+      strings.line0 = FUN_0025b9e8_text(static_cast<std::size_t>(battlePause_.DAT_005609c0_line0Message()));
+      strings.line1 = FUN_0025b9e8_text(static_cast<std::size_t>(battlePause_.DAT_005609c2_line1Message()));
+      strings.caption = FUN_0025b9e8_text(scene::kBattlePauseCaptionMessage);
+      return battlePause_.layout(strings, dialogueFont_);
+    }
+    if (pauseDrawn_)
+    {
+      namespace scene = orphen::ported::scene;
+      const std::string caption = FUN_0025b9e8_text(scene::kPauseCaptionMessage);
+      if (caption.empty())
+      {
+        return {};
+      }
+      const int width = text::FUN_00238e68_measure(caption, dialogueFont_, scene::kPauseCaptionCellWidth);
+      return text::FUN_00238608_layout(-width / 2, scene::kPauseCaptionY, caption, text::kColorDefault,
+                                       scene::kPauseCaptionCellWidth, scene::kPauseCaptionCellHeight,
+                                       dialogueFont_);
     }
 
     // FUN_00224418:19-21, the whole of what mode 12 draws over the world:
