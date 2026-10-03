@@ -5030,6 +5030,11 @@ namespace orphen::harness
     // (+0x08 bit 0x40), then that bucket's sprites. Within 0x1005 the models
     // go first because FUN_0020C5A8 submits after FUN_0022E910 and a bucket is
     // drawn head-first.
+    //
+    // Not from the fly camera. These, the pips and the text below are the
+    // game's screen UI, which the inset already shows; drawn over the fly view
+    // they float in front of it, the Equip ring included.
+    if (!flying)
     {
       constexpr int kOverlay = orphen::ported::render::entityDraw::kOverlayBucket;
       const bool anyOverlayModel =
@@ -5145,7 +5150,7 @@ namespace orphen::harness
     // FUN_0022EB00's pips, FUN_00207DE8(0x1006): the smear's bucket, so under
     // the letterbox bars and the fade (0x1007) and every glyph of text
     // (0x1009). The smear is submitted later in the frame and so drawn first.
-    if (!hudQuads_.empty())
+    if (!hudQuads_.empty() && !flying)
     {
       drawHudQuads(framebufferWidth, framebufferHeight);
     }
@@ -5230,7 +5235,7 @@ namespace orphen::harness
       glMatrixMode(GL_MODELVIEW);
     }
 
-    if (!dialogueSprites_.empty())
+    if (!dialogueSprites_.empty() && !flying)
     {
       drawDialogueSprites(framebufferWidth, framebufferHeight,
                           orphen::ported::render::entityDraw::kOverlayBucket + 1, 0x7FFFFFFF);

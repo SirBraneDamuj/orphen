@@ -9491,8 +9491,12 @@ front of it.
 - Fog, the smear, the letterbox bars, the fade and the game-over underlay are
   left out: they belong to the game's picture, and the fog is measured from the
   game camera's eye. Billboards are put back in the world through the game
-  camera's inverse view, because their quads arrive in its view space. Text and
-  HUD sprites still draw in their 4:3 box.
+  camera's inverse view, because their quads arrive in its view space. The
+  game's screen UI is left out too and shows only in the inset: text, HUD
+  sprites and pips, the field menu, and the Equip screen's bars and the models
+  in the overlay bucket (`0x1005`, its spell icons). The Equip ring is an
+  ordinary entity in the world and still draws. The original's debug text
+  (`H`) also still draws, since the inset's picture is copied before it.
 - `F4` toggles the inset, on by default: the game camera's own frame, a third
   of the window wide in the top-right corner. It is not a second camera. While
   it is up, `render()` runs the ordinary game frame first, whose last step
