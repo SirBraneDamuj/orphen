@@ -3895,7 +3895,8 @@ namespace orphen::harness
               item("SNAP TO GAME CAMERA", "F2", MenuCommand::SnapToGame)}},
         Menu{"PLAYER",
              {check("PLAYER PARAMS", "", MenuCommand::TogglePlayerParams, playerParamsVisible_),
-              check("INVENTORY", "", MenuCommand::ToggleInventory, inventoryVisible_),
+              check("SPELLS", "", MenuCommand::ToggleInventory, inventoryVisible_),
+              check("ITEMS", "", MenuCommand::ToggleItems, itemsVisible_),
               item("HEAL", "0", MenuCommand::Heal), item("HIT: SCRATCH", "1", MenuCommand::HitScratch),
               item("HIT: HIT", "2", MenuCommand::HitHit), item("HIT: KNOCKBACK", "3", MenuCommand::HitKnockback),
               item("HIT: FLATTEN", "4", MenuCommand::HitFlatten), item("HIT: LETHAL", "5", MenuCommand::HitLethal)}},
@@ -3931,6 +3932,9 @@ namespace orphen::harness
       break;
     case MenuCommand::ToggleInventory:
       inventoryVisible_ = !inventoryVisible_;
+      break;
+    case MenuCommand::ToggleItems:
+      itemsVisible_ = !itemsVisible_;
       break;
     case MenuCommand::Heal:
     {
@@ -4027,7 +4031,30 @@ namespace orphen::harness
 
   bool &MapViewer::toolPanelVisible(ToolPanelKind kind)
   {
-    return kind == ToolPanelKind::PlayerParams ? playerParamsVisible_ : inventoryVisible_;
+    switch (kind)
+    {
+    case ToolPanelKind::PlayerParams:
+      return playerParamsVisible_;
+    case ToolPanelKind::Inventory:
+      return inventoryVisible_;
+    case ToolPanelKind::Items:
+      break;
+    }
+    return itemsVisible_;
+  }
+
+  bool MapViewer::toolPanelVisible(ToolPanelKind kind) const
+  {
+    switch (kind)
+    {
+    case ToolPanelKind::PlayerParams:
+      return playerParamsVisible_;
+    case ToolPanelKind::Inventory:
+      return inventoryVisible_;
+    case ToolPanelKind::Items:
+      break;
+    }
+    return itemsVisible_;
   }
 
   std::vector<MapViewer::OpenToolPanel> MapViewer::toolPanels(int framebufferWidth, int framebufferHeight) const
@@ -4035,24 +4062,65 @@ namespace orphen::harness
     std::vector<OpenToolPanel> panels;
     const float scale = panel::scaleFor(framebufferHeight);
     const float screenWidth = static_cast<float>(framebufferWidth) / scale;
-    float top = static_cast<float>(panel::kMenuBarHeight + panel::kMargin);
-    const auto add = [&](ToolPanelKind kind, auto build) {
-      // Built once to measure it, then again centred.
-      const float width = build(0.0f).box().width;
-      ToolPanel built = build(std::max(static_cast<float>(panel::kMargin), (screenWidth - width) * 0.5f));
-      top += built.box().height + panel::kMargin;
-      panels.push_back(OpenToolPanel{kind, std::move(built)});
+    const float firstTop = static_cast<float>(panel::kMenuBarHeight + panel::kMargin);
+    const float bottom = static_cast<float>(framebufferHeight) / scale - panel::kMargin;
+    // Each open panel goes under the last one, or starts a new column when it
+    // would run off the bottom. Then the columns are centred as a group,
+    // between the tree and the game inset at the window sizes the harness
+    // usually runs at.
+    struct Placed
+    {
+      ToolPanelKind kind;
+      int column;
+      float top;
     };
-    // Down the middle of the view, between the tree and the game inset at the
-    // window sizes the harness usually runs at, in a fixed order.
-    if (playerParamsVisible_)
+    std::vector<Placed> placed;
+    std::vector<float> columnWidths;
+    float top = firstTop;
+    const auto build = [&](ToolPanelKind kind, float left, float at) {
+      switch (kind)
+      {
+      case ToolPanelKind::PlayerParams:
+        return buildPlayerParamsPanel(scale, left, at, playerParams_);
+      case ToolPanelKind::Inventory:
+        return buildInventoryPanel(scale, left, at, inventory_);
+      case ToolPanelKind::Items:
+        break;
+      }
+      return buildItemsPanel(scale, left, at, inventory_);
+    };
+    for (const ToolPanelKind kind : {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items})
     {
-      add(ToolPanelKind::PlayerParams,
-          [&](float left) { return buildPlayerParamsPanel(scale, left, top, playerParams_); });
+      if (!toolPanelVisible(kind))
+      {
+        continue;
+      }
+      const auto box = build(kind, 0.0f, 0.0f).box();
+      if (columnWidths.empty() || (top > firstTop && top + box.height > bottom))
+      {
+        columnWidths.push_back(0.0f);
+        top = firstTop;
+      }
+      columnWidths.back() = std::max(columnWidths.back(), box.width);
+      placed.push_back(Placed{kind, static_cast<int>(columnWidths.size()) - 1, top});
+      top += box.height + panel::kMargin;
     }
-    if (inventoryVisible_)
+
+    float groupWidth = 0.0f;
+    for (const float width : columnWidths)
     {
-      add(ToolPanelKind::Inventory, [&](float left) { return buildInventoryPanel(scale, left, top, inventory_); });
+      groupWidth += width + (groupWidth > 0.0f ? panel::kMargin : 0.0f);
+    }
+    std::vector<float> columnLefts;
+    float left = std::max(static_cast<float>(panel::kMargin), (screenWidth - groupWidth) * 0.5f);
+    for (const float width : columnWidths)
+    {
+      columnLefts.push_back(left);
+      left += width + panel::kMargin;
+    }
+    for (const auto &at : placed)
+    {
+      panels.push_back(OpenToolPanel{at.kind, build(at.kind, columnLefts[static_cast<std::size_t>(at.column)], at.top)});
     }
     return panels;
   }

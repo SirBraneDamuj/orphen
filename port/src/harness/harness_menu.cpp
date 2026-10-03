@@ -302,7 +302,7 @@ namespace orphen::harness
 
   ToolPanel buildInventoryPanel(float scale, float left, float top, const InventoryView &view)
   {
-    ToolPanel panel("INVENTORY", kInventoryColumns, scale, left, top);
+    ToolPanel panel("SPELLS", kInventoryColumns, scale, left, top);
     if (!view.available)
     {
       panel.text(0, "NO LEAD WITH A LOADOUT HERE", ToolPanel::Tone::Dim);
@@ -322,7 +322,7 @@ namespace orphen::harness
       panel.nextRow();
     }
 
-    panel.heading("SPELLS                             HELD");
+    panel.heading("SPELL                              HELD");
     for (const auto &item : view.items)
     {
       // Held or equipped is "learned"; neither is dim.
@@ -335,6 +335,30 @@ namespace orphen::harness
         panel.text(kItemSlotColumn, kSlotShortNames[static_cast<std::size_t>(item.equippedSlot)],
                    ToolPanel::Tone::Heading);
       }
+      panel.button(kItemLessColumn, "-", item.item * 2, item.count > 0);
+      panel.text(kItemCountColumn, rightAligned(item.count, 2), tone);
+      panel.button(kItemMoreColumn, "+", item.item * 2 + 1, item.count < 99);
+      panel.nextRow();
+    }
+    return panel;
+  }
+
+  ToolPanel buildItemsPanel(float scale, float left, float top, const InventoryView &view)
+  {
+    ToolPanel panel("ITEMS", kInventoryColumns, scale, left, top);
+    if (!view.available)
+    {
+      panel.text(0, "NO LEAD WITH A LOADOUT HERE", ToolPanel::Tone::Dim);
+      panel.nextRow();
+      return panel;
+    }
+
+    panel.heading("ITEM                               HELD");
+    for (const auto &item : view.fieldItems)
+    {
+      const auto tone = item.count > 0 ? ToolPanel::Tone::Body : ToolPanel::Tone::Dim;
+      panel.text(0, hexByte(item.item), ToolPanel::Tone::Dim);
+      panel.text(kItemNameColumn, item.name.substr(0, kItemNameWidth), tone);
       panel.button(kItemLessColumn, "-", item.item * 2, item.count > 0);
       panel.text(kItemCountColumn, rightAligned(item.count, 2), tone);
       panel.button(kItemMoreColumn, "+", item.item * 2 + 1, item.count < 99);
@@ -366,6 +390,11 @@ namespace orphen::harness
         request.item = buttonId / 2;
         request.delta = (buttonId & 1) != 0 ? 1 : -1;
       }
+      return request;
+    case ToolPanelKind::Items:
+      request.kind = HarnessRequest::Kind::AdjustItemCount;
+      request.item = buttonId / 2;
+      request.delta = (buttonId & 1) != 0 ? 1 : -1;
       return request;
     }
     return std::nullopt;

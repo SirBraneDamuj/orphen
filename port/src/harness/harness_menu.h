@@ -26,6 +26,7 @@ namespace orphen::harness
     SnapToGame,         // F2
     TogglePlayerParams,
     ToggleInventory,
+    ToggleItems,
     Heal,               // 0
     HitScratch,         // 1
     HitHit,             // 2
@@ -86,6 +87,7 @@ namespace orphen::harness
   {
     PlayerParams,
     Inventory,
+    Items,
   };
 
   // The Player Params panel: FUN_0026bc50's three rows, with a button for each
@@ -120,10 +122,14 @@ namespace orphen::harness
     // Whether each slot has anything it could be swapped for.
     std::array<bool, 3> canSwap{};
     std::vector<InventoryItemView> items;
+    // The Items panel: every item the Item screen could list for this lead
+    // (FUN_00230910's slot-3 filter, 0x80), held or not. Never equipped.
+    std::vector<InventoryItemView> fieldItems;
   };
 
   ToolPanel buildPlayerParamsPanel(float scale, float left, float top, const PlayerParamsView &view);
   ToolPanel buildInventoryPanel(float scale, float left, float top, const InventoryView &view);
+  ToolPanel buildItemsPanel(float scale, float left, float top, const InventoryView &view);
 
   // What a menu asks the runtime to do to the simulation. Applied between
   // steps, outside PortRuntime::update, so a --frames run never sees one.

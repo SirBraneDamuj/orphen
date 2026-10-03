@@ -1453,6 +1453,24 @@ namespace orphen::port
       view.items.push_back(std::move(row));
     }
     view.canSwap.fill(anyHeld);
+
+    // The Item screen's ring (FUN_00230910 as slot 3): the same walk with 0x80
+    // in place of 0x100, and again without the count test.
+    const std::uint16_t itemMask = static_cast<std::uint16_t>((mask & ~scene::kItemFlagSpellSlot) |
+                                                              scene::kItemFlagSlot3);
+    for (int item = 1; item < 0x80; ++item)
+    {
+      const auto record = itemDatabase_.FUN_00229688_record(item);
+      if (!record || (record->ids[0] & itemMask) != itemMask)
+      {
+        continue;
+      }
+      orphen::harness::InventoryItemView row;
+      row.item = item;
+      row.name = itemDatabase_.FUN_00229688_name(item);
+      row.count = counts[item];
+      view.fieldItems.push_back(std::move(row));
+    }
     return view;
   }
 

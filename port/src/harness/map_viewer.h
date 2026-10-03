@@ -229,7 +229,8 @@ namespace orphen::harness
     // numbers before updateFlyCamera and takes what the menus asked for after.
     void setPlayerParams(const PlayerParamsView &view) { playerParams_ = view; }
     void setInventory(InventoryView view) { inventory_ = std::move(view); }
-    bool inventoryVisible() const { return flyCameraActive_ && inventoryVisible_; }
+    // Either panel that inventoryView() feeds is open.
+    bool inventoryVisible() const { return flyCameraActive_ && (inventoryVisible_ || itemsVisible_); }
     std::vector<HarnessRequest> takeHarnessRequests();
     // The slot the inspector window should show, while there is one to show:
     // flying, and something selected.
@@ -417,6 +418,7 @@ namespace orphen::harness
     bool playerParamsVisible_ = false;
     PlayerParamsView playerParams_;
     bool inventoryVisible_ = false;
+    bool itemsVisible_ = false;
     InventoryView inventory_;
     // The open panels, built for this framebuffer from the current numbers,
     // in draw order.
@@ -427,6 +429,7 @@ namespace orphen::harness
     };
     std::vector<OpenToolPanel> toolPanels(int framebufferWidth, int framebufferHeight) const;
     bool &toolPanelVisible(ToolPanelKind kind);
+    bool toolPanelVisible(ToolPanelKind kind) const;
     void drawMenusAndPanels(int framebufferWidth, int framebufferHeight) const;
     std::vector<HarnessRequest> harnessRequests_;
     // The pointer as of the last update, for hover highlights in render().

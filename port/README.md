@@ -9578,7 +9578,7 @@ runs cannot see them. A battle reseeds the lead's HP and strength from the
 roster when it starts (`battle_party.cpp`), so an edit made in the field does
 not survive into one.
 
-PLAYER > INVENTORY opens a second panel, stacked under Player Params. It is a
+PLAYER > SPELLS opens a second panel, stacked under Player Params. It is a
 shortcut to what the Equip screen and opcode `0xBC` do, and writes the same two
 tables the same way (see the Equip screen section for both):
 
@@ -9595,6 +9595,17 @@ tables the same way (see the Equip screen section for both):
   the incoming count goes down one, the loadout byte takes it, the outgoing
   count goes up one. Nothing else is written, which is all the real swap
   writes too.
+
+PLAYER > ITEMS is the same for the Item screen's list: the ring built as slot 3,
+which asks the record for `0x80` in place of `0x100`. Twelve records carry it,
+all with `0x00BF` (every roster bit 0..5), so every lead sees the same list:
+the incenses and lanterns at `3C`..`41`, and `50`..`55`, Bug Attractor to Herb.
+`-` and `+` step the `DAT_003437B8` count as on the spell panel. Items are never
+equipped, so there is no loadout half. Using one is still a log line
+(`FUN_0022FF20:28-50`), so the count is all an item does in the port so far.
+
+A panel that would run off the bottom of the window starts a new column beside
+the last, and the columns are centred together.
 
 `--inventory-report` hexdumps both tables at the end of a run, laid out from
 `0x003437A0` exactly as `pcsx2_read` prints the same span, so the two diff line
@@ -9622,8 +9633,9 @@ The panels are drawn after the game view inset, so they lie over it, and the
 menu bar is drawn after the panels, so an open menu lies over them.
 
 `--pick-pixel` is repeatable, one click a frame, which is how a capture drives
-the menus: `--pick-pixel 90,12 --pick-pixel 130,32` opens PLAYER and then the
-panel, at 960x720.
+the menus: `--pick-pixel 90,12 --pick-pixel 130,32` opens PLAYER and then
+Player Params, at 960x720. The rows below it are 23 pixels apart: SPELLS at
+`130,55`, ITEMS at `130,78`.
 
 #### Map tile pick
 
