@@ -5031,18 +5031,18 @@ namespace orphen::harness
     // go first because FUN_0020C5A8 submits after FUN_0022E910 and a bucket is
     // drawn head-first.
     //
-    // Not from the fly camera. These, the pips and the text below are the
-    // game's screen UI, which the inset already shows; drawn over the fly view
-    // they float in front of it, the Equip ring included.
-    if (!flying)
+    // From the fly camera only the models: they sit in the world, in front of
+    // the game camera, so the fly view sees them where they are -- the title
+    // logo, the Equip ring. The sprites, the pips and the text below are drawn
+    // flat to the screen, which the inset already shows.
     {
       constexpr int kOverlay = orphen::ported::render::entityDraw::kOverlayBucket;
       const bool anyOverlayModel =
           std::any_of(entityDrawList.begin(), entityDrawList.end(),
                       [](const auto &item) { return item.depthBucket == kOverlay; });
       const bool anyLowSprite =
-          std::any_of(dialogueSprites_.begin(), dialogueSprites_.end(),
-                      [](const auto &sprite) { return sprite.sortBucket <= kOverlay; });
+          !flying && std::any_of(dialogueSprites_.begin(), dialogueSprites_.end(),
+                                 [](const auto &sprite) { return sprite.sortBucket <= kOverlay; });
       if (anyOverlayModel || anyLowSprite)
       {
         GLint worldViewport[4] = {0, 0, 0, 0};
@@ -5050,6 +5050,10 @@ namespace orphen::harness
         // Still inside the world pass's state: the sprites are y-flipped quads
         // and would be culled, and must not be lit.
         const auto spritesInBuckets = [&](int first, int last) {
+          if (flying)
+          {
+            return;
+          }
           const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
           const GLboolean lightingWasEnabled = glIsEnabled(GL_LIGHTING);
           glDisable(GL_CULL_FACE);
