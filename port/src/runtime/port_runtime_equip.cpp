@@ -1407,18 +1407,56 @@ namespace orphen::port
     constexpr int kItemCountCap = 99;
   } // namespace
 
+  int PortRuntime::harnessLoadoutRow() const
+  {
+    if (harnessLoadoutRow_ >= 0)
+    {
+      return harnessLoadoutRow_;
+    }
+    const bool leadPresent = entityPool_.status(0) != entity::SlotStatus::Free || mapViewer_.hasLeadPlayerView();
+    return leadPresent ? FUN_002298d0_roster(entityPool_.leadPlayer().typeId00) : 7;
+  }
+
   orphen::harness::InventoryView PortRuntime::inventoryView() const
   {
     orphen::harness::InventoryView view;
-    const int roster = FUN_002298d0_roster(entityPool_.leadPlayer().typeId00);
     const auto loadout = battleParty_.DAT_003437a0_loadout();
     const bool leadPresent = entityPool_.status(0) != entity::SlotStatus::Free || mapViewer_.hasLeadPlayerView();
-    if (!leadPresent || static_cast<std::size_t>(roster + 1) * battle::kLoadoutSlots > loadout.size())
+    const int leadRoster = leadPresent ? FUN_002298d0_roster(entityPool_.leadPlayer().typeId00) : 7;
+
+    // A tab for every party character with an item allowed in its spell
+    // slots. FUN_002298D0's rows are FUN_00230910's roster bits, so the row
+    // is all the filter needs. Row 6 is type 0x16, not a fighter: no lead is
+    // ever that type, and the Equip screen's name for it (message 0x8C) reads
+    // "No location name", so it gets no tab.
+    constexpr int kCharacterRows = 6;
+    for (int row = 0; row < kCharacterRows &&
+                      static_cast<std::size_t>(row + 1) * battle::kLoadoutSlots <= loadout.size();
+         ++row)
+    {
+      const std::uint16_t mask = spellSlotMask(row);
+      bool any = false;
+      for (int item = 1; item < 0x80 && !any; ++item)
+      {
+        const auto record = itemDatabase_.FUN_00229688_record(item);
+        any = record && (record->ids[0] & mask) == mask;
+      }
+      if (any)
+      {
+        view.characters.push_back(
+            {row, FUN_0025b9e8_text(static_cast<std::size_t>(row + scene::kEquipCharacterNameMessage)),
+             row == leadRoster});
+      }
+    }
+
+    const int roster = harnessLoadoutRow();
+    if (roster < 0 || static_cast<std::size_t>(roster + 1) * battle::kLoadoutSlots > loadout.size())
     {
       return view;
     }
     view.available = true;
     view.loadoutRow = roster;
+    view.characterName = FUN_0025b9e8_text(static_cast<std::size_t>(roster + scene::kEquipCharacterNameMessage));
 
     const auto &counts = sceneScript_.state().DAT_003437b8_itemCounts;
     const std::uint16_t mask = spellSlotMask(roster);
@@ -1501,6 +1539,22 @@ namespace orphen::port
       std::cout << '\n';
     }
     std::cout.flags(flags);
+    // The same rows by character, as the Spells panel's tabs name them.
+    for (const auto &tab : inventoryView().characters)
+    {
+      std::cout << "[inventory] row " << tab.loadoutRow << ' ' << tab.name << (tab.lead ? " (lead)" : "")
+                << ':';
+      for (std::size_t slot = 0; slot < battle::kLoadoutSlots; ++slot)
+      {
+        const int item = loadout[static_cast<std::size_t>(tab.loadoutRow) * battle::kLoadoutSlots + slot];
+        std::cout << ' ' << (item == 0 ? std::string("(empty)") : itemDatabase_.FUN_00229688_name(item));
+        if (slot + 1 < battle::kLoadoutSlots)
+        {
+          std::cout << " /";
+        }
+      }
+      std::cout << '\n';
+    }
   }
 
   void PortRuntime::adjustItemCountFromHarness(int item, int delta)
@@ -1517,7 +1571,7 @@ namespace orphen::port
 
   void PortRuntime::cycleLoadoutFromHarness(int slot, int delta)
   {
-    const int roster = FUN_002298d0_roster(entityPool_.leadPlayer().typeId00);
+    const int roster = harnessLoadoutRow();
     const auto loadout = battleParty_.DAT_003437a0_loadout();
     const std::size_t at = static_cast<std::size_t>(roster) * battle::kLoadoutSlots + static_cast<std::size_t>(slot);
     if (slot < 0 || slot >= static_cast<int>(battle::kLoadoutSlots) || at >= loadout.size())

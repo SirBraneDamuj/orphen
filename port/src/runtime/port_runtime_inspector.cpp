@@ -187,6 +187,9 @@ namespace orphen::port
       case Request::Kind::CycleLoadout:
         cycleLoadoutFromHarness(request.slot, request.delta);
         break;
+      case Request::Kind::SelectCharacter:
+        harnessLoadoutRow_ = request.loadoutRow;
+        break;
       }
     }
     return !requests.empty();

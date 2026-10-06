@@ -832,7 +832,9 @@ namespace orphen::port
           out.currentAction0f = tables.read<std::uint8_t>(block + control::kCurrentAction0f);
           out.characterClass = tables.read<std::int16_t>(record);
           out.target = tables.read<std::int16_t>(block + control::kTarget2c);
-          out.chargeTimer3c = tables.read<std::int32_t>(record + record::kChargeTimer3c);
+          // A halfword: FUN_00249270 reads it as a short. A 32-bit read takes
+          // the swing timer at +0x3E into the top half.
+          out.chargeTimer3c = tables.read<std::int16_t>(record + record::kChargeTimer3c);
           // FUN_00249308: the four attack bytes of the slot this member last
           // fired, at record + 0x18 + slot * 4. selectedSlot is keyed by the
           // 1-based party slot, which is the caster entity's +0x95.
@@ -2993,6 +2995,21 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28);
     };
     environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+    // Class 5's spell states hang their effect off the caster's role-4 bone.
+    environment.FUN_0020dd78_bone_for_role = [this](std::size_t slot, std::uint8_t role) -> std::size_t
+    {
+      if (slot >= entityPool_.slotCount())
+      {
+        return 0;
+      }
+      const EntityModelBinding *binding =
+          modelStore_.bindingForTypeId(entityPool_.slot(slot).effectiveTypeId());
+      if (binding == nullptr || binding->model == nullptr)
+      {
+        return 0;
+      }
+      return orphen::ported::model::FUN_0020dd78_bone_for_role(*binding->model, role);
+    };
 
     // The spell voice. FUN_0024c058 walks DAT_0031da60 1 -> 2 -> 3 across the
     // charge, and the state handlers speak clip 0 on the charge and clip 1 on
@@ -6937,10 +6954,16 @@ namespace orphen::port
       std::cout << ' ' << static_cast<int>(sceneScript_.state().DAT_003437b8_itemCounts[itemId]);
     }
     std::cout << "\n";
-    std::cout << "loadout (DAT_003437a0 row 0, the player):\n";
+    // FUN_002432d8:67 reads the player's row through FUN_002298D0 on party
+    // record 0's class: row 0 for Orphen, row 3 for Sephy.
+    const int loadoutRow = orphen::ported::entity::FUN_002298d0_character_class(
+        tables.read<std::int16_t>(BattleTables::partyRecord(0) + record::kClass00));
+    std::cout << "loadout (DAT_003437a0 row " << loadoutRow << ", the player):\n";
     for (std::uint32_t slot = 0; slot < 3; ++slot)
     {
-      const std::uint8_t itemId = battleParty_.DAT_003437a0_loadout()[slot];
+      const auto loadout = battleParty_.DAT_003437a0_loadout();
+      const std::size_t loadoutAt = static_cast<std::size_t>(loadoutRow) * 3 + slot;
+      const std::uint8_t itemId = loadoutAt < loadout.size() ? loadout[loadoutAt] : 0;
       std::cout << "  slot " << slot << " " << kButtonNames[slot] << " "
                 << hex(kDAT_0031d168_slotButtons[slot], 2) << "  item " << hex(itemId, 2);
       if (itemId == 0)

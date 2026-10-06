@@ -3158,7 +3158,7 @@ namespace orphen::ported::entity
     ball.hitSourceC0 = 0;
     ball.hitFlagsC2 = 0;
     ball.pendingDamageBe = 0;
-    ball.hitReactionBc = 0;
+    ball.freezeTimerBd = 0; // +0xBD, a byte
     ball.halfword08 = static_cast<std::uint16_t>(ball.halfword08 | 0x4000u);
 
     // FUN_00215e48 then FUN_002148a8: clear the already-hit set, then sweep.
@@ -3427,6 +3427,1146 @@ namespace orphen::ported::entity
     FUN_002dab70_spawn_fireball(0, effect.spawnParam94, effect.attackPower12c,
                                 haveBlock ? view.target : -1, hitParameters, origin.x, origin.y,
                                 origin.z, static_cast<std::int16_t>(casterSlot), environment);
+  }
+
+  // ------------------------------------------------------------- Ball of Wind
+  //
+  // Sephy's Triangle spell (item 0x18), kind 12. The same three-part shape as
+  // Hand of Pyro, with its own copies of every part:
+  //
+  //   FUN_002e4198  type 0x14A, the hand     -> FUN_002e3eb0 on +0x60 == 1
+  //   FUN_002e3eb0                           -> spawns one type 0x165
+  //   FUN_002e45a0  type 0x165, the ball     -> flies, chains, and on a hit
+  //                                             either bursts (type 0x178) or
+  //                                             traps the target
+  //
+  // **The trap.** A ball that hits its own target can stay on it instead of
+  // bursting: it switches to animation 1, raises the victim's +0x96 bit 0x40
+  // for 180 frames and circles it 0.8 units out. Only two casters get there.
+  // A class-1 caster (Orphen) always does. Anyone else needs a non-zero caster
+  // slot -- an ally, never the player in pool slot 0 -- the first ball of the
+  // chain, and a roll under the byte at DAT_0031DA08 + member*12 + 0xD6 (4 in
+  // ten when that byte is negative). So Sephy as the lead never traps.
+  //
+  // Hardware, s14_e003 with Sephy leading (savestates/s14_e003_wind_release
+  // .p2s): the ball leaves her hand in slot 39 at about 0.1 units a frame,
+  // frees itself 1.6 units out on the dummy, leaves a 0x178 where it was, and
+  // takes the dummy from 59 to 48.
+
+  // FUN_002e3eb0 (0x002e3eb0). One type 0x165 at `origin`. The twin of
+  // FUN_002dab70 apart from the type, the green light, the cue (0xE1), a
+  // 1/288 speed where the fireball has 1/144, and a ground height two units
+  // under the spawn point.
+  std::int32_t FUN_002e3eb0_spawn_wind_ball(std::uint8_t chainIndex,
+                                            std::uint8_t chargeLevel,
+                                            std::uint16_t attackPower,
+                                            std::int16_t target,
+                                            std::uint32_t hitParameters,
+                                            float originX,
+                                            float originZ,
+                                            float originY,
+                                            std::int16_t casterSlot,
+                                            const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(0x165, *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &ball = pool.slot(spawned);
+    FUN_00215e48_clear_hit_set(ball);
+
+    ball.attackPower12c = attackPower;
+    ball.fireballOriginX19c = originX;
+    ball.positionX20 = originX;
+    ball.fireballOriginZ1a0 = originZ;
+    ball.positionZ24 = originZ;
+    ball.fireballOriginY1a4 = originY;
+    ball.positionY28 = originY;
+    ball.groundHeight4c = originY - 2.0f;
+    ball.previousGroundHeight50 = originY - 2.0f;
+    // FUN_00267da0(ball + 0x198, source, 4): a copy of the four attack bytes.
+    ball.hitParameters198 = hitParameters;
+    ball.fireballChain1c6 = chainIndex;
+    ball.fireballTarget1c0 = target;
+    ball.fireballCaster1c2 = casterSlot;
+    ball.fireballCharge1c7 = chargeLevel;
+    ball.fadeRamp62 = 0;
+    ball.animationA0 = 0;
+
+    // FUN_0023eb20, then a fixed green light of radius 2.0 put on the ball.
+    if (environment.DAT_00343888_lights != nullptr)
+    {
+      const std::int32_t high = environment.DAT_00343888_lights->FUN_00266008_allocateFromThree();
+      const std::int32_t allocated =
+          high >= 0 ? high : environment.DAT_00343888_lights->FUN_00266050_allocateFromZero();
+      ball.lightSlot195 = static_cast<std::int8_t>(allocated);
+      if (allocated >= 0)
+      {
+        auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(allocated));
+        light.radius = 2.0f;
+        light.green = 0x50;
+        light.red = 0x14;
+        light.blue = 0x14;
+        light.x = ball.positionX20;
+        light.y = ball.positionZ24;
+        light.z = ball.positionY28;
+        environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(allocated), 2.0f);
+      }
+    }
+
+    // The chain, exactly as FUN_002dab70 arms it: the last link marks itself,
+    // every other one times its successor.
+    if (chargeLevel != 0)
+    {
+      if (chargeLevel == chainIndex)
+      {
+        if (chargeLevel == 5)
+        {
+          chargeLevel = 0x18;
+          ball.animationA0 = 1;
+        }
+        else
+        {
+          ball.fireballSparkId19b = static_cast<std::uint8_t>(chargeLevel + 0x14);
+        }
+      }
+      else
+      {
+        ball.fadeRamp62 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(8 - chargeLevel));
+      }
+    }
+    if (chargeLevel == 5)
+    {
+      ball.fireballSparkId19b = 0x18;
+    }
+
+    const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterSlot));
+    ball.facingRadians5c = caster.facingRadians5c;
+    ball.fireballLife1c4 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x6C));
+    const bool aimed = target >= 2 && static_cast<std::size_t>(target) < kEntitySlotCount &&
+                       pool.slot(static_cast<std::size_t>(target)).typeId00 != 0;
+    if (aimed)
+    {
+      const auto &victim = pool.slot(static_cast<std::size_t>(target));
+      const float dx = victim.positionX20 - originX;
+      const float dz = victim.positionZ24 - originZ;
+      const float dy = victim.positionY28 - originY;
+      // fGpffffa9f0 = 1/288: the 3D distance over it is the flight in ticks.
+      const float flight = std::sqrt(dx * dx + dz * dz + dy * dy) / 0.00347222225f;
+      ball.fireballRise1b0 = ((victim.positionY28 + victim.height58 * 0.5f) - originY) / flight;
+      ball.fireballSpeed1bc = std::sqrt(dx * dx + dz * dz) / flight;
+    }
+    else
+    {
+      ball.fireballSpeed1bc = 0.00347222225f; // uGpffffa9f4
+      ball.fireballRise1b0 = 0.0f;
+    }
+
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xE1, ball);
+    }
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002e45a0 (0x002e45a0), type 0x165: one ball of wind. See the block
+  // comment above for the trap; the flight is the fireball's, at half the
+  // speed and twice the life (0xD80 ticks), so the spread constants are
+  // doubled to match.
+  void FUN_002e45a0_wind_ball(OriginalEntity &ball,
+                              std::size_t slot,
+                              const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    ball.hitSourceC0 = 0;
+    ball.hitFlagsC2 = 0;
+    ball.pendingDamageBe = 0;
+    ball.freezeTimerBd = 0;
+    ball.halfword08 = static_cast<std::uint16_t>(ball.halfword08 | 0x4000u);
+    const std::int16_t target = ball.fireballTarget1c0;
+    // FUN_002660d0: the light rides the ball.
+    if (ball.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &light = environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(ball.lightSlot195));
+      light.x = ball.positionX20;
+      light.y = ball.positionZ24;
+      light.z = ball.positionY28;
+    }
+    const bool targetInPool = target >= 0 && static_cast<std::size_t>(target) < kEntitySlotCount;
+
+    if (static_cast<std::int16_t>(ball.animationA0) == 1)
+    {
+      // ---- trapping the target ----
+      std::uint16_t timer = ball.fadeRamp62;
+      const bool victimStanding = target > 0 && targetInPool &&
+                                  pool.slot(static_cast<std::size_t>(target)).typeId00 > 0 &&
+                                  static_cast<std::int16_t>(
+                                      pool.slot(static_cast<std::size_t>(target)).staggerTimer12a) > 0;
+      if (!victimStanding || timer == 0)
+      {
+        if ((ball.flags06 & 1u) != 0)
+        {
+          if (targetInPool)
+          {
+            auto &victim = pool.slot(static_cast<std::size_t>(target));
+            victim.effectFlags96 = static_cast<std::uint8_t>(victim.effectFlags96 & 0xBFu);
+          }
+          FUN_00265ec0_destroy_entity(slot, environment);
+          return;
+        }
+      }
+      if (timer != 0)
+      {
+        ball.fadeRamp62 = FUN_00248e58_step_timer(timer, environment.frameTicks);
+        if (targetInPool)
+        {
+          auto &victim = pool.slot(static_cast<std::size_t>(target));
+          victim.effectFlags96 = static_cast<std::uint8_t>(victim.effectFlags96 | 0x40u);
+        }
+        // FUN_00248d58 raises uGpffffb01c bit 0, which only the type 0x6A HUD
+        // sprite (FUN_00248d70) reads. Neither is ported.
+      }
+      if (!targetInPool)
+      {
+        return;
+      }
+      // Circle the victim 0.8 units out at DAT_00354970 radians a tick, at the
+      // top of its body.
+      const auto &victim = pool.slot(static_cast<std::size_t>(target));
+      ball.facingRadians5c += static_cast<float>(environment.frameTicks) * 0.00235619419f;
+      ball.positionX20 = std::cos(ball.facingRadians5c) * 0.8f + victim.positionX20;
+      ball.positionZ24 = std::sin(ball.facingRadians5c) * 0.8f + victim.positionZ24;
+      ball.positionY28 = victim.positionY28 + victim.height58;
+      return;
+    }
+
+    // ---- in flight ----
+    std::int8_t contacts = 0;
+    if (environment.hitTest != nullptr)
+    {
+      const auto parameters = orphen::ported::resource::HitParameters::unpack(ball.hitParameters198);
+      contacts = FUN_002148a8_swept_hit_test(ball, slot, parameters, *environment.hitTest);
+    }
+    if (contacts != 0)
+    {
+      if (target >= 2 && environment.hitTest != nullptr && environment.hitTest->DAT_003151c8_hitList != nullptr)
+      {
+        const std::int16_t casterIndex = ball.fireballCaster1c2;
+        ActorEnvironment::BattleMemberView view;
+        bool haveBlock = false;
+        std::uint32_t member = 0;
+        if (casterIndex >= 0 && static_cast<std::size_t>(casterIndex) < kEntitySlotCount)
+        {
+          member = static_cast<std::uint32_t>(
+              static_cast<std::int8_t>(pool.slot(static_cast<std::size_t>(casterIndex)).byte95) - 1);
+          haveBlock = environment.DAT_0031d7b0_battleMember &&
+                      environment.DAT_0031d7b0_battleMember(member, view);
+        }
+        for (const std::uint16_t victimSlot : *environment.hitTest->DAT_003151c8_hitList)
+        {
+          if (static_cast<std::int16_t>(victimSlot) != target)
+          {
+            continue;
+          }
+          bool trap = haveBlock && view.characterClass == 1;
+          if (!trap && casterIndex != 0 && ball.fireballChain1c6 == 0)
+          {
+            // DAT_0031DA08 + member*12 + 0xD6, a signed byte; negative reads 4.
+            std::int32_t odds = 4;
+            if (environment.DAT_0031d3c8_battleTableWord)
+            {
+              const std::uint32_t address = 0x0031DADEu + member * 12u;
+              const std::uint32_t word = environment.DAT_0031d3c8_battleTableWord(address & ~3u);
+              const auto byte = static_cast<std::int8_t>((word >> ((address & 3u) * 8u)) & 0xFFu);
+              if (byte >= 0)
+              {
+                odds = byte;
+              }
+            }
+            const std::uint32_t roll =
+                environment.random ? environment.random() : 0;
+            trap = static_cast<std::int32_t>((roll & 0xFFFFu) % 10u) < odds;
+          }
+          if (trap)
+          {
+            auto &victim = pool.slot(static_cast<std::size_t>(target));
+            victim.effectFlags96 = static_cast<std::uint8_t>(victim.effectFlags96 | 0x40u);
+            FUN_00225bc8_set_animation(ball, 1);
+            ball.fadeRamp62 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0xB4));
+            return;
+          }
+        }
+      }
+      // A player's ball offers each victim to the reaction camera
+      // (FUN_0023C220) and keys the rumble (FUN_0023BBD8(0, 6)); neither is
+      // ported, as in kind12_landed.
+      if (environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(0x1A, ball);
+      }
+      if (environment.descriptors != nullptr)
+      {
+        const std::size_t burst =
+            pool.FUN_00265e28_allocate_and_initialize(0x178, *environment.descriptors);
+        if (burst < kEntitySlotCount)
+        {
+          auto &flash = pool.slot(burst);
+          flash.positionX20 = ball.positionX20;
+          flash.positionZ24 = ball.positionZ24;
+          flash.groundHeight4c = ball.positionY28;
+          flash.positionY28 = ball.positionY28;
+          flash.previousGroundHeight50 = ball.positionY28;
+          flash.facingRadians5c = ball.facingRadians5c + 3.14159203f; // DAT_00354978
+          flash.rotationX154 = -ball.rotationX154;
+          FUN_00225bc8_set_animation(flash, 0);
+        }
+      }
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    if (ball.fireballLife1c4 == 0xD80)
+    {
+      ball.fireballBaseFacing1b4 = ball.facingRadians5c;
+      ball.facingRadians5c = 0.0f;
+    }
+    ball.fireballLife1c4 = FUN_00248e58_step_timer(ball.fireballLife1c4, environment.frameTicks);
+    if (ball.fireballLife1c4 == 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+      return;
+    }
+
+    // The spread by place in the chain, as the fireball's.
+    std::int32_t rise = 0;
+    std::int32_t turn = 0;
+    const std::uint8_t chain = ball.fireballChain1c6;
+    if (chain == 0)
+    {
+      rise = ((ball.fireballCharge1c7 ^ 5u) != 0) ? 0 : 6;
+    }
+    else if (chain == 1)
+    {
+      if (ball.fireballCharge1c7 == 1)
+      {
+        rise = -8;
+      }
+      else
+      {
+        turn = 0x32;
+      }
+    }
+    else if (chain == 2)
+    {
+      turn = -0x32;
+    }
+    else
+    {
+      rise = ((chain ^ 3u) != 0) ? 0 : -8;
+    }
+
+    const float elapsed = static_cast<float>(
+        static_cast<std::int16_t>(0x6C0 - static_cast<std::int32_t>(ball.fireballLife1c4)));
+    constexpr float kTwoPi = 6.28318405f; // DAT_0035497c
+    ball.facingRadians5c =
+        ((static_cast<float>(turn) * kTwoPi) / 360.0f / 3456.0f) * elapsed + ball.fireballBaseFacing1b4;
+    // FUN_00305130 is cosf, FUN_00305218 sinf.
+    ball.fireballVelX1a8 = ball.fireballSpeed1bc * std::cos(ball.facingRadians5c);
+    ball.fireballVelZ1ac = ball.fireballSpeed1bc * std::sin(ball.facingRadians5c);
+    const float planar = std::sqrt(ball.fireballVelX1a8 * ball.fireballVelX1a8 +
+                                   ball.fireballVelZ1ac * ball.fireballVelZ1ac);
+    ball.fireballRiseOffset1b8 = ((static_cast<float>(rise) * kTwoPi) / 360.0f / 3456.0f) * elapsed;
+    ball.desiredDeltaY38 =
+        ball.fireballRise1b0 * static_cast<float>(environment.frameTicks) + ball.fireballRiseOffset1b8;
+    ball.rotationX154 = std::atan2(-ball.fireballRise1b0, planar);
+    ball.desiredDeltaX30 = ball.fireballVelX1a8 * static_cast<float>(environment.frameTicks);
+    ball.desiredDeltaZ34 = ball.fireballVelZ1ac * static_cast<float>(environment.frameTicks);
+
+    if (ball.fadeRamp62 != 0)
+    {
+      ball.fadeRamp62 = FUN_00248e58_step_timer(ball.fadeRamp62, environment.frameTicks);
+      if (ball.fadeRamp62 == 0)
+      {
+        FUN_002e3eb0_spawn_wind_ball(static_cast<std::uint8_t>(ball.fireballChain1c6 + 1),
+                                     ball.fireballCharge1c7, ball.attackPower12c, target,
+                                     ball.hitParameters198, ball.fireballOriginX19c,
+                                     ball.fireballOriginZ1a0, ball.fireballOriginY1a4,
+                                     ball.fireballCaster1c2, environment);
+      }
+    }
+
+    if ((ball.collisionFlags0c & 0x4066u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
+  // FUN_002e4198 (0x002e4198), type 0x14A: the wind gathering in Sephy's hand
+  // while Triangle is held. Hand of Pyro's FUN_002da8a0 with three changes:
+  // the caster falls back to +0x19C when +0x192 is unset, the gather takes no
+  // per-class tilt, and the light is its own -- its green channel follows the
+  // **low byte** of the raw charge (capped at 0xFA, and only ever raised),
+  // red and blue a quarter of that, the radius charge/100 up to 2.0.
+  void FUN_002e4198_wind_hand(OriginalEntity &effect,
+                              std::size_t /*slot*/,
+                              const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C;
+    effect.facingRadians5c = 1.57079601f; // DAT_00354968
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+
+    std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0)
+    {
+      casterIndex = static_cast<std::int16_t>(effect.targetIndex19c);
+    }
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+
+    const auto memberView = [&](std::int16_t index, ActorEnvironment::BattleMemberView &view) {
+      const auto &body = pool.slot(static_cast<std::size_t>(index));
+      const auto member = static_cast<std::uint32_t>(static_cast<std::int8_t>(body.byte95) - 1);
+      return environment.DAT_0031d7b0_battleMember && environment.DAT_0031d7b0_battleMember(member, view);
+    };
+    ActorEnvironment::BattleMemberView view;
+    bool haveBlock = memberView(casterIndex, view);
+
+    if (static_cast<std::int16_t>(effect.animationA0) != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4001u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      // Anything but actions 0x8A/0x8B is "no longer casting this".
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x76u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+    }
+
+    const auto step = static_cast<std::int16_t>(effect.animationA0);
+    if (step == 1)
+    {
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+      effect.positionX20 = 0.0f;
+      effect.positionZ24 = 0.0f;
+      effect.positionY28 = 0.0f;
+      effect.groundHeight4c = 0.0f;
+      effect.previousGroundHeight50 = 0.0f;
+    }
+    else if (step == 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      auto &lights = *environment.DAT_00343888_lights;
+      if (effect.lightSlot195 < 0)
+      {
+        // FUN_0023eb20, and the slot starts black at radius 0.2.
+        const std::int32_t high = lights.FUN_00266008_allocateFromThree();
+        const std::int32_t allocated = high >= 0 ? high : lights.FUN_00266050_allocateFromZero();
+        effect.lightSlot195 = static_cast<std::int8_t>(allocated);
+        if (allocated >= 0)
+        {
+          auto &light = lights.slot(static_cast<std::uint32_t>(allocated));
+          light.radius = 0.2f; // DAT_0035496c
+          light.red = 0;
+          light.green = 0;
+          light.blue = 0;
+        }
+      }
+      if (effect.lightSlot195 >= 0)
+      {
+        auto &light = lights.slot(static_cast<std::uint32_t>(effect.lightSlot195));
+        const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+        // FUN_002494e0(caster, 1): zero on the restart frame, else the raw
+        // accumulator over one.
+        const std::int32_t charge =
+            ((caster.state60 & 0x4000u) != 0 || !haveBlock)
+                ? 0
+                : static_cast<std::int16_t>(view.chargeTimer3c);
+        const auto low = static_cast<std::uint8_t>(charge & 0xFF);
+        const std::uint8_t cap = low < 0xFB ? low : 0xFA;
+        if (light.green < cap)
+        {
+          light.green = cap;
+        }
+        light.red = static_cast<std::uint8_t>(light.green >> 2);
+        light.blue = static_cast<std::uint8_t>(light.green >> 2);
+        float radius = static_cast<float>(charge) / 100.0f;
+        if (2.0f < radius)
+        {
+          radius = 2.0f;
+        }
+        if (light.radius < radius)
+        {
+          light.radius = radius;
+        }
+        lights.noteRadius(static_cast<std::uint32_t>(effect.lightSlot195), light.radius);
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          const auto point = environment.FUN_0020dc88_bone_point(
+              static_cast<std::size_t>(casterIndex), static_cast<std::size_t>(effect.attachBone194),
+              orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+          light.x = point.x;
+          light.y = point.y;
+          light.z = point.z;
+        }
+        // FUN_002660d0 on the *caster*: republish its own light, if it has one.
+        if (caster.lightSlot195 >= 0)
+        {
+          auto &own = lights.slot(static_cast<std::uint32_t>(caster.lightSlot195));
+          own.x = caster.positionX20;
+          own.y = caster.positionZ24;
+          own.z = caster.positionY28;
+        }
+      }
+    }
+    else if (step == 2)
+    {
+      if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        auto &light =
+            environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195));
+        light.radius -= static_cast<float>(environment.frameTicks * 2) / 1000.0f;
+        if (light.radius < 0.0f)
+        {
+          light.radius = 0.0f; // FUN_00266098
+          effect.lightSlot195 = -1;
+        }
+      }
+      if ((effect.flags06 & 1u) != 0)
+      {
+        effect.positionX20 = 0.0f;
+        effect.positionZ24 = 0.0f;
+        effect.positionY28 = 0.0f;
+        effect.groundHeight4c = 0.0f;
+        effect.previousGroundHeight50 = 0.0f;
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+        if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195)).radius =
+              0.0f;
+        }
+        effect.lightSlot195 = -1;
+        // The delay slot of that FUN_00266098 call reloads the caster from
+        // +0x19C, so a throw on this same frame is made from there.
+        casterIndex = static_cast<std::int16_t>(effect.targetIndex19c);
+      }
+    }
+
+    // **The throw**, one frame, raised by FUN_0024dbf0 at the +0xAA 0x200
+    // marker.
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    orphen::ported::psm2::Vec3 origin{effect.positionX20, effect.positionZ24, effect.positionY28};
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      origin = environment.FUN_0020dc88_bone_point(static_cast<std::size_t>(casterIndex),
+                                                  static_cast<std::size_t>(effect.attachBone194),
+                                                  orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+    if (static_cast<std::int16_t>(effect.animationA0) != 2)
+    {
+      FUN_00225bc8_set_animation(effect, 2);
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 0x10u);
+    }
+    effect.state60 = 0;
+    // FUN_002493b8: the control block's target, made positive once it has
+    // been marked committed past -3.
+    haveBlock = memberView(casterIndex, view);
+    std::int16_t target = haveBlock ? view.target : -1;
+    if (target < -3)
+    {
+      target = static_cast<std::int16_t>(-target);
+    }
+    const std::uint32_t hitParameters = environment.DAT_0031d3c8_battleTableWord
+                                            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+                                            : 0;
+    FUN_002e3eb0_spawn_wind_ball(0, effect.spawnParam94, effect.attackPower12c, target, hitParameters,
+                                 origin.x, origin.y, origin.z, casterIndex, environment);
+  }
+
+  // ------------------------------------------------------------ Dance of Ice
+  //
+  // Sephy's Circle spell (item 0x1C), kind -2. One hand effect serves three
+  // Dance spells through the four-halfword rows at DAT_00326A80 -- {hand,
+  // burst, spark, summon}:
+  //
+  //   Dance of Ice       0x14B  0x17B  0x1A9  0x1A8
+  //   Dance of Wind      0x1BD  0x1BE  0x1BF  0x1C0
+  //   Dance of Darkness  0x1C1  0x1C2  0x1C3  0x1C4
+  //
+  // Only Ice runs through FUN_002e60c0 itself; the other two hands have their
+  // own handlers and are not ported. Below full charge the release does all its
+  // damage at once: FUN_002e5998 plants a burst on the target and box-tests a
+  // square around it that grows 1.5 units a charge level, then puts a 0x1A9 on
+  // everyone else the box caught. Both are left to play out and remove
+  // themselves. At level 5 on a live target it summons instead: FUN_002e5f48
+  // spawns the row's creature (0x1A8 for Ice, FUN_002e65d0) on the hand, and
+  // the creature's own damage pass comes back through FUN_002e5998 at level 6.
+  //
+  // Hardware, s14_e003 (savestates/s14_e003_idle_after_wind.p2s, Circle held 60
+  // frames): the 0x17B lands at (0, 2.5, 0.6) on dummy 17 and takes it from 48
+  // to 41.
+
+  // The rows of DAT_00326A80, read out of the executable.
+  struct DanceSpell
+  {
+    std::int16_t hand;
+    std::int16_t burst;
+    std::int16_t spark;
+    std::int16_t summon;
+  };
+  inline constexpr DanceSpell kDAT_00326a80_danceSpells[3] = {
+      {0x14B, 0x17B, 0x1A9, 0x1A8},
+      {0x1BD, 0x1BE, 0x1BF, 0x1C0},
+      {0x1C1, 0x1C2, 0x1C3, 0x1C4},
+  };
+
+  // LAB_002E6080 (type 0x17B) and LAB_002E60A0 (type 0x1A9), eight
+  // instructions each with no Ghidra function: `if (+0x06 & 1) FUN_00265EC0`.
+  // A burst lives exactly as long as its animation.
+  void LAB_002e6080_dance_burst(OriginalEntity &burst,
+                                std::size_t slot,
+                                const ActorEnvironment &environment)
+  {
+    if ((burst.flags06 & 1u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
+  }
+
+  // FUN_002e5de0 (0x002e5de0): a 0x1A9 on one bystander the burst caught. It
+  // is allocated as the row's *burst* type -- so it wears that model -- and
+  // retyped to 0x1A9, at the victim's mid-height, with no attack power of its
+  // own and a depth bias that deepens with the level.
+  std::int32_t FUN_002e5de0_spawn_dance_spark(std::int8_t level,
+                                              std::int16_t victimSlot,
+                                              std::uint32_t hitParameters,
+                                              std::int16_t casterSlot,
+                                              std::int32_t variant,
+                                              const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr ||
+        victimSlot < 0 || static_cast<std::size_t>(victimSlot) >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int8_t shown = level != 0 ? level : 1;
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(kDAT_00326a80_danceSpells[variant].burst,
+                                                  *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &spark = pool.slot(spawned);
+    const auto &victim = pool.slot(static_cast<std::size_t>(victimSlot));
+    spark.depthBias133 = static_cast<std::int8_t>(shown * -0x0C);
+    spark.fireballOriginX19c = victim.positionX20;
+    spark.positionX20 = victim.positionX20;
+    spark.attackPower12c = 0;
+    spark.typeId00 = 0x1A9;
+    spark.fireballOriginZ1a0 = victim.positionZ24;
+    spark.positionZ24 = victim.positionZ24;
+    spark.descriptorFlags02 = static_cast<std::uint16_t>(spark.descriptorFlags02 | 0x1000u);
+    spark.halfword04 = 0x19;
+    const float middle = victim.positionY28 + victim.height58 * 0.5f;
+    spark.fireballOriginY1a4 = middle;
+    spark.groundHeight4c = middle;
+    spark.positionY28 = middle;
+    spark.previousGroundHeight50 = middle;
+    spark.hitParameters198 = hitParameters;
+    spark.lightningTarget1ac = victimSlot;
+    spark.lightningCaster1ae = casterSlot;
+    spark.danceLevel1b5 = shown;
+    spark.animationA0 = 1;
+    spark.danceByte1b4 = 0;
+    spark.fadeRamp62 = 0;
+    spark.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002e5f48 (0x002e5f48): the level-5 summon. The row's creature, on
+  // the caster's hand bone, scaled 1.8 and parked on animation 8 with +0x94 at
+  // zero -- its first frame is what sets the stage.
+  std::int32_t FUN_002e5f48_spawn_dance_summon(std::uint8_t level,
+                                               std::uint16_t attackPower,
+                                               std::int16_t target,
+                                               std::uint32_t hitParameters,
+                                               const orphen::ported::psm2::Vec3 &anchor,
+                                               std::int16_t casterSlot,
+                                               std::int32_t variant,
+                                               const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(kDAT_00326a80_danceSpells[variant].summon,
+                                                  *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &creature = pool.slot(spawned);
+    creature.spawnParam94 = 0;
+    creature.summonAnchorX19c = anchor.x;
+    creature.positionX20 = anchor.x;
+    creature.attackPower12c = attackPower;
+    creature.summonAnchorZ1a0 = anchor.y;
+    creature.positionZ24 = anchor.y;
+    creature.descriptorFlags02 = static_cast<std::uint16_t>(creature.descriptorFlags02 | 0x1000u);
+    creature.halfword04 = 0x19;
+    creature.summonAnchorY1a4 = anchor.z;
+    creature.halfword08 = static_cast<std::uint16_t>(creature.halfword08 | 0x80u);
+    creature.groundHeight4c = anchor.z;
+    creature.scale14c = 1.79999995f; // uGpffffaa38
+    creature.animationA0 = 8;
+    creature.positionY28 = anchor.z;
+    creature.previousGroundHeight50 = anchor.z;
+    creature.scaleZ150 = 1.79999995f;
+    creature.hitParameters198 = hitParameters;
+    creature.lightningTarget1ac = target;
+    creature.lightningCaster1ae = casterSlot;
+    creature.danceLevel1b5 = static_cast<std::int8_t>(level);
+    creature.danceVariant1b2 = static_cast<std::int16_t>(variant);
+    creature.fadeRamp62 = 0;
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002e5c98 (0x002e5c98): the summon's mark on the player. The row's
+  // *spark* type, retyped to 0x1A9 like FUN_002e5de0's, but planted on pool
+  // slot 0's feet rather than a victim's middle, with the summon's attack power
+  // and animation 6. The summon calls it once, on entry, at its own level less
+  // one.
+  std::int32_t FUN_002e5c98_spawn_dance_mark(std::int8_t level,
+                                             std::uint8_t attackPower,
+                                             std::uint32_t hitParameters,
+                                             std::int32_t variant,
+                                             const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::int8_t shown = level != 0 ? level : 1;
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(kDAT_00326a80_danceSpells[variant].spark,
+                                                  *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &mark = pool.slot(spawned);
+    const auto &player = pool.slot(0);
+    mark.attackPower12c = attackPower;
+    mark.depthBias133 = static_cast<std::int8_t>(shown * -0x0C);
+    mark.descriptorFlags02 = static_cast<std::uint16_t>(mark.descriptorFlags02 | 0x1000u);
+    mark.fireballOriginX19c = player.positionX20;
+    mark.positionX20 = player.positionX20;
+    mark.typeId00 = 0x1A9;
+    mark.halfword04 = 0x19;
+    mark.fireballOriginZ1a0 = player.positionZ24;
+    mark.positionZ24 = player.positionZ24;
+    mark.fireballOriginY1a4 = player.positionY28;
+    mark.groundHeight4c = player.positionY28;
+    mark.positionY28 = player.positionY28;
+    mark.previousGroundHeight50 = player.positionY28;
+    mark.hitParameters198 = hitParameters;
+    mark.lightningTarget1ac = 0;
+    mark.lightningCaster1ae = 0;
+    mark.danceLevel1b5 = shown;
+    mark.danceByte1b4 = 0;
+    mark.fadeRamp62 = 0;
+    mark.animationA0 = 6;
+    mark.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002e5998 (0x002e5998): the release. `level` is the hand's +0x94, and
+  // `anchor` the hand-bone point FUN_002e60c0 took, which only the summon uses.
+  std::int32_t FUN_002e5998_launch_dance(std::uint8_t level,
+                                         std::uint16_t attackPower,
+                                         std::int16_t target,
+                                         std::uint32_t hitParameters,
+                                         const orphen::ported::psm2::Vec3 &anchor,
+                                         std::int16_t casterSlot,
+                                         std::int32_t variant,
+                                         const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || environment.descriptors == nullptr ||
+        casterSlot < 0 || static_cast<std::size_t>(casterSlot) >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const bool aimed = target > 1 && static_cast<std::size_t>(target) < kEntitySlotCount;
+    if (level == 5 && aimed)
+    {
+      FUN_002e5f48_spawn_dance_summon(level, attackPower, target, hitParameters, anchor, casterSlot,
+                                      variant, environment);
+      return 0;
+    }
+    orphen::ported::psm2::Vec3 at{};
+    if (aimed)
+    {
+      const auto &body = pool.slot(static_cast<std::size_t>(target));
+      at = {body.positionX20, body.positionZ24, body.positionY28};
+    }
+    else if (environment.FUN_002493f0_spell_landing)
+    {
+      environment.FUN_002493f0_spell_landing(static_cast<std::size_t>(casterSlot), at);
+    }
+    // FUN_0023bbd8(0, 7), the rumble, is not ported.
+    if (level == 0)
+    {
+      level = 1;
+    }
+
+    const std::size_t spawned =
+        pool.FUN_00265e28_allocate_and_initialize(kDAT_00326a80_danceSpells[variant].burst,
+                                                  *environment.descriptors);
+    if (spawned >= kEntitySlotCount)
+    {
+      return -1;
+    }
+    auto &burst = pool.slot(spawned);
+    burst.attackPower12c = attackPower;
+    burst.typeId00 = 0x17B;
+    burst.descriptorFlags02 = static_cast<std::uint16_t>(burst.descriptorFlags02 | 0x1000u);
+    burst.facingRadians5c = pool.slot(static_cast<std::size_t>(casterSlot)).facingRadians5c;
+    burst.halfword04 = 0x19;
+    burst.fireballOriginX19c = at.x;
+    burst.positionX20 = at.x;
+    burst.fireballOriginZ1a0 = at.y;
+    burst.positionZ24 = at.y;
+    const float height = at.z + 0.6f; // fGpffffaa34
+    burst.fireballOriginY1a4 = height;
+    burst.groundHeight4c = height;
+    burst.positionY28 = height;
+    burst.previousGroundHeight50 = height;
+    burst.hitParameters198 = hitParameters;
+    burst.lightningCaster1ae = casterSlot;
+    burst.lightningTarget1ac = target;
+    burst.danceLevel1b5 = static_cast<std::int8_t>(level);
+    burst.danceByte1b4 = 0;
+    burst.fadeRamp62 = 0;
+    burst.animationA0 = 0;
+    burst.lightningTimer1b0 = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(0x20));
+
+    // The damage, all on this frame: a box `level * 1.5` either side of the
+    // landing point, from its floor up `level * 0.5`. Note the box is built on
+    // the landing point, not on the burst's raised position.
+    const float reach = static_cast<float>(level) * 1.5f;
+    const std::array<float, 6> box = {at.x - reach, at.x + reach, at.y - reach,
+                                      at.y + reach, at.z, at.z + static_cast<float>(level) * 0.5f};
+    FUN_00215e48_clear_hit_set(burst);
+    std::int8_t contacts = 0;
+    if (environment.hitTest != nullptr)
+    {
+      const auto parameters = orphen::ported::resource::HitParameters::unpack(hitParameters);
+      contacts = FUN_00215ac8_box_hit_test(burst, spawned, box, parameters, *environment.hitTest);
+    }
+    if (environment.FUN_00267d38_playSound)
+    {
+      environment.FUN_00267d38_playSound(0xE1, burst);
+    }
+    if (contacts == 0 || environment.hitTest == nullptr ||
+        environment.hitTest->DAT_003151c8_hitList == nullptr)
+    {
+      return static_cast<std::int32_t>(spawned);
+    }
+    // A spark on everyone caught except the target, at most ten, walking the
+    // list until an entry below 1.
+    const auto hitList = *environment.hitTest->DAT_003151c8_hitList;
+    int sparks = 0;
+    for (std::size_t index = 0; index < hitList.size() && index < 0x100 && sparks <= 9; ++index)
+    {
+      const auto victim = static_cast<std::int16_t>(hitList[index]);
+      if (victim < 1)
+      {
+        break;
+      }
+      if (victim == target)
+      {
+        continue;
+      }
+      FUN_002e5de0_spawn_dance_spark(static_cast<std::int8_t>(level), victim, hitParameters,
+                                     casterSlot, variant, environment);
+      ++sparks;
+    }
+    return static_cast<std::int32_t>(spawned);
+  }
+
+  // FUN_002e60c0 (0x002e60c0), type 0x14B: the cold gathering in Sephy's hand
+  // while Circle is held. The twin of FUN_002deae8 (Bite of Lightning's hand):
+  // the same growing circle on the landing spot for a player cast, a light
+  // whose **blue** channel follows the low byte of the raw charge -- only for
+  // 0x14B itself -- and the release on +0x60 == 1.
+  void FUN_002e60c0_dance_hand(OriginalEntity &effect,
+                               std::size_t /*slot*/,
+                               const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    const std::uint16_t entryFlags08 = effect.halfword08;
+    effect.depthBias133 = -0x0C;
+    effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4000u);
+    std::int16_t casterIndex = effect.parentSlot192;
+    if (casterIndex < 0)
+    {
+      casterIndex = static_cast<std::int16_t>(effect.targetIndex19c);
+    }
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+
+    const auto memberView = [&](std::int16_t index, ActorEnvironment::BattleMemberView &view) {
+      const auto &body = pool.slot(static_cast<std::size_t>(index));
+      const auto member = static_cast<std::uint32_t>(static_cast<std::int8_t>(body.byte95) - 1);
+      return environment.DAT_0031d7b0_battleMember && environment.DAT_0031d7b0_battleMember(member, view);
+    };
+    ActorEnvironment::BattleMemberView view;
+    bool haveBlock = memberView(casterIndex, view);
+
+    if (static_cast<std::int16_t>(effect.animationA0) != 2)
+    {
+      if (haveBlock && view.pendingAction0e == 0x0B)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(entryFlags08 | 0x4001u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+      // Anything but 0x8C/0x8D is "no longer casting this".
+      const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+      if (static_cast<std::uint8_t>(action + 0x74u) > 1u)
+      {
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        FUN_00225bc8_set_animation(effect, 2);
+      }
+    }
+
+    // The landing circle, for the player only, sized off pool slot 0's charge.
+    const auto step = static_cast<std::int16_t>(effect.animationA0);
+    if (step >= 0 && step < 2 && casterIndex == 0 && environment.FUN_002f1380_show_hit_effect &&
+        environment.FUN_002493f0_spell_landing)
+    {
+      ActorEnvironment::BattleMemberView lead;
+      std::int32_t charge = 0;
+      if (memberView(0, lead))
+      {
+        charge = static_cast<std::int16_t>(lead.chargeTimer3c);
+        charge = charge > 0x2580 ? 0x2580 : charge;
+      }
+      orphen::ported::psm2::Vec3 landing{};
+      environment.FUN_002493f0_spell_landing(0, landing);
+      environment.FUN_002f1380_show_hit_effect(static_cast<float>(charge) / 1000.0f + 1.5f, 1.0f, landing);
+    }
+
+    if (step == 1)
+    {
+      const std::uint16_t flags06 = effect.flags06;
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      effect.flags06 = static_cast<std::uint16_t>(flags06 & 0xFFEFu);
+      if ((flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(effect, 0);
+      }
+    }
+    else if (step == 0)
+    {
+      effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+      if (environment.DAT_00343888_lights != nullptr)
+      {
+        auto &lights = *environment.DAT_00343888_lights;
+        if (effect.lightSlot195 < 0)
+        {
+          const std::int32_t high = lights.FUN_00266008_allocateFromThree();
+          const std::int32_t allocated = high >= 0 ? high : lights.FUN_00266050_allocateFromZero();
+          effect.lightSlot195 = static_cast<std::int8_t>(allocated);
+          if (allocated >= 0)
+          {
+            auto &light = lights.slot(static_cast<std::uint32_t>(allocated));
+            light.radius = 0.2f; // DAT_003549ac
+            light.red = 0;
+            light.green = 0;
+            light.blue = 0;
+          }
+        }
+        if (effect.lightSlot195 >= 0)
+        {
+          auto &light = lights.slot(static_cast<std::uint32_t>(effect.lightSlot195));
+          const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+          // FUN_002494e0(caster, 1).
+          const std::int32_t charge = ((caster.state60 & 0x4000u) != 0 || !haveBlock)
+                                          ? 0
+                                          : static_cast<std::int16_t>(view.chargeTimer3c);
+          if (effect.typeId00 == 0x14B)
+          {
+            const auto low = static_cast<std::uint8_t>(charge & 0xFF);
+            const std::uint8_t cap = low < 0xFB ? low : 0xFA;
+            if (light.blue < cap)
+            {
+              light.blue = cap;
+            }
+            light.red = static_cast<std::uint8_t>(light.blue >> 2);
+            light.green = static_cast<std::uint8_t>(light.blue >> 2);
+          }
+          float radius = static_cast<float>(charge) / 100.0f;
+          if (2.0f < radius)
+          {
+            radius = 2.0f;
+          }
+          if (light.radius < radius)
+          {
+            light.radius = radius;
+          }
+          lights.noteRadius(static_cast<std::uint32_t>(effect.lightSlot195), light.radius);
+          if (environment.FUN_0020dc88_bone_point)
+          {
+            const auto point = environment.FUN_0020dc88_bone_point(
+                static_cast<std::size_t>(casterIndex), static_cast<std::size_t>(effect.attachBone194),
+                orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+            light.x = point.x;
+            light.y = point.y;
+            light.z = point.z;
+          }
+          // FUN_002660d0 on the caster.
+          if (caster.lightSlot195 >= 0)
+          {
+            auto &own = lights.slot(static_cast<std::uint32_t>(caster.lightSlot195));
+            own.x = caster.positionX20;
+            own.y = caster.positionZ24;
+            own.z = caster.positionY28;
+          }
+        }
+      }
+    }
+    else if (step == 2)
+    {
+      if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        auto &light =
+            environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195));
+        light.radius -= static_cast<float>(environment.frameTicks * 2) / 1000.0f;
+        if (light.radius < 0.001f) // DAT_003549b0
+        {
+          light.radius = 0.0f; // FUN_00266098
+          effect.lightSlot195 = -1;
+        }
+      }
+      if ((effect.flags06 & 1u) != 0)
+      {
+        casterIndex = static_cast<std::int16_t>(effect.targetIndex19c);
+        effect.parentSlot192 = casterIndex;
+        effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x10u);
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 1u);
+        effect.scale14c = 1.0f;
+        effect.scaleZ150 = 1.0f;
+        if (effect.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+        {
+          environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(effect.lightSlot195)).radius =
+              0.0f;
+        }
+        effect.lightSlot195 = -1;
+      }
+    }
+
+    // **The release**, +0x60 == 1 for one frame from FUN_0024e1a0's +0xAA
+    // 0x400 marker.
+    if (effect.state60 != 1)
+    {
+      return;
+    }
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    if (static_cast<std::int16_t>(effect.animationA0) != 2)
+    {
+      FUN_00225bc8_set_animation(effect, 2);
+      effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 0x10u);
+    }
+    effect.flags06 = static_cast<std::uint16_t>(effect.flags06 & 0xFFEFu);
+    effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 & 0xFFFEu);
+    FUN_00225bc8_set_animation(effect, 2);
+    effect.state60 = 0;
+
+    haveBlock = memberView(casterIndex, view);
+    std::int16_t target = haveBlock ? view.target : -1;
+    if (target < -3)
+    {
+      target = static_cast<std::int16_t>(-target); // FUN_002493b8
+    }
+    // Which Dance this is: the row whose hand type matches, else row 0.
+    std::int32_t variant = 0;
+    for (std::int32_t row = 0; row < 3; ++row)
+    {
+      if (kDAT_00326a80_danceSpells[row].hand == effect.typeId00)
+      {
+        variant = row;
+        break;
+      }
+    }
+    const std::uint32_t hitParameters = environment.DAT_0031d3c8_battleTableWord
+                                            ? environment.DAT_0031d3c8_battleTableWord(effect.hitParameters198)
+                                            : 0;
+    // FUN_0020dc88(caster, +0x194): the hand-bone point, the summon's anchor.
+    const OriginalEntity &thrower = pool.slot(static_cast<std::size_t>(casterIndex));
+    orphen::ported::psm2::Vec3 anchor{thrower.positionX20, thrower.positionZ24, thrower.positionY28};
+    if (environment.FUN_0020dc88_bone_point)
+    {
+      anchor = environment.FUN_0020dc88_bone_point(static_cast<std::size_t>(casterIndex),
+                                                  static_cast<std::size_t>(effect.attachBone194),
+                                                  orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f});
+    }
+    FUN_002e5998_launch_dance(effect.spawnParam94, effect.attackPower12c, target, hitParameters, anchor,
+                              casterIndex, variant, environment);
   }
 
   // ------------------------------------------------------- Bite of Lightning
@@ -4518,6 +5658,397 @@ namespace orphen::ported::entity
       stage.DAT_00355554_creatureFade() = 300;
     }
     entity.fadeLevel134 = static_cast<std::uint8_t>(stage.DAT_00355554_creatureFade() / 100);
+  }
+
+  // ------------------------------------------------ Dance of Ice, the summon
+  //
+  // FUN_002E65D0, type 0x1A8: what a full-charge Dance of Ice on a live target
+  // becomes. It sets the same stage as the four elemental summons -- the
+  // DAT_00354ECC hold, FUN_002DE4A8's freeze, the dim set -- but drives it with
+  // its own copies of every global: DAT_00355568 is its stage fade (where the
+  // others use DAT_0035554C), DAT_0035556C its veil, DAT_00355570 the facing it
+  // latches, and its camera is one curve of four points at DAT_0034FC80 built
+  // into 0x0058B8F8, walked by +0x62 from 0x708 to 0x1C20 -- a quarter of the
+  // way in before it starts. The look-at is bone 1 of the creature itself.
+  //
+  // Timeline: frame 0x18 pulses the screen smear, 0x1C starts the camera
+  // moving (and swings it a further 45 degrees), 0x22 is the blast -- the whole
+  // field released, then FUN_002E5998 at level **6** from the target, which is
+  // not 5 so it cannot summon again -- and 0x36 starts the stage back up.
+  //
+  // +0x94 is the state: 0 entry, 1 darkening, 100 dark and holding, 2
+  // brightening, back to 0 and gone. 3 is tested and never written.
+  //
+  // Not ported, as with the other summons: FUN_002D7038's veil quad
+  // (colour 0xF0014), the spirit-name banner (DAT_0031DA1E/20, armed at the
+  // blast when DAT_0031DA1C bit 0x40 is up), the pad rumble, and DAT_00355E18,
+  // which is armed to 600 frames on entry and read by nothing.
+  struct DanceSummonGlobals
+  {
+    std::int32_t DAT_00355568_stageFade = 0;
+    std::uint8_t DAT_0035556c_veilAlpha = 0;
+    float DAT_00355570_facing = 0.0f;
+    std::int16_t DAT_00355e16_curveEnd = 0;
+    std::int16_t DAT_00355e18_timer = 0;
+    std::int16_t DAT_00355e1a_smearPulse = 0;
+    orphen::ported::camera::Curve3 DAT_0058b8f8_eyeCurve;
+  };
+  DanceSummonGlobals &danceSummonGlobals()
+  {
+    static DanceSummonGlobals globals;
+    return globals;
+  }
+
+  // DAT_0034FC80, four (x, y, z) points in the creature's frame.
+  inline constexpr std::array<orphen::ported::psm2::Vec3, 4> kDAT_0034fc80_danceEyePoints = {{
+      {1.19799995f, -0.050999999f, 4.13999987f},
+      {2.64100003f, -0.00999999978f, 2.82200003f},
+      {0.709999979f, 1.27199996f, 3.9519999f},
+      {-1.74300003f, 0.686999977f, 3.38700008f},
+  }};
+  inline constexpr float kDAT_003549b4_danceLightFloor = 0.00100000005f;
+  inline constexpr float kDAT_003549b8_danceTurnRate = 0.00261799339f;
+  inline constexpr float kDAT_003549bc_danceEyeSwing = 0.785398006f;
+
+  void FUN_002e65d0_dance_summon(OriginalEntity &entity,
+                                 std::size_t slot,
+                                 const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+    SummonStage &stage = DAT_0058bb00_summonStage();
+    DanceSummonGlobals &globals = danceSummonGlobals();
+    auto &feedback = environment.DAT_00343878_frameFeedback;
+    const std::int32_t ticks = static_cast<std::int32_t>(environment.frameTicks);
+    const std::int16_t casterIndex = entity.lightningCaster1ae;
+    const std::int16_t targetIndex = entity.lightningTarget1ac;
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      return;
+    }
+    OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x4080u);
+    // DAT_0031DA65 by the caster's +0x95: the channel its voice bank is on.
+    const std::uint8_t channel = environment.DAT_0031da65_voiceChannel
+                                     ? environment.DAT_0031da65_voiceChannel(
+                                           static_cast<std::int16_t>(caster.byte95))
+                                     : 0;
+    const auto fadeCap = [&](std::uint8_t value) {
+      if (environment.DAT_00355700_globalFadeCap != nullptr)
+      {
+        *environment.DAT_00355700_globalFadeCap = value;
+      }
+    };
+    const auto speakOnce = [&](std::uint8_t bit, std::uint32_t clip) {
+      if ((entity.danceVoiceFlags1b7 & bit) != 0 || !environment.FUN_00206a90_voice_busy ||
+          environment.FUN_00206a90_voice_busy())
+      {
+        return;
+      }
+      if (environment.FUN_00206f08_play_voice && environment.FUN_00206f08_play_voice(channel, clip))
+      {
+        entity.danceVoiceFlags1b7 = static_cast<std::uint8_t>(entity.danceVoiceFlags1b7 | bit);
+      }
+    };
+
+    // ---- entry ----
+    if (entity.spawnParam94 == 0)
+    {
+      globals.DAT_00355e1a_smearPulse = 0;
+      entity.danceVoiceFlags1b7 = 0;
+      if (environment.DAT_00354ecc_setBattleSuspended)
+      {
+        environment.DAT_00354ecc_setBattleSuspended(1);
+      }
+      const ActorEnvironment::SummonExemptSlots exempt = summon_exempt(caster, environment);
+      SummonStage::FUN_002de4a8_freeze_field(pool);
+      SummonStage::FUN_002de640_release_one(entity);
+      SummonStage::FUN_002de640_release_one(caster);
+      SummonStage::FUN_002de640_release_one(pool, exempt.DAT_0031daac_shield);
+      stage.FUN_002d6e20_build_dim_set(pool);
+      stage.FUN_002d6f38_exclude(static_cast<std::int32_t>(slot));
+      stage.FUN_002d6f38_exclude(casterIndex);
+      stage.FUN_002d6f38_exclude(exempt.DAT_0031daac_shield);
+      // FUN_002e5c98(0, level - 1, power, 0, ...): one 0x1A9 on pool slot 0,
+      // the player, on animation 6.
+      FUN_002e5c98_spawn_dance_mark(static_cast<std::int8_t>(entity.danceLevel1b5 - 1),
+                                    static_cast<std::uint8_t>(entity.attackPower12c & 0xFFu),
+                                    entity.hitParameters198, entity.danceVariant1b2, environment);
+      globals.DAT_0058b8f8_eyeCurve.FUN_00266a78_build(kDAT_0034fc80_danceEyePoints, true);
+      globals.DAT_00355e16_curveEnd = 0x1C20;
+      entity.spawnParam94 = 1;
+      entity.fadeRamp62 = 0x708;
+      fadeCap(0x7F);
+      globals.DAT_00355568_stageFade = 0x319C;
+      globals.DAT_00355e18_timer = FUN_00248e48_arm_timer(600);
+      entity.danceLightState1b6 = 0;
+      if (entity.lightSlot195 < 0 && environment.DAT_00343888_lights != nullptr)
+      {
+        auto &lights = *environment.DAT_00343888_lights;
+        const std::int32_t high = lights.FUN_00266008_allocateFromThree();
+        const std::int32_t allocated = high >= 0 ? high : lights.FUN_00266050_allocateFromZero();
+        entity.lightSlot195 = static_cast<std::int8_t>(allocated);
+        if (allocated >= 0)
+        {
+          auto &light = lights.slot(static_cast<std::uint32_t>(allocated));
+          light.blue = 0x7D;
+          light.radius = 1.0f;
+          light.red = 0;
+          light.green = 0;
+          entity.danceLightState1b6 = 1;
+        }
+      }
+      // DAT_0035564C / DAT_00355658 / DAT_0035565C: roll 0, zoom 1.0, and a
+      // third word nothing reads.
+      if (environment.camera != nullptr)
+      {
+        environment.camera->setRoll(0.0f);
+        environment.camera->setZoomLog2(1.0f);
+      }
+      if (targetIndex >= 0 && static_cast<std::size_t>(targetIndex) < kEntitySlotCount)
+      {
+        const OriginalEntity &victim = pool.slot(static_cast<std::size_t>(targetIndex));
+        globals.DAT_00355570_facing = std::atan2(victim.positionZ24 - caster.positionZ24,
+                                                 victim.positionX20 - caster.positionX20);
+      }
+    }
+
+    // The summoning line, clip 2, as soon as the voice is free.
+    speakOnce(1, 2);
+
+    orphen::ported::render::LightTable::Slot *light = nullptr;
+    if (entity.lightSlot195 >= 0 && environment.DAT_00343888_lights != nullptr)
+    {
+      light = &environment.DAT_00343888_lights->slot(static_cast<std::uint32_t>(entity.lightSlot195));
+    }
+    if (entity.danceLightState1b6 == 1 && light != nullptr)
+    {
+      light->radius += static_cast<float>(ticks * 3) / 1000.0f;
+      if (40.0f < light->radius)
+      {
+        light->radius = 40.0f;
+        entity.danceLightState1b6 = 99;
+      }
+    }
+    if (entity.danceLightState1b6 == 2 && light != nullptr)
+    {
+      light->radius -= static_cast<float>(ticks * 6) / 1000.0f;
+      if (light->radius < kDAT_003549b4_danceLightFloor)
+      {
+        light->radius = 0.0f; // FUN_00266098
+        entity.lightSlot195 = -1;
+        light = nullptr;
+        entity.danceLightState1b6 = 0;
+      }
+    }
+
+    // The caster turns onto the latched angle; the creature stands in it.
+    const float step = FUN_0023a320_approach_angle(caster.facingRadians5c, globals.DAT_00355570_facing,
+                                                   static_cast<float>(ticks) * kDAT_003549b8_danceTurnRate);
+    caster.facingRadians5c = (step == 0.0f) ? globals.DAT_00355570_facing : caster.facingRadians5c + step;
+    entity.facingRadians5c = caster.facingRadians5c;
+    entity.positionX20 = caster.positionX20;
+    entity.positionZ24 = caster.positionZ24;
+    entity.groundHeight4c = caster.positionY28;
+    entity.positionY28 = caster.positionY28;
+    entity.previousGroundHeight50 = caster.positionY28;
+
+    // ---- the camera ----
+    if (static_cast<std::int16_t>(entity.fadeRamp62) < globals.DAT_00355e16_curveEnd)
+    {
+      float swing = 0.0f;
+      if (static_cast<std::int16_t>(entity.timelineCursorA8) >= 0x1C)
+      {
+        swing = kDAT_003549bc_danceEyeSwing;
+        entity.fadeRamp62 = static_cast<std::uint16_t>(entity.fadeRamp62 + ticks * 3);
+        if (feedback != nullptr)
+        {
+          feedback->set_DAT_00343880_rotation(0);
+        }
+      }
+      if (globals.DAT_00355e16_curveEnd < static_cast<std::int16_t>(entity.fadeRamp62))
+      {
+        entity.fadeRamp62 = static_cast<std::uint16_t>(globals.DAT_00355e16_curveEnd);
+      }
+      const orphen::ported::psm2::Vec3 sample = globals.DAT_0058b8f8_eyeCurve.FUN_00266ce8_sample(
+          static_cast<float>(static_cast<std::int16_t>(entity.fadeRamp62)) /
+          static_cast<float>(globals.DAT_00355e16_curveEnd));
+      const float radius = std::sqrt(sample.x * sample.x + sample.y * sample.y);
+      const float angle = orphen::ported::model::FUN_00216690_wrap_angle(
+          swing + entity.facingRadians5c + std::atan2(sample.y, sample.x));
+      if (environment.camera != nullptr)
+      {
+        environment.camera->FUN_00217d40_set_eye(orphen::ported::psm2::Vec3{
+            radius * std::cos(angle) + entity.positionX20, radius * std::sin(angle) + entity.positionZ24,
+            sample.z + entity.positionY28});
+        if (environment.FUN_0020dc88_bone_point)
+        {
+          // Stored at 0x00326A98 on the way.
+          environment.camera->FUN_00217d10_set_look_at(
+              environment.FUN_0020dc88_bone_point(slot, 1, orphen::ported::psm2::Vec3{0.0f, 0.0f, 0.0f}));
+        }
+      }
+    }
+    if (entity.danceLightState1b6 != 0 && light != nullptr)
+    {
+      light->x = caster.positionX20;
+      light->y = caster.positionZ24;
+      light->z = caster.positionY28;
+      environment.DAT_00343888_lights->noteRadius(static_cast<std::uint32_t>(entity.lightSlot195),
+                                                  light->radius);
+    }
+
+    // ---- the blast ----
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == 0x22 && (entity.flags06 & 4u) != 0)
+    {
+      SummonStage::FUN_002de500_release_field(pool);
+      entity.fireballSparkId19b = 0x18;
+      // FUN_002493b8 on the caster: its control block's target, made positive.
+      std::int16_t aimed = -1;
+      ActorEnvironment::BattleMemberView view;
+      if (environment.DAT_0031d7b0_battleMember &&
+          environment.DAT_0031d7b0_battleMember(
+              static_cast<std::uint32_t>(static_cast<std::int8_t>(caster.byte95) - 1), view))
+      {
+        aimed = view.target < -3 ? static_cast<std::int16_t>(-view.target) : view.target;
+      }
+      if (aimed >= 3)
+      {
+        speakOnce(2, 3);
+        FUN_002e5998_launch_dance(6, static_cast<std::uint8_t>(entity.attackPower12c & 0xFFu), targetIndex,
+                                  entity.hitParameters198,
+                                  orphen::ported::psm2::Vec3{entity.summonAnchorX19c, entity.summonAnchorZ1a0,
+                                                             entity.summonAnchorY1a4},
+                                  casterIndex, entity.danceVariant1b2, environment);
+      }
+    }
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == 0x36 && (entity.flags06 & 4u) != 0)
+    {
+      entity.spawnParam94 = 2;
+    }
+
+    // FUN_002D7038(0xF0014, DAT_0035556C, 0x4000, 2): the veil. Not ported.
+
+    if (entity.spawnParam94 == 1)
+    {
+      globals.DAT_00355568_stageFade -= ticks * 6;
+      if (globals.DAT_00355568_stageFade < 300)
+      {
+        globals.DAT_00355568_stageFade = 300;
+        entity.spawnParam94 = 100;
+      }
+      const auto cap = static_cast<std::uint8_t>(globals.DAT_00355568_stageFade / 100);
+      fadeCap(cap);
+      globals.DAT_0035556c_veilAlpha = static_cast<std::uint8_t>(0x7F - cap);
+    }
+
+    // ---- the smear ----
+    if (static_cast<std::int16_t>(entity.timelineCursorA8) == 0x18 && (entity.flags06 & 4u) != 0)
+    {
+      globals.DAT_00355e1a_smearPulse = 0x28;
+      if (feedback != nullptr)
+      {
+        feedback->set_DAT_00343880_rotation(5);
+      }
+    }
+    if (feedback != nullptr)
+    {
+      if (globals.DAT_00355e1a_smearPulse != 0)
+      {
+        feedback->FUN_00264448_set_alpha(
+            static_cast<std::uint8_t>((globals.DAT_00355e1a_smearPulse & 0xFF) + 0x5A));
+        feedback->flip_DAT_00343880_rotation();
+        feedback->set_DAT_0034387c_scale(0x32, 0x32);
+      }
+      else
+      {
+        feedback->FUN_00264448_set_alpha(0x55);
+        feedback->flip_DAT_00343880_rotation();
+        feedback->set_DAT_0034387c_scale(0x19, 0x19);
+      }
+    }
+    if (globals.DAT_00355e1a_smearPulse != 0)
+    {
+      --globals.DAT_00355e1a_smearPulse;
+    }
+
+    const auto finish = [&] {
+      fadeCap(0);
+      entity.spawnParam94 = 0;
+      FUN_00225bc8_set_animation(entity, 8);
+      entity.fadeLevel134 = 0;
+      FUN_00265ec0_destroy_entity(slot, environment);
+      if (environment.DAT_00354ecc_setBattleSuspended)
+      {
+        environment.DAT_00354ecc_setBattleSuspended(0);
+      }
+      if (feedback != nullptr)
+      {
+        feedback->set_DAT_00343880_rotation(0);
+        feedback->FUN_00264448_set_alpha(0);
+        feedback->set_DAT_0034387c_scale(0, 0);
+      }
+    };
+
+    if (entity.spawnParam94 == 3)
+    {
+      if (globals.DAT_00355568_stageFade == 0)
+      {
+        globals.DAT_00355568_stageFade = 0x319C;
+      }
+      globals.DAT_00355568_stageFade -= ticks * 6;
+      if (globals.DAT_00355568_stageFade < 300)
+      {
+        globals.DAT_00355568_stageFade = 300;
+        entity.spawnParam94 = 100;
+      }
+      fadeCap(static_cast<std::uint8_t>(globals.DAT_00355568_stageFade / 100));
+    }
+    if (entity.spawnParam94 == 2)
+    {
+      globals.DAT_00355568_stageFade += ticks * 6;
+      if (globals.DAT_00355568_stageFade > 0x319C)
+      {
+        globals.DAT_00355568_stageFade = 0;
+        entity.spawnParam94 = 100;
+      }
+      const auto cap = static_cast<std::uint8_t>(globals.DAT_00355568_stageFade / 100);
+      fadeCap(cap);
+      globals.DAT_0035556c_veilAlpha = static_cast<std::uint8_t>(0x7F - cap);
+      if (light != nullptr)
+      {
+        light->radius = 1.0f;
+      }
+      if (globals.DAT_00355568_stageFade == 0)
+      {
+        // The original returns here, before the dim pass.
+        finish();
+        return;
+      }
+    }
+    if ((entity.flags06 & 1u) != 0)
+    {
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10u);
+      entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 1u);
+      if (entity.spawnParam94 == 100 && globals.DAT_00355568_stageFade == 0)
+      {
+        finish();
+      }
+      if (feedback != nullptr)
+      {
+        feedback->FUN_00264448_set_alpha(0);
+        feedback->set_DAT_00343880_rotation(0);
+        feedback->set_DAT_0034387c_scale(0, 0);
+      }
+    }
+
+    stage.FUN_002d6fa0_apply(pool, environment.DAT_00355700_globalFadeCap != nullptr
+                                       ? *environment.DAT_00355700_globalFadeCap
+                                       : 0);
   }
 
   // ---------------------------------------------------- Pinnacle of the Sun
@@ -7000,6 +8531,125 @@ namespace orphen::ported::entity
     }
   }
 
+  // FUN_002da6f0 (0x002da6f0), type 0x176: Blazing Baton, the weapon class 5's
+  // kind-0 states (Sephy's Cross) put in her hand.
+  //
+  // Much simpler than the 0x139 blade. Every frame it re-pins itself to bone
+  // 0x0C of the caster named by +0x192, copies the caster's facing, and picks
+  // its pose from the caster's control-block action -- 6 for the dash (0x85),
+  // 7 for the hold (0x86), and 0 for anything outside 0x84..0x86 or with a
+  // 0x0B park pending. During the cut (0x84) it keeps the 3/4/5 that
+  // FUN_0024d670 gave it, and only those poses (above 2) run the swept hit
+  // test, with the same five-frame re-hit cooldown in +0x62 the blade uses.
+  // The poses are written raw into +0xA0, so the timeline is not restarted.
+  //
+  // **Before the first Cross press +0x192 is still FUN_00242df0's -1**, and the
+  // original reads "pool slot -1" -- whatever sits 0x1D8 bytes below
+  // 0x0058BEB0 -- for the caster's floor, facing and party byte. Hardware
+  // (savestates/s14_e003_entry.p2s, stepped 600) shows what that comes to:
+  // +0x08 bit 0 clear, animation 0, facing 0, +0x60 0xFFFF, and a floor of
+  // -152.95 that is plainly not a floor. Animation 0 draws nothing there. The
+  // port reproduces all of it except the garbage floor, which it leaves alone.
+  void FUN_002da6f0_baton(OriginalEntity &baton,
+                          std::size_t slot,
+                          const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr)
+    {
+      return;
+    }
+    EntityPool &pool = *environment.entityPool;
+
+    baton.positionX20 = 0.0f;
+    baton.positionZ24 = 0.0f;
+    baton.positionY28 = 0.0f;
+    baton.attachBone194 = 0x0C;
+    baton.halfword04 = 0x19;
+    baton.flags06 = static_cast<std::uint16_t>(baton.flags06 & 0xFFEFu);
+    baton.rotationY158 = 0.0f;
+    // A signed halfword here, where the blade reads +0x192 as a byte.
+    const std::int16_t casterIndex = baton.parentSlot192;
+    baton.state60 = static_cast<std::uint16_t>(casterIndex);
+    if (casterIndex < 0 || static_cast<std::size_t>(casterIndex) >= kEntitySlotCount)
+    {
+      baton.halfword08 = static_cast<std::uint16_t>(baton.halfword08 & 0xFFFEu);
+      baton.facingRadians5c = 0.0f;
+      baton.rotationX154 = 1.57079601f;
+      baton.animationA0 = 0;
+      return;
+    }
+    const OriginalEntity &caster = pool.slot(static_cast<std::size_t>(casterIndex));
+    baton.groundHeight4c = caster.previousGroundHeight50;
+    baton.previousGroundHeight50 = caster.previousGroundHeight50;
+    baton.halfword08 = static_cast<std::uint16_t>(baton.halfword08 & 0xFFFEu);
+    baton.facingRadians5c = caster.facingRadians5c;
+
+    ActorEnvironment::BattleMemberView view;
+    const auto member = static_cast<std::uint32_t>(static_cast<std::int8_t>(caster.byte95) - 1);
+    const bool haveBlock = environment.DAT_0031d7b0_battleMember &&
+                           environment.DAT_0031d7b0_battleMember(member, view);
+    const std::uint8_t pending = haveBlock ? view.pendingAction0e : 0;
+    const std::uint8_t action = haveBlock ? view.currentAction0f : 0;
+
+    // DAT_00354840..0035484C: -30, -160, -90 and +90 degrees.
+    if (action == 0x85)
+    {
+      baton.rotationX154 = -0.523598671f;
+      baton.animationA0 = 6;
+    }
+    else if (action == 0x86)
+    {
+      baton.rotationX154 = -2.79252625f;
+      baton.rotationY158 = -1.57079601f;
+      baton.animationA0 = 7;
+    }
+    else
+    {
+      baton.rotationX154 = 1.57079601f;
+    }
+
+    if (baton.fadeRamp62 != 0)
+    {
+      // FUN_00248e58, as the blade writes it out.
+      const std::uint16_t stepped =
+          static_cast<std::uint16_t>(baton.fadeRamp62 - environment.frameTicks);
+      baton.fadeRamp62 = (baton.fadeRamp62 < stepped) ? std::uint16_t{0} : stepped;
+    }
+    if (pending == 0x0B)
+    {
+      baton.animationA0 = 0;
+    }
+    if (static_cast<std::uint8_t>(action + 0x7C) > 2)
+    {
+      baton.animationA0 = 0;
+    }
+    if (static_cast<std::int16_t>(baton.animationA0) <= 2)
+    {
+      return;
+    }
+
+    baton.scale14c = 1.0f;
+    baton.scaleZ150 = 1.0f;
+    if (environment.hitTest == nullptr)
+    {
+      return;
+    }
+    // +0x198 is the address of the slot's four-byte element block.
+    const std::uint32_t packed = environment.DAT_0031d3c8_battleTableWord
+                                     ? environment.DAT_0031d3c8_battleTableWord(baton.hitParameters198)
+                                     : 0;
+    const auto parameters = orphen::ported::resource::HitParameters::unpack(packed);
+    if (FUN_002148a8_swept_hit_test(baton, slot, parameters, *environment.hitTest) != 0 &&
+        baton.fadeRamp62 == 0)
+    {
+      if (environment.FUN_00267d38_playSound)
+      {
+        environment.FUN_00267d38_playSound(0xCE, baton);
+      }
+      baton.fadeRamp62 = static_cast<std::uint16_t>(5 * 32);
+    }
+  }
+
   bool actorHandlerIsImplemented(std::uint32_t handlerAddress)
   {
     switch (handlerAddress)
@@ -7023,6 +8673,13 @@ namespace orphen::ported::entity
     case 0x002F13D0u: // FUN_002f13d0, type 0x1E3, the shared hit effect
     case 0x002E7328u: // FUN_002e7328, type 0x1C7, the guard shield
     case 0x002DA350u: // FUN_002da350, type 0x139, the battle sword blade
+    case 0x002DA6F0u: // FUN_002da6f0, type 0x176, Blazing Baton
+    case 0x002E4198u: // FUN_002e4198, type 0x14A, Ball of Wind's hand effect
+    case 0x002E45A0u: // FUN_002e45a0, type 0x165, the ball of wind
+    case 0x002E60C0u: // FUN_002e60c0, type 0x14B, Dance of Ice's hand effect
+    case 0x002E6080u: // LAB_002e6080, type 0x17B, its burst
+    case 0x002E60A0u: // LAB_002e60a0, type 0x1A9, a bystander's burst
+    case 0x002E65D0u: // FUN_002e65d0, type 0x1A8, the Dance of Ice summon
     case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
     case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
     case 0x002D73E8u: // FUN_002d73e8, type 0x192, the target cursor
@@ -7131,6 +8788,19 @@ namespace orphen::ported::entity
       return "FUN_002e7328 (guard shield)";
     case 0x002DA350u:
       return "FUN_002da350 (battle sword blade)";
+    case 0x002DA6F0u:
+      return "FUN_002da6f0 (blazing baton)";
+    case 0x002E4198u:
+      return "FUN_002e4198 (ball of wind hand)";
+    case 0x002E45A0u:
+      return "FUN_002e45a0 (ball of wind)";
+    case 0x002E60C0u:
+      return "FUN_002e60c0 (dance of ice hand)";
+    case 0x002E6080u:
+    case 0x002E60A0u:
+      return "LAB_002e6080 (dance burst)";
+    case 0x002E65D0u:
+      return "FUN_002e65d0 (dance of ice summon)";
     case 0x002DA8A0u:
       return "FUN_002da8a0 (hand of pyro)";
     case 0x002DAE60u:
@@ -7389,6 +9059,25 @@ namespace orphen::ported::entity
         break;
       case 0x002DA350u:
         FUN_002da350_battle_blade(entity, slot, slotEnvironment);
+        break;
+      case 0x002DA6F0u:
+        FUN_002da6f0_baton(entity, slot, slotEnvironment);
+        break;
+      case 0x002E4198u:
+        FUN_002e4198_wind_hand(entity, slot, slotEnvironment);
+        break;
+      case 0x002E45A0u:
+        FUN_002e45a0_wind_ball(entity, slot, slotEnvironment);
+        break;
+      case 0x002E60C0u:
+        FUN_002e60c0_dance_hand(entity, slot, slotEnvironment);
+        break;
+      case 0x002E6080u:
+      case 0x002E60A0u:
+        LAB_002e6080_dance_burst(entity, slot, slotEnvironment);
+        break;
+      case 0x002E65D0u:
+        FUN_002e65d0_dance_summon(entity, slot, slotEnvironment);
         break;
       case 0x002DA8A0u:
         FUN_002da8a0_hand_effect(entity, slot, slotEnvironment);

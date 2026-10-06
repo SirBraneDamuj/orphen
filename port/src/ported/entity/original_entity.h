@@ -930,6 +930,18 @@ namespace orphen::ported::entity
     std::uint16_t lightningTimer1b0 = 0; // +0x1B0: FUN_00248e48(0x20), 32 frames of life.
     std::uint8_t lightningByte1b2 = 0;   // +0x1B2: cleared on spawn; nothing in src/ reads it.
     std::int8_t lightningLevel1b3 = 0;   // +0x1B3: the charge level, 1..5.
+    // Dance of Ice's bursts (0x17B, 0x1A9; FUN_002e5998 / FUN_002e5de0) use the
+    // same block two bytes on: +0x1B4 cleared, +0x1B5 the charge level. Neither
+    // stub behaviour reads them.
+    std::uint8_t danceByte1b4 = 0;
+    std::int8_t danceLevel1b5 = 0;
+    // The Dance summon (0x1A8, FUN_002e65d0) adds three more: which Dance row
+    // it is at +0x1B2 (a short, over the lightning byte), its light's ramp at
+    // +0x1B6 (1 growing, 99 held, 2 shrinking, 0 none) and, at +0x1B7, which
+    // of its two voice lines have been spoken (bits 1 and 2).
+    std::int16_t danceVariant1b2 = 0;
+    std::uint8_t danceLightState1b6 = 0;
+    std::uint8_t danceVoiceFlags1b7 = 0;
 
     // The level-5 summon block, types 0x13F..0x142. It sits **on top of** the
     // burst block above rather than beside it: FUN_002E00D8 and its three

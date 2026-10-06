@@ -809,6 +809,10 @@ namespace orphen::port
     orphen::harness::InventoryView inventoryView() const;
     void adjustItemCountFromHarness(int item, int delta);
     void cycleLoadoutFromHarness(int slot, int delta);
+    // The loadout row the panels edit: the picked tab's, or the lead's while
+    // harnessLoadoutRow_ is -1.
+    int harnessLoadoutRow() const;
+    int harnessLoadoutRow_ = -1;
     void printRenderReport() const;
     void printModelReport() const;
     void printEntityModelBindings() const;

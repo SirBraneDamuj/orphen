@@ -2045,6 +2045,564 @@ namespace orphen::ported::battle
       return 0;
     }
 
+    // ===================================================== class 5 (Sephy)
+    //
+    // The nine handlers the class-5 table at 0x0031DDC0 does not share with
+    // class 1. They are recognisably the same machines -- a hold that charges,
+    // a release that hands the effect its hit parameters -- but they key off
+    // different timeline markers, and every one of them hangs its effect off
+    // the bone whose role nibble is 4 rather than a fixed hand bone.
+
+    // FUN_0020dd78(caster, 4) and the caster's slot into +0x192: the attachment
+    // states 111 and 113 give a freshly spawned effect.
+    void attachToRoleBone4(const StateContext &context, OriginalEntity &effect)
+    {
+      effect.parentSlot192 = static_cast<std::int16_t>(context.entitySlot & 0xFFu);
+      const auto &boneForRole = context.environment->FUN_0020dd78_bone_for_role;
+      effect.attachBone194 =
+          static_cast<std::int8_t>(boneForRole ? boneForRole(context.entitySlot, 4) : 0);
+    }
+
+    OriginalEntity *tableEntity(const StateContext &context, std::uint32_t tableBase)
+    {
+      const std::int32_t slot = context.party->entitySlotAt(tableBase + context.member * 4);
+      return slot == kNoEntity ? nullptr
+                               : &context.environment->pool->slot(static_cast<std::size_t>(slot));
+    }
+
+    // The bail-out every spell state opens with when the member has no spell
+    // entity: back to the idle, action 6.
+    std::uint16_t abandonToIdle(const StateContext &context)
+    {
+      context.entity->state60 = 0x4078;
+      context.entity->flags06 = static_cast<std::uint16_t>(context.entity->flags06 | 0x10);
+      setAction(context, kActionIdle06);
+      return 0;
+    }
+
+    // The effect's hit parameters, as every release writes them: the caster's
+    // attack power plus the slot's item byte (+ `bonus`), and +0x198 pointed at
+    // the slot's element block. `bonus` is the charge level for state 105 only.
+    void stampHitParameters(const StateContext &context, OriginalEntity &effect, std::int32_t bonus)
+    {
+      const auto chosen =
+          static_cast<std::int8_t>(context.party->selectedSlot(static_cast<std::int16_t>(context.entity->byte95)));
+      const std::uint32_t recordBase = BattleTables::partyRecord(context.member);
+      effect.attackPower12c = static_cast<std::uint16_t>(
+          context.entity->attackPower12c +
+          context.party->tables().read<std::int8_t>(recordBase + record::kSpellByte14 +
+                                                    static_cast<std::uint32_t>(chosen)) +
+          bonus);
+      effect.hitParameters198 = recordBase + record::kSpellBlock18 + static_cast<std::uint32_t>(chosen) * 4;
+    }
+
+    // The release shout, clip 1, owed once state 100 has been reached. 101
+    // when it started, 102 when the voice was busy and the line was dropped.
+    // FUN_00206f08's own result is not looked at.
+    void speakReleaseLine(const StateContext &context)
+    {
+      BattleParty &party = *context.party;
+      const std::uint32_t voiceSlot = party.selectedSlot(static_cast<std::int16_t>(context.entity->byte95));
+      const std::uint32_t at = kDAT_0031da60_voiceState + voiceSlot * 2;
+      if (party.tables().read<std::int16_t>(at) != 100)
+      {
+        return;
+      }
+      const auto &environment = *context.environment;
+      if (environment.FUN_00206a90_voice_busy && environment.FUN_00206a90_voice_busy())
+      {
+        party.tables().write<std::int16_t>(at, 0x66);
+        return;
+      }
+      if (environment.FUN_00206f08_play_voice)
+      {
+        environment.FUN_00206f08_play_voice(voiceSlot, 1);
+      }
+      party.tables().write<std::int16_t>(at, 0x65);
+    }
+
+    // Clip 0, the incantation, if the bank has landed (step 3) and nothing
+    // else is speaking. Only a clip that actually started moves the step on.
+    void speakChargeLine(const StateContext &context, std::uint32_t voiceSlot)
+    {
+      BattleParty &party = *context.party;
+      const auto &environment = *context.environment;
+      const std::uint32_t at = kDAT_0031da60_voiceState + voiceSlot * 2;
+      if (party.tables().read<std::int16_t>(at) == 3 && environment.FUN_00206a90_voice_busy &&
+          !environment.FUN_00206a90_voice_busy() && environment.FUN_00206f08_play_voice &&
+          environment.FUN_00206f08_play_voice(voiceSlot, 0))
+      {
+        party.tables().write<std::int16_t>(at, 100);
+      }
+    }
+
+    // The end of every class-5 cast: action 6, one of the two idle animations
+    // written raw, and state 120 *without* the restart bit.
+    void finishCast(const StateContext &context)
+    {
+      setAction(context, kActionIdle06);
+      const std::uint32_t roll =
+          context.environment->FUN_00216868_random ? context.environment->FUN_00216868_random() : 0;
+      context.entity->animationA0 = (roll & 1) ? 0x13 : 0x2F;
+      context.entity->state60 = 0x78;
+    }
+
+    // FUN_0024d670 (class 5, state 105): the kind-0 release, Sephy's three-cut
+    // combo 0x33 -> 0x30 -> 0x31 -> 0x33. The effect (DAT_0031da9c) plays
+    // animations 3, 4 and 5 alongside.
+    //
+    // Unlike Orphen's 105 a re-press is not spent at once. The restart bit
+    // stays up, and the handler returns 1, until the cut reaches its link frame
+    // -- cursor 6 on 0x33 and 0x30, 12 on 0x31 -- and only then moves to the
+    // next cut. The input unlocks (return 0) only in the windows below the
+    // link frames, and only with no press already waiting.
+    std::uint16_t stateComboAttack105Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      const auto requestRecover = [&] {
+        entity.state60 = 0x406C;
+        entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        setAction(context, kActionRecover87);
+      };
+      if (tableEntity(context, kDAT_0031da9c_attackEntity) == nullptr)
+      {
+        requestRecover();
+        return 0;
+      }
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        const std::uint16_t animation = entity.animationA0;
+        if (animation != 0x33 && animation != 0x30 && animation != 0x31)
+        {
+          // ---- the first cut ----
+          respawnSlotEffect(*context.environment, context.member, kDAT_0031da9c_attackEntity,
+                            context.entitySlot, true, false, false);
+          entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+          FUN_00248ee0_set_animation(entity, 0x33);
+          orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+          OriginalEntity *effect = tableEntity(context, kDAT_0031da9c_attackEntity);
+          if (effect != nullptr)
+          {
+            FUN_00248ee0_set_animation(*effect, 3);
+            orphen::ported::entity::FUN_00215e48_clear_hit_set(*effect);
+          }
+          // The charge level rides on the power as a signed byte.
+          const auto level =
+              static_cast<std::int8_t>(FUN_00249270_charge(party, context.member, 0x780));
+          if (effect != nullptr)
+          {
+            stampHitParameters(context, *effect, level);
+          }
+          if (level >= 5)
+          {
+            party.FUN_0023f620_count(0, static_cast<std::int8_t>(entity.byte95));
+          }
+        }
+
+        OriginalEntity *effect = tableEntity(context, kDAT_0031da9c_attackEntity);
+        if (effect == nullptr)
+        {
+          return 0;
+        }
+        // The effect's *state* is the caster's slot.
+        effect->state60 = static_cast<std::uint16_t>(context.entitySlot & 0xFFu);
+        effect->parentSlot192 = static_cast<std::int16_t>(context.entitySlot & 0xFFu);
+
+        const bool ticked = (entity.flags06 & 4) != 0;
+        const auto cursor = static_cast<std::int16_t>(entity.timelineCursorA8);
+        std::uint16_t nextCut = 0;
+        std::uint16_t effectAnimation = 0;
+        if (entity.animationA0 == 0x33 && cursor == 6 && ticked)
+        {
+          nextCut = 0x30;
+          effectAnimation = 4;
+        }
+        else if (entity.animationA0 == 0x30 && cursor == 6 && ticked)
+        {
+          nextCut = 0x31;
+          effectAnimation = 5;
+        }
+        else if (entity.animationA0 == 0x31 && cursor == 0x0C && ticked)
+        {
+          nextCut = 0x33;
+          effectAnimation = 3;
+        }
+        else
+        {
+          return 1;
+        }
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        FUN_00248ee0_set_animation(entity, nextCut);
+        FUN_00248ee0_set_animation(*effect, effectAnimation);
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(*effect);
+        if (context.environment->FUN_00267d38_play_at_entity)
+        {
+          context.environment->FUN_00267d38_play_at_entity(0xE5, context.entitySlot);
+        }
+      }
+
+      if ((entity.flags06 & 1) != 0)
+      {
+        if (OriginalEntity *effect = tableEntity(context, kDAT_0031da9c_attackEntity))
+        {
+          FUN_00248ee0_set_animation(*effect, 0);
+        }
+        requestRecover();
+        return 1;
+      }
+      // The cancel windows.
+      const auto cursor = static_cast<std::int16_t>(entity.timelineCursorA8);
+      const bool open = (entity.animationA0 == 0x33 && cursor < 9) ||
+                        ((entity.animationA0 == 0x30 || entity.animationA0 == 0x31) &&
+                         (cursor == 4 || cursor == 6));
+      if (!open)
+      {
+        return 1;
+      }
+      return ((entity.state60 & 0x4000) != 0) ? 1 : 0;
+    }
+
+    // FUN_0024d4d8 (class 5, state 107): the kind-0 hold. Respawns the attack
+    // effect only if the slot's type changed, holds it on animation 7 (written
+    // raw every frame, so its timeline never advances) and charges while the
+    // ground ring is open. No timeline marker gates the charge here.
+    std::uint16_t stateChargeAttack107Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        respawnSlotEffect(*context.environment, context.member, kDAT_0031da9c_attackEntity,
+                          context.entitySlot, true, false, false);
+        OriginalEntity *effect = tableEntity(context, kDAT_0031da9c_attackEntity);
+        if (effect != nullptr)
+        {
+          effect->state60 = static_cast<std::uint16_t>(context.entitySlot & 0xFFu);
+          effect->parentSlot192 = static_cast<std::int16_t>(context.entitySlot & 0xFFu);
+        }
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+        if (effect != nullptr)
+        {
+          FUN_00248ee0_set_animation(*effect, 7);
+        }
+        FUN_00248e98_set_animation_if_changed(entity, 0xAB);
+        party.FUN_00249108_clear_turn_flags(context.member);
+      }
+      if (OriginalEntity *effect = tableEntity(context, kDAT_0031da9c_attackEntity))
+      {
+        effect->animationA0 = 7;
+      }
+      if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0)
+      {
+        FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+      }
+      return 0;
+    }
+
+    // FUN_0024dbf0 (class 5, state 109): the kind > 0 release, and the body
+    // state 112 tail-calls. The throw marker is +0xAA bit **0x200**, where
+    // Orphen's is 0x100, and the effect is left on whatever animation it has.
+    std::uint16_t stateReleaseSpell109Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      OriginalEntity *effect = tableEntity(context, kDAT_0031daac_shieldEntity);
+      if (effect == nullptr)
+      {
+        return abandonToIdle(context);
+      }
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        FUN_00248e98_set_animation_if_changed(entity, 0x14);
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+      }
+      if ((entity.flagsAa & 0x200) != 0 && (entity.flags06 & 4) != 0)
+      {
+        stampHitParameters(context, *effect, 0);
+        effect->state60 = 1;
+        effect->spawnParam94 = static_cast<std::uint8_t>(FUN_00249270_charge(party, context.member, 0x780));
+        FUN_002d9b78_drive_cast_ring(*context.environment, context.member, false);
+      }
+      if ((entity.flags06 & 1) == 0)
+      {
+        return 1;
+      }
+      finishCast(context);
+      return 0;
+    }
+
+    // FUN_0024d148 (class 5, state 111): the kind > 0 hold. The effect is
+    // respawned, shown (animation 1, +0x08 bit 0x10) and hung off role bone 4
+    // on entry; the charge builds on the frames animation 0x14 raises +0xAA
+    // bit 0x100.
+    //
+    // The 0x6B branches are reproduced as written: they are for a 111 handler
+    // entered with state 107, which never happens through this table.
+    std::uint16_t stateChargeSpellA111Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      if (tableEntity(context, kDAT_0031daac_shieldEntity) == nullptr)
+      {
+        return abandonToIdle(context);
+      }
+      const bool voiced = FUN_00249348_is_voiced_player(party, entity);
+      const std::uint32_t voiceSlot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        if (entity.state60 == 0x6B)
+        {
+          FUN_00248e98_set_animation_if_changed(entity, 0x33);
+        }
+        else
+        {
+          respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
+                            context.entitySlot, false, false, false);
+          FUN_00248e98_set_animation_if_changed(entity, 0x14);
+          if (OriginalEntity *effect = tableEntity(context, kDAT_0031daac_shieldEntity))
+          {
+            FUN_00248ee0_set_animation(*effect, 1);
+            effect->halfword08 = static_cast<std::uint16_t>(effect->halfword08 | 0x10);
+            attachToRoleBone4(context, *effect);
+          }
+          if (voiced)
+          {
+            party.tables().write<std::int16_t>(kDAT_0031da60_voiceState + voiceSlot * 2, 1);
+          }
+        }
+        party.FUN_00249108_clear_turn_flags(context.member);
+      }
+
+      if (voiced && entity.state60 != 0x6B)
+      {
+        FUN_0024c058_step_spell_voice(*context.environment, voiceSlot);
+      }
+
+      if (entity.animationA0 == 0x14)
+      {
+        if ((entity.flagsAa & 0x100) != 0 && (entity.flags06 & 4) != 0)
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+          if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0)
+          {
+            FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+            if (voiced)
+            {
+              speakChargeLine(context, voiceSlot);
+            }
+          }
+        }
+      }
+      else if (entity.animationA0 == 0x33)
+      {
+        if (static_cast<std::int16_t>(entity.timelineCursorA8) == 2 && (entity.flags06 & 4) != 0)
+        {
+          entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
+        }
+        if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0)
+        {
+          FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+        }
+      }
+      return 0;
+    }
+
+    // FUN_0024db10 (class 5, state 112): the kind > 0 release's voice and
+    // count bookkeeping, then FUN_0024dbf0. Unlike Orphen's 112 it is not gated
+    // on a timeline frame -- it runs every frame of the release.
+    std::uint16_t stateReleaseSpellA112Class5(const StateContext &context, std::uint16_t charge)
+    {
+      auto &entity = *context.entity;
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+      if (FUN_00249348_is_voiced_player(*context.party, entity))
+      {
+        if (FUN_00249270_charge(*context.party, context.member, 0x780) > 4)
+        {
+          context.party->FUN_0023f620_count(3, static_cast<std::int8_t>(entity.byte95));
+        }
+        speakReleaseLine(context);
+      }
+      return stateReleaseSpell109Class5(context, charge);
+    }
+
+    // FUN_0024dda8 (class 5, state 113): the kind < 0 hold. Two timeline
+    // markers record a loop: +0xAA bit 0x100 stores the cursor (halved) in
+    // party record +0x45 and is also the incantation's cue, bit 0x200 stores
+    // it in +0x46. Once both are set the animation is wound back from +0x46's
+    // frame to the one before +0x45's for as long as the button is held.
+    // Until +0x45 is set the landing spot tracks the target and nothing
+    // charges.
+    std::uint16_t stateChargeSpellB113Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      auto &tables = party.tables();
+      if (tableEntity(context, kDAT_0031daac_shieldEntity) == nullptr)
+      {
+        return abandonToIdle(context);
+      }
+      const bool voiced = FUN_00249348_is_voiced_player(party, entity);
+      const std::uint32_t voiceSlot = party.selectedSlot(static_cast<std::int16_t>(entity.byte95));
+      const std::uint32_t recordBase = BattleTables::partyRecord(context.member);
+      const std::uint32_t loopStartAt = recordBase + record::kAimMarker45;
+      const std::uint32_t loopEndAt = recordBase + record::kLoopEnd46;
+
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        respawnSlotEffect(*context.environment, context.member, kDAT_0031daac_shieldEntity,
+                          context.entitySlot, false, false, false);
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        if (OriginalEntity *effect = tableEntity(context, kDAT_0031daac_shieldEntity))
+        {
+          FUN_00248ee0_set_animation(*effect, 1);
+          effect->halfword08 = static_cast<std::uint16_t>(effect->halfword08 | 0x10);
+          attachToRoleBone4(context, *effect);
+        }
+        party.FUN_00249108_clear_turn_flags(context.member);
+        if (OriginalEntity *effect = tableEntity(context, kDAT_0031daac_shieldEntity))
+        {
+          effect->halfword08 = static_cast<std::uint16_t>(effect->halfword08 | 0x10);
+        }
+        tables.write<std::uint8_t>(recordBase + record::kCastMarker44, 0xFF);
+        tables.write<std::uint8_t>(loopStartAt, 0xFF);
+        tables.write<std::uint8_t>(loopEndAt, 0xFF);
+        FUN_00248e98_set_animation_if_changed(entity, 0x3A);
+        if (voiced)
+        {
+          tables.write<std::int16_t>(kDAT_0031da60_voiceState + voiceSlot * 2, 1);
+        }
+      }
+
+      if (voiced)
+      {
+        FUN_0024c058_step_spell_voice(*context.environment, voiceSlot);
+      }
+
+      if (tables.read<std::uint8_t>(loopStartAt) != 0xFF)
+      {
+        FUN_00249128_accumulate_charge(party, context.member, context.environment->frameTicks);
+      }
+      else
+      {
+        // The original copies the target's position with no range check; with
+        // no target that is a read off the front of the pool that nothing
+        // looks at, so the port leaves the floats alone, as state 113 does.
+        const std::int16_t target = tables.read<std::int16_t>(context.control + control::kTarget2c);
+        if (target >= 0 && static_cast<std::size_t>(target) < orphen::ported::entity::kEntitySlotCount)
+        {
+          const auto &body = context.environment->pool->slot(static_cast<std::size_t>(target));
+          tables.write<float>(recordBase + record::kTargetPos28 + 0, body.positionX20);
+          tables.write<float>(recordBase + record::kTargetPos28 + 4, body.positionZ24);
+          tables.write<float>(recordBase + record::kTargetPos28 + 8, body.positionY28);
+        }
+      }
+
+      const auto halfCursor = [&] {
+        return static_cast<std::uint8_t>(static_cast<std::int16_t>(entity.timelineCursorA8) / 2);
+      };
+      if ((entity.flagsAa & 0x100) != 0)
+      {
+        if (FUN_002d9b78_drive_cast_ring(*context.environment, context.member, true) != 0 && voiced)
+        {
+          speakChargeLine(context, voiceSlot);
+        }
+        tables.write<std::uint8_t>(loopStartAt, halfCursor());
+      }
+      if ((entity.flagsAa & 0x200) != 0)
+      {
+        tables.write<std::uint8_t>(loopEndAt, halfCursor());
+      }
+      const std::uint8_t loopEnd = tables.read<std::uint8_t>(loopEndAt);
+      if (loopEnd != 0xFF && static_cast<std::int16_t>(entity.timelineCursorA8) == loopEnd * 2 &&
+          (entity.flags06 & 4) != 0)
+      {
+        entity.timelineCursorA8 =
+            static_cast<std::uint16_t>((tables.read<std::uint8_t>(loopStartAt) - 1) * 2);
+      }
+      return 0;
+    }
+
+    // FUN_0024e1a0 (class 5, state 114): the kind < 0 release. The marker is
+    // +0xAA bit 0x400; a level of 5 or more is counted as the summon. It
+    // returns 1 on every path but the no-effect one, the last frame included.
+    std::uint16_t stateReleaseSpellB114Class5(const StateContext &context, std::uint16_t)
+    {
+      auto &entity = *context.entity;
+      BattleParty &party = *context.party;
+      OriginalEntity *effect = tableEntity(context, kDAT_0031daac_shieldEntity);
+      if (effect == nullptr)
+      {
+        return abandonToIdle(context);
+      }
+      entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(entity);
+      }
+      if (FUN_00249348_is_voiced_player(party, entity))
+      {
+        speakReleaseLine(context);
+      }
+      if ((entity.flagsAa & 0x400) != 0 && (entity.flags06 & 4) != 0)
+      {
+        stampHitParameters(context, *effect, 0);
+        effect->state60 = 1;
+        const std::int32_t level = FUN_00249270_charge(party, context.member, 0x780);
+        effect->spawnParam94 = static_cast<std::uint8_t>(level);
+        FUN_002d9b78_drive_cast_ring(*context.environment, context.member, false);
+        if (level >= 5)
+        {
+          party.FUN_0023f620_count(2, static_cast<std::int8_t>(entity.byte95));
+        }
+      }
+      if ((entity.flags06 & 1) != 0)
+      {
+        if (static_cast<std::int16_t>(effect->animationA0) != 2)
+        {
+          FUN_00248ee0_set_animation(*effect, 2);
+          effect->halfword08 = static_cast<std::uint16_t>(effect->halfword08 | 0x10);
+        }
+        finishCast(context);
+      }
+      return 1;
+    }
+
+    // FUN_0024e428 (class 5, state 121), a tail call into FUN_0024e448: one of
+    // nine poses at random, held for a timer in +0x62, then back to the idle.
+    // The table is nine {animation, ticks} halfword pairs copied from
+    // 0x0034C8B0 onto the stack. The *duration* is indexed by entity +0x94, not
+    // by the pose drawn -- every duration is 0x78, so it cannot matter.
+    std::uint16_t statePose121Class5(const StateContext &context, std::uint16_t charge)
+    {
+      constexpr std::array<std::uint16_t, 9> kPoses = {0x46, 0x47, 0x48, 0x63, 0x64,
+                                                       0x72, 0x7F, 0x13, 0x17};
+      constexpr std::int16_t kPoseTicks = 0x78;
+      auto &entity = *context.entity;
+      if ((entity.state60 & 0x4000) != 0)
+      {
+        entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
+        const std::uint32_t roll =
+            context.environment->FUN_00216868_random ? context.environment->FUN_00216868_random() : 0;
+        FUN_00248e98_set_animation_if_changed(entity, kPoses[(roll & 0xFFFFu) % 9u]);
+        charge = static_cast<std::uint16_t>(FUN_00248e48_arm_timer(kPoseTicks));
+      }
+      charge = FUN_00248e58_step_timer(charge, context.environment->frameTicks);
+      entity.fadeRamp62 = charge;
+      if (static_cast<std::int16_t>(charge) == 0)
+      {
+        entity.state60 = 0x4078;
+        setAction(context, kActionIdle06);
+      }
+      return charge;
+    }
+
     // The class-1 table at 0x0031DD60, states 100..123. A null entry is a state
     // whose handler this slice does not port; --battle-report names any that a
     // run actually reached.
@@ -2074,6 +2632,50 @@ namespace orphen::ported::battle
         stateIdle120,          // 122 FUN_0024cf20
         nullptr,               // 123 -- the original's own null entry
     };
+
+    // The class-5 table at 0x0031DDC0, dumped from the executable. Fifteen
+    // entries are class 1's own addresses; the nine marked are Sephy's.
+    constexpr std::array<StateHandler, 24> kClass5States = {
+        nullptr,                     // 100
+        stateNothing,                // 101 LAB_0024a538
+        stateDamage102,              // 102 FUN_0024a540
+        stateNothing,                // 103 LAB_0024a868
+        stateNothing,                // 104 LAB_0024a868
+        stateComboAttack105Class5,   // 105 FUN_0024d670  *
+        stateApproach106,            // 106 FUN_0024b410
+        stateChargeAttack107Class5,  // 107 FUN_0024d4d8  *
+        stateWalkBack108,            // 108 FUN_0024a870
+        stateReleaseSpell109Class5,  // 109 FUN_0024dbf0  *
+        stateNothing,                // 110 LAB_0024dda0  * `jr ra; move v0, zero`
+        stateChargeSpellA111Class5,  // 111 FUN_0024d148  *
+        stateReleaseSpellA112Class5, // 112 FUN_0024db10  *
+        stateChargeSpellB113Class5,  // 113 FUN_0024dda8  *
+        stateReleaseSpellB114Class5, // 114 FUN_0024e1a0  *
+        stateShieldHold115,          // 115 FUN_0024bd30
+        stateEndAction116,           // 116 LAB_0024bd08
+        stateGuard117,               // 117 FUN_0024cba0
+        stateEndAction118,           // 118 LAB_0024cef8
+        stateNothing,                // 119 LAB_0024cf18
+        stateIdle120,                // 120 FUN_0024cf20
+        statePose121Class5,          // 121 FUN_0024e428  *
+        stateIdle120,                // 122 FUN_0024cf20
+        nullptr,                     // 123
+    };
+
+    // FUN_00249610:311-349 picks the table by party record +0x00. Only the
+    // classes with a ported table answer; the rest still fall through silently.
+    const std::array<StateHandler, 24> *stateTableForClass(std::int16_t characterClass)
+    {
+      switch (characterClass)
+      {
+      case 1:
+        return &kClass1States;
+      case 5:
+        return &kClass5States;
+      default:
+        return nullptr;
+      }
+    }
   } // namespace
 
   // FUN_002493f0 (0x002493f0). Twenty lines, and the whole of "where does an
@@ -2109,10 +2711,11 @@ namespace orphen::ported::battle
     return target;
   }
 
-  bool class1StateIsPorted(std::uint16_t state)
+  bool classStateIsPorted(std::int16_t characterClass, std::uint16_t state)
   {
+    const auto *table = stateTableForClass(characterClass);
     const std::uint32_t index = static_cast<std::uint32_t>(state & 0xBFFF) - 100u;
-    return index < kClass1States.size() && kClass1States[index] != nullptr;
+    return table != nullptr && index < table->size() && (*table)[index] != nullptr;
   }
 
   std::uint32_t FUN_0024a360_take_pending_action(const BattleUpdateEnvironment &environment,
@@ -2489,18 +3092,11 @@ namespace orphen::ported::battle
       }
     }
 
-    // :311-349. The dispatch. Only class 1 has a table here.
+    // :311-349. The dispatch, through the member's class table.
     const std::uint16_t state = entity.state60;
     const std::uint32_t index = static_cast<std::uint32_t>(state & 0xBFFF) - 100u;
-    if (characterClass != 1)
-    {
-      if (environment.trace != nullptr)
-      {
-        environment.trace->recordState(state, false);
-      }
-      return;
-    }
-    if (index >= kClass1States.size() || kClass1States[index] == nullptr)
+    const auto *states = stateTableForClass(characterClass);
+    if (states == nullptr || index >= states->size() || (*states)[index] == nullptr)
     {
       if (environment.trace != nullptr)
       {
@@ -2516,7 +3112,7 @@ namespace orphen::ported::battle
     const StateContext context{&environment, &party, &entity, entitySlot, member, control};
     // The handler takes +0x62 and its return goes straight back there. That
     // round trip is the charge value travelling between frames.
-    entity.fadeRamp62 = kClass1States[index](context, entity.fadeRamp62);
+    entity.fadeRamp62 = (*states)[index](context, entity.fadeRamp62);
 
     // :362-364. A non-zero +0x62 raises bit 0 of the control block's flag word,
     // which is what FUN_002462c8 tests before it will accept a new press.

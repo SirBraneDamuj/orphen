@@ -9674,6 +9674,14 @@ tables the same way (see the Equip screen section for both):
   count goes up one. Nothing else is written, which is all the real swap
   writes too.
 
+- **Character tabs.** A row of tabs across the top picks whose row the panel
+  edits: Orphen, Cleo, Magnus, Sephy, Zeus and Mar, loadout rows 0..5, named
+  by `FUN_0025B9E8(row + 0x86)` as the Equip screen names them. The lead's tab
+  carries a `*` and is the one shown until another is clicked. Row 6 (type
+  `0x16`, not a fighter) has no tab: its name message reads "No location
+  name". The ITEMS panel follows the same tab, since its filter is the
+  character's roster bit too; the counts are one table for everybody.
+
 PLAYER > ITEMS is the same for the Item screen's list: the ring built as slot 3,
 which asks the record for `0x80` in place of `0x100`. Twelve records carry it,
 all with `0x00BF` (every roster bit 0..5), so every lead sees the same list:
@@ -10177,6 +10185,54 @@ four extra labels on a case that was already there.
 Not ported, and called out where they would go: `FUN_0023C220`, the per-victim
 offer that swings the battle camera onto whatever was hit, and `FUN_0023BBD8`'s
 rumble. `FUN_002D6BD0`, the volley's own hit cue, is here.
+
+### Sephy fights as battle class 5
+
+`s14_e003` is Sephy's own battle, the one Magnus's route reaches from
+`s03_e001`: three type `0x8B` dummies, with Sephy made the lead by the scene's
+own `0xB0`, so `--scene s14_e003` is a faithful way in. On hardware it is the
+debug menu's MAP SELECT, `MP14` > `BG03` (Right steps the section, Cross picks).
+Its save states are `savestates/s14_e003_*.p2s`.
+
+`FUN_00249610` dispatches through a 24-entry table picked by party record
+`+0x00`, and the port had only class 1's. Sephy is class 5
+(`0x0031DDC0`), so she sat in state 101 for good; state 120 never ran, so
+control `+0x2C` was never turned from -1 into the 1 that starts the target
+cycler, which is why nothing could be targeted. Fifteen of her 24 entries are
+class 1's addresses. Her nine are in `battle_character_update.cpp` under
+"class 5". Her effects hang off `FUN_0020DD78(caster, 4)`, a bone role, where
+Orphen's use fixed bones.
+
+Her loadout is row 3, and all three spells are ported:
+
+| Button | Item | Kind | States | Effect entities |
+|---|---|---|---|---|
+| Triangle | `18` Ball of Wind | 12 | 111 -> 112/109 | `0x14A` hand, `0x165` ball, `0x178` burst |
+| Circle | `1C` Dance of Ice | -2 | 113 -> 114 | `0x14B` hand, `0x17B` burst, `0x1A9` bystander, `0x1A8` summon |
+| Cross | `14` Blazing Baton | 0 | 107 -> 106 -> 105 | `0x176` baton |
+
+Checked against hardware in the same arena, one cast at a time, with the
+damage read off dummy `+0x12A`: the baton's cut takes it 62 to 59, the wind
+ball 59 to 48 (ball in slot 39, burst in slot 41 on both), Dance of Ice 48 to
+41 at the hardware's own charge of `0x240`. The state sequence and the dash's
+frame count match too.
+
+Dance of Ice at full charge on a live target summons instead: `FUN_002E5F48`
+puts creature `0x1A8` (`FUN_002E65D0`) on the hand. It sets the same stage as
+Orphen's five summons -- freeze, dim set, `DAT_00354ECC` -- with its own copies
+of the globals (`DAT_00355568` fade, `DAT_0035556C` veil, `DAT_00355570`
+facing) and one four-point eye curve at `DAT_0034FC80`, looking at the
+creature's bone 1. Its blast at timeline frame `0x22` is `FUN_002E5998` again
+at level 6. On hardware (`savestates/s14_e003_ice_full_charge.p2s`) the blast
+lands 170-173 frames after the release and takes 7 off all three dummies; the
+port lands it at 171 for the same 7 each, and the creature is gone inside the
+same 40-frame window. The swirling smear around it reads stronger in the port
+than on hardware; not chased. Its veil quad and banner are not ported, as for
+the other summons.
+
+A wind ball that traps its target raises the `FUN_00248D58`
+flag the type `0x6A` HUD sprite reads, and that sprite is not ported. Sephy as
+the lead never traps; see `FUN_002e45a0_wind_ball`.
 
 ### The five level-5 summons
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <string>
 
 namespace orphen::harness
@@ -105,8 +106,10 @@ namespace orphen::harness
 
     // Button ids. Player Params: param * 4 + step. Inventory: an item's count
     // buttons are item * 2 + (more), the loadout's are kLoadoutButtonBase +
-    // slot * 2 + (next).
+    // slot * 2 + (next), and a character tab's kCharacterButtonBase + row.
     constexpr int kLoadoutButtonBase = 0x1000;
+    // A character tab is kCharacterButtonBase + its loadout row.
+    constexpr int kCharacterButtonBase = 0x2000;
 
     int paramButtonId(PlayerParam param, PlayerParamStep step)
     {
@@ -300,9 +303,51 @@ namespace orphen::harness
     return panel;
   }
 
+  namespace
+  {
+    std::string upper(std::string text)
+    {
+      std::transform(text.begin(), text.end(), text.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+      return text;
+    }
+
+    // One tab per character, wrapping onto a second row when the names run
+    // past the panel. The shown one is bracketed text rather than a button;
+    // the lead carries a star.
+    void characterTabs(ToolPanel &panel, const InventoryView &view)
+    {
+      int column = 0;
+      for (const auto &tab : view.characters)
+      {
+        const std::string name = upper(tab.name) + (tab.lead ? "*" : "");
+        const int width = static_cast<int>(name.size()) + 3;
+        if (column > 0 && column + width > kInventoryColumns)
+        {
+          panel.nextRow();
+          column = 0;
+        }
+        if (tab.loadoutRow == view.loadoutRow)
+        {
+          panel.text(column, "[" + name + "]", ToolPanel::Tone::Heading);
+        }
+        else
+        {
+          panel.button(column + 1, name, kCharacterButtonBase + tab.loadoutRow);
+        }
+        column += width;
+      }
+      if (column > 0)
+      {
+        panel.nextRow();
+      }
+    }
+  } // namespace
+
   ToolPanel buildInventoryPanel(float scale, float left, float top, const InventoryView &view)
   {
     ToolPanel panel("SPELLS", kInventoryColumns, scale, left, top);
+    characterTabs(panel, view);
     if (!view.available)
     {
       panel.text(0, "NO LEAD WITH A LOADOUT HERE", ToolPanel::Tone::Dim);
@@ -310,7 +355,8 @@ namespace orphen::harness
       return panel;
     }
 
-    panel.heading("EQUIPPED  (LOADOUT ROW " + std::to_string(view.loadoutRow) + ")");
+    panel.heading("EQUIPPED  (" + upper(view.characterName) + ", ROW " +
+                  std::to_string(view.loadoutRow) + ")");
     for (std::size_t slot = 0; slot < view.loadout.size(); ++slot)
     {
       const int id = kLoadoutButtonBase + static_cast<int>(slot) * 2;
@@ -353,6 +399,10 @@ namespace orphen::harness
       return panel;
     }
 
+    // The counts are one table for everybody; only the filter is the
+    // character's, and it follows the Spells panel's tab.
+    panel.text(0, "USABLE BY " + upper(view.characterName), ToolPanel::Tone::Dim);
+    panel.nextRow();
     panel.heading("ITEM                               HELD");
     for (const auto &item : view.fieldItems)
     {
@@ -378,7 +428,12 @@ namespace orphen::harness
       request.step = static_cast<PlayerParamStep>(buttonId % 4);
       return request;
     case ToolPanelKind::Inventory:
-      if (buttonId >= kLoadoutButtonBase)
+      if (buttonId >= kCharacterButtonBase)
+      {
+        request.kind = HarnessRequest::Kind::SelectCharacter;
+        request.loadoutRow = buttonId - kCharacterButtonBase;
+      }
+      else if (buttonId >= kLoadoutButtonBase)
       {
         request.kind = HarnessRequest::Kind::CycleLoadout;
         request.slot = (buttonId - kLoadoutButtonBase) / 2;

@@ -21,7 +21,15 @@
 //   class 1 (Orphen) 0x0031DD60   class 5 0x0031DDC0   class 3 0x0031DE20
 //   class 4          0x0031DE80   class 6 0x0031DEE0   class 7 0x0031DF40
 //
-// Only class 1 is ported. The handler is called with the entity and the
+// Classes 1 and 5 are ported. Class 5 is Sephy, and her table shares fifteen
+// of its 24 entries with Orphen's -- the damage, approach, walk-back, shield,
+// guard and idle handlers are the same addresses. Her own nine are the attacks
+// and the two spell kinds (105, 107, 109..114) and 121. Without the table she
+// sat in state 101 for ever, and state 120 is what flips control block +0x2C
+// to 1 so the target cycler can run -- which is why s14_e003 could not target
+// anything.
+//
+// The handler is called with the entity and the
 // character's charge halfword (+0x62) and its return value is written back
 // there, so that round trip is load-bearing: break it and charging looks like
 // it does nothing.
@@ -87,6 +95,9 @@ namespace orphen::ported::battle
     std::function<void(std::uint16_t cue, std::size_t slot)> FUN_00267d38_play_at_entity;
     // FUN_00216868, through the runtime's seeded LCG.
     std::function<std::uint32_t()> FUN_00216868_random;
+    // FUN_0020dd78: the bone carrying a role nibble on an entity's model.
+    // Class 5 hangs its spell effects off role 4 rather than a fixed bone.
+    std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
 
     // == The spell voice ==
     //
@@ -147,8 +158,8 @@ namespace orphen::ported::battle
                                           const orphen::ported::entity::OriginalEntity &caster,
                                           orphen::ported::psm2::Vec3 &out);
 
-  // The class-1 table at 0x0031DD60, exposed so --battle-report can say whether
-  // a state it saw has a handler.
-  bool class1StateIsPorted(std::uint16_t state);
+  // The class tables at 0x0031DD60 (class 1) and 0x0031DDC0 (class 5), exposed
+  // so --battle-report can say whether a state it saw has a handler.
+  bool classStateIsPorted(std::int16_t characterClass, std::uint16_t state);
 
 } // namespace orphen::ported::battle

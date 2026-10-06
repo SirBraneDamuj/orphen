@@ -121,6 +121,12 @@ namespace orphen::ported::battle
     // starts getting up. DAT_00355cb0 is the party record plus 0x28.
     inline constexpr std::uint32_t kDownTimer3e = 0x3E;
     inline constexpr std::uint32_t kAimMarker45 = 0x45;   // DAT_00355cb0 + 0x1D, signed byte
+    // DAT_00355cb0 + 0x1C and + 0x1E. Class 5's state 113 (FUN_0024dda8) seeds
+    // all three bytes 0x44..0x46 with 0xFF; +0x46 is the frame the held cast
+    // loops *from* (halved), and +0x45 the frame it loops back to. Nothing reads
+    // +0x44.
+    inline constexpr std::uint32_t kCastMarker44 = 0x44;
+    inline constexpr std::uint32_t kLoopEnd46 = 0x46;
   } // namespace record
 
   // ----------------------------------------- control block field offsets

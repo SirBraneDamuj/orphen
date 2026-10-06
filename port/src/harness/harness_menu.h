@@ -112,11 +112,23 @@ namespace orphen::harness
     // The loadout slot it is equipped in on the lead's row, or -1.
     int equippedSlot = -1;
   };
+  // One tab per party character that has anything it could put in a spell
+  // slot: a DAT_003437A0 row and the name SCR.BIN 0xBF group 1 gives its type.
+  struct InventoryCharacterTab
+  {
+    int loadoutRow = 0;
+    std::string name;
+    bool lead = false;
+  };
   struct InventoryView
   {
-    // False with no lead, or a lead with no loadout row (FUN_002298D0's 7).
+    // False with no character to show -- no lead and no tab picked, or a lead
+    // with no loadout row (FUN_002298D0's 7).
     bool available = false;
+    // The row the panels are showing: the picked tab's, or the lead's.
     int loadoutRow = 0;
+    std::string characterName;
+    std::vector<InventoryCharacterTab> characters;
     std::array<int, 3> loadout{};
     std::array<std::string, 3> loadoutNames;
     // Whether each slot has anything it could be swapped for.
@@ -142,6 +154,7 @@ namespace orphen::harness
       Hit,             // hitKind 1..5, the same kinds as the 1..5 keys
       AdjustItemCount, // item, delta
       CycleLoadout,    // slot, delta (+1 next held spell, -1 previous)
+      SelectCharacter, // loadoutRow: the Spells/Items panels' tab
     };
     Kind kind = Kind::Heal;
     orphen::ported::debug::PlayerParam param = orphen::ported::debug::PlayerParam::HitPoints;
@@ -150,6 +163,7 @@ namespace orphen::harness
     int item = 0;
     int slot = 0;
     int delta = 0;
+    int loadoutRow = 0;
   };
 
   // A panel button's id back into the request it stands for.
