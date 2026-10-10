@@ -4349,6 +4349,37 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_0025ee08_read_position();
 
+    // 0x5D (FUN_0025f290): selector, speed and angle. The speed is scaled by
+    // DAT_00352BC8 (100000.0), then by 1/32 and the frame's ticks, and pushed
+    // along the wrapped angle into the selected entity's +0x30/+0x34 movement
+    // request -- not its position, so physics still owns the move. s03_e001's
+    // return from s14_e003 walks Sephy off the ledge with it each frame, and
+    // the cutscene waits on the flag her script raises once she lands.
+    case 0x5D:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedCurrent = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      const std::int32_t speedRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t angleRaw = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      resolveEntityFrom(selector, savedCurrent);
+      if (currentEntity_ >= orphen::ported::entity::kEntitySlotCount || environment_.entityPool == nullptr)
+      {
+        return 0;
+      }
+      const float speed = static_cast<float>(speedRaw) / kScriptCoordinateScale * 0.03125f *
+                          static_cast<float>(environment_.frameTicks);
+      const float angle = FUN_00216690_wrapAngle(static_cast<float>(angleRaw) / kScriptCoordinateScale);
+      auto &entity = environment_.entityPool->slot(currentEntity_);
+      entity.desiredDeltaX30 += speed * std::cos(angle);
+      entity.desiredDeltaZ34 += speed * std::sin(angle);
+      return 0;
+    }
+
     // 0x5E / 0x5F (FUN_0025f380): magnitude and angle in, one cartesian
     // component out -- cos for 0x5E, sin for 0x5F. (FUN_00305130 is cosf and
     // FUN_00305218 is sinf, not the other way round; two files under analyzed/
@@ -6179,8 +6210,34 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0x12C (FUN_002615B0) and 0x12D (FUN_002615D8): one expression, a music
+    // slot. 0x12C answers FUN_00206238, "is a ramp in flight", which a script
+    // polls to wait out a fade; 0x12D is FUN_00205F40's hard stop. They used to
+    // fall into 0x132 below, whose inline u32 swallowed the next opcode's bytes
+    // -- s03_e001's return from s14_e003 stops slot 3 this way and then hung.
     case 0x12C:
     case 0x12D:
+    {
+      note(OpcodeSupport::Modelled);
+      const auto slot = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_ || slot < 0)
+      {
+        return 0;
+      }
+      if (opcode == 0x12C)
+      {
+        return environment_.FUN_00206238_music_slot_ramping &&
+                       environment_.FUN_00206238_music_slot_ramping(static_cast<std::size_t>(slot))
+                   ? 1u
+                   : 0u;
+      }
+      if (environment_.FUN_00205f40_stop_music_slot)
+      {
+        environment_.FUN_00205f40_stop_music_slot(static_cast<std::size_t>(slot));
+      }
+      return 0;
+    }
+
     // 0x132 / 0x133 (FUN_00261700 / FUN_00261760): one expression -- the
     // channel, which the original asserts is 0..2 -- then an **inline u32**
     // VOICE.BIN entry id read straight off the stream, into

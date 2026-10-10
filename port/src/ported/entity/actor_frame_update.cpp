@@ -8,6 +8,7 @@
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
 #include "ported/entity/original_breakable_prop.h"
+#include "ported/entity/original_element_object.h"
 #include "ported/entity/original_ship_fire.h"
 #include "ported/entity/original_status_aura.h"
 #include "ported/entity/original_summon_stage.h"
@@ -8680,6 +8681,8 @@ namespace orphen::ported::entity
     case 0x002E6080u: // LAB_002e6080, type 0x17B, its burst
     case 0x002E60A0u: // LAB_002e60a0, type 0x1A9, a bystander's burst
     case 0x002E65D0u: // FUN_002e65d0, type 0x1A8, the Dance of Ice summon
+    case 0x002F11C8u: // 0x002f11c8, type 0x6D, the Lamp (FUN_002484d0)
+    case 0x00239F80u: // LAB_00239f80, type 0x122, the burst FUN_002d6ce0 spawns
     case 0x002DA8A0u: // FUN_002da8a0, type 0x13D, Hand of Pyro's hand effect
     case 0x002DAE60u: // FUN_002dae60, type 0x15B, the fireball it throws
     case 0x002D73E8u: // FUN_002d73e8, type 0x192, the target cursor
@@ -8801,6 +8804,10 @@ namespace orphen::ported::entity
       return "LAB_002e6080 (dance burst)";
     case 0x002E65D0u:
       return "FUN_002e65d0 (dance of ice summon)";
+    case 0x002F11C8u:
+      return "FUN_002484d0 (lamp 0x6d)";
+    case 0x00239F80u:
+      return "LAB_00239f80 (burst 0x122)";
     case 0x002DA8A0u:
       return "FUN_002da8a0 (hand of pyro)";
     case 0x002DAE60u:
@@ -9078,6 +9085,12 @@ namespace orphen::ported::entity
         break;
       case 0x002E65D0u:
         FUN_002e65d0_dance_summon(entity, slot, slotEnvironment);
+        break;
+      case 0x002F11C8u:
+        FUN_002f11c8_lamp(entity, slot, slotEnvironment);
+        break;
+      case 0x00239F80u:
+        LAB_00239f80_burst(entity, slot, slotEnvironment);
         break;
       case 0x002DA8A0u:
         FUN_002da8a0_hand_effect(entity, slot, slotEnvironment);

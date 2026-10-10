@@ -7,6 +7,7 @@
 //   src/FUN_002f0608.c  the spawn hook: it *retypes* the entity
 //   src/FUN_002f08f8.c  the per-frame behaviour (not ported yet)
 //   src/FUN_0025e7c0.c  the caller, from the map's object placement table
+//   src/FUN_002484d0.c  type 0x6D, the Lamp (below)
 //
 // == Why one of these is not the type it was spawned as ==
 //
@@ -44,6 +45,7 @@
 #include "ported/resource/character_stats.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace orphen::ported::entity
@@ -74,5 +76,49 @@ namespace orphen::ported::entity
   bool FUN_002f0608_element_object(OriginalEntity &entity,
                                    const orphen::ported::resource::StatRecord &record,
                                    ElementDamageTable &damage);
+
+  // == Type 0x6D, the Lamp ==
+  //
+  //   0x002F11C8  the type's entry in the primary table. Five instructions:
+  //               +0x02 &= 0xFE7F, then `j FUN_002484D0`.
+  //   src/FUN_002484d0.c  the lamp itself
+  //
+  // s14_e003's two hanging lanterns are placed as streamed prop 0x287 with a
+  // negative tag, so the placement walk binds them into the actor table with
+  // one hit point; the scene's init entry then writes type 0x6D over them
+  // (opcode 0x77, register 0). The model stays 0x287's.
+  //
+  // +0x94 is the phase. 0 and 1 hang: every frame the lamp offers +0x02 bit 8
+  // (a target for the player's side) unless it already carries 0x1000, and
+  // pins its body to 1.0. The first frame anything leaves damage in +0xBE it
+  // drops: hit points to zero, +0x02 trades bit 8 for 0x1000 so it now hurts
+  // the enemy side, +0x04 loses bit 8 (gravity back on) and gains 0x10 (no
+  // longer a victim), animation 4, phase 100. Phase 100 waits for FUN_002262C0
+  // to report +0x0C bit 4, standing on ground, then arms a 1200-frame timer;
+  // phase 101 rings ten type 0x47 flames round it; phase 102 sweeps its own hit
+  // volume against the pool every frame with DAT_00354F88's parameters until
+  // the timer runs out and it frees itself. The flames go with it: a 0x47
+  // frees itself once its +0x198 parent's type reads 0 (original_breakable_prop.h).
+  void FUN_002f11c8_lamp(OriginalEntity &entity,
+                         std::size_t slot,
+                         const ActorEnvironment &environment);
+
+  // FUN_002D6CE0(scaleX, scaleZ, animation, position): a type 0x122 burst,
+  // drawn on top (+0x08 |= 0x4040) with its ground pinned to the point's
+  // height. The position is in entity field order, +0x20/+0x24/+0x28, the
+  // last one the height. Returns the slot, or -1 when the pool is full.
+  std::int32_t FUN_002d6ce0_spawn_burst(float scaleX,
+                                        float scaleZ,
+                                        std::uint16_t animation,
+                                        float x,
+                                        float y,
+                                        float z,
+                                        const ActorEnvironment &environment);
+
+  // LAB_00239F80, type 0x122's handler. No Ghidra function; six instructions:
+  // `if (+0x94 == 0) +0x94 += 1; if (+0x06 & 1) FUN_00265EC0`.
+  void LAB_00239f80_burst(OriginalEntity &entity,
+                          std::size_t slot,
+                          const ActorEnvironment &environment);
 
 } // namespace orphen::ported::entity

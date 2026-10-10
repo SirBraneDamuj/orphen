@@ -898,6 +898,84 @@ namespace orphen::ported::battle
   //
   // DAT_00354E90 is the entity the display is aimed at, and the whole block is
   // skipped without one: a battle with nothing targetable never freezes.
+  bool BattleParty::FUN_0023da10_victory_camera(const Environment &environment,
+                                                const BattleEncounter &encounter,
+                                                std::uint32_t frameTicks)
+  {
+    // :12-15. Suspended, or carrying bit 4 or 0x10: nothing, and the caller
+    // takes the zero as "done".
+    if (DAT_00354ecc_ != 0 || (DAT_00354fc2() & 4u) != 0 || (DAT_00354fc2() & 0x10u) != 0)
+    {
+      return false;
+    }
+    if (environment.pool == nullptr)
+    {
+      return false;
+    }
+    const auto &pool = *environment.pool;
+
+    // :19-56. Pick the subject once: walking the table from the front, the
+    // bound record with the smallest non-zero death count whose entity still
+    // has a type and still answers to the record's id.
+    if (DAT_00354e88_closeUpSubject_ < 0)
+    {
+      std::uint8_t best = 0xFF;
+      for (std::int32_t index = 0; index < encounter.DAT_00354eba_actorCount(); ++index)
+      {
+        const std::uint32_t at = encounter.record(static_cast<std::size_t>(index));
+        const std::uint8_t dead = encounter.read<std::uint8_t>(at + actor::kAlive0c);
+        if (dead == 0 || dead >= best)
+        {
+          continue;
+        }
+        const std::int32_t slot = encounter.entitySlot(at);
+        if (slot < 0 || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+        {
+          continue;
+        }
+        const auto &entity = pool.slot(static_cast<std::size_t>(slot));
+        if (entity.typeId00 == 0 ||
+            static_cast<std::int8_t>(entity.byte95) !=
+                static_cast<std::int8_t>(encounter.read<std::uint8_t>(at + actor::kId00)))
+        {
+          continue;
+        }
+        best = dead;
+        DAT_00354e88_closeUpSubject_ = slot;
+      }
+      if (DAT_00354e88_closeUpSubject_ < 0)
+      {
+        return false;
+      }
+      sGpffffaf2e_closeUpType_ = pool.slot(static_cast<std::size_t>(DAT_00354e88_closeUpSubject_)).typeId00;
+      DAT_00571b80_cameraWork_.FUN_00267e78_clear();
+      uGpffffaf30_closeUpTicks_ = 0x1E00;
+    }
+
+    // :58-71. Spend the frame; while any is left, hold the shot.
+    if (uGpffffaf30_closeUpTicks_ == 0)
+    {
+      return false;
+    }
+    const auto left = static_cast<std::uint16_t>(uGpffffaf30_closeUpTicks_ - frameTicks);
+    uGpffffaf30_closeUpTicks_ = static_cast<std::int16_t>(left) < 0 ? std::uint16_t{0} : left;
+    if (uGpffffaf30_closeUpTicks_ == 0)
+    {
+      return false;
+    }
+    if (environment.camera != nullptr)
+    {
+      // 0x0023DB18-0x0023DB34: -45.0 in $f12, the rate in $f13, five steps,
+      // mode 7.
+      FUN_0023e790_close_up(*environment.camera,
+                            pool.slot(static_cast<std::size_t>(DAT_00354e88_closeUpSubject_)), -45.0f,
+                            kfGpffff8770_closeUpOrbitRate, 5, 7, DAT_00571b80_cameraWork_,
+                            environment.DAT_003551f8_sceneEntry, pool.slot(0).facingRadians5c,
+                            static_cast<std::int32_t>(frameTicks));
+    }
+    return true;
+  }
+
   void BattleParty::FUN_0023c340_target_display(const Environment &environment,
                                                 const BattleEncounter &encounter,
                                                 std::uint32_t frameTicks)
@@ -914,6 +992,7 @@ namespace orphen::ported::battle
     // :34-40. Not in a battle: everything the display owns is dropped.
     if ((DAT_00354fc2() & 1) == 0)
     {
+      DAT_00354e88_closeUpSubject_ = -1;
       DAT_00354e90_ = -1;
       DAT_00354e94_ = 0;
       DAT_00354e96_ = 0;

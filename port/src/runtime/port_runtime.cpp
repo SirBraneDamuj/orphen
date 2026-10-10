@@ -410,10 +410,7 @@ namespace orphen::port
     setWorkIndex_ = config.setWorkIndex;
     setWorkValue_ = config.setWorkValue;
     setWorkFrame_ = config.setWorkFrame;
-    enemyHpPending_ = config.hasEnemyHp;
-    enemyHpSlot_ = config.enemyHpSlot;
-    enemyHpValue_ = config.enemyHpValue;
-    enemyHpFrame_ = config.enemyHpFrame;
+    pendingEnemyHp_ = config.enemyHp;
     pendingEventFlags_ = config.setEventFlags;
     armStreamPending_ = config.hasArmStream;
     armStreamOffset_ = config.armStreamOffset;
@@ -1768,6 +1765,25 @@ namespace orphen::port
         tables.write<std::uint32_t>(address, value);
       }
     };
+    // FUN_00240870's two reaches outside the encounter: the player's party
+    // slot, which a wave trigger's count is compared against, and FUN_002D6C68
+    // for the reinforcement it spawns.
+    vm.DAT_00354ebe_playerSlot = battleParty_.DAT_00354ebe_playerSlot();
+    vm.DAT_00354fc2_battleState = &battleParty_.DAT_00354fc2_mutable();
+    vm.FUN_002d6c68_spawn = [this](std::int16_t typeId,
+                                   std::int32_t &slot) -> orphen::ported::entity::OriginalEntity * {
+      const std::size_t spawned =
+          entityPool_.FUN_00265e28_allocate_and_initialize(typeId, descriptorTable_);
+      if (spawned >= orphen::ported::entity::kEntitySlotCount)
+      {
+        std::cout << "[battle] FUN_002d6c68: pool full, no type 0x" << std::hex << typeId
+                  << std::dec << " spawned\n";
+        slot = -1;
+        return nullptr;
+      }
+      slot = static_cast<std::int32_t>(spawned);
+      return &entityPool_.slot(spawned);
+    };
     // FUN_00244248's party half. The block is `DAT_0031D780 + slot *
     // 0x3C`, which is controlBlock(slot - 1) + 0x0C, so the pending and
     // current action bytes land on +0x0E and +0x0F exactly as they do on
@@ -1877,10 +1893,28 @@ namespace orphen::port
         // battle VM's opcode 12 is what puts 500 there. The port has no VM, so
         // the variable is read straight out of the script's own work memory --
         // s14_e012's master script sets it with the first opcode it runs.
-        if (sceneScript_.state().DAT_00355060_work[25] == 500)
+        //
+        // 600 is FUN_0023DA10, the close-up on the last enemy down, which a
+        // master script asks for once the fight is won; when it reports done
+        // the variable goes back to 0 and the script's opcode 5 sub-op 5 lets
+        // it move on. 0x1F5 (FUN_0023BF30, a shot over the player's shoulder)
+        // and the fallback that steps FUN_00217F38's camera blend are not
+        // ported.
         {
-          battleParty_.FUN_0023c340_target_display(battle, battleEncounter_,
-                                                   orphen::ported::kNominalFrameTicks);
+          auto &work = sceneScript_.state().DAT_00355060_work;
+          if (work[25] == 500)
+          {
+            battleParty_.FUN_0023c340_target_display(battle, battleEncounter_,
+                                                     orphen::ported::kNominalFrameTicks);
+          }
+          else if (work[25] == 600)
+          {
+            if (!battleParty_.FUN_0023da10_victory_camera(battle, battleEncounter_,
+                                                          orphen::ported::kNominalFrameTicks))
+            {
+              work[25] = 0;
+            }
+          }
         }
         return 0;
       case 0x78:
@@ -2424,6 +2458,10 @@ namespace orphen::port
     { soundEngine_.FUN_002063c8_ramp_up_slot(slot, speed, fader); };
     environment.FUN_00206260_ramp_music_down = [this](std::size_t slot, int speed, int fader)
     { soundEngine_.FUN_00206260_ramp_down_slot(slot, speed, fader); };
+    environment.FUN_00206238_music_slot_ramping = [this](std::size_t slot)
+    { return soundEngine_.slotRamping(slot); };
+    environment.FUN_00205f40_stop_music_slot = [this](std::size_t slot)
+    { soundEngine_.FUN_00205f40_stop_slot(slot); };
 
     environment.FUN_00213640_set_bandana = [this](std::int32_t mode)
     {
@@ -3217,6 +3255,7 @@ namespace orphen::port
     // encounter's own spline pairs, and the target display interrupts it to
     // frame the enemy the D-pad picked.
     environment.camera = &fieldCamera_;
+    environment.DAT_003551f8_sceneEntry = DAT_003551f8_groupEntry_;
     // FUN_002334E8's four tables, and the glyph widths FUN_00238E68 measures
     // the two captions with.
     environment.stats = &characterStats_;
@@ -3645,6 +3684,23 @@ namespace orphen::port
     {
       battleParty_.markers().FUN_00267e78_clear();
       battleParty_.markers().FUN_00247f18_register(static_cast<std::int16_t>(kMarkerCount));
+    }
+
+    // Mode 2, FUN_0022A418:187, under the same `uVar17 == 0` as modes 0 and 1.
+    // Module 5, FUN_0026C228, is the one that does anything with it that the
+    // port can see: it overrides the prop bank FUN_0022A418:50 seeded with
+    // bank 5, whatever stage the battle was entered from. s14_e003 is module
+    // 5, and without this its streamed props came out of no bank at all --
+    // struct-default bodies and no +0x02/+0x04 flags, against hardware's
+    // 0x80/0xD8 -- which left its two lanterns at a 0.15 radius.
+    //
+    // The module's other two modes are not ported: mode 1 is FUN_00205938(1,
+    // 1, 1), a sound-bank load, and mode 4 latches DAT_00355214 once work
+    // word 1 reaches 0x16, which nothing outside the module reads.
+    if (mode == 2 && DAT_0032536c_sceneModule_ == 5)
+    {
+      applyMapPropBank(5);
+      return;
     }
 
     // Mode 3, FUN_0022A418:369 -- after the init entry and immediately before
@@ -4321,6 +4377,11 @@ namespace orphen::port
     // Only the seed, though: opcode 0x3C writes DAT_00355208 outright, and a
     // group-0xE scene uses it to replace exactly this inheritance.
     applyMapPropBank(DAT_003551f4_sceneSection_);
+    // The original runs mode 2 between the seed and modes 0/1 (FUN_0022A418:
+    // 50, 187, 264); the port seeds after 0/1, so mode 2 has to follow the
+    // seed here or the seed would undo it. Nothing in a ported mode 0 or 1
+    // reads the bank.
+    FUN_0032536c_scene_module(2);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
     FUN_0022a178_bind_map_textures();
@@ -9233,18 +9294,24 @@ namespace orphen::port
       // --enemy-hp. +0x12A is the live hit-point field FUN_0025BAE8's record
       // fills at spawn; writing it is how a headless run reaches a boss phase
       // it cannot fight its way to.
-      if (enemyHpPending_ && frameCount_ >= enemyHpFrame_ &&
-          enemyHpSlot_ < orphen::ported::entity::kEntitySlotCount)
+      std::erase_if(pendingEnemyHp_, [this](const auto &probe)
       {
-        enemyHpPending_ = false;
-        auto &target = entityPool_.slot(enemyHpSlot_);
-        const std::uint16_t before = target.staggerTimer12a;
-        target.staggerTimer12a = static_cast<std::uint16_t>(enemyHpValue_);
-        std::cout << "[enemy-hp] slot " << enemyHpSlot_ << " type 0x" << std::hex
-                  << target.typeId00 << std::dec << " hp " << before << " -> "
-                  << enemyHpValue_ << " at frame " << frameCount_
-                  << " -- a harness probe, not something the game does here.\n";
-      }
+        if (frameCount_ < probe.frame)
+        {
+          return false;
+        }
+        if (probe.slot < orphen::ported::entity::kEntitySlotCount)
+        {
+          auto &target = entityPool_.slot(probe.slot);
+          const std::uint16_t before = target.staggerTimer12a;
+          target.staggerTimer12a = static_cast<std::uint16_t>(probe.value);
+          std::cout << "[enemy-hp] slot " << probe.slot << " type 0x" << std::hex
+                    << target.typeId00 << std::dec << " hp " << before << " -> "
+                    << probe.value << " at frame " << frameCount_
+                    << " -- a harness probe, not something the game does here.\n";
+        }
+        return true;
+      });
       if (sceneScript_.loaded())
       {
         std::erase_if(pendingEventFlags_, [this](const auto &probe)
@@ -9659,27 +9726,67 @@ namespace orphen::port
               actorStep.actionsRequested + step.actionsRequested;
           battleActionsRefused_ += actorStep.actionsRefused + step.actionsRefused;
 
-          // FUN_0023fd30:350. **This frame of delay is load-bearing.** The
-          // cursors are spawned on animation 13 by the block below, and
-          // FUN_002d73e8 only moves a cursor off 13 through its "not the
-          // player's target" branch. Run the command input before the cursors
-          // exist and the player already owns a target when they appear, so
-          // *that* cursor sits out all eight columns of animation 13 at four
-          // frames each -- 32 frames -- before it can reach the 12-frame
-          // grow-in. Run it a frame later, as the original does, and every
-          // cursor including the target's is switched to 10 on its first frame
-          // and the grow-in starts immediately.
-          orphen::ported::battle::CommandInputEnvironment commandInput;
-          commandInput.party = &battleParty_;
-          commandInput.encounter = &battleEncounter_;
-          commandInput.pool = &entityPool_;
-          commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
-          commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
-          commandInput.DAT_00355600_pressedPad2 =
-              static_cast<std::uint16_t>(input.rawPressedStickDirection);
-          commandInput.frameTicks = frameTicks;
-          commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
-          orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
+          // FUN_0023fd30:156-193. The party control blocks' own scripts, last
+          // of the three loops.
+          const auto partyStep = battleEncounter_.FUN_0023fd30_step_party_scripts(vm);
+          if (partyStep.halted && !battleActorHaltReported_)
+          {
+            battleActorHaltReported_ = true;
+            std::cout << "[battle] party script halted: unimplemented VM opcode "
+                      << static_cast<int>(partyStep.haltOpcode) << " at 0x" << std::hex
+                      << partyStep.haltOffset << std::dec << "\n";
+          }
+          battleActionsRequested_ += partyStep.actionsRequested;
+          battleActionsRefused_ += partyStep.actionsRefused;
+
+          // FUN_0023fd30:286-300. **The battle is over.** Once the VM's opcode
+          // 5 sub-op 6 has raised bit 8, every member not already idle or on
+          // its way home is sent home (pending 0x87 over current 6), and the
+          // tick returns before the auto-retarget and the command input -- the
+          // player has no more say.
+          if ((battleParty_.DAT_00354fc2() & 8u) != 0)
+          {
+            auto &tables = battleParty_.tables();
+            for (std::int32_t member = 0; member < battleParty_.DAT_00354ebc_memberCount() &&
+                                          member < static_cast<std::int32_t>(
+                                                       orphen::ported::battle::kControlBlockCount);
+                 ++member)
+            {
+              const std::uint32_t block = orphen::ported::battle::BattleTables::controlBlock(
+                  static_cast<std::uint32_t>(member));
+              const std::uint8_t current =
+                  tables.read<std::uint8_t>(block + orphen::ported::battle::control::kCurrentAction0f);
+              if (current != 0x06 && current != 0x87)
+              {
+                tables.write<std::uint8_t>(block + orphen::ported::battle::control::kPendingAction0e, 0x87);
+                tables.write<std::uint8_t>(block + orphen::ported::battle::control::kCurrentAction0f, 0x06);
+              }
+            }
+          }
+          else
+          {
+            // FUN_0023fd30:350. **This frame of delay is load-bearing.** The
+            // cursors are spawned on animation 13 by the block below, and
+            // FUN_002d73e8 only moves a cursor off 13 through its "not the
+            // player's target" branch. Run the command input before the cursors
+            // exist and the player already owns a target when they appear, so
+            // *that* cursor sits out all eight columns of animation 13 at four
+            // frames each -- 32 frames -- before it can reach the 12-frame
+            // grow-in. Run it a frame later, as the original does, and every
+            // cursor including the target's is switched to 10 on its first frame
+            // and the grow-in starts immediately.
+            orphen::ported::battle::CommandInputEnvironment commandInput;
+            commandInput.party = &battleParty_;
+            commandInput.encounter = &battleEncounter_;
+            commandInput.pool = &entityPool_;
+            commandInput.DAT_003555f4_heldPad = static_cast<std::uint16_t>(input.rawHeldPad);
+            commandInput.DAT_003555f6_pressedPad = static_cast<std::uint16_t>(input.rawPressedPad);
+            commandInput.DAT_00355600_pressedPad2 =
+                static_cast<std::uint16_t>(input.rawPressedStickDirection);
+            commandInput.frameTicks = frameTicks;
+            commandInput.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+            orphen::ported::battle::FUN_002462c8_battle_command_input(commandInput);
+          }
         }
         sampleBattleTrace(input.rawHeldPad);
       }

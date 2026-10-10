@@ -286,6 +286,19 @@ namespace orphen::ported::battle
       std::function<void(std::int32_t member, std::uint32_t offset, int width,
                          std::uint32_t value)>
           DAT_0031d7b0_write;
+
+      // DAT_00354FC2 (sGpffffb052), the battle state word. Opcode 5 sub-op 6
+      // raises bit 8 on it, the "battle is over" broadcast.
+      std::uint16_t *DAT_00354fc2_battleState = nullptr;
+
+      // DAT_00354EBE, the party slot the player has. FUN_00240870's wave
+      // triggers compare a wave's remaining count against it.
+      std::int16_t DAT_00354ebe_playerSlot = 0;
+      // FUN_002D6C68(type): FUN_00265E28 plus a diagnostic when the pool is
+      // full. The wave triggers spawn their reinforcements through it. Returns
+      // the new entity and its slot, or null.
+      std::function<orphen::ported::entity::OriginalEntity *(std::int16_t typeId, std::int32_t &slot)>
+          FUN_002d6c68_spawn;
     };
 
     // One block the VM can be running on: the master pseudo-record DAT_0031DBA8
@@ -296,6 +309,7 @@ namespace orphen::ported::battle
     struct VmBlock
     {
       std::uint32_t record = 0; // 0 for the master pseudo-record
+      std::int32_t member = -1; // a party control block, when >= 0
       std::uint32_t pc = 0;     // +0x30 / DAT_0031DBD8
       std::int16_t yield = 0;   // +0x2E / DAT_0031DBD6
       std::uint32_t triggers = 0; // +0x34 / DAT_0031DBDC
@@ -331,6 +345,71 @@ namespace orphen::ported::battle
     VmStepResult FUN_0023fd30_step_actor_scripts(const VmEnvironment &environment);
     static std::int32_t FUN_00248f18_find_by_tag(const orphen::ported::entity::EntityPool &pool,
                                                  std::uint8_t id);
+
+    // FUN_00240870: **the trigger table** VM opcode 9 installs at a block's
+    // +0x34. FUN_0023FD30 walks it once a frame for the master block, and for
+    // an actor record straight after that record's own script has stepped.
+    // Each 16-byte entry is a condition and a jump; the first one that holds
+    // moves the block's program counter (+0x30) to `table + entry[+0x0A]` and
+    // **clears the table**, so a trigger fires once.
+    //
+    //   +0x00 kind  0  the block's entity -- or id +0x04's -- has damage
+    //                  waiting in +0xBE
+    //               1  script work word [+0x06] equals +0x08 (and the jump
+    //                  goes to id +0x04's block, not this one)
+    //               2  id +0x04 is gone, or its hit points are <= +0x06
+    //               3  id +0x04's hit points are >= +0x06
+    //               4  a reinforcement wave: record +0x04 is empty or dead,
+    //                  so after +0x0C ticks spawn type +0x06 into it with
+    //                  script +0x08; +0x02 counts the waves down
+    //               5  the same, gated on an entity tagged +0x02 existing
+    //
+    // s14_e003 is the scene that needs it: its master script parks on opcode
+    // 10 at 0x3F30 behind a four-entry table of kind 0 on Sephy and the three
+    // dummies, and everything after the first hit -- the end of the battle
+    // included -- is behind that jump. `blockRecord` is 0 for the master.
+    //
+    // FUN_0023EBA0 can hand back any of the three kinds of 0x3C block, and so
+    // can "zero means the block I am running on", so every VM path that names
+    // a block goes through BlockRef.
+    struct BlockRef
+    {
+      enum class Kind
+      {
+        None,
+        Master,  // DAT_0031DBA8, id 0xFFFF
+        Control, // DAT_0031D7B0 + member * 0x3C, ids below 10
+        Record,  // the actor table, every other id
+      };
+      Kind kind = Kind::None;
+      std::int32_t member = -1;
+      std::uint32_t record = 0;
+      bool valid() const { return kind != Kind::None; }
+    };
+    void FUN_00240870_walk_triggers(const BlockRef &self, const VmEnvironment &environment);
+
+    // FUN_0023fd30:156-193, the third loop: every party control block with a
+    // script at +0x30, an entity, and either hit points left or an animation
+    // other than 0x21. FUN_00243F80 installs scripts on members other than the
+    // player, and a master script can install one on the player too with
+    // opcode 18 -- s14_e003's does, and that script is what moves the master
+    // on to the end-of-battle poll.
+    VmStepResult FUN_0023fd30_step_party_scripts(const VmEnvironment &environment);
+
+    // FUN_0023EBA0, all three halves.
+    BlockRef FUN_0023eba0_lookup(std::uint16_t id, bool includeDead,
+                                 const VmEnvironment &environment) const;
+    // The block a script is running on, as a BlockRef.
+    static BlockRef selfRef(const VmBlock &block);
+    // One field of any block. The master pseudo-record keeps only +0x2E,
+    // +0x30, +0x34 and +0x38 (DAT_0031DBD6..DAT_0031DBE0); its +0x08 is null,
+    // and the port reads its other fields as zero.
+    std::uint32_t blockField(const BlockRef &block, std::uint32_t offset, int width,
+                             const VmEnvironment &environment) const;
+    void setBlockField(const BlockRef &block, std::uint32_t offset, int width, std::uint32_t value,
+                       const VmEnvironment &environment);
+    // The block's +0x08 as a pool slot, or -1.
+    std::int32_t blockEntity(const BlockRef &block, const VmEnvironment &environment) const;
 
     // FUN_0023EBA0's `id >= 10` branch: the actor records, which live in the
     // script window. Returns the record offset, or 0 for none -- the port's
@@ -422,6 +501,7 @@ namespace orphen::ported::battle
     std::uint32_t masterPc_ = 0;       // DAT_0031DBD8
     std::int16_t masterYield_ = 0;     // DAT_0031DBD6
     std::uint32_t masterTriggers_ = 0; // DAT_0031DBDC
+    std::uint32_t masterFlags_ = 0;    // DAT_0031DBE0, the +0x38 opcode 18 raises 0x20 in
     bool masterHalted_ = false;
     std::uint8_t masterHaltOpcode_ = 0;
     std::uint32_t masterHaltOffset_ = 0;

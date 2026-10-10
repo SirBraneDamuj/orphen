@@ -2,6 +2,8 @@
 
 #include "ported/battle/battle_tables.h"
 
+#include <iostream>
+
 namespace orphen::ported::battle
 {
 
@@ -21,6 +23,7 @@ namespace orphen::ported::battle
     masterPc_ = 0;
     masterYield_ = 0;
     masterTriggers_ = 0;
+    masterFlags_ = 0;
     masterHalted_ = false;
     masterHaltOpcode_ = 0;
     masterHaltOffset_ = 0;
@@ -807,6 +810,12 @@ namespace orphen::ported::battle
           Resolved found;
           if (id == 0)
           {
+            if (block.member >= 0)
+            {
+              found.member = block.member;
+              found.valid = true;
+              return found;
+            }
             found.record = block.record;
             found.valid = block.record != 0;
             return found;
@@ -1095,8 +1104,74 @@ namespace orphen::ported::battle
         // FUN_00242660. Sub-op 1 is the timer wait: the first visit returns
         // `operand * 2` as the yield and the later ones spend it with
         // FUN_00248e00, advancing four bytes when it runs out. Sub-op 0 waits
-        // for an actor to exist; sub-op 3 stamps every bound record's +0x02.
+        // for an actor to exist; sub-op 3 stamps every bound record's +0x02
+        // (not ported).
+        //
+        // Sub-op 5 holds while script variable 25 -- the camera mode opcode
+        // 12 requests -- still equals the operand, then runs on. Sub-op 6 is
+        // **the end of the battle**: it raises bit 8 of DAT_00354FC2, which
+        // FUN_0023fd30:286 answers by sending every member home on action 0x87
+        // and stopping the command input. With the battle suspended it raises
+        // 0x18 instead and holds.
         const std::int8_t sub = read<std::int8_t>(pc + 1);
+        if (sub == 0)
+        {
+          // FUN_00248F18 returns the slot, so "below one" is "not found, or
+          // only the lead".
+          const std::int16_t tag = read<std::int16_t>(pc + 2);
+          const std::int32_t slot =
+              tag < 1 || tag > 0x7F || pool == nullptr
+                  ? -1
+                  : FUN_00248f18_find_by_tag(*pool, static_cast<std::uint8_t>(tag));
+          if (slot < 1)
+          {
+            block.pc = pc + 4;
+          }
+          yield = 0;
+          break;
+        }
+        if (sub == 5)
+        {
+          const std::uint32_t mode = environment.scriptVars != nullptr && environment.scriptVarCount > 25
+                                         ? environment.scriptVars[25]
+                                         : 0u;
+          if (static_cast<std::uint32_t>(read<std::uint16_t>(pc + 2)) == mode)
+          {
+            yield = 0;
+          }
+          else
+          {
+            block.pc = pc + 4;
+            yield = -1;
+          }
+          break;
+        }
+        if (sub == 6)
+        {
+          yield = 0;
+          if (environment.DAT_00354ecc_suspended == 0)
+          {
+            std::int32_t countdown = static_cast<std::int16_t>(block.yield - 1);
+            if (environment.DAT_00354fc2_battleState != nullptr &&
+                (*environment.DAT_00354fc2_battleState & 8u) == 0)
+            {
+              *environment.DAT_00354fc2_battleState =
+                  static_cast<std::uint16_t>(*environment.DAT_00354fc2_battleState | 8u);
+              countdown = -1;
+            }
+            yield = countdown;
+            if (yield < 0)
+            {
+              block.pc = pc + 4;
+            }
+          }
+          else if (environment.DAT_00354fc2_battleState != nullptr)
+          {
+            *environment.DAT_00354fc2_battleState =
+                static_cast<std::uint16_t>(*environment.DAT_00354fc2_battleState | 0x18u);
+          }
+          break;
+        }
         if (sub != 1)
         {
           handled = false;
@@ -1125,10 +1200,7 @@ namespace orphen::ported::battle
 
       case 9:
         // LAB_00240C70: `block->+0x34 = pc; pc += count * 16 + 4`, return -1.
-        // The pointer is installed, but FUN_00240870 -- the trigger walker that
-        // spawns reinforcement waves off it -- is not run yet, so a script that
-        // uses this gets its table remembered and nothing spawned. Recorded
-        // rather than left silent.
+        // FUN_00240870 walks what this installs; see FUN_00240870_walk_triggers.
         block.triggers = pc;
         block.pc = pc + 4 + static_cast<std::uint32_t>(read<std::int16_t>(pc + 2)) * 16u;
         result.triggerTableInstalled = true;
@@ -1200,19 +1272,18 @@ namespace orphen::ported::battle
           break;
         }
 
-        std::uint32_t at = block.record;
+        // FUN_0023EBA0(byte, 1): a control block or a record by id, or the
+        // block this script runs on. s14_e003's victory orders the player's
+        // own control block (id 1) into action 0x87 this way.
         const std::uint8_t named = read<std::uint8_t>(pc + 3);
-        if (named != 0)
-        {
-          at = FUN_0023eba0_find(named, true);
-        }
-        if (at == 0)
+        const BlockRef target = named != 0 ? FUN_0023eba0_lookup(named, true, environment) : selfRef(block);
+        if (!target.valid())
         {
           block.pc = pc + 4;
           continue;
         }
 
-        const std::int32_t slot = entitySlot(at);
+        const std::int32_t slot = blockEntity(target, environment);
         const bool bound = slot >= 0 &&
                            static_cast<std::size_t>(slot) < orphen::ported::entity::kEntitySlotCount &&
                            pool != nullptr;
@@ -1357,16 +1428,13 @@ namespace orphen::ported::battle
           yield = block.yield;
           if (environment.DAT_00354ecc_suspended == 0)
           {
-            std::uint32_t at = block.record;
             const std::uint8_t named = read<std::uint8_t>(pc + 2);
-            if (named != 0)
-            {
-              at = FUN_0023eba0_find(named, false);
-            }
-            bool done = at == 0;
+            const BlockRef target =
+                named != 0 ? FUN_0023eba0_lookup(named, false, environment) : selfRef(block);
+            bool done = !target.valid();
             if (!done)
             {
-              const std::int32_t slot = entitySlot(at);
+              const std::int32_t slot = blockEntity(target, environment);
               if (slot < 0 ||
                   static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount ||
                   pool == nullptr ||
@@ -1375,7 +1443,8 @@ namespace orphen::ported::battle
               {
                 done = true;
               }
-              else if (read<std::int8_t>(at + actor::kCurrentAction0f) == read<std::int8_t>(pc + 3))
+              else if (static_cast<std::int8_t>(blockField(target, actor::kCurrentAction0f, 1, environment)) ==
+                       read<std::int8_t>(pc + 3))
               {
                 done = true;
               }
@@ -1435,17 +1504,17 @@ namespace orphen::ported::battle
         // master pseudo-record is nothing -- and `+0x04` is the offset from
         // this instruction to the script body. +0x38 bit 0x20 is what makes
         // FUN_0023fd30's second loop step it.
+        //
+        // The id is a full halfword, so 0xFFFF reaches the master itself, and
+        // below 10 a party control block: s14_e003 installs scripts on both.
         const std::int16_t id = read<std::int16_t>(pc + 2);
-        std::uint32_t at = block.record;
-        if (id != 0)
+        const BlockRef target =
+            id != 0 ? FUN_0023eba0_lookup(static_cast<std::uint16_t>(id), false, environment) : selfRef(block);
+        if (target.valid())
         {
-          at = FUN_0023eba0_find(static_cast<std::uint16_t>(id), false);
-        }
-        if (at != 0)
-        {
-          write<std::uint32_t>(at + actor::kScriptPc30, pc + read<std::uint32_t>(pc + 4));
-          write<std::uint32_t>(at + actor::kFlags38,
-                               read<std::uint32_t>(at + actor::kFlags38) | 0x20u);
+          setBlockField(target, actor::kScriptPc30, 4, pc + read<std::uint32_t>(pc + 4), environment);
+          setBlockField(target, actor::kFlags38, 4,
+                        blockField(target, actor::kFlags38, 4, environment) | 0x20u, environment);
           ++result.actorScriptsInstalled;
         }
         block.pc = pc + 8;
@@ -1500,7 +1569,407 @@ namespace orphen::ported::battle
     masterPc_ = block.pc;
     masterYield_ = block.yield;
     masterTriggers_ = block.triggers;
+
+    // FUN_0023fd30:55-57, after the step loop.
+    if (!masterHalted_ && masterTriggers_ != 0)
+    {
+      BlockRef master;
+      master.kind = BlockRef::Kind::Master;
+      FUN_00240870_walk_triggers(master, environment);
+    }
     return result;
+  }
+
+  BattleEncounter::BlockRef BattleEncounter::FUN_0023eba0_lookup(std::uint16_t id, bool includeDead,
+                                                                 const VmEnvironment &environment) const
+  {
+    BlockRef found;
+    if (id == 0xFFFF)
+    {
+      found.kind = BlockRef::Kind::Master;
+      return found;
+    }
+    if (static_cast<std::int16_t>(id) < 10)
+    {
+      if (environment.FUN_0023eba0_find_control_block)
+      {
+        found.member = environment.FUN_0023eba0_find_control_block(id, includeDead);
+        if (found.member >= 0)
+        {
+          found.kind = BlockRef::Kind::Control;
+        }
+      }
+      return found;
+    }
+    found.record = FUN_0023eba0_find_record(id, includeDead);
+    if (found.record != 0)
+    {
+      found.kind = BlockRef::Kind::Record;
+    }
+    return found;
+  }
+
+  BattleEncounter::BlockRef BattleEncounter::selfRef(const VmBlock &block)
+  {
+    BlockRef self;
+    if (block.member >= 0)
+    {
+      self.kind = BlockRef::Kind::Control;
+      self.member = block.member;
+    }
+    else if (block.record != 0)
+    {
+      self.kind = BlockRef::Kind::Record;
+      self.record = block.record;
+    }
+    else
+    {
+      self.kind = BlockRef::Kind::Master;
+    }
+    return self;
+  }
+
+  std::uint32_t BattleEncounter::blockField(const BlockRef &block, std::uint32_t offset, int width,
+                                            const VmEnvironment &environment) const
+  {
+    switch (block.kind)
+    {
+    case BlockRef::Kind::Master:
+      switch (offset)
+      {
+      case actor::kYield2e: return static_cast<std::uint16_t>(masterYield_);
+      case actor::kScriptPc30: return masterPc_;
+      case actor::kTriggers34: return masterTriggers_;
+      case actor::kFlags38: return masterFlags_;
+      default: return 0;
+      }
+    case BlockRef::Kind::Control:
+      return environment.DAT_0031d7b0_read ? environment.DAT_0031d7b0_read(block.member, offset, width) : 0u;
+    case BlockRef::Kind::Record:
+      if (width == 1)
+      {
+        return read<std::uint8_t>(block.record + offset);
+      }
+      if (width == 2)
+      {
+        return read<std::uint16_t>(block.record + offset);
+      }
+      return read<std::uint32_t>(block.record + offset);
+    case BlockRef::Kind::None:
+    default:
+      return 0;
+    }
+  }
+
+  void BattleEncounter::setBlockField(const BlockRef &block, std::uint32_t offset, int width,
+                                      std::uint32_t value, const VmEnvironment &environment)
+  {
+    switch (block.kind)
+    {
+    case BlockRef::Kind::Master:
+      switch (offset)
+      {
+      case actor::kYield2e: masterYield_ = static_cast<std::int16_t>(value); break;
+      case actor::kScriptPc30: masterPc_ = value; break;
+      case actor::kTriggers34: masterTriggers_ = value; break;
+      case actor::kFlags38: masterFlags_ = value; break;
+      default: break;
+      }
+      break;
+    case BlockRef::Kind::Control:
+      if (environment.DAT_0031d7b0_write)
+      {
+        environment.DAT_0031d7b0_write(block.member, offset, width, value);
+      }
+      break;
+    case BlockRef::Kind::Record:
+      if (width == 1)
+      {
+        write<std::uint8_t>(block.record + offset, static_cast<std::uint8_t>(value));
+      }
+      else if (width == 2)
+      {
+        write<std::uint16_t>(block.record + offset, static_cast<std::uint16_t>(value));
+      }
+      else
+      {
+        write<std::uint32_t>(block.record + offset, value);
+      }
+      break;
+    case BlockRef::Kind::None:
+    default:
+      break;
+    }
+  }
+
+  std::int32_t BattleEncounter::blockEntity(const BlockRef &block, const VmEnvironment &environment) const
+  {
+    switch (block.kind)
+    {
+    case BlockRef::Kind::Control:
+      return environment.DAT_0031d7b8_memberEntity ? environment.DAT_0031d7b8_memberEntity(block.member) : -1;
+    case BlockRef::Kind::Record:
+      return entitySlot(block.record);
+    case BlockRef::Kind::Master:
+    case BlockRef::Kind::None:
+    default:
+      return -1;
+    }
+  }
+
+  BattleEncounter::VmStepResult BattleEncounter::FUN_0023fd30_step_party_scripts(
+      const VmEnvironment &environment)
+  {
+    VmStepResult result;
+    if (!available() || !environment.DAT_0031d7b0_read || !environment.DAT_0031d7b0_write)
+    {
+      return result;
+    }
+    const orphen::ported::entity::EntityPool *pool = environment.pool;
+    for (std::int32_t member = 0; member < environment.sGpffffaf4c_memberCount; ++member)
+    {
+      BlockRef self;
+      self.kind = BlockRef::Kind::Control;
+      self.member = member;
+
+      // :168-177. An entity, a script, and either hit points left or an
+      // animation other than 0x21 -- a downed member keeps running its script
+      // until its collapse animation is the one playing.
+      const std::int32_t slot = blockEntity(self, environment);
+      const std::uint32_t pc = blockField(self, actor::kScriptPc30, 4, environment);
+      if (slot < 0 || pool == nullptr || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount ||
+          pc == 0)
+      {
+        continue;
+      }
+      const auto &entity = pool->slot(static_cast<std::size_t>(slot));
+      if (static_cast<std::int16_t>(entity.staggerTimer12a) < 1 && entity.animationA0 == 0x21)
+      {
+        continue;
+      }
+
+      VmBlock block;
+      block.member = member;
+      block.pc = pc;
+      block.yield = static_cast<std::int16_t>(blockField(self, actor::kYield2e, 2, environment));
+      block.triggers = blockField(self, actor::kTriggers34, 4, environment);
+      const bool stepped = stepVmBlock(block, environment, result);
+      if (!stepped && !actorHalted_)
+      {
+        actorHalted_ = true;
+        actorHaltOpcode_ = result.haltOpcode;
+        actorHaltOffset_ = result.haltOffset;
+      }
+      setBlockField(self, actor::kScriptPc30, 4, block.pc, environment);
+      setBlockField(self, actor::kYield2e, 2, static_cast<std::uint16_t>(block.yield), environment);
+      setBlockField(self, actor::kTriggers34, 4, block.triggers, environment);
+
+      // :187-189.
+      if (stepped && block.triggers != 0)
+      {
+        FUN_00240870_walk_triggers(self, environment);
+      }
+    }
+    return result;
+  }
+
+  void BattleEncounter::FUN_00240870_walk_triggers(const BlockRef &self, const VmEnvironment &environment)
+  {
+    // param_1's +0x30 and +0x34, read and written in place so a wave that
+    // refills this same record lands the way the original's stores do.
+    const auto blockTriggers = [&]() -> std::uint32_t {
+      return blockField(self, actor::kTriggers34, 4, environment);
+    };
+    const auto setBlockPc = [&](std::uint32_t pc) {
+      setBlockField(self, actor::kScriptPc30, 4, pc, environment);
+    };
+
+    const auto find = [&](std::int16_t id, bool includeDead) -> BlockRef {
+      return FUN_0023eba0_lookup(static_cast<std::uint16_t>(id), includeDead, environment);
+    };
+    const auto entityOf = [&](const BlockRef &found) -> std::int32_t { return blockEntity(found, environment); };
+    const auto *pool = environment.pool;
+    const auto entity = [&](std::int32_t slot) -> const orphen::ported::entity::OriginalEntity * {
+      if (pool == nullptr || slot < 0 || static_cast<std::size_t>(slot) >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return nullptr;
+      }
+      return &pool->slot(static_cast<std::size_t>(slot));
+    };
+    const auto hitPoints = [&](std::int32_t slot) -> std::int16_t {
+      const auto *found = entity(slot);
+      return found != nullptr ? static_cast<std::int16_t>(found->staggerTimer12a) : std::int16_t{0};
+    };
+
+    const std::uint32_t table = blockTriggers();
+    if (table == 0)
+    {
+      return;
+    }
+    const std::int16_t count = read<std::int16_t>(table + 2);
+    std::int16_t index = 0;
+    for (; index < count; ++index)
+    {
+      const std::uint32_t entry = table + 4u + static_cast<std::uint32_t>(index) * 16u;
+      const std::int16_t kind = read<std::int16_t>(entry + 0x00);
+      const std::int16_t id = read<std::int16_t>(entry + 0x04);
+      const std::int16_t value = read<std::int16_t>(entry + 0x06);
+      const std::uint32_t jumpTo = table + static_cast<std::uint32_t>(read<std::int16_t>(entry + 0x0A));
+
+      if (kind == 0)
+      {
+        // :35-45. Zero names the block itself, and the master has no entity.
+        const std::int32_t slot = entityOf(id != 0 ? find(id, false) : self);
+        const auto *watched = entity(slot);
+        if (watched != nullptr && watched->pendingDamageBe != 0)
+        {
+          setBlockPc(jumpTo);
+          break;
+        }
+      }
+      else if (kind == 1)
+      {
+        // :46-55. A whole work word against a sign-extended halfword, and the
+        // jump lands on id +0x04's block when there is one.
+        const auto word = static_cast<std::uint16_t>(value);
+        if (environment.scriptVars != nullptr && word < environment.scriptVarCount &&
+            static_cast<std::int32_t>(environment.scriptVars[word]) ==
+                static_cast<std::int32_t>(read<std::int16_t>(entry + 0x08)))
+        {
+          if (id == 0)
+          {
+            setBlockPc(jumpTo);
+          }
+          else
+          {
+            setBlockField(find(id, false), actor::kScriptPc30, 4, jumpTo, environment);
+          }
+          break;
+        }
+      }
+      else if (kind == 2)
+      {
+        // :56-68. Gone counts as beaten.
+        const BlockRef found = find(id, false);
+        if (!found.valid() || hitPoints(entityOf(found)) <= value)
+        {
+          setBlockPc(jumpTo);
+          break;
+        }
+      }
+      else if (kind == 3)
+      {
+        const BlockRef found = find(id, false);
+        if (found.valid() && value <= hitPoints(entityOf(found)))
+        {
+          setBlockPc(jumpTo);
+          break;
+        }
+      }
+      else if (kind == 4 || kind == 5)
+      {
+        // :69-129, the reinforcement wave. Only a record can take one: the
+        // fields it fills (+0x0E/+0x0F, +0x2E, +0x30, +0x38, +0x14..+0x18) are
+        // an actor record's, and no wave in a shipped table names a party id.
+        const BlockRef found = find(id, true);
+        if (!found.valid())
+        {
+          continue;
+        }
+        if (found.kind != BlockRef::Kind::Record)
+        {
+          std::cout << "[battle] trigger kind " << kind << " names party id " << id
+                    << "; a wave into a control block is not modelled\n";
+          continue;
+        }
+        const std::uint32_t at = found.record;
+        const std::int32_t occupant = entitySlot(at);
+        if (entity(occupant) != nullptr && hitPoints(occupant) > 0)
+        {
+          continue;
+        }
+        const std::int16_t remaining = read<std::int16_t>(entry + 0x02);
+        bool due = false;
+        if (remaining == environment.DAT_00354ebe_playerSlot)
+        {
+          due = true;
+        }
+        else if (kind == 4 && remaining == 0)
+        {
+          due = false;
+        }
+        else if (kind == 5)
+        {
+          // FUN_00248F18(+0x02): a tag search, -1 below one and -2 for none.
+          due = remaining >= 1 && remaining <= 0x7F && pool != nullptr &&
+                FUN_00248f18_find_by_tag(*pool, static_cast<std::uint8_t>(remaining)) >= 0;
+        }
+        else
+        {
+          due = pool != nullptr && FUN_0023f080_living_enemy_count(*pool) != 0;
+        }
+        if (!due)
+        {
+          continue;
+        }
+
+        // :89-97. The first visit marks the record mid-spawn and arms the
+        // delay; later visits count it down by the frame's ticks.
+        if (read<std::uint8_t>(at + actor::kPendingAction0e) != 0x11)
+        {
+          write<std::uint8_t>(at + actor::kPendingAction0e, 0x11);
+          write<std::uint16_t>(at + actor::kYield2e, read<std::uint16_t>(entry + 0x0C));
+          continue;
+        }
+        const std::int16_t delay = read<std::int16_t>(at + actor::kYield2e);
+        if (delay > 0)
+        {
+          write<std::uint16_t>(at + actor::kYield2e,
+                               static_cast<std::uint16_t>(static_cast<std::uint16_t>(delay) -
+                                                          static_cast<std::uint16_t>(environment.frameTicks)));
+          continue;
+        }
+
+        // :98-127. Spawn.
+        write<std::int16_t>(at + actor::kYield2e, 0);
+        setBlockPc(jumpTo);
+        std::int32_t slot = -1;
+        auto *spawned = environment.FUN_002d6c68_spawn ? environment.FUN_002d6c68_spawn(value, slot) : nullptr;
+        if (spawned != nullptr)
+        {
+          if (kind == 4)
+          {
+            write<std::int16_t>(entry + 0x02, static_cast<std::int16_t>(remaining - 1));
+          }
+          constexpr float kfGpffff87a0_nudge = 0.0010000000474974513f; // 0x3A83126F
+          write<std::uint8_t>(at + actor::kCurrentAction0f, 0x11);
+          write<std::uint8_t>(at + actor::kPendingAction0e, 0x11);
+          spawned->staggerTimer12a = 0x78;
+          write<std::uint32_t>(at + actor::kScriptPc30,
+                               table + static_cast<std::uint32_t>(read<std::int16_t>(entry + 0x08)));
+          write<std::uint32_t>(at + actor::kFlags38, 0x21);
+          setEntitySlot(at, slot);
+          const float x = static_cast<float>(read<std::int16_t>(at + actor::kSpawnX14)) / 10.0f;
+          spawned->positionZ24 = static_cast<float>(read<std::int16_t>(at + actor::kSpawnY16)) / 10.0f;
+          const float height = static_cast<float>(read<std::int16_t>(at + actor::kSpawnZ18)) / 10.0f;
+          spawned->groundHeight4c = height;
+          spawned->positionY28 = height;
+          spawned->previousGroundHeight50 = height;
+          spawned->desiredDeltaX30 = kfGpffff87a0_nudge;
+          spawned->byte95 = read<std::uint8_t>(entry + 0x04);
+          spawned->halfword08 = static_cast<std::uint16_t>(spawned->halfword08 | 1u);
+          spawned->halfword04 = static_cast<std::uint16_t>(spawned->halfword04 | 0x11u);
+          spawned->positionX20 = x - kfGpffff87a0_nudge;
+        }
+        break;
+      }
+    }
+
+    // :132-134. Leaving early -- a trigger fired -- spends the table.
+    if (index != count)
+    {
+      setBlockField(self, actor::kTriggers34, 4, 0, environment);
+    }
   }
 
   // FUN_0023fd30:57-130. One pass over the actor table doing two independent
@@ -1530,7 +1999,8 @@ namespace orphen::ported::battle
         block.yield = read<std::int16_t>(at + actor::kYield2e);
         block.triggers = read<std::uint32_t>(at + actor::kTriggers34);
 
-        if (!stepVmBlock(block, environment, result))
+        const bool stepped = stepVmBlock(block, environment, result);
+        if (!stepped)
         {
           // The script is left parked on the opcode rather than dropped, so a
           // later frame reports the same halt and nothing is silently skipped.
@@ -1545,6 +2015,15 @@ namespace orphen::ported::battle
         write<std::uint32_t>(at + actor::kScriptPc30, block.pc);
         write<std::int16_t>(at + actor::kYield2e, block.yield);
         write<std::uint32_t>(at + actor::kTriggers34, block.triggers);
+
+        // FUN_0023fd30:84-86, once the record's own script has yielded.
+        if (stepped && block.triggers != 0)
+        {
+          BlockRef self;
+          self.kind = BlockRef::Kind::Record;
+          self.record = at;
+          FUN_00240870_walk_triggers(self, environment);
+        }
       }
 
       // :92-130, the target validation, which runs whether or not the record

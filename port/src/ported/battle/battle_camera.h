@@ -78,6 +78,16 @@ namespace orphen::ported::battle
     // pointer, the port keeps the pool slot. A different target re-arms.
     std::int32_t int34_target = -1;
 
+    // FUN_0023E790's fields. It reads +0x2C as the subject's *type*, the same
+    // halfword FUN_0023DE20 keeps its direction in; the workspace is cleared
+    // before either arms, so the two readings never meet.
+    float float0c_lookHeight = 0.0f; // +0x0C: the subject's +0x28, while it keeps its type
+    float float14_facing = 0.0f;     // +0x14: the subject's +0x5C when armed
+    float float18_playerFacing = 0.0f; // +0x18: DAT_0058BF0C, the lead's +0x5C
+    float float20_x = 0.0f;          // +0x20..+0x28: where the subject stood
+    float float24_y = 0.0f;
+    float float28_z = 0.0f;
+
     // FUN_00267E78(0x571b80, 0x70).
     void FUN_00267e78_clear() { *this = TargetCameraWork{}; }
   };
@@ -108,5 +118,36 @@ namespace orphen::ported::battle
                                  std::uint8_t mode,
                                  TargetCameraWork &work,
                                  std::uint32_t frameTicks);
+
+  // DAT_003526E0 / DAT_003526E4 (fGpffff8770 / fGpffff8774): the close-up's
+  // orbit rate, radians a tick, and a second rate FUN_0023DA10 passes in $f14
+  // that FUN_0023E790 never reads.
+  inline constexpr float kfGpffff8770_closeUpOrbitRate = 0.00016580623923800886f;
+  // DAT_00352708 / DAT_0035270C: the "arrived" band on the eye's distance.
+  inline constexpr float kDAT_00352708_arrivedLow = -0.30000001192092896f;
+  inline constexpr float kDAT_0035270c_arrivedHigh = 0.30000001192092896f;
+
+  // FUN_0023E790(angle $f12, rate $f13, subject a0, steps a1, mode a2, work
+  // a3). Ghidra's prototype is shifted by the float arguments again; the call
+  // at 0x0023DB34 is the reading this follows.
+  //
+  // On a new mode it arms the workspace off the subject: its position, facing
+  // and type, and the starting angle. Two section-14 entries override that
+  // angle to face a fixed point (entry 0x11 and entry 0x29). Every frame the
+  // eye then closes `1 / (steps * frameTicks / 32)` of the way on a point 2.5
+  // units out from the subject at the angle and a unit up, and in mode 7 the
+  // angle walks by `rate` a tick and the eye's x/y go straight to the circle.
+  // It looks at where the subject stood, half a unit above its height, and
+  // returns whether the eye has arrived to within 0.3.
+  bool FUN_0023e790_close_up(orphen::ported::camera::OriginalFieldCamera &camera,
+                             const orphen::ported::entity::OriginalEntity &subject,
+                             float angle,
+                             float rate,
+                             std::int16_t steps,
+                             std::uint8_t mode,
+                             TargetCameraWork &work,
+                             std::int32_t DAT_003551f8_sceneEntry,
+                             float DAT_0058bf0c_leadFacing,
+                             std::int32_t frameTicks);
 
 } // namespace orphen::ported::battle

@@ -123,6 +123,9 @@ namespace orphen::ported::battle
       // The camera FUN_0023C340 drives -- both the ambient spline shots and the
       // target framing. Null in a harness with no camera, which skips both.
       orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
+      // DAT_003551F8, the section-14 entry being played. FUN_0023E790 aims
+      // its close-up from a fixed point in entries 0x11 and 0x29.
+      std::int32_t DAT_003551f8_sceneEntry = -1;
       // FUN_00216868, through the runtime's seeded LCG. The ambient camera
       // picks its spline, its starting position along it, how long it holds it
       // and which way it runs with four draws, so a --frames run needs the
@@ -193,6 +196,22 @@ namespace orphen::ported::battle
     // the display opens, and releases it when the display closes so the field
     // camera has the shot back.
     void FUN_0023c340_target_display(const Environment &environment,
+                                     const BattleEncounter &encounter,
+                                     std::uint32_t frameTicks);
+
+    // FUN_0023DA10, FUN_00242CF0's camera for script variable 25 = 600: the
+    // close-up on the enemy that fell last, which a master script asks for
+    // once every enemy is down. The first call picks the subject -- the bound
+    // record with the smallest non-zero +0x0C, FUN_0023FC08's count of frames
+    // spent dead -- and arms 0x1E00 ticks, four seconds; every call after that
+    // spends the frame's ticks and orbits the subject with FUN_0023E790 mode 7.
+    // Returns false once the four seconds are up, or when there is nobody to
+    // look at, or while the battle is suspended or carries bit 4 or 0x10 --
+    // and false is what tells FUN_00242CF0 to put the variable back to 0.
+    //
+    // It also zeroes uGpffffb6f1 and DAT_0034387C/E each live call; that is
+    // the pad vibration, which the port does not drive.
+    bool FUN_0023da10_victory_camera(const Environment &environment,
                                      const BattleEncounter &encounter,
                                      std::uint32_t frameTicks);
     // :48-140. Arm a spline pair: pick one, install it on the camera, choose a
@@ -368,6 +387,8 @@ namespace orphen::ported::battle
     // second time and leaked a second shared hit effect -- which then ate the
     // FUN_002f1380 request every frame and left the real one hidden.
     std::uint32_t DAT_00354fc2() const { return sGpffffb052_; }
+    // The battle VM's opcode 5 sub-op 6 writes it directly.
+    std::uint16_t &DAT_00354fc2_mutable() { return sGpffffb052_; }
 
     std::span<const std::uint8_t> DAT_003437a0_loadout() const { return DAT_003437a0_; }
     // FUN_0022F620's one write to the loadout: the Equip screen's swap.
@@ -444,6 +465,13 @@ namespace orphen::ported::battle
     std::vector<orphen::ported::render::HudQuad> targetDisplayQuads_;
     // DAT_00571B80, the camera workspace.
     TargetCameraWork DAT_00571b80_cameraWork_{};
+    // FUN_0023DA10's three: psGpffffaf18 (DAT_00354E88) the subject, as a pool
+    // slot, sGpffffaf2e its type, and uGpffffaf30 the ticks left. Only
+    // FUN_0023C2E0 and FUN_0023C340's not-in-a-battle branch clear the subject,
+    // so once the four seconds are spent the shot stays spent.
+    std::int32_t DAT_00354e88_closeUpSubject_ = -1;
+    std::int16_t sGpffffaf2e_closeUpType_ = 0;
+    std::uint16_t uGpffffaf30_closeUpTicks_ = 0;
     // The ambient camera. DAT_00354FB2 at 0xFFFF means "nothing armed", which
     // is both the initial state and how every other camera mode hands control
     // back: leave a non-zero mode byte in the workspace and the next frame

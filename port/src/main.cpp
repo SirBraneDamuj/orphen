@@ -581,16 +581,17 @@ namespace
           throw std::runtime_error("--enemy-hp needs <slot>=<hp>[:<frame>]");
         }
         const std::size_t colon = value.find(':', equals);
-        config.enemyHpSlot = static_cast<std::uint32_t>(std::stoul(value.substr(0, equals)));
-        config.enemyHpValue = static_cast<std::uint32_t>(
+        orphen::port::PortRuntimeConfig::EnemyHpProbe probe;
+        probe.slot = static_cast<std::uint32_t>(std::stoul(value.substr(0, equals)));
+        probe.value = static_cast<std::uint32_t>(
             std::stoul(value.substr(equals + 1, colon == std::string::npos
                                                     ? std::string::npos
                                                     : colon - equals - 1)));
-        config.enemyHpFrame =
+        probe.frame =
             colon == std::string::npos
                 ? 1u
                 : static_cast<std::uint32_t>(std::stoul(value.substr(colon + 1)));
-        config.hasEnemyHp = true;
+        config.enemyHp.push_back(probe);
         continue;
       }
       if (argument == "--set-event-flag")

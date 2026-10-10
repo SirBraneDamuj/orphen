@@ -143,10 +143,14 @@ namespace orphen::port
     // what kept s14_e001's swarm phase out of reach. It writes the same field
     // the stat record writes at spawn, so nothing downstream can tell the
     // difference; it is still a probe, not something the game does.
-    bool hasEnemyHp = false;
-    std::uint32_t enemyHpSlot = 0;
-    std::uint32_t enemyHpValue = 0;
-    std::uint32_t enemyHpFrame = 1;
+    // Repeatable: one entry per slot, so a whole wave can be brought low.
+    struct EnemyHpProbe
+    {
+      std::uint32_t slot = 0;
+      std::uint32_t value = 0;
+      std::uint32_t frame = 1;
+    };
+    std::vector<EnemyHpProbe> enemyHp;
     // --set-event-flag, repeatable: each entry is (flag id, frame).
     std::vector<std::pair<std::uint32_t, std::uint32_t>> setEventFlags;
     bool hasArmStream = false;
@@ -723,10 +727,8 @@ namespace orphen::port
     std::uint32_t setWorkIndex_ = 0;
     std::uint32_t setWorkValue_ = 0;
     std::uint32_t setWorkFrame_ = 1;
-    bool enemyHpPending_ = false;
-    std::uint32_t enemyHpSlot_ = 0;
-    std::uint32_t enemyHpValue_ = 0;
-    std::uint32_t enemyHpFrame_ = 1;
+    // --enemy-hp probes not yet applied.
+    std::vector<PortRuntimeConfig::EnemyHpProbe> pendingEnemyHp_;
     // (flag id, frame) probes not yet raised.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pendingEventFlags_;
     std::uint32_t armStreamOffset_ = 0;

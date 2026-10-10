@@ -10234,6 +10234,116 @@ A wind ball that traps its target raises the `FUN_00248D58`
 flag the type `0x6A` HUD sprite reads, and that sprite is not ported. Sephy as
 the lead never traps; see `FUN_002e45a0_wind_ball`.
 
+### `s14_e003`'s lanterns: type `0x6D`, the Lamp
+
+The arena's two hanging lanterns, slots 15 and 19, are props the player can
+lock onto ("Lamp-1", 1 HP). One hit drops the lantern, and it burns on the floor
+for 1200 frames, damaging any enemy that walks into the fire. The port drew
+them as Orphen and never targeted them, for three separate reasons:
+
+- **The props came out of no bank.** `FUN_0022A418:50` seeds the streamed-prop
+  bank (`DAT_00355208`) from the stage, but `s14_e003` is scene module 5,
+  `FUN_0026C228`, and that module's **mode 2** overrides the bank with 5. The
+  port never called mode 2, so every streamed prop in the scene got
+  struct-default bodies and no `+0x02`/`+0x04` flags. Hardware has
+  `0x80`/`0xD8` on them. `FUN_0032536c_scene_module(2)` now runs right after the
+  seed; the original runs it between the seed and modes 0/1, and no ported mode
+  0 or 1 reads the bank.
+- **The model followed the retype.** The lanterns are placed as prop `0x287`
+  with a negative tag (ids `0x5B`/`0x5F`, bound into the actor table with one
+  hit point). The init entry then writes `0x6D` over `+0x00` with opcode `0x77`
+  register 0. `0x6D`'s own model record is a party character. The register write
+  now pins `modelTypeId15c` the way every other retype site does.
+- **The behaviour was missing.** `0x002F11C8` is five instructions that clear
+  `+0x02` bits `0x180` and tail-call `FUN_002484D0`, now in
+  `original_element_object.cpp`. Hanging, the lamp offers `+0x02` bit 8 every
+  frame and pins its body to 1.0. The first `+0xBE` drops it: `+0x02` trades bit
+  8 for `0x1000`, gravity comes back (`+0x04` bit 8 off), and it plays animation
+  4. On `+0x0C` bit 4 it arms `0x4B0` frames and rings ten type `0x47` flames
+  round itself (`divu`, so 36 ten-degree steps at 0.50..0.79; Ghidra prints both
+  remainders signed). Burning, it runs `FUN_002148A8` with `DAT_00354F88`
+  (`01 00 0A 00`) every frame, puts a type `0x122` burst (`FUN_002D6CE0`,
+  handler `LAB_00239F80`) on the first victim, and frees itself when the timer
+  runs out. The flames follow, through the break piece's own parent test.
+
+Checked on hardware from `savestates/s14_e003_idle_after_wind.p2s` (Right
+once, then Cross). The hanging, falling and burning fields match the port's
+snapshot: `+0x02` `0x4008` -> `0x5000`, `+0x04` `0xC9` -> `0xD1`, the 0.001 nudge
+to x 2.251, the floor at 0.0, and the timer falling 32 a frame. The ten flames
+match field for field and land in the same pool slots (35, 39..47); only their
+ring positions differ, because the RNG has a different history. On both, the
+fire costs a dummy one point a contact.
+
+### How `s14_e003` ends: the trigger walker, the party scripts and the close-up
+
+Killing the last dummy did nothing. The end of this battle is not one opcode.
+It is a relay through all three of `FUN_0023FD30`'s VM loops, and the port had
+only two of them, plus none of the pieces in between:
+
+1. The master script (0x3EBC) installs the dummies' AI, then a **trigger
+   table** with opcode 9: four kind-0 entries, "Sephy or any dummy has damage
+   waiting in `+0xBE`". Then it parks on opcode 10. `FUN_00240870` walks that
+   table every frame. The first entry that holds jumps the master to 0x3F34
+   and spends the table. The port stored the table and never walked it, so the
+   master sat at 0x3F30 for the whole fight.
+2. 0x3F34 installs scripts on the dummies and on **id 1, Sephy's own control
+   block**, with opcode 18. The control blocks are `FUN_0023FD30`'s third loop.
+   The port did not run it, and its opcode 18, 13, 17 and 4 could only name actor
+   records. `FUN_0023EBA0` hands back the master (id 0xFFFF), a control block
+   (below 10) or a record through one pointer, so `BattleEncounter::BlockRef`
+   now does the same for every VM path that names a block, "zero means me"
+   included.
+3. Sephy's script ends by installing the master again with opcode 18 id 0xFFFF,
+   at 0x3FB4: opcode 3 mode 1 polling the living-enemy count once a frame.
+   At zero it jumps to 0x4150.
+4. 0x4150 is the win. Opcode 5 sub-op 6 raises bit 8 of `DAT_00354FC2`, and
+   `FUN_0023FD30:286` answers it by sending every member home (pending 0x87)
+   and returning before the command input. Opcode 12 asks for camera mode 600.
+   Opcode 5 sub-op 5 holds until script variable 25 stops being 600. Then the
+   player is ordered into 0x87 and variable 39 gets 1000, which is what the
+   scene script is waiting on to play the pose and leave for `s03_e001`.
+5. Camera mode 600 is `FUN_0023DA10` through `FUN_00242CF0`. It picks the
+   bound record with the smallest non-zero `+0x0C`, which is the enemy that died
+   last, and orbits it with `FUN_0023E790` mode 7 for 0x1E00 ticks. That is
+   the four-second **close-up on the fallen enemy** before the victory pose.
+   Then it reports done and `FUN_00242CF0` zeroes the variable. It skips
+   itself (straight to done) while the battle is suspended or carries
+   `DAT_00354FC2` bit 4 or 0x10. Opcode 5 sub-op 6 raises 0x18 when it runs
+   during a suspend, so a battle won by a summon goes straight to the pose.
+
+Checked on hardware from `savestates/s14_e003_last_enemy.p2s`, with one dummy
+left at 4 HP. Triangle kills it, the camera cuts to the dummy and holds, then
+goes letterboxed onto Sephy. The master's PC there was already 0x3FC0 (the
+poll), and Sephy's control block `+0x30` was 0x3FB0, the end of her script.
+The port, with the dummies brought to 0/0/1 HP by `--enemy-hp` (now
+repeatable) and one baton hit, shows the same three shots and goes on to
+`s03_e001`.
+
+Not ported, and named: the walker's kinds 4/5 into a party control block (no
+shipped table does it); camera mode 0x1F5 (`FUN_0023BF30`) and `FUN_00242CF0`'s
+blend fallback through `FUN_00217F38`; opcode 5 sub-op 3; and the pad rumble
+`FUN_0023DA10` zeroes.
+
+### Back in `s03_e001`: Sephy's ledge jump, 0x5D and 0x12D
+
+Winning `s14_e003` returns to `s03_e001`, where a scheduler stream at blob
+offset 0x5BF0 plays the reunion. Its eighth record waits on event flag 0x191,
+and only Sephy's script at 0x4471 raises it, once she has landed. In the port
+she said "Hah!" and stood on the ledge forever, for two reasons:
+
+- **0x5D (`FUN_0025F290`) was unported.** It takes a selector, a speed and an
+  angle. The speed is scaled by `DAT_00352BC8` (100000.0), then by 1/32 and
+  the frame's ticks. It is added along the angle to the entity's `+0x30/+0x34`
+  movement request, not to its position, so physics still carries the fall.
+- **0x12C/0x12D fell through into 0x132's handler**, whose inline u32 ate the
+  next opcode. Both are one expression, a music slot: 0x12C returns
+  `FUN_00206238` ("is a ramp in flight") and 0x12D stops the slot through
+  `FUN_00205F40`. The cutscene's other script stops slot 3 this way and then
+  decoded garbage every frame.
+
+Replayed with `--from-scene s14_e003 --arm-stream 5bf0:5`, the stream now runs
+to the end and the scene moves on to `s05_e011`.
+
 ### The five level-5 summons
 
 Released at full charge with a live target, an elemental spell is not thrown at

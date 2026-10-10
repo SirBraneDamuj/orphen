@@ -59,7 +59,19 @@ namespace orphen::ported::script
 
     switch (index)
     {
-    case 0x00: entity.typeId00 = static_cast<std::int16_t>(halfword); return true;
+    // Only +0x00 moves. The model is +0x15C, which FUN_00229C40 bound at spawn
+    // off the type the slot was allocated as, so a retyped entity goes on
+    // drawing what it was. s14_e003's init entry is the case that shows it:
+    // its two lanterns are placed as prop 0x287 and written over with 0x6D,
+    // the Lamp, whose own model record is a party character. A free slot has
+    // no model to keep.
+    case 0x00:
+      if (entity.modelTypeId15c < 0 && entity.typeId00 != 0)
+      {
+        entity.modelTypeId15c = entity.effectiveTypeId();
+      }
+      entity.typeId00 = static_cast<std::int16_t>(halfword);
+      return true;
     case 0x01: entity.descriptorFlags02 = halfword; return true;
     case 0x02: entity.collisionFlags0c = value; return true;
     case 0x03: entity.halfword04 = halfword; return true;

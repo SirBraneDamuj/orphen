@@ -946,6 +946,10 @@ namespace orphen::ported::script
     std::function<void(std::size_t slot, int fader)> FUN_00205d90_play_music_slot;
     std::function<void(std::size_t slot, int speed, int fader)> FUN_002063c8_ramp_music_up;
     std::function<void(std::size_t slot, int speed, int fader)> FUN_00206260_ramp_music_down;
+    // 0x12C asks FUN_00206238 whether a slot's ramp is still in flight; 0x12D
+    // stops a slot outright through FUN_00205F40.
+    std::function<bool(std::size_t slot)> FUN_00206238_music_slot_ramping;
+    std::function<void(std::size_t slot)> FUN_00205f40_stop_music_slot;
 
     // FUN_00213640: suspend or resume the player's bandana. Extended opcode
     // 0x146's whole effect; it needs the bone-override table, which lives on the

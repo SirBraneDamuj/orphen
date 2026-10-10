@@ -167,4 +167,86 @@ namespace orphen::ported::battle
     camera.FUN_00217d70_set_manual_camera(eye, look);
   }
 
+  bool FUN_0023e790_close_up(orphen::ported::camera::OriginalFieldCamera &camera,
+                             const orphen::ported::entity::OriginalEntity &subject,
+                             float angle,
+                             float rate,
+                             std::int16_t steps,
+                             std::uint8_t mode,
+                             TargetCameraWork &work,
+                             std::int32_t DAT_003551f8_sceneEntry,
+                             float DAT_0058bf0c_leadFacing,
+                             std::int32_t frameTicks)
+  {
+    // DAT_0031D0F8/FC and DAT_0031D108/10C: the two arena points the angle is
+    // aimed from in section-14 entries 0x11 and 0x29.
+    constexpr float kDAT_0031d0f8_x = -1.9500000476837158f;
+    constexpr float kDAT_0031d0fc_y = 10.71500015258789f;
+    constexpr float kDAT_0031d108_x = -6.2769999504089355f;
+    constexpr float kDAT_0031d10c_y = 5.203999996185303f;
+
+    // 0x0023E7DC-0x0023E89C. A new mode arms the workspace.
+    if (static_cast<std::int8_t>(work.byte00_mode) != static_cast<std::int8_t>(mode))
+    {
+      work.byte00_mode = mode;
+      work.float04_angle = angle;
+      work.float14_facing = subject.facingRadians5c;
+      work.half2c_direction = static_cast<std::uint16_t>(subject.typeId00);
+      work.float18_playerFacing = DAT_0058bf0c_leadFacing;
+      work.float20_x = subject.positionX20;
+      work.float24_y = subject.positionZ24;
+      work.float28_z = subject.positionY28;
+      work.float0c_lookHeight = subject.positionY28;
+      if (DAT_003551f8_sceneEntry == 0x11)
+      {
+        work.float04_angle = std::atan2(kDAT_0031d0fc_y - subject.positionZ24, kDAT_0031d0f8_x - subject.positionX20);
+        work.float14_facing = 0.0f;
+      }
+      if (DAT_003551f8_sceneEntry == 0x29)
+      {
+        work.float04_angle = std::atan2(kDAT_0031d10c_y - subject.positionZ24, kDAT_0031d108_x - subject.positionX20);
+        work.float14_facing = 0.0f;
+      }
+    }
+
+    // 0x0023E8A0-0x0023E8EC. The divisor is `steps * (ticks / 32)` through a
+    // short, and the plain step count when that comes out zero.
+    work.float04_angle = orphen::ported::model::FUN_00216690_wrap_angle(work.float04_angle);
+    const std::int32_t whole = (frameTicks < 0 ? frameTicks + 0x1F : frameTicks) >> 5;
+    const auto scaled = static_cast<std::int16_t>(static_cast<std::int32_t>(steps) * whole);
+    const float divisor = static_cast<float>(scaled != 0 ? scaled : steps);
+
+    // 0x0023E8F0-0x0023E9C8.
+    const Vec3 eye = camera.DAT_0058c0a8_eye();
+    const float wantX = std::cos(work.float14_facing + work.float04_angle) * 2.5f + work.float20_x;
+    const float wantY = std::sin(work.float14_facing + work.float04_angle) * 2.5f + work.float24_y;
+    const float wantZ = work.float28_z + 1.0f;
+    const float dx = wantX - eye.x;
+    const float dy = wantY - eye.y;
+    const float dz = wantZ - eye.z;
+    const float distance = FUN_00216648_length3(dx, dy, dz);
+    Vec3 nextEye{dx / divisor + eye.x, dy / divisor + eye.y, dz / divisor + eye.z};
+
+    // 0x0023E9CC-0x0023EA24. Mode 7 orbits: the angle moves on and x/y snap to
+    // the circle, leaving only the height eased.
+    if (mode == 7)
+    {
+      work.float04_angle += rate * static_cast<float>(frameTicks);
+      nextEye.x = std::cos(work.float14_facing + work.float04_angle) * 2.5f + work.float20_x;
+      nextEye.y = std::sin(work.float14_facing + work.float04_angle) * 2.5f + work.float24_y;
+    }
+
+    // 0x0023EA28-0x0023EA40. The look height follows the subject only while it
+    // is still the type it was armed on.
+    if (subject.typeId00 == static_cast<std::int16_t>(work.half2c_direction))
+    {
+      work.float0c_lookHeight = subject.positionY28;
+    }
+
+    // FUN_00246F40: FUN_00217E18(0), then FUN_00217D70(eye, look).
+    camera.FUN_00217e18_release_manual_camera(false);
+    camera.FUN_00217d70_set_manual_camera(nextEye, Vec3{work.float20_x, work.float24_y, work.float0c_lookHeight + 0.5f});
+    return kDAT_00352708_arrivedLow < distance && distance < kDAT_0035270c_arrivedHigh;
+  }
+
 } // namespace orphen::ported::battle
