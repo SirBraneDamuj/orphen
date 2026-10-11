@@ -382,6 +382,7 @@ namespace orphen::port
     // read the pool here and nowhere else (port_runtime_inspector.cpp).
     void updateFlyCamera(float deltaSeconds, const InputSnapshot &input);
     bool flyCameraActive() const { return mapViewer_.flyCameraActive(); }
+    float outputVolume() const { return mapViewer_.outputVolume(); }
     bool harnessUiCovers(int pixelX, int pixelY) const { return mapViewer_.harnessUiCovers(pixelX, pixelY); }
     // --select-entity's click. False until the slot is in the tree.
     bool selectEntity(std::size_t slot);

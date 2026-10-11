@@ -63,6 +63,12 @@ namespace orphen::harness
         std::memset(stream, 0, static_cast<std::size_t>(lengthBytes));
       }
       device->mixMovie(samples, frames);
+      // The port's listening level, not the game's: films included.
+      const float volume = device->volume();
+      for (std::size_t sample = 0; sample < frames * 2; ++sample)
+      {
+        samples[sample] *= volume;
+      }
     }
   } // namespace
 

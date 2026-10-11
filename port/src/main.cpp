@@ -1625,6 +1625,7 @@ int main(int argc, char **argv)
         // fires would key on over the top of the last one.
         audio.setMuted(fastForward);
       }
+      audio.setVolume(runtime.outputVolume());
 
       const auto simStart = std::chrono::steady_clock::now();
       if (fastForward)

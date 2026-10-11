@@ -47,6 +47,11 @@ namespace orphen::harness
     // drainPendingKeyOns that keeps the queue from growing without bound.
     void setMuted(bool muted) { muted_.store(muted, std::memory_order_relaxed); }
 
+    // The listening level, a gain on everything the device plays. The port's
+    // preference, not the game's: the fly view's Settings panel sets it.
+    void setVolume(float volume) { volume_.store(volume, std::memory_order_relaxed); }
+    float volume() const { return volume_.load(std::memory_order_relaxed); }
+
     // For the callback, which is handed the device rather than the engine.
     orphen::ported::sound::SoundEngine *engine() const { return engine_; }
     bool muted() const { return muted_.load(std::memory_order_relaxed); }
@@ -78,6 +83,7 @@ namespace orphen::harness
     orphen::ported::sound::SoundEngine *engine_ = nullptr;
     // Read on SDL's audio thread.
     std::atomic<bool> muted_{false};
+    std::atomic<float> volume_{0.5f};
 
     std::mutex movieLock_;
     std::vector<std::int16_t> moviePcm_;

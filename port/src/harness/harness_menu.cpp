@@ -87,6 +87,22 @@ namespace orphen::harness
       return text;
     }
 
+    // The Settings panel. "VOLUME  -10 -1  100%  +1 +10"
+    constexpr int kSettingsColumns = 28;
+    constexpr int kVolumeValueColumn = 15; // "100%", right-aligned
+    struct VolumeButton
+    {
+      int delta;
+      int column;
+      const char *text;
+    };
+    constexpr std::array<VolumeButton, 4> kVolumeButtons = {{
+        {-10, 8, "-10"},
+        {-1, 12, "-1"},
+        {1, 21, "+1"},
+        {10, 24, "+10"},
+    }};
+
     // The Inventory panel's columns.
     //   "TRIANGLE <  Sword of the Fallen Devil >"
     //   "01 Sword of the Fallen Devil TRI   -  1  +"
@@ -417,6 +433,30 @@ namespace orphen::harness
     return panel;
   }
 
+  ToolPanel buildSettingsPanel(float scale, float left, float top, const SettingsView &view)
+  {
+    ToolPanel panel("SETTINGS", kSettingsColumns, scale, left, top);
+    panel.text(0, "VOLUME");
+    panel.text(kVolumeValueColumn, rightAligned(view.volumePercent, 3) + "%");
+    for (std::size_t index = 0; index < kVolumeButtons.size(); ++index)
+    {
+      const auto &button = kVolumeButtons[index];
+      const bool enabled = button.delta < 0 ? view.volumePercent > 0 : view.volumePercent < 100;
+      panel.button(button.column, button.text, static_cast<int>(index), enabled);
+    }
+    panel.nextRow();
+    return panel;
+  }
+
+  int settingsVolumeDelta(int buttonId)
+  {
+    if (buttonId < 0 || buttonId >= static_cast<int>(kVolumeButtons.size()))
+    {
+      return 0;
+    }
+    return kVolumeButtons[static_cast<std::size_t>(buttonId)].delta;
+  }
+
   std::optional<HarnessRequest> toolPanelRequest(ToolPanelKind kind, int buttonId)
   {
     HarnessRequest request;
@@ -451,6 +491,8 @@ namespace orphen::harness
       request.item = buttonId / 2;
       request.delta = (buttonId & 1) != 0 ? 1 : -1;
       return request;
+    case ToolPanelKind::Settings:
+      break;
     }
     return std::nullopt;
   }

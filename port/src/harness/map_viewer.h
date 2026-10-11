@@ -232,6 +232,9 @@ namespace orphen::harness
     // Either panel that inventoryView() feeds is open.
     bool inventoryVisible() const { return flyCameraActive_ && (inventoryVisible_ || itemsVisible_); }
     std::vector<HarnessRequest> takeHarnessRequests();
+    // The Settings panel's volume as a gain, for main() to hand the audio
+    // device each frame.
+    float outputVolume() const { return static_cast<float>(settings_.volumePercent) / 100.0f; }
     // The slot the inspector window should show, while there is one to show:
     // flying, and something selected.
     std::optional<std::size_t> inspectedEntitySlot() const;
@@ -420,6 +423,8 @@ namespace orphen::harness
     bool inventoryVisible_ = false;
     bool itemsVisible_ = false;
     InventoryView inventory_;
+    bool settingsVisible_ = false;
+    SettingsView settings_;
     // The open panels, built for this framebuffer from the current numbers,
     // in draw order.
     struct OpenToolPanel

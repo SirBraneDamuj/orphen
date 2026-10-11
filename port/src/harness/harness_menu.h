@@ -27,6 +27,7 @@ namespace orphen::harness
     TogglePlayerParams,
     ToggleInventory,
     ToggleItems,
+    ToggleSettings,
     Heal,               // 0
     HitScratch,         // 1
     HitHit,             // 2
@@ -88,6 +89,7 @@ namespace orphen::harness
     PlayerParams,
     Inventory,
     Items,
+    Settings,
   };
 
   // The Player Params panel: FUN_0026bc50's three rows, with a button for each
@@ -142,6 +144,18 @@ namespace orphen::harness
   ToolPanel buildPlayerParamsPanel(float scale, float left, float top, const PlayerParamsView &view);
   ToolPanel buildInventoryPanel(float scale, float left, float top, const InventoryView &view);
   ToolPanel buildItemsPanel(float scale, float left, float top, const InventoryView &view);
+
+  // The Settings panel: the port's own preferences, nothing of the game's.
+  struct SettingsView
+  {
+    // The audio device's output level, 0..100.
+    int volumePercent = 50;
+  };
+  ToolPanel buildSettingsPanel(float scale, float left, float top, const SettingsView &view);
+  // A Settings button's change to the volume, in percent. The settings never
+  // touch the simulation, so they are applied in the viewer rather than going
+  // out as a HarnessRequest.
+  int settingsVolumeDelta(int buttonId);
 
   // What a menu asks the runtime to do to the simulation. Applied between
   // steps, outside PortRuntime::update, so a --frames run never sees one.

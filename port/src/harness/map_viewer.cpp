@@ -3900,6 +3900,7 @@ namespace orphen::harness
               item("HEAL", "0", MenuCommand::Heal), item("HIT: SCRATCH", "1", MenuCommand::HitScratch),
               item("HIT: HIT", "2", MenuCommand::HitHit), item("HIT: KNOCKBACK", "3", MenuCommand::HitKnockback),
               item("HIT: FLATTEN", "4", MenuCommand::HitFlatten), item("HIT: LETHAL", "5", MenuCommand::HitLethal)}},
+        Menu{"SETTINGS", {check("SETTINGS", "", MenuCommand::ToggleSettings, settingsVisible_)}},
     };
   }
 
@@ -3935,6 +3936,9 @@ namespace orphen::harness
       break;
     case MenuCommand::ToggleItems:
       itemsVisible_ = !itemsVisible_;
+      break;
+    case MenuCommand::ToggleSettings:
+      settingsVisible_ = !settingsVisible_;
       break;
     case MenuCommand::Heal:
     {
@@ -4007,7 +4011,11 @@ namespace orphen::harness
         }
         else if (const auto button = panel->panel.buttonAt(x, y); button.has_value())
         {
-          if (const auto request = toolPanelRequest(panel->kind, *button); request.has_value())
+          if (panel->kind == ToolPanelKind::Settings)
+          {
+            settings_.volumePercent = std::clamp(settings_.volumePercent + settingsVolumeDelta(*button), 0, 100);
+          }
+          else if (const auto request = toolPanelRequest(panel->kind, *button); request.has_value())
           {
             harnessRequests_.push_back(*request);
           }
@@ -4037,6 +4045,8 @@ namespace orphen::harness
       return playerParamsVisible_;
     case ToolPanelKind::Inventory:
       return inventoryVisible_;
+    case ToolPanelKind::Settings:
+      return settingsVisible_;
     case ToolPanelKind::Items:
       break;
     }
@@ -4051,6 +4061,8 @@ namespace orphen::harness
       return playerParamsVisible_;
     case ToolPanelKind::Inventory:
       return inventoryVisible_;
+    case ToolPanelKind::Settings:
+      return settingsVisible_;
     case ToolPanelKind::Items:
       break;
     }
@@ -4084,12 +4096,15 @@ namespace orphen::harness
         return buildPlayerParamsPanel(scale, left, at, playerParams_);
       case ToolPanelKind::Inventory:
         return buildInventoryPanel(scale, left, at, inventory_);
+      case ToolPanelKind::Settings:
+        return buildSettingsPanel(scale, left, at, settings_);
       case ToolPanelKind::Items:
         break;
       }
       return buildItemsPanel(scale, left, at, inventory_);
     };
-    for (const ToolPanelKind kind : {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items})
+    for (const ToolPanelKind kind :
+         {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items, ToolPanelKind::Settings})
     {
       if (!toolPanelVisible(kind))
       {
