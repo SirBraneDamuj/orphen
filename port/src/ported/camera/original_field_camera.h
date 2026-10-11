@@ -203,6 +203,8 @@ namespace orphen::ported::camera
     float followPitch() const { return uGpffffad24_pitchSetting_; }
     FieldCameraMode mode() const { return bGpffffb6e0_mode_; }
     bool freeLookActive() const { return cGpffffb6e4_freeLook_ != 0; }
+    // The raw byte, for opcode 0x148.
+    std::uint8_t cGpffffb6e4_freeLook() const { return cGpffffb6e4_freeLook_; }
     std::uint32_t idleTicks() const { return uGpffffad0c_idleTimer_; }
 
     // uGpffffad0c > 0x1c200 is where the original hands off to the idle

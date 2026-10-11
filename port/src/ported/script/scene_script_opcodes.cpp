@@ -12,6 +12,7 @@
 #include "ported/camera/original_camera_path.h"
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity_sound.h"
+#include "ported/entity/original_hit_test.h"
 #include "ported/entity/original_smoke_cloud.h"
 #include "ported/entity/player_bandana.h"
 #include "ported/script/object_registers.h"
@@ -1006,6 +1007,64 @@ namespace orphen::ported::script
       orphen::ported::entity::FUN_00225bf0_set_state_and_animation(
           environment_.entityPool->leadPlayer(), 10, 1);
     }
+    return 0;
+  }
+
+  // 0xA9 (FUN_00262f80): x, y expressions and an inline walk/run byte. Walks
+  // the lead one frame toward (x, y) and returns 1 once it is closer than a
+  // frame's step, without snapping onto the point. The step is
+  // iGpffffb64c * 64 * DAT_00352C9C walking, * 128 * DAT_00352C98 running --
+  // both 1/81920 in the retail ELF -- and it lands in +0x30/+0x34 for
+  // FUN_002261E0 to spend. +0xA0 is written bare, no FUN_00225bf0: 0xB walk,
+  // 0xE run, 1 on arrival.
+  std::uint32_t SceneCommandInterpreter::FUN_00262f80_step_lead_toward()
+  {
+    const float targetX = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    const float targetZ = static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    const std::uint8_t run = readU8();
+    if (halted_ || environment_.entityPool == nullptr)
+    {
+      return 0;
+    }
+    constexpr float kDAT_00352c98_runScale = 1.0f / 81920.0f;
+    constexpr float kDAT_00352c9c_walkScale = 1.0f / 81920.0f;
+    constexpr std::uint16_t kWalkAnimation = 0x0B;
+    constexpr std::uint16_t kRunAnimation = 0x0E;
+    constexpr std::uint16_t kIdleAnimation = 1;
+
+    auto &lead = environment_.entityPool->leadPlayer();
+    const float deltaX = targetX - lead.positionX20;
+    const float deltaZ = targetZ - lead.positionZ24;
+    const float step = static_cast<float>(environment_.frameTicks) *
+                       (run == 0 ? 64.0f * kDAT_00352c9c_walkScale : 128.0f * kDAT_00352c98_runScale);
+    lead.animationA0 = run == 0 ? kWalkAnimation : kRunAnimation;
+
+    // FUN_00216608.
+    if (std::sqrt(deltaX * deltaX + deltaZ * deltaZ) < step)
+    {
+      lead.animationA0 = kIdleAnimation;
+      return 1;
+    }
+
+    // :41-44, a footstep on a keyframe carrying 0x100 while +0x04 & 0x81000 is
+    // all set -- FUN_00256ff8's gate without its dust.
+    if ((lead.flagsAa & 0x100) != 0 && (lead.halfword04 & 0x1000) != 0 && (lead.flags06 & 8) != 0 &&
+        environment_.FUN_00267d38_play_at_entity)
+    {
+      const std::optional<std::uint32_t> terrain =
+          (lead.collisionFlags0c & 1u) != 0 ? std::optional<std::uint32_t>(lead.flagWord6c) : std::nullopt;
+      environment_.FUN_00267d38_play_at_entity(
+          orphen::ported::entity::FUN_00255d88_surface_cue(
+              lead.typeId00, terrain, lead.interactTarget68 >= 0,
+              run == 0 ? orphen::ported::entity::SurfaceSoundKind::Walk
+                       : orphen::ported::entity::SurfaceSoundKind::Run),
+          0);
+    }
+
+    // FUN_00305408 / FUN_00305130 / FUN_00305218.
+    lead.facingRadians5c = std::atan2(deltaZ, deltaX);
+    lead.desiredDeltaX30 += step * std::cos(lead.facingRadians5c);
+    lead.desiredDeltaZ34 += step * std::sin(lead.facingRadians5c);
     return 0;
   }
 
@@ -4980,6 +5039,10 @@ namespace orphen::ported::script
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00262f38_install_lead_slot();
 
+    case 0xA9:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      return FUN_00262f80_step_lead_toward();
+
     case 0xAA:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       return FUN_00263118_clear_lead_slot();
@@ -5340,6 +5403,62 @@ namespace orphen::ported::script
       return 0;
     }
 
+    // 0xCF (FUN_00264740): a selector and an inline u32, a blob offset. The
+    // selector picks DAT_00355044 through FUN_0025d6c0, and FUN_002148a8 runs
+    // the selected entity's swept hit test with `script base + offset` as its
+    // parameter pointer -- the same four bytes FUN_00216078 copies out of
+    // SCR.BIN 0xBE for a weapon, only kept in the scene's own blob. s05_e011's
+    // hazards run it every frame.
+    case 0xCF:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedCurrent = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      const std::uint32_t offset = FUN_0025c1d0_readStreamU32();
+      if (halted_)
+      {
+        return 0;
+      }
+      resolveEntityFrom(selector, savedCurrent);
+      if (currentEntity_ >= orphen::ported::entity::kEntitySlotCount || offset + 4u > blob_.size())
+      {
+        return 0;
+      }
+      const std::uint32_t packed = static_cast<std::uint32_t>(blob_[offset]) |
+                                   (static_cast<std::uint32_t>(blob_[offset + 1]) << 8) |
+                                   (static_cast<std::uint32_t>(blob_[offset + 2]) << 16) |
+                                   (static_cast<std::uint32_t>(blob_[offset + 3]) << 24);
+      // FUN_00264740 ends on the jal, so v0 is still FUN_002148A8's contact
+      // count when it returns -- Ghidra types it void, but the script reads it.
+      // s05_e011's hazards branch on it.
+      if (environment_.FUN_002148a8_script_hit_test)
+      {
+        return static_cast<std::uint32_t>(static_cast<std::int32_t>(
+            environment_.FUN_002148a8_script_hit_test(currentEntity_, packed)));
+      }
+      return 0;
+    }
+
+    // 0xD0 (FUN_00264790): a selector, then FUN_00215E48 on that entity --
+    // forget everything its swept hit test has already struck, so the next
+    // 0xCF can hit the same victim again.
+    case 0xD0:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::size_t savedCurrent = currentEntity_;
+      const std::uint32_t selector = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      resolveEntityFrom(selector, savedCurrent);
+      if (currentEntity_ < orphen::ported::entity::kEntitySlotCount && environment_.entityPool != nullptr)
+      {
+        orphen::ported::entity::FUN_00215e48_clear_hit_set(environment_.entityPool->slot(currentEntity_));
+      }
+      return 0;
+    }
+
     // 0xD7 FUN_00264d90  a palette slot and its byte.
     case 0xD7:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
@@ -5593,6 +5712,83 @@ namespace orphen::ported::script
         environment_.FUN_002257c0_set_map_uv_track(track, static_cast<std::uint8_t>(value));
       }
       return 0;
+    }
+
+    // 0x119 / 0x11A / 0x11B (FUN_00264a60): two track indices, `from` and
+    // `to`, and FUN_002257e0 copies the first track's (u, v) offset onto the
+    // second. The same three-way split as 0x116..0x118: 0x119 evaluates a
+    // selector first and aims at the entity's +0x164, 0x11A at uGpffffb788 (the
+    // map's block), 0x11B at DAT_00345a2c. Only 0x11A is reached so far, by
+    // s05_e011's start entry.
+    case 0x11A:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t from = FUN_0025c258_evaluate();
+      const std::uint32_t to = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_002257e0_copy_map_uv_offset)
+      {
+        environment_.FUN_002257e0_copy_map_uv_offset(from, to);
+      }
+      return 0;
+    }
+
+    // 0x11F / 0x120 / 0x121 (FUN_00264be8): one track index into FUN_00225740,
+    // which rewinds it. The usual three-way split: 0x11F evaluates a selector
+    // and aims at the entity's +0x164, 0x120 at uGpffffb788 (the map's block),
+    // 0x121 at DAT_00345a2c. s05_e011 rewinds the map's tracks with 0x120.
+    case 0x120:
+    {
+      note(OpcodeSupport::Modelled);
+      const auto track = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_00225740_reset_map_uv_track)
+      {
+        environment_.FUN_00225740_reset_map_uv_track(track);
+      }
+      return 0;
+    }
+
+    // 0x13B (FUN_002653a0): one expression, stored as a byte in DAT_00355657.
+    // Anything over 6 prints "paramater error [set_bokasi_lev]" through
+    // FUN_0026bfc0 and is stored anyway.
+    case 0x13B:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t level = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (level > 6)
+      {
+        std::cout << "paramater error [set_bokasi_lev]\n";
+      }
+      if (environment_.DAT_00355657_set_blur_level)
+      {
+        environment_.DAT_00355657_set_blur_level(static_cast<std::uint8_t>(level));
+      }
+      return 0;
+    }
+
+    // 0x148 (FUN_00265788): no operands, returns the signed byte cGpffffb6e4 --
+    // the free-look latch FUN_00216aa0 sets to 1 on R3 and FUN_00251ed8 to 2.
+    // s05_e011's 0x45B9 polls it.
+    case 0x148:
+    {
+      note(OpcodeSupport::Modelled);
+      if (!environment_.cGpffffb6e4_free_look)
+      {
+        return 0;
+      }
+      return static_cast<std::uint32_t>(
+          static_cast<std::int32_t>(static_cast<std::int8_t>(environment_.cGpffffb6e4_free_look())));
     }
 
     // 0x100 (FUN_002620a8): no expressions, one inline byte selecting which of

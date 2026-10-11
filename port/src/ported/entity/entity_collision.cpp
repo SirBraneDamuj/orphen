@@ -392,4 +392,78 @@ namespace orphen::ported::entity
   const EntityCollisionStats &entityCollisionStats() { return g_stats; }
   void resetEntityCollisionStats() { g_stats = EntityCollisionStats{}; }
 
+  namespace
+  {
+    // DAT_00352424.
+    constexpr float kDAT_00352424_rideDropLimit = 0.3f;
+
+    // The record78 +0x0A names, or null. +0x0A packs the triangle half into
+    // bit 14, which FUN_002262c0 masks off with 0x3FFF.
+    const orphen::ported::psm2::DRecord78 *groundRecord(const OriginalEntity &entity,
+                                                        const orphen::ported::psm2::Psm2RuntimeState &map)
+    {
+      if (entity.groundPrimitive0a < 0)
+      {
+        return nullptr;
+      }
+      const std::size_t index = static_cast<std::size_t>(entity.groundPrimitive0a) & 0x3FFFu;
+      return index < map.DAT_003556b0_dRecords78.size() ? &map.DAT_003556b0_dRecords78[index] : nullptr;
+    }
+  } // namespace
+
+  void FUN_002262c0_ride_collision_group(OriginalEntity &entity,
+                                         const orphen::ported::psm2::Psm2RuntimeState &map,
+                                         const std::function<std::optional<float>()> &FUN_00227070_sample)
+  {
+    // :41-49. Every gate falls through to the freeze test without touching
+    // anything.
+    const auto *standingOn = groundRecord(entity, map);
+    if (standingOn == nullptr || standingOn->byte13 == 0)
+    {
+      return;
+    }
+    const std::int8_t group = standingOn->groupIndex14;
+    if (group < 0 || static_cast<std::size_t>(group) >= map.DAT_003556e0_collisionGroups.size() ||
+        map.DAT_003556e0_collisionGroups[static_cast<std::size_t>(group)].dirty5a == 0)
+    {
+      return;
+    }
+
+    // :50-54. 128 or more is FUN_00227840's "nothing here".
+    const std::optional<float> floor = FUN_00227070_sample ? FUN_00227070_sample() : std::nullopt;
+    if (!floor.has_value())
+    {
+      return;
+    }
+
+    if (*floor < entity.groundHeight4c)
+    {
+      // :55-77. The floor went down. Only an actor standing exactly on it,
+      // not rising, and within 0.3 of it goes down too; everyone else just
+      // has the cached ground lowered and falls onto it under gravity.
+      if (entity.positionY28 == entity.groundHeight4c && entity.verticalVelocity44 <= 0.0f &&
+          entity.positionY28 - *floor < kDAT_00352424_rideDropLimit)
+      {
+        entity.positionY28 = *floor;
+        entity.previousGroundHeight50 = *floor;
+      }
+      entity.groundHeight4c = *floor;
+      return;
+    }
+
+    // :78-87. The floor rose or held. FUN_00227070 has rewritten +0x0A by now,
+    // and the lift only carries the actor if the sample is still on the same
+    // group.
+    const auto *nowOn = groundRecord(entity, map);
+    if (nowOn == nullptr || nowOn->groupIndex14 != group)
+    {
+      return;
+    }
+    entity.groundHeight4c = *floor;
+    if (entity.positionY28 < *floor)
+    {
+      entity.positionY28 = *floor;
+    }
+  }
+
 } // namespace orphen::ported::entity

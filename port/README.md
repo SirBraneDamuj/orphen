@@ -10344,6 +10344,151 @@ she said "Hah!" and stood on the ledge forever, for two reasons:
 Replayed with `--from-scene s14_e003 --arm-stream 5bf0:5`, the stream now runs
 to the end and the scene moves on to `s05_e011`.
 
+### `s05_e011`'s lift: 0x11A, 0x120, 0x148 and 0xCF
+
+After the reunion the party steps onto a lift, which in the port never moved.
+The stream at blob offset 0x6468 launches two scripts when they board. Slot 3
+(0x48A2) drives the lift through 0x7E, and slot 4 (0x4991) waits for the ride
+to finish, then raises flag 0x139, which the stream's record 99 waits on. Slot
+3's first instruction was **0x11A**, which was unported, so the script halted
+there every frame and the lift's collision group never got a 0x7E write. The
+scene uses four extended opcodes the port lacked:
+
+- **0x119/0x11A/0x11B (`FUN_00264A60` -> `FUN_002257E0`)** take two one-based
+  track indices and copy the first track's (u, v) offset onto the second.
+  0x11A aims at the map's UV animation block. The start entry also ends in one,
+  so it had been halting before its last instruction since the scene was first
+  loaded.
+- **0x11F/0x120/0x121 (`FUN_00264BE8` -> `FUN_00225740`)** rewind a track
+  (all of them for a negative index) without touching its running flag.
+- **0x148 (`FUN_00265788`)** has no operands and returns `cGpffffb6e4`, the
+  camera's free-look latch. Slot 1 (0x45B9) polls it.
+- **0xCF (`FUN_00264740`)** takes a selector and an inline blob offset, and runs
+  the selected entity's `FUN_002148A8` swept hit test with the four parameter
+  bytes at that offset. The hazards run it every frame.
+
+Replayed with `--arm-stream 6730:5 --set-event-flag 310 --set-event-flag 311`,
+slot 3 runs its group move from frame 103 and flag 0x139 rises at frame 415.
+Armed that late, the party is not standing on the lift, so the replay says
+nothing about riding it. In play the lift goes on to `s05_e013`.
+
+### `s05_e013`: riding the lift, and when the lead's physics runs
+
+The lift carries the party from `s05_e011` into `s05_e013`, which opens with the
+lift lowered to -3 (raw -3000 through 0x0F's x100 literal) and raises it 0.008 a
+frame to its rest height. In the port the party stayed where it was dropped:
+the lead fell through to the floor at -4, Magnus and Cleo hung at -2.70 while
+the lift rose through them, and the three walk-to-mark scripts that follow
+waited forever for them to arrive. That was two divergences:
+
+- **`FUN_002262c0:41-91`, the riding block, was unported in both physics
+  copies.** If the primitive an actor last stood on (+0x0A) has record78
+  `+0x13` set and belongs to a group (`+0x14`) whose dirty byte is live, it
+  resamples the floor with `FUN_00227070`. A floor that rose lifts `+0x28` onto
+  it, as long as the sample is still on the same group. A floor that dropped
+  lowers `+0x4C`, and takes a settled actor with it if the drop is under
+  `DAT_00352424` (0.3). Record78 `+0x14` comes from descriptor[`+0x10`]
+  `+0x1A`, which group resolution fills with the group's index. The port's
+  `DRecord78` had stopped at `+0x13`.
+- **The lead's physics ran in the wrong place.** The port called
+  `FUN_002262c0` at the end of the lead controller. The original controller,
+  `FUN_00251ED8`, never integrates. `FUN_002261E0` does slot 0 along with the
+  rest of the pool, at `FUN_002239C8:135`, after `FUN_00208450` has moved the
+  groups. On `s05_e013`'s first frame the start entry has just lowered the
+  lift, so a lead integrated before the move stood on the lift's old position,
+  found nothing and fell. The other handlers order it the other way round:
+  `FUN_002245D8` (the cutscene frame) and `FUN_00224218` (the pause, save
+  prompt and Equip tail) run `FUN_002261E0` before `FUN_00208450`, so the port
+  now picks the order by frame kind.
+
+Arriving from `s05_e011`, the party rides from -2.69 to 0.30 by frame 380 and
+walks off. The stream runs on into Magnus and Orphen's "nice shelter from the
+storm" exchange, and the lead is back under player control by frame 3000.
+Moving the lead's physics changes `s14_e002` as well. Its script report is
+identical, but the lead now spends its battle movement request after the
+battle tick, as `FUN_002239C8` does, and at frame 3000 the lead faces
+slightly differently and the mast boss sits 1.0 lower on y. None of that is
+checked against hardware yet.
+
+### `s05_e013`'s west lift: 0xA9, and 0x13B in `s05_e018`
+
+The room has a second lift at its west end. Its trigger is a floor test, not
+an interaction: the per-frame entry's opcode 0x61 tests the lead's terrain
+word, and a floor carrying bit 0x1 sets work[0x11] to 2. That picks the second
+of four state machines, which switches on work[0x12]. Case 0 frames the
+camera; case 10, at 0x200B, loops on opcode 0xA9 until it returns 1. The
+port halted on that 0xA9.
+
+0xA9 (`FUN_00262F80`) takes x and y expressions and an inline walk/run byte.
+Each frame it adds one step toward the point to the lead's +0x30/+0x34 and
+aims +0x5C at it. The step is `iGpffffb64c * 64 * DAT_00352C9C` walking and
+`* 128 * DAT_00352C98` running, both scales being 1/81920 in the retail ELF.
+It writes animation +0xA0 directly (0xB walking, 0xE running), with no
+`FUN_00225BF0` call. Once the point is closer than one step it sets +0xA0 to 1
+and returns 1. It does not snap onto the point. `analyzed/ops/0xA9_*` says it
+does, and that note is wrong. While walking it plays a footstep on a keyframe
+carrying 0x100, the same check `FUN_00256FF8` makes, but without its dust.
+
+Headless: `--scene s05_e013 --from-scene s05_e011 --place-slot
+0,-6.0,0,0.5:3100-3105` walks the lead from -6.0 to -6.5 in 20 frames (0.025
+per frame), rides the lift down, and loads `s05_e018` at frame 3498. There the
+lead rides up from -8 to -4, walks off, and has control again by frame 4200.
+
+`s05_e018`'s start entry opens with 0x13B (`FUN_002653A0`), which stores one
+expression as the byte `DAT_00355657`. The string `FUN_0026BFC0` prints for a
+value over 6 names it: "set_bokasi_lev", the blur level. `FUN_002000C0` reads
+it once a frame to draw that many `FUN_002020A8` passes. Each pass takes a
+depth threshold between 4.0 and 19.0 and redraws the frame offset by a few
+pixels, depth-tested, so distant geometry blurs: a depth of field.
+`FUN_0022A418:284` resets the level to 6 between the init entry and the start
+entry, so every scene in the game runs with all six passes. **The port draws
+none of them.** It stores the level and nothing reads it yet.
+
+### `s05_e011`'s spinning hazards, and why nothing could hit the lead
+
+The four type 0x276 props (slots 10-13, each with a partner in slots 42-45)
+are driven entirely by the per-frame entry; the type's own behaviour,
+`FUN_002CFE08`, is a plain streamed prop. Every frame the script does the
+following for each hazard:
+
+- Adds work[6..9] to +0x154 (register 0x1F) and copies the result to the
+  partner.
+- Changes that speed by 0.1° per step with `0x37 ... 0x29` / `0x2A`. It speeds
+  up or slows down depending on whether +0x154 lies in (0, π), and keeps the
+  speed between bounds.
+- Counts down +0x1B4 (register 0x3F) on both entities while it is non-zero.
+- Runs `0xCF` (`FUN_00264740` → `FUN_002148A8`) when the countdown is zero. On
+  a contact it sets both countdowns to 15, clears both hit sets with `0xD0`,
+  and writes register 0x17 (+0xC4) on the lead.
+
+Four port bugs broke that:
+
+- **Registers 0x1F/0x20 (and 0x17) wrap.** `FUN_0025C8F8` passes all three
+  through `FUN_00216690`, as it does 0x0D. The port stored 0x1F and 0x20 raw,
+  so after the first turn the angle never fell in (0, π) again and every
+  hazard was stuck at whatever speed it had then.
+- **0xCF returns the contact count.** `FUN_00264740` ends on the `jal`, so v0
+  still holds `FUN_002148A8`'s result. Ghidra types it `void`, and the port
+  returned 0, so the script never saw a hit.
+- **Register writes 0x2C-0x2F and 0x3F were missing.** The damage (15) goes
+  into +0x12C through 0x2E, and the cooldown lives in +0x1B4. On a streamed
+  prop that word is the port's `pushHeading1b4`, so 0x3F stores the dword bit
+  for bit. `0xD0` (`FUN_00264790`, which runs `FUN_00215E48` on the selected
+  entity) was also missing.
+- **The lead was never a hit candidate.** `FUN_0022A418:201` runs
+  `FUN_00229C40` on slot 0, which sets status byte 1 and copies descriptor
+  +0x04 into +0x02 (type 1: 0x0001). The port builds the lead from struct
+  defaults and left slot 0 Free with +0x02 = 0. `candidateAccepted` refuses
+  both, so outside a battle that retypes the lead, nothing in the game could
+  hit the player. `FUN_0022a418_stamp_lead_player_flags` now sets both.
+
+Headless, with the lead pinned at (1, 0) and then released: hazard 11 hits it
+for 15 a contact and knocks it back to x = -2. Magnus, standing near hazard
+10, takes 30 a contact. The regression guard moves as a result: enemies in
+`s14_e001`, `s14_e002` and `s14_e012` now land 3-4 hits on the lead in the
+first 3000 frames, where they landed none before. None of that is checked
+against hardware.
+
 ### The five level-5 summons
 
 Released at full charge with a live target, an elemental spell is not thrown at

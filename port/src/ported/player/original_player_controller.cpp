@@ -400,7 +400,12 @@ namespace orphen::ported::player
       }
     }
 
-    FUN_002262c0_integrate_physics(clampedFrameTicks, terrainSampler);
+    // FUN_002262C0 is not called from here. The original controller,
+    // FUN_00251ED8, never integrates; FUN_002261E0 does it for slot 0 at
+    // FUN_002239C8:135, after the actors, the battle tick and FUN_00208450 --
+    // so the lead lands on wherever a moving group has got to this frame.
+    // PortRuntime calls FUN_002261e0_step_physics from that slot.
+    (void)terrainSampler;
 
     // +0xA8 used to be advanced here, once per frame, as a substate counter.
     // It is not one: FUN_00225c90 owns that halfword and steps it by *two per
@@ -1810,7 +1815,10 @@ namespace orphen::ported::player
     {
       return;
     }
-    FUN_002262c0_integrate_physics(frameTicks, terrainSampler);
+    // FUN_002000c0 clamps DAT_003555bc before anything reads it.
+    FUN_002262c0_integrate_physics(
+        std::clamp(frameTicks, orphen::ported::kMinFrameTicks, orphen::ported::kMaxFrameTicks),
+        terrainSampler);
   }
 
   OriginalTerrainQuery OriginalPlayerController::terrainQueryForEntity(float bodyBaseHeight) const
@@ -1923,6 +1931,25 @@ namespace orphen::ported::player
     // FUN_002262c0:40. Cleared once per solve, whether or not a clamp fires.
     entity().blockedBy64 = 0;
 
+    // FUN_002262c0:41-91, riding a moving collision group.
+    if (movingFloorMap_ != nullptr)
+    {
+      orphen::ported::entity::FUN_002262c0_ride_collision_group(
+          entity(), *movingFloorMap_, [this, &terrainSampler]() {
+            const auto surface = FUN_00227390_validate_destination(
+                entity().positionX20, entity().positionZ24, entity().positionY28, terrainSampler, false);
+            if (!surface.has_value())
+            {
+              return std::optional<float>{};
+            }
+            // FUN_00227070:128-132's write-back.
+            entity().flagWord70 = surface->commonFootprintFlags;
+            entity().groundPrimitive0a = surface->packedPrimitive;
+            entity().flagWord6c = surface->terrainFlags;
+            return std::optional<float>{surface->height};
+          });
+    }
+
     // FUN_002262c0:97-110, gravity. **It runs on the ground as well.** A
     // standing actor falls a sliver every frame and the landing at :511 puts it
     // back on +0x4C, which is what raises bit 0; a walk down a slope is the
@@ -1954,9 +1981,9 @@ namespace orphen::ported::player
     // zero the landing leaves behind.
     const float impactVelocity = entity().verticalVelocity44;
 
-    // Not ported for the lead: the +0x0A lift block (:41-91, which needs a
-    // dynamic group), the +0xBD freeze (:93) and the embedded-corner push-out
-    // (:111-209). The non-player copy in actor_frame_update.cpp has the last two.
+    // Not ported for the lead: the +0xBD freeze (:93) and the embedded-corner
+    // push-out (:111-209). The non-player copy in actor_frame_update.cpp has
+    // both.
 
     // FUN_002262C0:213-451, the movement loop. Entered only for a non-zero +0x30
     // or +0x34; a body with no horizontal request makes no ground query at all,

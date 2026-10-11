@@ -2627,6 +2627,66 @@ namespace orphen::port
       }
     };
 
+    // FUN_002257e0 through opcode 0x11A: (u, v) of one track onto another.
+    // The original indexes `base + 4 + (index - 1) * 10` with no bound check;
+    // the port drops an index past the block instead of writing past it.
+    environment.FUN_002257e0_copy_map_uv_offset = [this](std::uint32_t from, std::uint32_t to)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr || from == 0 || to == 0)
+      {
+        return;
+      }
+      auto &tracks = map->DAT_003556f4_uvAnimation;
+      if (from > tracks.size() || to > tracks.size())
+      {
+        return;
+      }
+      tracks[to - 1u].u = tracks[from - 1u].u;
+      tracks[to - 1u].v = tracks[from - 1u].v;
+    };
+
+    environment.FUN_00225740_reset_map_uv_track = [this](std::int32_t track)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr || track == 0)
+      {
+        return;
+      }
+      auto &tracks = map->DAT_003556f4_uvAnimation;
+      const auto rewind = [](orphen::ported::psm2::UvAnimationTrack &entry)
+      {
+        entry.u = 0;
+        entry.v = 0;
+        entry.timer = 0;
+        entry.frameIndex = 0xff;
+        entry.link = 0;
+        entry.repeat = 0;
+      };
+      if (track < 0)
+      {
+        for (auto &entry : tracks)
+        {
+          rewind(entry);
+        }
+      }
+      else if (static_cast<std::size_t>(track) <= tracks.size())
+      {
+        rewind(tracks[static_cast<std::size_t>(track) - 1u]);
+      }
+    };
+
+    environment.cGpffffb6e4_free_look = [this] { return fieldCamera_.cGpffffb6e4_freeLook(); };
+    environment.DAT_00355657_set_blur_level = [this](std::uint8_t level) { DAT_00355657_blurLevel_ = level; };
+
+    environment.FUN_002148a8_script_hit_test = [this, frameTicks](std::size_t slot, std::uint32_t packed)
+    {
+      const auto hitEnvironment = hitTestEnvironment(frameTicks);
+      return orphen::ported::entity::FUN_002148a8_swept_hit_test(
+          entityPool_.slot(slot), slot, orphen::ported::resource::HitParameters::unpack(packed),
+          hitEnvironment);
+    };
+
     environment.FUN_0022dc68_enable_map_terrain = [this](std::uint32_t groupMask, bool solid)
     { FUN_0022dc68_enable_map_terrain(groupMask, solid); };
 
@@ -4627,6 +4687,10 @@ namespace orphen::port
     const std::uint16_t initHaltOpcode = sceneScript_.lastHaltOpcode();
     const std::uint32_t initHaltOffset = sceneScript_.lastHaltOffset();
     const bool initHaltedOnUnimplemented = sceneScript_.lastRunHaltedOnUnimplemented();
+
+    // FUN_0022a418:284, after the init entry, so only the start entry's 0x13B
+    // survives the load.
+    DAT_00355657_blurLevel_ = 6;
 
     // FUN_0022A418:328. The climbable faces depend only on the map, so where in
     // the load this runs changes nothing.
@@ -9450,26 +9514,21 @@ namespace orphen::port
       else if (pauseFrame)
       {
         // FUN_00224320. Neither player controller runs.
+        // When it ends in FUN_00224218, FUN_002261E0 runs from its usual slot
+        // below.
         pauseFieldTail = FUN_00224320_step_pause(input, frameTicks);
-        if (pauseFieldTail)
-        {
-          leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
-        }
       }
       else if (pauseMenuOpenFrame)
       {
         // 0x00224268, then its FUN_00224218 tail.
         FUN_00224268_open_battle_pause();
         pauseFieldTail = true;
-        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
       }
       else if (saveFrame)
       {
         // 0x00224BA8 / 0x00224E68 ahead of their FUN_00224218 tail. Neither
-        // player controller runs; FUN_002261E0 does, slot 0 here and the rest
-        // of the pool below.
+        // player controller runs; FUN_002261E0 does, from its slot below.
         FUN_00224ba8_step_save_prompt(input, frameTicks);
-        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
       }
       else if (equipFrame)
       {
@@ -9545,20 +9604,11 @@ namespace orphen::port
 
       // **FUN_002261E0 walks every pool slot, slot 0 included**, and it sits
       // after both the controller branch and FUN_0023FD30 (which is what steps
-      // the path followers). Outside battle the lead's half of it runs inside
-      // leadPlayer_.update above; in battle nothing was running it at all, so
-      // the request FUN_002446E8 had just written was never spent.
-      //
-      // That is what made Orphen hop on the spot in s14_e002. Battle state 120
-      // measures him against the recorded mark, hands off to 108 when he has
-      // drifted, and 108 starts a return walk -- which moved nobody, so it
-      // "arrived" three frames later at the same spot and 120 sent him straight
-      // back. The visible result is the walk animation firing for three frames
-      // once a second with the pad locked out for each of them.
-      if (!uiFrame && battleParty_.battleActive(DAT_003555d3_groupEScene_))
-      {
-        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
-      }
+      // the path followers) -- and after FUN_00208450. The lead's half runs
+      // from that slot below, in battle as well: with nothing running it in
+      // battle, the request FUN_002446E8 had just written was never spent,
+      // which is what made Orphen hop on the spot in s14_e002 (state 120's
+      // return walk moved nobody and "arrived" three frames later).
 
       // --place-slot. Debug scaffolding, applied just before the actor loop so
       // a behaviour sees the entity where the flag put it. Nothing in the
@@ -9817,28 +9867,31 @@ namespace orphen::port
       // seeds every group's dirty byte with 3: the first pass is what applies
       // the identity transform and fills the derived bounds, normals and the
       // 0x10000 dynamic bit that FUN_00227840's second loop reads.
-      if (auto *loadedMapForGroups = mapViewer_.loadedMap())
+      const auto runCollisionGroups = [&]()
       {
-        // The return value is DAT_003555d0: how many collision groups had a
-        // live dirty byte this frame. FUN_002262c0:112 reads it as a flag, and
-        // it is what lets a stationary actor resample the floor and be pushed
-        // out of anything a moving door or the sea has swallowed.
-        DAT_003555d0_collisionGroupMoved_ =
-            orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups) != 0;
-        if (DAT_003555d0_collisionGroupMoved_)
+        if (auto *loadedMapForGroups = mapViewer_.loadedMap())
         {
-          ++DAT_003555d0_liveFrames_;
+          // The return value is DAT_003555d0: how many collision groups had a
+          // live dirty byte this frame. FUN_002262c0:112 reads it as a flag, and
+          // it is what lets a stationary actor resample the floor and be pushed
+          // out of anything a moving door or the sea has swallowed.
+          DAT_003555d0_collisionGroupMoved_ =
+              orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups) != 0;
+          if (DAT_003555d0_collisionGroupMoved_)
+          {
+            ++DAT_003555d0_liveFrames_;
+          }
+
+
+          // FUN_00208F28: step the map's UV animation, gated on iGpffffb788
+          // (DAT_003556F8) being non-null, immediately before FUN_00209140 walks
+          // the primitives. This is the rain outside the windows and the flicker
+          // on the lantern glows -- an offset added to baked coordinates, which
+          // is why none of the geometry or texture state ever changes.
+          orphen::ported::psm2::FUN_00225940_step_uv_animation(
+              loadedMapForGroups->DAT_003556f4_uvAnimation, frameTicks);
         }
-
-
-        // FUN_00208F28: step the map's UV animation, gated on iGpffffb788
-        // (DAT_003556F8) being non-null, immediately before FUN_00209140 walks
-        // the primitives. This is the rain outside the windows and the flicker
-        // on the lantern glows -- an offset added to baked coordinates, which
-        // is why none of the geometry or texture state ever changes.
-        orphen::ported::psm2::FUN_00225940_step_uv_animation(
-            loadedMapForGroups->DAT_003556f4_uvAnimation, frameTicks);
-      }
+      };
 
       // FUN_002239c8:135. FUN_002261e0 is the very next call after
       // FUN_00208450, so the physics walk reads DAT_003555d0 on the same frame
@@ -9847,9 +9900,33 @@ namespace orphen::port
       // Neither menu handler runs it: both jump from FUN_00208450 straight to
       // FUN_00208EE8, so a body left mid-fall stays where it is. The Equip
       // screen's handler does run it, second, right after FUN_0022E910.
-      if (!uiFrame || equipFrame || saveFrame || pauseFieldTail)
+      const auto runPhysics = [&]()
       {
+        if (uiFrame && !equipFrame && !saveFrame && !pauseFieldTail)
+        {
+          return;
+        }
+        // Slot 0 first, as FUN_002261E0's walk starts there. It used to run at
+        // the end of the lead controller, ahead of FUN_00208450, so on a lift
+        // the lead sampled last frame's floor -- and on s05_e013's first frame,
+        // the lift before the start entry lowered it, and fell through.
+        leadPlayer_.FUN_002261e0_step_physics(frameTicks, loadedMap);
         orphen::ported::entity::FUN_002261e0_update_physics(actorEnvironment(frameTicks));
+      };
+
+      // Only the field frame, FUN_002239C8:134-135, moves the groups before
+      // the physics. FUN_002245D8 (the cutscene frame, :8-9) and FUN_00224218
+      // (the pause, save prompt and Equip tail, :5-6) run FUN_002261E0 first,
+      // so a body there lands on where a group was left last frame.
+      if (!uiFrame && !cutsceneFrame)
+      {
+        runCollisionGroups();
+        runPhysics();
+      }
+      else
+      {
+        runPhysics();
+        runCollisionGroups();
       }
 
       // FUN_002239c8:134-138 -- FUN_00208450, the physics pass, FUN_00224060,
@@ -10183,7 +10260,18 @@ namespace orphen::port
         descriptor.has_value())
     {
       base = descriptor->halfword0x18;
+      // FUN_0022a418:201 is FUN_00229c40 on slot 0, which copies descriptor
+      // +0x04 into +0x02 (type 1: 0x0001, as a hardware dump of s14_e002
+      // reads). OriginalPlayerController::resetAt builds the lead from
+      // struct defaults and left it 0, which every hit test's candidate mask
+      // rejects: nothing outside a battle retype could hit the player.
+      lead.descriptorFlags02 = descriptor->flags0x04;
     }
+    // FUN_00229c40's status byte for a positive type. The port had slot 0 Free,
+    // which candidateAccepted also refuses. The pool walks that tick actors
+    // start at slot 1 or 2, so this only lets in the walks that include slot 0
+    // in the original -- the hit tests, FUN_002de5b8's freeze, the tag search.
+    entityPool_.setStatus(0, orphen::ported::entity::SlotStatus::ScriptSpawned);
     lead.halfword04 = static_cast<std::uint16_t>((base & 0xFFE7u) | 0x3000u);
 
     // FUN_0022a418:205, `DAT_0058bf24 = 0x8000000` -- the lead's +0x74 reject

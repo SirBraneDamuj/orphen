@@ -285,6 +285,10 @@ namespace orphen::ported::player
     // something else is driving the player: the battle module's own controller,
     // which still needs +0x30/+0x34 spent, the ground followed and the entity
     // settled.
+    // The map FUN_002262c0's lift block reads record78 +0x13/+0x14 and the
+    // groups' dirty bytes from. Null skips the block.
+    void setMovingFloorMap(const orphen::ported::psm2::Psm2RuntimeState *map) { movingFloorMap_ = map; }
+
     void FUN_002261e0_step_physics(std::uint32_t frameTicks,
                                    const OriginalTerrainSampler &terrainSampler);
 
@@ -372,6 +376,7 @@ namespace orphen::ported::player
   private:
     orphen::ported::entity::OriginalEntity ownedEntity_;
     orphen::ported::entity::OriginalEntity *entityStorage_ = &ownedEntity_;
+    const orphen::ported::psm2::Psm2RuntimeState *movingFloorMap_ = nullptr;
     orphen::ported::entity::EntityPool *entityPool_ = nullptr;
     std::size_t entityPoolSlot_ = 0;
     OriginalScriptedStateStep scriptedStateStep_;

@@ -68,7 +68,14 @@ namespace orphen::ported::psm2
     std::array<std::uint16_t, 4> vertexIndices{};
     std::uint16_t selector = 0;
     std::uint8_t byte12 = 0;
+    // +0x13. FUN_002262c0:44 only lets a primitive carry an actor on a moving
+    // group when this is non-zero.
     std::uint8_t byte13 = 0;
+    // +0x14, the collision group this primitive belongs to, or -1.
+    // FUN_0022c6e8:74 copies it, as a byte, from descriptor[selector] +0x1A,
+    // which FUN_0022b5a8:79-84 seeds to 0xFFFF and :481 overwrites with the
+    // index of the group that resolves through that descriptor.
+    std::int8_t groupIndex14 = -1;
     Bounds3 bounds;
 
     // FUN_0022c6e8's plane data. planeNormal is FUN_0022caf8's raw

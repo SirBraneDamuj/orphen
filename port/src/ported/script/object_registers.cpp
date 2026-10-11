@@ -2,6 +2,8 @@
 
 #include "ported/entity/original_entity.h"
 
+#include <bit>
+
 namespace orphen::ported::script
 {
   namespace
@@ -99,6 +101,9 @@ namespace orphen::ported::script
     case 0x11: entity.byte95 = byte; return true;
 
     case 0x13: entity.groundHeight4c = toField(value); return true;
+    // +0xC4, wrapped like 0x0D. s05_e011's hazards zero it on the lead after a
+    // hit.
+    case 0x17: entity.hitDirectionC4 = FUN_00216690_wrapAngle(toField(value)); return true;
     case 0x19: entity.state60 = halfword; return true;
 
     case 0x1A: entity.desiredDeltaX30 = toField(value); return true;
@@ -108,12 +113,12 @@ namespace orphen::ported::script
     case 0x1E: entity.verticalVelocity44 = toField(value); return true;
 
     // +0x154 / +0x158, the two extra model rotations the renderer already
-    // applies in FUN_0020cdc0_entity_root. Stored raw: 0x0D above is the only
-    // angle write that normalises. s01_e012 tilts a prop with these during the
-    // opening, and they were the last two unmodelled register writes in the
-    // scene.
-    case 0x1F: entity.rotationX154 = toField(value); return true;
-    case 0x20: entity.rotationY158 = toField(value); return true;
+    // applies in FUN_0020cdc0_entity_root. **Wrapped through FUN_00216690**,
+    // as 0x0D and 0x17 are -- this used to store them raw. s05_e011's spinning
+    // hazards add to +0x154 every frame and change speed on whether it lies in
+    // (0, pi), so unwrapped they stopped changing after the first turn.
+    case 0x1F: entity.rotationX154 = FUN_00216690_wrapAngle(toField(value)); return true;
+    case 0x20: entity.rotationY158 = FUN_00216690_wrapAngle(toField(value)); return true;
 
     case 0x22: entity.fadeLevel134 = byte; return true;
     case 0x23: entity.fadeColor138 = value; return true;
@@ -122,9 +127,20 @@ namespace orphen::ported::script
     case 0x28: entity.radius54 = toField(value); return true;
     case 0x29: entity.height58 = toField(value); return true;
 
-    // 0x38..0x3F are eight consecutive dwords from +0x198. Only the first is
-    // modelled; for type 0x3A that is the chest's event flag id.
+    // The combat stat block, halfwords [0x95] / [0x94] / [0x96] / [0x97] as
+    // the read side below. s05_e011's hazards take their damage in +0x12C.
+    case 0x2C: entity.staggerTimer12a = halfword; return true;
+    case 0x2D: entity.maxHitPoints128 = halfword; return true;
+    case 0x2E: entity.attackPower12c = halfword; return true;
+    case 0x2F: entity.defence12e = halfword; return true;
+
+    // 0x38..0x3F are eight consecutive dwords from +0x198. For type 0x3A the
+    // first is the chest's event flag id.
     case 0x38: entity.eventFlagId198 = value; return true;
+    // +0x1B4. On a map-streamed prop the port keeps that word as the float
+    // pushHeading1b4 (FUN_002CFEE8's reading), so the dword goes in and out
+    // bit for bit. s05_e011's hazards use it as a hit cooldown.
+    case 0x3F: entity.pushHeading1b4 = std::bit_cast<float>(value); return true;
 
     // +0x96, written as a byte. The only reader of bit 0x20 is FUN_00216140's
     // hit test, which skips FUN_002D5630 when it is set -- so this write is how
@@ -170,6 +186,7 @@ namespace orphen::ported::script
     case 0x11: value = static_cast<std::uint32_t>(static_cast<std::int8_t>(entity.byte95)); return true;
 
     case 0x13: value = fromField(entity.groundHeight4c); return true;
+    case 0x17: value = fromField(entity.hitDirectionC4); return true;
     case 0x19: value = entity.state60; return true;
 
     case 0x1A: value = fromField(entity.desiredDeltaX30); return true;
@@ -198,6 +215,7 @@ namespace orphen::ported::script
     case 0x2F: value = entity.defence12e; return true;
 
     case 0x38: value = entity.eventFlagId198; return true;
+    case 0x3F: value = std::bit_cast<std::uint32_t>(entity.pushHeading1b4); return true;
 
     // Read back unsigned, unlike the 0x10 and 0x11 byte cases above.
     case 0x40: value = entity.battleFlags96; return true;

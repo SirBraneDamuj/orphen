@@ -97,8 +97,9 @@ namespace orphen::ported::entity
     std::uint32_t DAT_003551ec_sceneRequest = 0; // iGpffffb27c
     // FUN_00266368(0x50B). A scene raises it to suppress the gauge.
     bool DAT_0034ab70_flag50b = false;
-    // cGpffffb6e4. FUN_0022A418 clears it and nothing in src/ ever sets it, so
-    // it is false; it only matters when the lead is itself hidden.
+    // cGpffffb6e4, the camera's free-look latch: FUN_00216aa0 sets it to 1 and
+    // FUN_00251ed8 to 2. Not wired here yet, so it reads false; it only
+    // matters when the lead is itself hidden.
     bool DAT_00355654 = false;
   };
 

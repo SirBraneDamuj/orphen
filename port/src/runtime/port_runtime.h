@@ -459,6 +459,11 @@ namespace orphen::port
     // time a group-0xE scene is loaded: FUN_0022a238 and FUN_0022a288 both read
     // it to decide which descriptor list they are walking.
     bool DAT_003555d3_groupEScene_ = false;
+    // DAT_00355657, the depth-blur level ("bokasi"). FUN_0022a418:284 resets it
+    // to 6 between the two script entries and opcode 0x13B writes it.
+    // FUN_002000c0 draws that many FUN_002020a8 passes a frame; the port draws
+    // none of them yet, so nothing reads this.
+    std::uint8_t DAT_00355657_blurLevel_ = 6;
     // MCB0 section 14. FUN_0022a418:102 passes it as a literal.
     static constexpr std::uint16_t kGroupEScene = 14;
     // DAT_003555d2, the movie request opcode 0x13A writes. Signed on purpose:

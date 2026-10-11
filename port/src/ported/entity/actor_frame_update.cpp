@@ -814,6 +814,34 @@ namespace orphen::ported::entity
       return;
     }
 
+    // FUN_002262c0:41-91, riding a moving collision group. Ahead of the freeze
+    // test, as in the original.
+    if (environment.psm2Map != nullptr && environment.terrainSurface)
+    {
+      FUN_002262c0_ride_collision_group(entity, *environment.psm2Map, [&entity, &environment]() {
+        const auto surface = environment.terrainSurface(entity.positionX20, entity.positionZ24,
+                                                        entity.positionY28, entity.height58,
+                                                        entity.radius54, entity.halfword04,
+                                                        entity.rejectTerrainMask74);
+        if (!surface.has_value())
+        {
+          return std::optional<float>{};
+        }
+        // FUN_00227070:128-138's write-back.
+        entity.flagWord70 = surface->terrainFlagsAll;
+        entity.groundPrimitive0a = static_cast<std::int16_t>(surface->primitiveIndex);
+        entity.flagWord6c = surface->terrainFlags;
+        if (surface->sampledFourCorners)
+        {
+          entity.cornerHeight84 = surface->cornerHeights[0];
+          entity.cornerHeight88 = surface->cornerHeights[1];
+          entity.cornerHeight8c = surface->cornerHeights[2];
+          entity.cornerHeight90 = surface->cornerHeights[3];
+        }
+        return std::optional<float>{surface->height};
+      });
+    }
+
     // FUN_002262c0:93. A frozen actor returns before anything else happens, so
     // +0x0C, +0x30 and +0x34 all keep the values last frame left them. The
     // original's workspace clear at :37 is ahead of this return, but the only
@@ -1043,9 +1071,9 @@ namespace orphen::ported::entity
     // a floor a query would have found. Sampling them every frame is what put
     // Volcan at -1.00 instead of -1.20.
     //
-    // (The one other resample, FUN_002262c0:41-85's lift block, additionally
-    // requires the cached primitive's +0x13 to be non-zero. It is 0 for every
-    // primitive in s01_e012, so that block never fires here either.)
+    // (The one other resample is FUN_002262c0:41-91's lift block, at the top
+    // of this function. It needs the cached primitive's +0x13 to be non-zero,
+    // which no primitive in s01_e012 is.)
     const bool movedHorizontally = entity.desiredDeltaX30 != 0.0f || entity.desiredDeltaZ34 != 0.0f;
     std::optional<ActorEnvironment::TerrainSurface> surface;
     if (movedHorizontally && environment.terrainSurface)

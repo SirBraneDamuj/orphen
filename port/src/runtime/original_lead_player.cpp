@@ -226,6 +226,7 @@ namespace orphen::port
       return std::optional<orphen::ported::player::OriginalTerrainSample>{
           toOriginalTerrainSample(*groundHit)};
     };
+    controller_.setMovingFloorMap(map);
     controller_.FUN_002261e0_step_physics(frameTicks, terrainSampler);
     originalState_ = controller_.snapshot();
     refreshViewState(*map);

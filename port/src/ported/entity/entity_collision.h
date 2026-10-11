@@ -22,9 +22,12 @@
 // handler is FUN_00239e78's `jr ra; nop`.
 
 #include "ported/entity/entity_pool.h"
+#include "ported/psm2/psm2_runtime.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 
 namespace orphen::ported::entity
 {
@@ -55,5 +58,23 @@ namespace orphen::ported::entity
   };
   const EntityCollisionStats &entityCollisionStats();
   void resetEntityCollisionStats();
+
+  // FUN_002262c0:41-91, how an actor rides a moving collision group -- a lift.
+  //
+  // It runs ahead of the freeze test and gravity, and only while the primitive
+  // the actor last stood on (+0x0A) is flagged at +0x13 and belongs to a group
+  // (+0x14) whose dirty byte is live. Then it resamples the floor with
+  // FUN_00227070 where the actor stands and moves +0x4C to it. A floor that
+  // dropped away takes a settled actor down with it when the drop is under
+  // DAT_00352424 (0.3); a floor that rose lifts the actor's +0x28 onto it, but
+  // only while the sample still landed on the same group.
+  //
+  // `FUN_00227070_sample` is the caller's floor sample at the actor's own
+  // position. It returns the height, or nothing for the 128 sentinel, and it
+  // must leave +0x0A (and the terrain words) as FUN_00227070 does, because the
+  // rising branch re-reads +0x0A after it.
+  void FUN_002262c0_ride_collision_group(OriginalEntity &entity,
+                                         const orphen::ported::psm2::Psm2RuntimeState &map,
+                                         const std::function<std::optional<float>()> &FUN_00227070_sample);
 
 } // namespace orphen::ported::entity

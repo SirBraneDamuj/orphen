@@ -1056,6 +1056,29 @@ namespace orphen::ported::script
     // records are effectively one-based.
     std::function<void(std::uint32_t track, std::uint8_t value)> FUN_002257c0_set_map_uv_track;
 
+    // Opcode 0x11A (FUN_00264a60 -> FUN_002257e0): copy track `from`'s current
+    // (u, v) offset -- record +0x00 and +0x02 -- onto track `to`, in the map's
+    // block. Same one-based numbering as above; either index zero is a no-op.
+    std::function<void(std::uint32_t from, std::uint32_t to)> FUN_002257e0_copy_map_uv_offset;
+
+    // Opcode 0x120 (FUN_00264be8 -> FUN_00225740): rewind a track of the map's
+    // block -- (u, v), timer, link and repeat to zero, frame index to 0xFF --
+    // leaving its +0x07 flags alone. A negative index rewinds every track, zero
+    // does nothing.
+    std::function<void(std::int32_t track)> FUN_00225740_reset_map_uv_track;
+
+    // Opcode 0x148 (FUN_00265788): cGpffffb6e4, the camera's free-look latch.
+    std::function<std::uint8_t()> cGpffffb6e4_free_look;
+
+    // Opcode 0x13B (FUN_002653a0): DAT_00355657, the depth-blur level -- how
+    // many of FUN_002000c0's six FUN_002020a8 passes run each frame.
+    std::function<void(std::uint8_t level)> DAT_00355657_set_blur_level;
+
+    // Opcode 0xCF (FUN_00264740 -> FUN_002148a8): run the swept hit test for
+    // a slot with the four parameter bytes the script points at.
+    // Returns the contact count, which is 0xCF's value.
+    std::function<std::int8_t(std::size_t slot, std::uint32_t packedParameters)> FUN_002148a8_script_hit_test;
+
     // FUN_00237b38: start a dialogue stream at a blob offset, or terminate the
     // current one when the offset is zero. Both the scheduler and opcode 0x33
     // reach the text system through this.
@@ -1328,6 +1351,7 @@ namespace orphen::ported::script
     std::uint32_t FUN_00261f08_read_event_channel();  // 0xA3
     std::uint32_t FUN_00262f38_install_lead_slot(); // 0xA8
     std::uint32_t FUN_00263118_clear_lead_slot();   // 0xAA
+    std::uint32_t FUN_00262f80_step_lead_toward();  // 0xA9
 
     orphen::ported::entity::OriginalEntity *resolveEntity(std::uint32_t index);
     // FUN_0025D6C0 with the caller's saved current entity as the 0x100

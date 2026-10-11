@@ -13,8 +13,9 @@
  *   run : speed_cap = 128, motion_state = 14, scale = fGpffff8d28
  * The per-frame step is `frame_ticks * speed_cap * scale`.
  *
- * If the remaining distance is < step the lead snaps to target, motion
- * state goes to 1, returns 1 (arrived). Otherwise:
+ * If the remaining distance is < step, +0xA0 (the animation id, not a motion
+ * state) goes to 1 and it returns 1 (arrived). There is no snap to the target.
+ * Both step scales (0x352C98 / 0x352C9C) are 1/81920. Otherwise:
  *   - When the lead has follow-cam tracking flags set
  *     (DAT_0058bf5a & 0x100 and (lead.flags & 0x81000) == 0x81000),
  *     calls npc_sync_follow + audio_play_for_entity to keep the camera /

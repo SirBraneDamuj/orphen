@@ -321,6 +321,25 @@ namespace orphen::ported::psm2
                             descriptor.center.y - group.pivot.y,
                             descriptor.center.z - group.pivot.z};
       }
+
+      // FUN_0022b5a8:481 writes each group's index into its descriptor's
+      // +0x1A, and FUN_0022c6e8:74 hands the low byte to every primitive whose
+      // +0x10 names that descriptor. A later group sharing a descriptor wins,
+      // as the original's in-order overwrite does.
+      std::vector<std::int8_t> descriptorGroup(state.DAT_003556d8_collisionDescriptors.size(), -1);
+      for (std::size_t index = 0; index < state.DAT_003556e0_collisionGroups.size(); ++index)
+      {
+        const std::uint16_t descriptorIndex = state.DAT_003556e0_collisionGroups[index].descriptorIndex;
+        if (descriptorIndex < descriptorGroup.size())
+        {
+          descriptorGroup[descriptorIndex] = static_cast<std::int8_t>(index & 0xFFu);
+        }
+      }
+      for (auto &record78 : state.DAT_003556b0_dRecords78)
+      {
+        record78.groupIndex14 =
+            record78.selector < descriptorGroup.size() ? descriptorGroup[record78.selector] : std::int8_t{-1};
+      }
     }
 
     // FUN_0022b5a8:331-374, PSM2 header +0x2C. An s16 track count, then per
