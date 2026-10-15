@@ -117,6 +117,20 @@ namespace orphen::ported::entity
                                                 std::uint32_t rejectTerrainMask)>
         terrainSurface;
 
+    // The same sample with FUN_002262c0's workspace +0x162 applied: the corners
+    // the embedded-corner push-out found buried are not sampled, which is how
+    // FUN_00227390 behaves for the rest of a solve that pushed. Only the
+    // physics step uses it; everything else wants every corner.
+    std::function<std::optional<TerrainSurface>(float x,
+                                                float y,
+                                                float feetHeight,
+                                                float bodyHeight,
+                                                float radius,
+                                                std::uint16_t entityFlags04,
+                                                std::uint32_t rejectTerrainMask,
+                                                std::uint8_t embeddedMask)>
+        terrainSurfaceMasked;
+
     // FUN_00227390's corner fill, which is what the embedded-corner push-out
     // in FUN_002262c0 actually reads. Deliberately **not** gated on "found":
     // a corner over a hole stores the 128 sentinel, and `feet < 128` is what
@@ -669,6 +683,29 @@ namespace orphen::ported::entity
   // length of the carry. Without it the push-out ejects the player off the
   // spline the moment a collision group moves under them.
   bool &DAT_003555d1_suspendPushOut();
+
+  // DAT_00318ad0. Sixteen (x, z) pairs indexed by FUN_002262c0's embedded-corner
+  // mask, read straight out of the executable. Corner order is FUN_00227070's:
+  // 0 = (x-r, z-r), 1 = (x+r, z-r), 2 = (x+r, z+r), 3 = (x-r, z+r), so bit `n`
+  // means "corner n has ground above the feet". Every non-zero entry is +/-0.18
+  // -- the push is a fixed step away from the buried side, not a
+  // penetration-depth resolve. Both copies of the push-out read it: the
+  // non-player one in actor_frame_update.cpp and the lead's in
+  // original_player_controller.cpp.
+  struct PushOut
+  {
+    float x;
+    float z;
+  };
+  inline constexpr PushOut kDAT_00318ad0_pushOut[16] = {
+      {0.00f, 0.00f},  {0.18f, 0.18f},   {-0.18f, 0.18f},  {0.00f, 0.18f},
+      {-0.18f, -0.18f}, {-0.18f, 0.18f}, {-0.18f, 0.00f},  {-0.18f, 0.18f},
+      {0.18f, -0.18f}, {0.18f, 0.00f},   {0.18f, 0.18f},   {0.18f, 0.18f},
+      {0.00f, -0.18f}, {0.18f, -0.18f},  {-0.18f, -0.18f}, {0.00f, 0.00f},
+  };
+
+  // DAT_0035242c, the quarter turn the push-out's mask-0xF fallback rotates by.
+  inline constexpr float kDAT_0035242c_quarterTurn = 1.570796012878418f;
 
   // FUN_00225bf0: the same, plus the movement state at +0x60. Script opcode 0xA8
   // uses it to put the lead player into the state that runs its object script.

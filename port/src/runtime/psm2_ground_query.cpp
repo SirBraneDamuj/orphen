@@ -671,7 +671,8 @@ namespace orphen::port
                                               float bodyHeight,
                                               float radius,
                                               std::uint16_t entityFlags04,
-                                              std::uint32_t rejectTerrainMask)
+                                              std::uint32_t rejectTerrainMask,
+                                              std::uint8_t embeddedMask)
   {
     // FUN_00227070:32. The head limit is staged once and shared by every sample.
     const Psm2TerrainQueryOptions options{rejectTerrainMask, false,
@@ -732,17 +733,33 @@ namespace orphen::port
                                                           {x + radius, y + radius},
                                                           {x - radius, y + radius}}};
 
+    if ((embeddedMask & 0x0Fu) == 0x0Fu)
+    {
+      sample.found = false;
+      return sample;
+    }
+
     float running = kNoGroundHeight;
+    bool firstSampled = true;
     for (std::size_t cornerIndex = 0; cornerIndex < corners.size(); ++cornerIndex)
     {
+      // FUN_00227390: `if (((+0x162 ^ 1) & 1) != 0)` ahead of corner 0, and
+      // the same test on 2, 4 and 8 ahead of the others.
+      if ((embeddedMask & (1u << cornerIndex)) != 0)
+      {
+        continue;
+      }
       const auto hit = runScan(corners[cornerIndex].first, corners[cornerIndex].second);
       const float height = heightOf(hit);
       sample.cornerHeights[cornerIndex] = height;
       sample.cornerPrimitives[cornerIndex] =
           hit.has_value() ? static_cast<std::int32_t>(hit->primitiveIndex) : -1;
 
-      if (cornerIndex == 0)
+      // FUN_00227390 starts its running best at -100, so whichever corner is
+      // sampled first takes the corner-0 branch; with no mask that is corner 0.
+      if (firstSampled)
       {
+        firstSampled = false;
         adopt(hit, false);
         running = height;
         sample.terrainFlagsWinning = flagsOf(hit);
@@ -769,6 +786,15 @@ namespace orphen::port
       else if (height == running)
       {
         sample.terrainFlagsWinning |= flagsOf(hit);
+      }
+    }
+
+    // FUN_00227390's tail: every masked corner reads back as the answer.
+    for (std::size_t cornerIndex = 0; cornerIndex < corners.size(); ++cornerIndex)
+    {
+      if ((embeddedMask & (1u << cornerIndex)) != 0)
+      {
+        sample.cornerHeights[cornerIndex] = running;
       }
     }
 

@@ -96,6 +96,13 @@ namespace orphen::port
   //
   // Not modelled: the FUN_00228cf0 pass the original runs afterwards, which can
   // raise the result and sets entity +0x0C bit 0x100 when it does.
+  //
+  // `embeddedMask` is FUN_002262c0's workspace +0x162, which FUN_00227390 (the
+  // movement loop's copy of this sample) reads: a corner whose bit is set is
+  // not sampled, and afterwards reads back as the winning height. Only the
+  // four-corner path honours it, as in the original. 0xF is the caller's to
+  // handle -- FUN_00227390 answers it without sampling at all -- and here it
+  // returns not-found.
   Psm2GroundSample FUN_00227070_sample_ground(const orphen::ported::psm2::Psm2RuntimeState &map,
                                               float x,
                                               float y,
@@ -103,7 +110,8 @@ namespace orphen::port
                                               float bodyHeight,
                                               float radius,
                                               std::uint16_t entityFlags04,
-                                              std::uint32_t rejectTerrainMask);
+                                              std::uint32_t rejectTerrainMask,
+                                              std::uint8_t embeddedMask = 0);
 
   std::optional<Psm2GroundHit> queryPsm2GroundAt(const orphen::ported::psm2::Psm2RuntimeState &map,
                                                  float x,

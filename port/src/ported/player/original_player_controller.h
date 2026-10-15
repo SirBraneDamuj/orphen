@@ -310,6 +310,16 @@ namespace orphen::ported::player
       entityPoolSlot_ = slot;
     }
 
+    // DAT_003555B4, the frame counter, and DAT_003555D0, "a collision group
+    // moved this frame". FUN_002262C0:112 gates the embedded-corner push-out on
+    // them, and slot 0 has a leg of that gate of its own: every 64th frame.
+    // Unbound, the push-out never runs for the lead.
+    void bindPushOutGate(const std::uint32_t *frameCounter, const bool *collisionGroupMoved)
+    {
+      DAT_003555b4_frameCounter_ = frameCounter;
+      DAT_003555d0_collisionGroupMoved_ = collisionGroupMoved;
+    }
+
     void setScriptedStateStep(OriginalScriptedStateStep step) { scriptedStateStep_ = std::move(step); }
 
     void setActionEffectHooks(OriginalActionEffectHooks hooks) { actionEffect_ = std::move(hooks); }
@@ -379,6 +389,13 @@ namespace orphen::ported::player
     const orphen::ported::psm2::Psm2RuntimeState *movingFloorMap_ = nullptr;
     orphen::ported::entity::EntityPool *entityPool_ = nullptr;
     std::size_t entityPoolSlot_ = 0;
+    const std::uint32_t *DAT_003555b4_frameCounter_ = nullptr;
+    const bool *DAT_003555d0_collisionGroupMoved_ = nullptr;
+    // FUN_002262c0's workspace +0x162: the embedded-corner mask the push-out
+    // leaves behind, which every FUN_00227390 for the rest of the same solve
+    // reads to skip those corners. Only non-zero inside one
+    // FUN_002262c0_integrate_physics call.
+    std::uint8_t embeddedCornerMask162_ = 0;
     OriginalScriptedStateStep scriptedStateStep_;
     OriginalActionEffectHooks actionEffect_;
     orphen::ported::entity::EntitySoundPlayer FUN_00267d38_playSound_;

@@ -21,6 +21,10 @@ namespace orphen::port
     {
       controller_.bindEntityPool(pool, slot);
     }
+    void bindPushOutGate(const std::uint32_t *frameCounter, const bool *collisionGroupMoved)
+    {
+      controller_.bindPushOutGate(frameCounter, collisionGroupMoved);
+    }
 
     // The player states FUN_00251ed8 dispatches that the controller does not
     // implement itself -- currently the chest cutscene, 0x0C..0x15.

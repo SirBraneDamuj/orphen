@@ -1843,6 +1843,35 @@ namespace orphen::ported::player
       return std::nullopt;
     }
 
+    // Workspace +0x162, the push-out's embedded-corner mask. FUN_00227390 does
+    // not sample a corner whose bit is set -- `if (((+0x162 ^ 1) & 1) != 0)`
+    // ahead of corner 0, and the same for 2, 4 and 8 -- so for the rest of a
+    // solve that pushed, a move is judged only by the corners that were *not*
+    // buried. That is what lets the push move the entity at all: the corner
+    // that is inside the geometry would otherwise refuse every destination
+    // near it. Every corner buried returns 1 at once with +0x4C as the height.
+    //
+    // Hardware-checked in s05_e013, whose chest sits under a hanging cage: the
+    // chest's exit puts the lead at (5.5, -2.15) with three corners inside the
+    // cage's collision block, and two (-0.18, +0.18) pushes carry it to
+    // (5.14, -1.79). Without the skip the port refused the first push and the
+    // lead never moved again.
+    const std::uint8_t embeddedMask = embeddedCornerMask162_;
+    if (embeddedMask == 0x0Fu)
+    {
+      // :0x2273C0. The terrain words are 0 and +0x20 is -1; workspace +0x04 is
+      // not written, so it holds the push-out's own last footprint AND, which
+      // the entity's +0x70 still carries.
+      OriginalTerrainSample buried;
+      buried.height = entity().groundHeight4c;
+      buried.lowestCornerHeight = entity().groundHeight4c;
+      buried.terrainFlags = 0;
+      buried.commonFootprintFlags = entity().flagWord70;
+      buried.packedPrimitive = -1;
+      buried.slopeAngle = 0.0f;
+      return buried;
+    }
+
     const OriginalTerrainQuery query = terrainQueryForEntity(bodyBaseHeight);
     const float radius = entity().radius54;
     const std::array<orphen::ported::psm2::Vec3, 4> footprintOffsets{{{-radius, -radius, 0.0f},
@@ -1853,8 +1882,13 @@ namespace orphen::ported::player
     std::uint32_t commonTerrainFlags = 0xffffffff;
     float lowestHeight = 500.0f;
 
-    for (const auto &offset : footprintOffsets)
+    for (std::size_t corner = 0; corner < footprintOffsets.size(); ++corner)
     {
+      if ((embeddedMask & (1u << corner)) != 0)
+      {
+        continue;
+      }
+      const auto &offset = footprintOffsets[corner];
       const auto sample = terrainSampler(originalX + offset.x,
                                          originalZ + offset.y,
                                          bodyBaseHeight,
@@ -1921,6 +1955,17 @@ namespace orphen::ported::player
       return;
     }
 
+    // :96 zeroes workspace +0x162 for this solve. (In the original that is
+    // after the lift block, which therefore sees whatever the scratchpad held;
+    // the port gives the lift block a clean mask.) The guard puts it back to 0
+    // on the way out so no FUN_00227390 outside a solve sees a stale one.
+    embeddedCornerMask162_ = 0;
+    struct ClearMaskOnExit
+    {
+      std::uint8_t &mask;
+      ~ClearMaskOnExit() { mask = 0; }
+    } clearMaskOnExit{embeddedCornerMask162_};
+
     // The workspace result word (+0x12C), seeded at :39 and stored over +0x0C
     // at :628. +0x0C itself is read mid-solve as *last* frame's word -- bit 0 at
     // :276, bit 0x10000 at :311 and :582 -- so that copy is kept aside.
@@ -1981,9 +2026,127 @@ namespace orphen::ported::player
     // zero the landing leaves behind.
     const float impactVelocity = entity().verticalVelocity44;
 
-    // Not ported for the lead: the +0xBD freeze (:93) and the embedded-corner
-    // push-out (:111-209). The non-player copy in actor_frame_update.cpp has
-    // both.
+    // Not ported for the lead: the +0xBD freeze (:93). The non-player copy in
+    // actor_frame_update.cpp has it.
+
+    // FUN_002262c0:111-209, the embedded-corner push-out. The non-player copy
+    // in actor_frame_update.cpp explains the mechanism; what is particular to
+    // the lead is the second leg of the gate at :113, `param_1 == 0x58BEB0`
+    // (slot 0) && `(DAT_003555B4 & 0x3F) == 0` -- every 64th frame, whether or
+    // not anything moved.
+    //
+    // That leg is what gets the lead out of s05_e013's cage. The chest under
+    // it puts the player back one radius sum in front of it (state 0x13), and
+    // three of the four footprint corners there land in the cage's collision
+    // block, whose underside is at 0.8 -- exactly the top of a 0.8-tall lead
+    // standing on 0. FUN_00227840 stops at a face `<= head`, so the scan ends
+    // on that underside with the block's 3.6 top latched, every move reads a
+    // destination 3.6 up, and every move and retry is refused. Without this
+    // block the lead stood there for good.
+    if (!orphen::ported::entity::DAT_003555d1_suspendPushOut() &&
+        ((DAT_003555d0_collisionGroupMoved_ != nullptr && *DAT_003555d0_collisionGroupMoved_ &&
+          (entity().halfword08 & 0x0020u) != 0) ||
+         (DAT_003555b4_frameCounter_ != nullptr && (*DAT_003555b4_frameCounter_ & 0x3Fu) == 0)))
+    {
+      // FUN_00227390 at a point with the required mask zeroed (:116), read back
+      // as the workspace's four corner heights +0x34..+0x40. A corner over
+      // nothing reads FUN_00227840's 128.
+      const auto cornerHeights = [this, &terrainSampler](float x, float z) {
+        const float feet = entity().positionY28;
+        const OriginalTerrainQuery query = terrainQueryForEntity(feet);
+        const float r = entity().radius54;
+        const std::array<std::array<float, 2>, 4> offsets{{{-r, -r}, {r, -r}, {r, r}, {-r, r}}};
+        std::array<float, 4> heights{};
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          const auto sample =
+              terrainSampler ? terrainSampler(x + offsets[corner][0], z + offsets[corner][1], feet, query)
+                             : std::nullopt;
+          heights[corner] = sample.has_value() ? sample->height : 128.0f;
+        }
+        return heights;
+      };
+
+      // Workspace +0x163: how many times the mask-0xF fallback has moved the
+      // lead this solve. Zeroed on entry to the block.
+      int fallbackMoves = 0;
+      // LAB_00226544, which the fallback jumps back to after a move.
+      for (;;)
+      {
+        const float feet = entity().positionY28;
+        const auto corners = cornerHeights(entity().positionX20, entity().positionZ24);
+        unsigned mask = 0;
+        for (std::size_t corner = 0; corner < 4; ++corner)
+        {
+          if (feet < corners[corner])
+          {
+            mask |= 1u << corner;
+          }
+        }
+
+        // The mask is built straight into workspace +0x162, which the movement
+        // loop's FUN_00227390 calls below then read to skip these corners.
+        embeddedCornerMask162_ = static_cast<std::uint8_t>(mask);
+        if (mask == 0)
+        {
+          break;
+        }
+        if (mask != 0xFu)
+        {
+          // :198-204. A request, so the movement loop below spends it this same
+          // frame -- judged only by the corners that are not buried.
+          entity().desiredDeltaX30 =
+              entity().desiredDeltaX30 * 0.5f + orphen::ported::entity::kDAT_00318ad0_pushOut[mask].x;
+          entity().desiredDeltaZ34 =
+              entity().desiredDeltaZ34 * 0.5f + orphen::ported::entity::kDAT_00318ad0_pushOut[mask].z;
+          break;
+        }
+
+        // :160-195, every corner buried. Probe half a unit back along the
+        // facing, turning a quarter each time, and take the first heading where
+        // *any one* corner is at or below the feet. The first time, the lead is
+        // moved there outright and the whole test runs again from LAB_00226544;
+        // a second time, the offset becomes the request instead. Either way the
+        // block ends with +0x162 = 0xF (LAB_002266f8), which makes every
+        // FUN_00227390 for the rest of the solve answer 1 at +0x4C.
+        bool moved = false;
+        float heading = entity().facingRadians5c;
+        for (int attempt = 0; attempt < 4 && !moved; ++attempt)
+        {
+          const float offsetX = -(std::cos(heading) * 0.5f);
+          const float offsetZ = -(std::sin(heading) * 0.5f);
+          const auto probe = cornerHeights(entity().positionX20 + offsetX, entity().positionZ24 + offsetZ);
+          for (std::size_t corner = 0; corner < 4; ++corner)
+          {
+            if (probe[corner] <= feet)
+            {
+              if (fallbackMoves != 0)
+              {
+                entity().desiredDeltaX30 = offsetX;
+                entity().desiredDeltaZ34 = offsetZ;
+                entity().groundHeight4c = probe[corner];
+                fallbackMoves = -1;
+              }
+              else
+              {
+                entity().positionX20 += offsetX;
+                entity().positionZ24 += offsetZ;
+                entity().groundHeight4c = probe[corner];
+                ++fallbackMoves;
+              }
+              moved = true;
+              break;
+            }
+          }
+          heading += orphen::ported::entity::kDAT_0035242c_quarterTurn;
+        }
+        if (!moved || fallbackMoves < 0)
+        {
+          embeddedCornerMask162_ = 0x0Fu;
+          break;
+        }
+      }
+    }
 
     // FUN_002262C0:213-451, the movement loop. Entered only for a non-zero +0x30
     // or +0x34; a body with no horizontal request makes no ground query at all,

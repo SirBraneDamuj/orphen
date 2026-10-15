@@ -119,26 +119,8 @@ namespace orphen::ported::entity
     constexpr std::uint16_t kEnemyWingCue = 0x196;
     constexpr std::uint16_t kEnemyDeathCue = 0x197;
 
-    // DAT_00318ad0. Sixteen (x, z) pairs indexed by the embedded-corner mask,
-    // read straight out of the executable. Corner order is FUN_00227070's:
-    // 0 = (x-r, z-r), 1 = (x+r, z-r), 2 = (x+r, z+r), 3 = (x-r, z+r), so bit
-    // `n` means "corner n has ground above the feet". Every non-zero entry is
-    // +/-0.18 -- the push is a fixed step away from the buried side, not a
-    // penetration-depth resolve.
-    struct PushOut
-    {
-      float x;
-      float z;
-    };
-    constexpr PushOut kDAT_00318ad0_pushOut[16] = {
-        {0.00f, 0.00f},  {0.18f, 0.18f},   {-0.18f, 0.18f},  {0.00f, 0.18f},
-        {-0.18f, -0.18f}, {-0.18f, 0.18f}, {-0.18f, 0.00f},  {-0.18f, 0.18f},
-        {0.18f, -0.18f}, {0.18f, 0.00f},   {0.18f, 0.18f},   {0.18f, 0.18f},
-        {0.00f, -0.18f}, {0.18f, -0.18f},  {-0.18f, -0.18f}, {0.00f, 0.00f},
-    };
-
-    // DAT_0035242c, the quarter turn the mask-0xF fallback rotates by.
-    constexpr float kDAT_0035242c_quarterTurn = 1.570796012878418f;
+    // DAT_00318ad0 (the push table) and DAT_0035242c live in
+    // actor_frame_update.h, shared with the lead's copy of the push-out.
 
     // DAT_00352428. FUN_002262c0:107 substitutes it whenever the vertical
     // velocity lands on exactly zero, so the sign survives the next subtract.
@@ -950,12 +932,19 @@ namespace orphen::ported::entity
     //
     // Mask 0xF -- every corner buried, so there is no "away" -- takes the
     // fallback at :160-195 instead: probe half a unit back along the facing,
-    // rotating by pi/2 up to four times, and take the first heading whose
-    // corners are all at or below the feet.
+    // rotating by pi/2 up to four times, and take the first heading where any
+    // one corner is at or below the feet (see the block itself -- this used to
+    // say "all four", and the port did that).
     // (This function is the non-player path, so the lead's every-64-frames leg
     // of the same branch is not reachable here -- slot 0 runs its own copy.)
     // :111. DAT_003555D1 is the outer gate on the whole push-out, ahead of the
     // collision-group test.
+    //
+    // Workspace +0x162 is the mask, and it outlives the block: FUN_00227390
+    // skips those corners for every destination the movement loop below asks
+    // about, so a push is judged only by the corners that were not buried. :96
+    // zeroes it at the top of each solve.
+    std::uint8_t embeddedMask = 0;
     if (!DAT_003555d1_suspendPushOut() && environment.FUN_00227390_corner_sample &&
         environment.DAT_003555d0_collisionGroupMoved && (entity.halfword08 & 0x0020u) != 0)
     {
@@ -987,8 +976,13 @@ namespace orphen::ported::entity
         return mask;
       };
 
+      // The mask-0xF fallback can move the entity and come back here
+      // (LAB_00226544); +0x163 counts those moves.
+      int fallbackMoves = 0;
+    pushOutAgain:
       const auto sampled = cornersAt(entity.positionX20, entity.positionZ24);
       const unsigned mask = maskAt(sampled);
+      embeddedMask = static_cast<std::uint8_t>(mask);
       if (gPushProbe)
       {
         // Mirrors a PCSX2 execute breakpoint at 0x002265E4, where $v1 is this
@@ -1026,20 +1020,45 @@ namespace orphen::ported::entity
       if (mask == 0xFu)
       {
         // FUN_002262c0:160-195. DAT_0035242c is pi/2, and the step back is half
-        // a unit against the facing.
+        // a unit against the facing. A heading is taken as soon as **any one**
+        // of the probe's corners is at or below the feet -- not all four. The
+        // first time, the entity is moved there outright, +0x4C takes that
+        // corner's height, and the whole test runs again from LAB_00226544;
+        // the second time, the offset becomes the request instead. Either way
+        // the block ends with +0x162 = 0xF (LAB_002266f8), so FUN_00227390
+        // answers 1 at +0x4C for the rest of the solve.
         float heading = entity.facingRadians5c;
         for (int attempt = 0; attempt < 4; ++attempt)
         {
           const float offsetX = -(std::cos(heading) * 0.5f);
           const float offsetZ = -(std::sin(heading) * 0.5f);
-          if (maskAt(cornersAt(entity.positionX20 + offsetX, entity.positionZ24 + offsetZ)) == 0)
+          const auto probe = cornersAt(entity.positionX20 + offsetX, entity.positionZ24 + offsetZ);
+          if (probe.has_value() && probe->sampledFourCorners)
           {
-            entity.desiredDeltaX30 = offsetX;
-            entity.desiredDeltaZ34 = offsetZ;
-            break;
+            for (std::size_t corner = 0; corner < 4; ++corner)
+            {
+              const float cornerHeight = probe->cornerHeights[corner];
+              if (cornerHeight <= entity.positionY28)
+              {
+                if (fallbackMoves != 0)
+                {
+                  entity.desiredDeltaX30 = offsetX;
+                  entity.desiredDeltaZ34 = offsetZ;
+                  entity.groundHeight4c = cornerHeight;
+                  embeddedMask = 0x0Fu;
+                  goto pushOutDone;
+                }
+                entity.positionX20 += offsetX;
+                entity.positionZ24 += offsetZ;
+                entity.groundHeight4c = cornerHeight;
+                ++fallbackMoves;
+                goto pushOutAgain;
+              }
+            }
           }
           heading += kDAT_0035242c_quarterTurn;
         }
+        embeddedMask = 0x0Fu;
       }
       else if (mask != 0)
       {
@@ -1050,6 +1069,7 @@ namespace orphen::ported::entity
           ++*environment.pushOutCounter;
         }
       }
+    pushOutDone:;
     }
 
     const float startX = entity.positionX20;
@@ -1078,10 +1098,34 @@ namespace orphen::ported::entity
     std::optional<ActorEnvironment::TerrainSurface> surface;
     if (movedHorizontally && environment.terrainSurface)
     {
-      const auto sampleAt = [&entity, &environment](float x, float z) {
+      // FUN_00227390 under this solve's +0x162. A single-point entity (+0x04
+      // bit 1) takes its own path ahead of the mask test, so the mask only
+      // reaches the four-corner sample.
+      const bool fourCorner = (entity.halfword04 & 0x0002u) == 0;
+      const auto sampleAt = [&entity, &environment, embeddedMask, fourCorner](float x, float z) {
+        if (fourCorner && embeddedMask != 0 && environment.terrainSurfaceMasked)
+        {
+          return environment.terrainSurfaceMasked(x, z, entity.positionY28, entity.height58,
+                                                  entity.radius54, entity.halfword04,
+                                                  entity.rejectTerrainMask74, embeddedMask);
+        }
         return environment.terrainSurface(x, z, entity.positionY28, entity.height58,
                                           entity.radius54, entity.halfword04,
                                           entity.rejectTerrainMask74);
+      };
+      // +0x162 = 0xF: FUN_00227390 returns 1 at once, before the required-mask
+      // test, with +0x4C as both heights, terrain word 0 and +0x20 = -1. Its
+      // +0x04 is not written, so it still holds the push-out's own footprint
+      // AND, which the entity's +0x70 carries.
+      const bool everyCornerBuried = fourCorner && embeddedMask == 0x0Fu;
+      const auto buriedAnswer = [&entity]() {
+        ActorEnvironment::TerrainSurface buried;
+        buried.height = entity.groundHeight4c;
+        buried.terrainFlags = 0;
+        buried.terrainFlagsAll = entity.flagWord70;
+        buried.primitiveIndex = -1;
+        buried.slopeAngle = 0.0f;
+        return buried;
       };
 
       // FUN_002262c0:0x00226884-0x00226cb4, the whole accept/refuse decision
@@ -1224,6 +1268,13 @@ namespace orphen::ported::entity
 
       for (;;)
       {
+        if (everyCornerBuried)
+        {
+          entity.positionX20 = startX + stepX;
+          entity.positionZ24 = startZ + stepZ;
+          surface = buriedAnswer();
+          break;
+        }
         auto destination = sampleAt(startX + stepX, startZ + stepZ);
         if (walkable(destination))
         {
@@ -1332,7 +1383,21 @@ namespace orphen::ported::entity
       entity.positionY28 = before + verticalDelta;
       entity.collisionFlags0c |= 0x0008u;
       bool cleared = false;
-      if (environment.terrainSurface)
+      // :486's FUN_00227390 is still inside the solve, so +0x162 applies: the
+      // buried corners are skipped, and 0xF answers 1 outright.
+      const bool fourCorner = (entity.halfword04 & 0x0002u) == 0;
+      if (fourCorner && embeddedMask == 0x0Fu)
+      {
+        cleared = true;
+      }
+      else if (fourCorner && embeddedMask != 0 && environment.terrainSurfaceMasked)
+      {
+        const auto headroom = environment.terrainSurfaceMasked(
+            entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,
+            entity.radius54, entity.halfword04, entity.rejectTerrainMask74, embeddedMask);
+        cleared = headroom.has_value() && headroom->height <= entity.positionY28;
+      }
+      else if (environment.terrainSurface)
       {
         const auto headroom = environment.terrainSurface(
             entity.positionX20, entity.positionZ24, entity.positionY28, entity.height58,

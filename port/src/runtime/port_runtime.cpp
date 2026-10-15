@@ -122,6 +122,7 @@ namespace orphen::port
     // already be writing there when resetToMap places it.
     leadPlayer_.bindEntity(entityPool_.leadPlayer());
     leadPlayer_.bindEntityPool(entityPool_, 0);
+    leadPlayer_.bindPushOutGate(&DAT_003555b4_frameCounter_, &DAT_003555d0_collisionGroupMoved_);
     leadPlayer_.setScriptedStateStep(
         [this](std::uint32_t frameTicks) { return stepScriptedPlayerState(frameTicks); });
     // The player reaches the sound engine through the same callback an actor
@@ -1329,6 +1330,32 @@ namespace orphen::port
       {
         const auto sample = FUN_00227070_sample_ground(*loadedMap, x, y, feetHeight, bodyHeight,
                                                        radius, entityFlags04, rejectTerrainMask);
+        if (!sample.found)
+        {
+          return std::nullopt;
+        }
+
+        orphen::ported::entity::ActorEnvironment::TerrainSurface surface;
+        surface.height = sample.height;
+        surface.terrainFlags = sample.terrainFlagsWinning;
+        surface.terrainFlagsAll = sample.terrainFlagsAll;
+        surface.primitiveIndex = sample.packedPrimitive;
+        surface.cornerHeights = sample.cornerHeights;
+        surface.cornerPrimitives = sample.cornerPrimitives;
+        surface.sampledFourCorners = sample.sampledFourCorners;
+        surface.slopeAngle = sample.slopeAngle;
+        return surface;
+      };
+
+      environment.terrainSurfaceMasked =
+          [loadedMap](float x, float y, float feetHeight, float bodyHeight, float radius,
+                      std::uint16_t entityFlags04, std::uint32_t rejectTerrainMask,
+                      std::uint8_t embeddedMask)
+          -> std::optional<orphen::ported::entity::ActorEnvironment::TerrainSurface>
+      {
+        const auto sample = FUN_00227070_sample_ground(*loadedMap, x, y, feetHeight, bodyHeight,
+                                                       radius, entityFlags04, rejectTerrainMask,
+                                                       embeddedMask);
         if (!sample.found)
         {
           return std::nullopt;
@@ -10266,6 +10293,15 @@ namespace orphen::port
       // struct defaults and left it 0, which every hit test's candidate mask
       // rejects: nothing outside a battle retype could hit the player.
       lead.descriptorFlags02 = descriptor->flags0x04;
+      // The same FUN_00229c40 seeds +0x08 from descriptor +0x16 and ORs 0x20 in
+      // for any type below 0x272. Every field dump of the lead reads 0x26; the
+      // port's read 0. Bit 0x20 is FUN_002262c0:112's "push me out when a
+      // collision group moves" gate, which is how hardware ejects the lead from
+      // s05_e013's cage during the chest's exit fade rather than on the next
+      // 64th frame. ORed rather than assigned because this re-runs after every
+      // placement, and FUN_00229c40's 0x10 (snap the first pose) is left out:
+      // it is consumed on the first frame and no field dump carries it.
+      lead.halfword08 = static_cast<std::uint16_t>(lead.halfword08 | descriptor->halfword0x16 | 0x20u);
     }
     // FUN_00229c40's status byte for a positive type. The port had slot 0 Free,
     // which candidateAccepted also refuses. The pool walks that tick actors

@@ -10489,6 +10489,83 @@ for 15 a contact and knocks it back to x = -2. Magnus, standing near hazard
 first 3000 frames, where they landed none before. None of that is checked
 against hardware.
 
+### `s05_e013`'s caged chest, and the push-out the lead never had
+
+Chest slot 20 sits at (5.5, -2.5) under hanging cage slot 16. The cage's
+collision is static map geometry, not a group: an invisible octagon (record78
+leading word bit 0x20; 551, 552, 554 and 555 among its faces) from an underside at 0.799988 to a
+top at 3.6. FUN_00227840 stops scanning at the first face `<= head`
+(`c.le.s` at 0x002279B4), and the lead's head is 0 + 0.8, so a corner under the
+cage ends the scan on the underside with the 3.6 top latched. To an 0.8-tall
+lead standing on the floor the cage is a pillar. Walking up to the chest stops
+at y = -1.78, which is still in Cross reach.
+
+State 0x13 (0x002552B0, disassembled from the ELF and matching the port) puts
+the lead back one radius sum in front of the chest: (5.5, -2.15). Three of its
+four footprint corners land inside the octagon. Every destination near there
+has a corner reading 3.6, so every move and all five retries were refused, and
+the lead stood there for good.
+
+Hardware does not get stuck. A PCSX2 run (`savestates/s05_e013_entry.p2s`,
+then `s05_e013_chest_message.p2s` at the item message) ends the exit fade
+with the lead free at (5.14, -1.79): two (-0.18, +0.18) pushes. Three pieces
+were missing from the port, all in `FUN_002262C0` and its callees:
+
+- **The lead's push-out.** `FUN_002262C0:111-209` runs for slot 0 every 64th
+  frame (`(DAT_003555B4 & 0x3F) == 0`). It also runs, like for every actor,
+  on any frame a collision group moved (`DAT_003555D0`), if `+0x08` bit 0x20
+  is set. The non-player copy had it; the lead's did not. Its mask-0xF
+  fallback is not the non-player copy's either: it moves the lead outright on
+  the first heading where *any one* probe corner is at or below the feet,
+  re-runs the test, and only on a second pass turns the offset into a request.
+- **FUN_00227390 skips the buried corners.** The push-out builds its mask in
+  workspace +0x162. FUN_00227390 tests that byte before each corner (`((+0x162
+  ^ 1) & 1) != 0` and so on), so for the rest of that solve a destination is
+  judged only by the corners that were not buried. With 0xF it returns 1 at
+  once with +0x4C. Without the skip the push itself was refused: the hardware
+  cell lists, read out of RAM, match the port's exactly, and the buried corner
+  reads 3.6 on both.
+- **Lead `+0x08` was 0.** `FUN_00229C40` seeds it from descriptor +0x16 and
+  ORs 0x20 in for types below 0x272. Every field dump reads 0x26. Without
+  0x20, the lead waited for the 64th-frame leg and took about two seconds to
+  get out. With it, the port ejects during state 0x14 as hardware does.
+  `FUN_0022a418_stamp_lead_player_flags` ORs it in. The 0x10 pose-snap bit is
+  left out, because no field dump carries it. The remaining 0x04 is set on the
+  respawn path.
+
+The non-player copy (`actor_frame_update.cpp`) had the same two gaps. Its
+fallback also waited for all four probe corners to be clear, where the
+original takes any one and moves first. It now matches.
+`FUN_00227070_sample_ground` takes the mask as an optional last argument (0
+for every other caller), and `ActorEnvironment::terrainSurfaceMasked` is the
+physics step's way in. The mask covers the movement loop's destinations and
+the rise test at :486, and 0xF accepts at +0x4C without sampling. A
+single-point entity (+0x04 bit 1) takes FUN_00227390's own path ahead of the
+mask test, so the mask never reaches it.
+
+That moves one thing in the guard: `s14_e001`'s crab walk-in (frames 11-100).
+The crab climbs a ramp with its uphill corners above its feet, so it is pushed
+every frame (mask 12, `DAT_003555D0` is 1 every frame on hardware too). Judged
+on its downhill corners, it now sinks up to ~0.35 into the ramp. Every 8
+frames or so the 0xF fallback throws it half a unit back for a frame, before
+the script's next position write. That is the disassembly's behaviour
+(0x00227424-0x00227644) on the port's inputs, but it is **not
+hardware-checked**. Entered from the debug menu, hardware has no walk-in at
+all: the crab is at its start spot, (0, -3.18, -1.0), by the port's frame 6.
+Whether the port should be walking it in there is a separate question.
+`s01_e012`'s Magnus-off-the-crate push, the hardware-checked case, is
+unchanged. Slots 59/60 in `s14_e001`, 0.0004 below a deck at frame 1, stay
+put and settle onto it, as the `crab_start` dump has them.
+
+Regression guard against 161bafd: `s03_e001` shows the new `+0x08` bits in a
+register-4 write (306 = 0x110 | 0x22). `s14_e001` diverges from about frame
+900. The animatic places the lead at (1.2, -3.2, -0.5) on a deck that samples
+-0.499588. All four corners read 0.0004 above the feet, the 0xF fallback moves
+him half a unit, and he is pushed into the pool. Both builds then reach the
+hardware dump's crab-start position, (-0.08, -0.25, -0.5), by frame 1500. That
+stretch is **not hardware-checked**: entering `s14_e001` from the debug menu
+skips it, and is at crab start 300 frames after load.
+
 ### The five level-5 summons
 
 Released at full charge with a live target, an elemental spell is not thrown at
