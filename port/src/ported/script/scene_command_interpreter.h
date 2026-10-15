@@ -845,6 +845,12 @@ namespace orphen::ported::script
     // no-ops unless cGpffffb6e1 is already 0x23, so a scene has to have run
     // 0x46 (or a camera path) first; s14_e001's per-frame entry drives its
     // whole crab preamble with these two.
+    // FUN_00267288, PTR_FUN_0031e730[1] behind opcode 0xBE: one `sb` of the
+    // argument into cGpffffb6e1, the camera submode. s05_e018's per-frame
+    // entry selects the overhead camera with 0xBE(1, 0x1E) and drops it with
+    // 0xBE(1, 0).
+    std::function<void(std::uint8_t subMode)> FUN_00267288_set_camera_submode;
+
     std::function<void(const orphen::ported::psm2::Vec3 &eye)> FUN_00217d40_set_eye;
     std::function<void(const orphen::ported::psm2::Vec3 &lookAt)> FUN_00217d10_set_look_at;
 

@@ -444,7 +444,14 @@ namespace orphen::ported::camera
     {
       // 0x23 runs FUN_00217b88(1), which only moves anything while an
       // interpolation is armed. FUN_00217d70 arms none, so the pose stands.
-      // The other submodes are the manual cameras, still unported.
+      // 0x20 (re-aim at the target) is still unported.
+      //
+      // The original compares the byte signed, which is why FUN_00251ED8's
+      // 0xFF park (-1) falls past every case.
+      if (cGpffffb6e1_subMode_ >= 0x1B && cGpffffb6e1_subMode_ < 0x1F)
+      {
+        FUN_00218710_manual_camera(frameTicks, input.rawHeldPad, input.autoFocusGoalYaw, target);
+      }
       return;
     }
 
@@ -747,6 +754,84 @@ namespace orphen::ported::camera
                                        fGpffff82e0_verticalDecel);
 
     DAT_0058c0a8_eye_.z += error < 0.0f ? -magnitude : magnitude;
+  }
+
+  // FUN_00218710. The submodes differ only in where the distance and pitch
+  // come from:
+  //
+  //   0x1B  DAT_00354C88 / DAT_00354C90, as FUN_002186E0 left them
+  //   0x1C  3.0 at DAT_00352290 (-56 degrees)
+  //   0x1E  5.0 at DAT_00352290 -- s05_e018's overhead view, via 0xBE(1, 0x1E)
+  //   0x1D  a fixed 2.0 back along DAT_0058BF0C, dropping at slope -0.5
+  //
+  // Hardware in s05_e018, lead at (0.284, 0.719, -4.0): look-at
+  // (0.284, 0.719, -3.2), stored eye (-2.5120, 0.719, 0.5452). That is 5.0
+  // along -56 degrees from the look-at, less the 0.4 the view build adds back.
+  void OriginalFieldCamera::FUN_00218710_manual_camera(std::uint32_t frameTicks,
+                                                       std::uint16_t rawHeldPad,
+                                                       float autoFocusGoalYaw,
+                                                       const orphen::ported::psm2::Vec3 &target)
+  {
+    constexpr float kDAT_00352290_manualPitch = -0.97738439f; // 0xBF7A35DA
+    constexpr float kDAT_00352294_yawRateR1 = 0.0015625f;
+    constexpr float kDAT_00352298_yawRateL1 = 0.0015625f;
+    constexpr float kDAT_0035229c_lookAtHeight = 0.8f;
+    constexpr float kDAT_003522a0_eyeDrop = 0.4f;
+    constexpr float kDAT_003522a4_lookAtHeight1d = 0.8f;
+    constexpr float kDAT_003522a8_eyeDrop1d = 0.4f;
+
+    const std::uint8_t mode = cGpffffb6e1_subMode_;
+    if (mode == 0x1D)
+    {
+      // FUN_00218710:24-37. FUN_00216510 normalises the direction in place.
+      float dirX = std::cos(autoFocusGoalYaw);
+      float dirY = std::sin(autoFocusGoalYaw);
+      float dirZ = -0.5f;
+      const float length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+      dirX /= length;
+      dirY /= length;
+      dirZ /= length;
+      DAT_0058be90_lookAt_ = {target.x, target.y, target.z + kDAT_003522a4_lookAtHeight1d};
+      const float eyeZ = DAT_0058be90_lookAt_.z - (dirZ + dirZ);
+      DAT_0058c0a8_eye_ = {target.x - (dirX + dirX), target.y - (dirY + dirY),
+                           eyeZ - kDAT_003522a8_eyeDrop1d};
+      publishOrientation();
+      return;
+    }
+
+    float pitch = DAT_00354c90_manualPitch_;
+    float distance = DAT_00354c88_manualDistance_;
+    if (mode != 0x1B)
+    {
+      pitch = kDAT_00352290_manualPitch;
+      distance = mode == 0x1C ? 3.0f : 5.0f;
+    }
+
+    // FUN_00218710:43-53. R1 is tested first and wins over L1. DAT_003555F4
+    // is the same raw held word the follow camera reads.
+    if ((rawHeldPad & kRawPadR1) != 0)
+    {
+      DAT_00354c8c_manualYaw_ = wrapAngle(DAT_00354c8c_manualYaw_ -
+                                          static_cast<float>(frameTicks) * kDAT_00352294_yawRateR1);
+    }
+    else if ((rawHeldPad & kRawPadL1) != 0)
+    {
+      DAT_00354c8c_manualYaw_ = wrapAngle(DAT_00354c8c_manualYaw_ +
+                                          static_cast<float>(frameTicks) * kDAT_00352298_yawRateL1);
+    }
+
+    // FUN_00218710:54-69.
+    const float horizontal = std::cos(pitch);
+    const float dirX = horizontal * std::cos(DAT_00354c8c_manualYaw_);
+    const float dirY = horizontal * std::sin(DAT_00354c8c_manualYaw_);
+    const float dirZ = std::sin(pitch);
+    DAT_0058be90_lookAt_ = {target.x, target.y, target.z + kDAT_0035229c_lookAtHeight};
+    const float eyeZ = DAT_0058be90_lookAt_.z - dirZ * distance;
+    DAT_0058c0a8_eye_ = {target.x - dirX * distance, target.y - dirY * distance,
+                         eyeZ - kDAT_003522a0_eyeDrop};
+    // FUN_00218710:72-73 write the yaw and pitch from the direction; the
+    // eye/look-at pair above gives the same two angles.
+    publishOrientation();
   }
 
   void OriginalFieldCamera::publishOrientation()

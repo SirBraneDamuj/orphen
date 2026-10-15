@@ -352,6 +352,14 @@ namespace orphen::harness
     }
     std::size_t loadedTexturePageCount() const { return texturePages_.size(); }
     const std::vector<LoadedDiscTexturePage> &loadedTexturePages() const { return texturePages_; }
+
+    // FUN_0022A178's result: which loaded page sits in each of the ten global
+    // map slots, -1 for a slot the scene's table leaves at zero. A map
+    // primitive's material type byte and a background model's texture byte
+    // are both **global slot numbers**, not page indices; the two only agree
+    // when the table starts at slot 0. s05_e018's starts at slot 1.
+    static constexpr std::size_t kMapTextureSlotCount = 10;
+    void setMapTextureSlotPages(const std::array<int, kMapTextureSlotCount> &pageForSlot);
     std::uint64_t loadedMapGeneration() const { return loadedMapGeneration_; }
     // --dump-map-textures. One binary PAM (P7, RGB_ALPHA) per decoded page,
     // named page<N>_tex_<id>.pam. Needs no GL context, so it works under
@@ -380,6 +388,11 @@ namespace orphen::harness
     orphen::port::SceneObjectViewList sceneObjectViews_;
     mutable std::vector<unsigned int> uploadedTextureIds_;
     mutable bool textureUploadDirty_ = false;
+    // Identity until FUN_0022A178 says otherwise; see setMapTextureSlotPages.
+    std::array<int, kMapTextureSlotCount> mapSlotPages_{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    mutable std::vector<unsigned int> mapSlotTextureIds_;
+    // The GL names for slots 0..9, built from the two caches above.
+    const std::vector<unsigned int> &mapSlotTextureIds() const;
     const orphen::ported::resource::TextureSlotCache *textureSlots_ = nullptr;
     mutable std::vector<unsigned int> slotTextureIds_;
     mutable bool slotTextureUploadDirty_ = true;

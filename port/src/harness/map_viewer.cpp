@@ -3355,6 +3355,38 @@ namespace orphen::harness
     releaseUploadedTextures();
     texturePages_ = std::move(texturePages);
     textureUploadDirty_ = true;
+    mapSlotPages_ = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  }
+
+  void MapViewer::setMapTextureSlotPages(const std::array<int, kMapTextureSlotCount> &pageForSlot)
+  {
+    mapSlotPages_ = pageForSlot;
+  }
+
+  // A slot the table leaves at zero is not loaded by FUN_0022A178, so it keeps
+  // whatever the previous scene put there. The global slot cache holds exactly
+  // that, so it answers for those slots.
+  const std::vector<unsigned int> &MapViewer::mapSlotTextureIds() const
+  {
+    ensureTexturesUploaded();
+    ensureSlotTexturesUploaded();
+    mapSlotTextureIds_.assign(kMapTextureSlotCount, 0);
+    for (std::size_t slot = 0; slot < kMapTextureSlotCount; ++slot)
+    {
+      const int page = mapSlotPages_[slot];
+      if (page >= 0)
+      {
+        if (static_cast<std::size_t>(page) < uploadedTextureIds_.size())
+        {
+          mapSlotTextureIds_[slot] = uploadedTextureIds_[static_cast<std::size_t>(page)];
+        }
+      }
+      else if (slot < slotTextureIds_.size())
+      {
+        mapSlotTextureIds_[slot] = slotTextureIds_[slot];
+      }
+    }
+    return mapSlotTextureIds_;
   }
 
   std::size_t MapViewer::dumpTexturePages(const std::filesystem::path &directory) const
@@ -4994,7 +5026,7 @@ namespace orphen::harness
         // FUN_002239C8's draw block ends with FUN_0020C290, but its packets go
         // into a bucket at the far end of the display list, so the GS sees the
         // backdrop before anything else. Here that is simply "draw it first".
-        drawBackgroundQuads(backgroundQuads_, uploadedTextureIds_, backgroundProjection);
+        drawBackgroundQuads(backgroundQuads_, mapSlotTextureIds(), backgroundProjection);
 
         // Bucket 2, between the backdrop and the map. See setWorldUnderlayAlpha.
         // A full-screen quad, so it belongs to the game's picture only.
@@ -5006,7 +5038,7 @@ namespace orphen::harness
         // From the fly camera the game's list still decides what is drawn by
         // default, so walking out of the frustum shows what the visibility
         // pass threw away. F3 swaps in the whole map.
-        drawMap(*map_, uploadedTextureIds_, flying ? flyViewMapDrawList() : mapDrawList_,
+        drawMap(*map_, mapSlotTextureIds(), flying ? flyViewMapDrawList() : mapDrawList_,
                 useOriginalCamera && !wireframe_, sceneObjectViews_, entityDrawList, slotTextureIds_);
 
         if (g_renderStats != nullptr)
@@ -5023,7 +5055,7 @@ namespace orphen::harness
       {
         // The free viewer has no depth-sorted list to merge into, so models go
         // out unsorted after the map and lean on the depth buffer.
-        drawMapUnsorted(*map_, uploadedTextureIds_);
+        drawMapUnsorted(*map_, mapSlotTextureIds());
         drawObjectModels(sceneObjectViews_, slotTextureIds_);
       }
     }

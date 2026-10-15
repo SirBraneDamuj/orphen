@@ -535,8 +535,24 @@ namespace orphen::port
                     << " vertexCount=" << group.vertexCount
                     << " rest=" << group.restVertices.size()
                     << " firstPrim=" << group.firstPrimitive
-                    << " primCount=" << group.primitiveCount << '\n';
-        }
+                    << " primCount=" << group.primitiveCount << " pivot=(" << group.pivot.x << ","
+                    << group.pivot.y << "," << group.pivot.z << ")";
+          // The rest pose's horizontal reach and height range about the pivot,
+          // which is what says where a turning group's surfaces are.
+          float nearest = 1e9f;
+          float farthest = 0.0f;
+          float lowest = 1e9f;
+          float highest = -1e9f;
+          for (const auto &vertex : group.restVertices)
+          {
+            const float reach = std::sqrt(vertex.x * vertex.x + vertex.y * vertex.y);
+            nearest = std::min(nearest, reach);
+            farthest = std::max(farthest, reach);
+            lowest = std::min(lowest, vertex.z);
+            highest = std::max(highest, vertex.z);
+          }
+          std::cout << " reach=" << nearest << ".." << farthest << " z=" << lowest << ".."
+                    << highest << '\n';        }
       }
 
       // Section G. Worth printing because a map that silently parsed no tracks
@@ -2118,6 +2134,9 @@ namespace orphen::port
       fieldCamera_.FUN_00217d70_set_manual_camera(eye, lookAt);
     };
 
+    environment.FUN_00267288_set_camera_submode = [this](std::uint8_t subMode)
+    { fieldCamera_.cGpffffb6e1_setSubMode(subMode); };
+
     environment.FUN_00217d40_set_eye = [this](const orphen::ported::psm2::Vec3 &eye)
     { fieldCamera_.FUN_00217d40_set_eye(eye); };
 
@@ -3073,16 +3092,43 @@ namespace orphen::port
   //
   // eeMemory.bin confirms both the table and the result for s01_e012:
   // DAT_00325394 = {0286, 0002, 02c8, 0253, 000d, 02c9, 000f} and
-  // DAT_003429a8[0..6] holds the same ids in the same order. The port's own
-  // page list is the same sequence, so it stands in for the table.
+  // DAT_003429a8[0..6] holds the same ids in the same order.
+  //
+  // **The table is the scene script's, not the bundle's page order**, and the
+  // two do not always line up. FUN_0025B600 copies it out of header word 6,
+  // and a zero entry is skipped rather than ending the list. s05_e018's is
+  // {0, 005e, 021d, 0059, 021b, 0218, 0060, 005d}: hardware puts tex_005e in
+  // slot 1 and draws the floor from slot 2. Loading pages from slot 0 drew the
+  // whole room one sheet over -- floor from the wall sheet, the platform
+  // emblems from the gold trim.
   void PortRuntime::FUN_0022a178_bind_map_textures()
   {
     const auto &pages = mapViewer_.loadedTexturePages();
-    for (std::size_t index = 0; index < pages.size() && index < kMapTextureSlotCount; ++index)
+    std::array<int, orphen::harness::MapViewer::kMapTextureSlotCount> pageForSlot{};
+    const auto &table = sceneScript_.textureSlotTable();
+    for (std::size_t slot = 0; slot < kMapTextureSlotCount; ++slot)
     {
-      modelStore_.mutableTextureSlots().FUN_00210280_load_into_slot(
-          static_cast<int>(index), pages[index].resourceId);
+      // A port-only fallback for a scene with no header word 6 block, where
+      // the original would load nothing: keep the page order.
+      const std::uint16_t resourceId =
+          table.has_value() ? (*table)[slot]
+                            : (slot < pages.size() ? pages[slot].resourceId : std::uint16_t{0});
+      pageForSlot[slot] = -1;
+      if (resourceId == 0)
+      {
+        continue;
+      }
+      modelStore_.mutableTextureSlots().FUN_00210280_load_into_slot(static_cast<int>(slot), resourceId);
+      for (std::size_t page = 0; page < pages.size(); ++page)
+      {
+        if (pages[page].resourceId == resourceId)
+        {
+          pageForSlot[slot] = static_cast<int>(page);
+          break;
+        }
+      }
     }
+    mapViewer_.setMapTextureSlotPages(pageForSlot);
   }
 
   // FUN_002239c8:18-33, the top of the field frame:
@@ -4471,7 +4517,8 @@ namespace orphen::port
     FUN_0032536c_scene_module(2);
 
     modelStore_.FUN_00221fd8_bind_boot_textures();
-    FUN_0022a178_bind_map_textures();
+    // FUN_0022a178 is not here: it needs FUN_0025B600's table, and the port
+    // reads the script later, in runSceneScript.
     // FUN_00238c90, which the original runs inline in FUN_00221fd8 on the
     // decoded buffer before it hands it to the slot. Same measurement, one
     // step later.
@@ -4608,6 +4655,7 @@ namespace orphen::port
     if (record == nullptr)
     {
       std::cout << "[scr] scene has no script record\n";
+      FUN_0022a178_bind_map_textures();
       return;
     }
 
@@ -4632,8 +4680,12 @@ namespace orphen::port
     if (!sceneScript_.load(decoded))
     {
       std::cout << "[scr] script blob too small to hold a header (" << decoded.size() << " bytes)\n";
+      FUN_0022a178_bind_map_textures();
       return;
     }
+    // FUN_0022a418's order: FUN_0025B600 (inside load) fills DAT_00325394,
+    // then FUN_0022A178 binds the pages it names.
+    FUN_0022a178_bind_map_textures();
     sceneScript_.state().FUN_002294d0_load_party_records(characterStats_);
 
     // --set-event-flag <id>:0 lands here rather than in the frame loop, because
@@ -9902,8 +9954,16 @@ namespace orphen::port
           // live dirty byte this frame. FUN_002262c0:112 reads it as a flag, and
           // it is what lets a stationary actor resample the floor and be pushed
           // out of anything a moving door or the sea has swallowed.
+          auto &lead = entityPool_.leadPlayer();
+          const orphen::ported::psm2::CollisionGroupRider rider{
+              lead.groundPrimitive0a,
+              lead.collisionFlags0c,
+              {lead.positionX20, lead.positionZ24, lead.positionY28},
+              &lead.desiredDeltaX30,
+              &lead.desiredDeltaZ34,
+              &lead.facingRadians5c};
           DAT_003555d0_collisionGroupMoved_ =
-              orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups) != 0;
+              orphen::ported::psm2::FUN_00208450_update_collision_groups(*loadedMapForGroups, &rider) != 0;
           if (DAT_003555d0_collisionGroupMoved_)
           {
             ++DAT_003555d0_liveFrames_;

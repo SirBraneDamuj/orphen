@@ -3,6 +3,7 @@
 #include "ported/script/scene_command_interpreter.h"
 #include "ported/script/script_trace.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -82,6 +83,14 @@ namespace orphen::ported::script
     // The half-open [begin, end) of the record containing `offset`, or an empty
     // pair when it is not in the table.
     std::pair<std::uint32_t, std::uint32_t> dialogueRecordBounds(std::uint32_t offset) const;
+
+    // FUN_0025b600's copy into DAT_00325394: entry N names the texture page
+    // for global slot N, zero meaning "leave the slot alone". Empty when the
+    // scene has no header word 6 block.
+    const std::optional<std::array<std::uint16_t, 16>> &textureSlotTable() const
+    {
+      return textureSlotTable_;
+    }
 
     const std::optional<orphen::ported::psm2::Vec3> &sceneSpawn() const { return sceneSpawn_; }
     const std::optional<float> &sceneDrawDistance() const { return sceneDrawDistance_; }
@@ -191,6 +200,7 @@ namespace orphen::ported::script
     std::vector<std::uint32_t> dialogueRecordOffsets_;
     std::optional<orphen::ported::psm2::Vec3> sceneSpawn_;
     std::optional<float> sceneDrawDistance_;
+    std::optional<std::array<std::uint16_t, 16>> textureSlotTable_;
     void FUN_0025b600_read_scene_defaults();
     void FUN_0025b288_read_dialogue_window();
     SceneScriptState state_;

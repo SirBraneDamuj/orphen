@@ -179,11 +179,28 @@ namespace orphen::ported::script
   {
     sceneSpawn_.reset();
     sceneDrawDistance_.reset();
+    textureSlotTable_.reset();
 
     const std::uint32_t texturePageOffset = headerWords_[6];
     if (texturePageOffset == 0 || texturePageOffset >= blob_.size())
     {
       return;
+    }
+
+    // FUN_0025b600:14-23. Sixteen halfwords from word6 + 2 into struct +0x2C,
+    // which is DAT_00325394 -- FUN_0022A178's slot table. Entry N is the page
+    // for global slot N and a zero leaves that slot alone, so the list is
+    // *not* zero-terminated: s05_e018's starts with a zero and its seven pages
+    // land in slots 1..7.
+    if (texturePageOffset + 2 + 16 * 2 <= blob_.size())
+    {
+      std::array<std::uint16_t, 16> table{};
+      for (std::size_t entry = 0; entry < table.size(); ++entry)
+      {
+        const std::size_t at = texturePageOffset + 2 + entry * 2;
+        table[entry] = static_cast<std::uint16_t>(blob_[at] | (blob_[at + 1] << 8));
+      }
+      textureSlotTable_ = table;
     }
 
     // The copy loop runs 16 times from word6 + 2, so the ints start after it.

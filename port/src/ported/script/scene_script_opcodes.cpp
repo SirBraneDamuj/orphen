@@ -1787,10 +1787,10 @@ namespace orphen::ported::script
   // 0xBE (FUN_00263ee0): two expressions -- an index into PTR_FUN_0031e730 and
   // one argument -- then an indirect call through that table.
   //
-  // Only index 6 is modelled, because only index 6 is reached: s01_e012 calls
-  // it 243 times with argument 0 and no other scene the port runs touches the
-  // table at all. The remaining fourteen entries are read and recorded so
-  // --scr-report names what a scene asked for rather than silently dropping it.
+  // Indices 1 and 6 are modelled. 6 is s01_e012's storm, 243 calls with
+  // argument 0; 1 is the camera submode setter s05_e018 uses for its overhead
+  // view. The remaining thirteen entries are read and recorded so --scr-report
+  // names what a scene asked for rather than silently dropping it.
   std::uint32_t SceneCommandInterpreter::FUN_00263ee0_call_function_table_entry()
   {
     // Which index it is only becomes known after both operands are evaluated,
@@ -1800,15 +1800,18 @@ namespace orphen::ported::script
     const std::uint32_t entryOffset = streamOffset_ ? streamOffset_ - 1 : 0;
     const std::uint32_t index = FUN_0025c258_evaluate();
     const std::uint32_t argument = FUN_0025c258_evaluate();
-    (void)argument;
     if (halted_)
     {
       return 0;
     }
-    const bool modelled = index == 6;
+    const bool modelled = index == 1 || index == 6;
     trace_.recordOpcode(0xBE, entryOffset,
                         modelled ? OpcodeSupport::Modelled : OpcodeSupport::OperandsOnly);
-    if (modelled)
+    if (index == 1 && environment_.FUN_00267288_set_camera_submode)
+    {
+      environment_.FUN_00267288_set_camera_submode(static_cast<std::uint8_t>(argument));
+    }
+    else if (index == 6)
     {
       FUN_002676d8_roll_sea_and_camera(environment_);
     }

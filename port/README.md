@@ -8380,8 +8380,9 @@ after a release is `cGpffffad08` plus the yaw speed accumulator.
 
 Not ported yet: the idle auto-camera handoff at `uGpffffad0c > 0x1c200`
 (reported through `idleTimedOut()`), free-look (`FUN_00218270`), the script
-camera (`FUN_00217b88`), manual modes 0x1b-0x1e (`FUN_00218710`, analyzed), and
-camera collision beyond the ground clamp.
+camera's interpolators (`FUN_00217b88`), submode 0x20, and camera collision
+beyond the ground clamp. The manual modes 0x1B..0x1E (`FUN_00218710`) are
+ported; see the `s05_e018` section.
 
 ## Rendering
 
@@ -10565,6 +10566,68 @@ him half a unit, and he is pushed into the pool. Both builds then reach the
 hardware dump's crab-start position, (-0.08, -0.25, -0.5), by frame 1500. That
 stretch is **not hardware-checked**: entering `s14_e001` from the debug menu
 skips it, and is at crab start 300 frames after load.
+
+### `s05_e018`: the texture table, the overhead camera and the turning blocks
+
+Three separate gaps, all checked against `savestates/s05_e018_entry.p2s`.
+
+**Every surface drew one sheet over.** `FUN_0025B600` copies sixteen halfwords
+from script header word 6 + 2 into `DAT_00325394`, and `FUN_0022A178` loads
+entry N into global slot N, *skipping* a zero. s05_e018's table is
+`{0, 005e, 021d, 0059, 021b, 0218, 0060, 005d}`. Its pages go into slots 1..7
+and its primitives' material types run 1..7. The port loaded the bundle's
+pages from slot 0 and indexed them by material type, so the floor drew from the
+wall sheet and the block tops from the gold trim. A GS dump confirms hardware
+draws the floor from slot 2 (tbp 6280) and the block emblems from slot 4.
+`SceneScript::textureSlotTable` now keeps the table. `FUN_0022a178_bind_map_textures`
+runs right after the script loads, as `FUN_0022A418` orders it, and gives
+`MapViewer` a slot → page map. A zero slot falls back to the global slot cache,
+which is the previous scene's page on hardware too. Every scene in the
+regression guard has its table starting at slot 0, which is why this never
+showed before.
+
+**The camera was the follow camera.** The per-frame entry runs `0xBE(1, 0x1E)`.
+`PTR_FUN_0031E730[1]` is `FUN_00267288`, one `sb` of the argument into
+`cGpffffb6e1`. Submodes 0x1B..0x1E go to `FUN_00218710`, which rebuilds the
+pose from the target every frame with no smoothing:
+
+| submode | distance | pitch |
+| --- | --- | --- |
+| 0x1B | `DAT_00354C88` | `DAT_00354C90` (set by `FUN_002186E0`) |
+| 0x1C | 3.0 | `DAT_00352290` = -0.977 (-56°) |
+| 0x1E | 5.0 | same |
+| 0x1D | 2.0 back along `DAT_0058BF0C`, slope -0.5 | — |
+
+The look-at is the target + 0.8, and the stored eye is 0.4 below the true one,
+like the follow camera. L1/R1 turn the shared yaw `DAT_00354C8C` by
+0.0015625/tick, and nothing else writes it. Hardware in s05_e018 matches the
+port to four places: look-at (0.284, 0.719, -3.2), eye (-2.5120, 0.719,
+0.5452). `s05_e013` runs `0xBE(1, 0x1C)` and hardware holds 0x1C there too; its
+eye also matches. That is the only other change in the guard: its smoke cloud's
+visible count moves with the camera.
+
+**The turning blocks did not carry the lead.** Groups 2..6 are each four
+blocks at different heights around a post. The script turns them about z at
+0.2, 0.3 or 0.4° a frame. Groups 7..11 are their type-4 visual copies.
+`FUN_00208450:301-327` carries the lead when the group it just applied is the
+one under the lead's `+0x0A` and `+0x0C` bit 0 is set. It composes the change
+in rotation and translation since `DAT_00354C4C[group]`, applies it to the
+lead's position about the pivot, and adds the result to `+0x30`/`+0x34`. The
+rotation's z change is added to the facing. `DAT_00354C4C` is 0x18 bytes per
+group, zero at load, and is stored after every applied pass for a group that
+is not type 4. The vertical half was already in `FUN_002262c0`'s riding block.
+
+Checked with the lead's `+0x0A` set to block primitive 955 on hardware: 61
+frames turn the facing by 0.2125 and move him round the post. The port, nudged
+onto primitive 958 with `--place-slot 0,2.75,4.3,-2.0:3-3 --hold-stick 0,60,6-7`,
+turns by 0.209 over 60 frames and moves (2.71, 4.25) → (2.40, 4.21). That is
+the same 0.209 rad about the pivot (2.75, 2.75). Only the lead is carried:
+the original has no such step for any other slot.
+
+Two traps found on the way. `--place-slot` on frame 1 samples the ground
+before the groups' first pass has placed them, so put the lead down on frame 3
+or later. And a teleported lead keeps its old `+0x0A` until it walks, on
+hardware as well as in the port, so it will not ride until it moves.
 
 ### The five level-5 summons
 

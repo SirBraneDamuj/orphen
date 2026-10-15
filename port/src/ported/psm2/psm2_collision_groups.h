@@ -37,7 +37,20 @@ namespace orphen::ported::psm2
   //
   // Returns the number of groups it moved, which is DAT_003555D0 in the
   // original -- "something moved this frame".
-  std::size_t FUN_00208450_update_collision_groups(Psm2RuntimeState &state);
+  //
+  // `lead` is pool slot 0, which FUN_00208450:301-327 carries with the group
+  // under its feet. Null leaves the lead alone.
+  struct CollisionGroupRider
+  {
+    std::int16_t groundPrimitive0a = -1; // DAT_0058BEBA
+    std::uint32_t collisionFlags0c = 0;  // DAT_0058BEBC; bit 0 gates the carry
+    Vec3 position{};                     // DAT_0058BED0..D8
+    float *desiredDeltaX30 = nullptr;    // DAT_0058BEE0
+    float *desiredDeltaY34 = nullptr;    // DAT_0058BEE4
+    float *facing5c = nullptr;           // DAT_0058BF0C
+  };
+  std::size_t FUN_00208450_update_collision_groups(Psm2RuntimeState &state,
+                                                   const CollisionGroupRider *lead = nullptr);
 
   // FUN_00260738's two writes. `channel` is 0..2; the original diagnoses
   // anything higher and then indexes with it anyway, so the port clamps.

@@ -9,6 +9,10 @@
  * the target position each frame with no smoothing at all -- the eye is simply
  * "target minus direction * distance".
  *
+ * Scenes select a mode through opcode 0xBE index 1: PTR_FUN_0031e730[1] is
+ * FUN_00267288, a single `sb a0, cGpffffb6e1`. s05_e018 runs 0xBE(1, 0x1E) and
+ * s05_e013 0xBE(1, 0x1C); hardware holds those values in 0x00355651.
+ *
  * Ghidra lost the argument at the call site in FUN_00216aa0, which appears as
  * `FUN_00218710()`. The guard there is `0x1a < cGpffffb6e1 && cGpffffb6e1 < 0x1f`
  * and this function switches on param_1 == 0x1b/0x1c/0x1d/0x1e, so param_1 is
@@ -25,7 +29,7 @@
  *
  * Manual yaw stepping (shared by 0x1b/0x1c/0x1e):
  *   R1 (raw bit 0x08): DAT_00354c8c -= DAT_003555bc * DAT_00352294
- *   L1 (raw bit 0x04): DAT_00354c8c += DAT_003555bc * DAT_003555bc * DAT_00352298
+ *   L1 (raw bit 0x04): DAT_00354c8c += DAT_003555bc * DAT_00352298
  *   Both step constants are 0.0015625, so at the nominal 0x20 ticks the camera
  *   turns 0.05 rad (2.86 deg) per frame, about 172 deg/sec.
  *   FUN_00216690 wraps the result back into range.

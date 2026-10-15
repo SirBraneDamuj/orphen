@@ -284,6 +284,14 @@ namespace orphen::ported::psm2
     float minZ = 0.0f;
     float maxZ = 0.0f;
     bool boundsValid = false;
+
+    // DAT_00354C4C[group], 0x18 bytes each: the translation and rotation the
+    // group had the last time FUN_00208450 applied it. The map arena holds
+    // zeros at load (hardware, s05_e018). The lead's carry is the change since
+    // then. FUN_00208450:332-347 stores it only for a group that is not type 4,
+    // so a visual-only copy keeps reading zero.
+    Vec3 lastTranslation{};
+    Vec3 lastRotation{};
   };
 
   // FUN_00227840:94. A group of this type is skipped by the terrain scan.

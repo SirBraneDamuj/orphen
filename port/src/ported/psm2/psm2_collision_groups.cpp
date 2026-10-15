@@ -72,12 +72,33 @@ namespace orphen::ported::psm2
                                         : static_cast<std::int8_t>(record.dirty5a | 1);
   }
 
-  std::size_t FUN_00208450_update_collision_groups(Psm2RuntimeState &state)
+  std::size_t FUN_00208450_update_collision_groups(Psm2RuntimeState &state,
+                                                   const CollisionGroupRider *lead)
   {
     std::size_t moved = 0;
 
-    for (CollisionGroup &group : state.DAT_003556e0_collisionGroups)
+    // FUN_00208450:53-64. The group under the lead, read once before any group
+    // moves: record78 +0x14 of the +0x0A primitive, -1 when +0x0A is negative.
+    int riddenGroup = -1;
+    if (lead != nullptr && lead->groundPrimitive0a >= 0)
     {
+      const std::size_t primitive = static_cast<std::size_t>(lead->groundPrimitive0a) & 0x3FFFu;
+      if (primitive < state.DAT_003556b0_dRecords78.size())
+      {
+        riddenGroup = state.DAT_003556b0_dRecords78[primitive].groupIndex14;
+      }
+      if (gGroupProbe)
+      {
+        std::cout << "[group] lead on primitive " << lead->groundPrimitive0a << " -> group "
+                  << riddenGroup << " flags0c=0x" << std::hex << lead->collisionFlags0c << std::dec
+                  << '\n';
+      }
+    }
+
+    for (std::size_t groupIndex = 0; groupIndex < state.DAT_003556e0_collisionGroups.size();
+         ++groupIndex)
+    {
+      CollisionGroup &group = state.DAT_003556e0_collisionGroups[groupIndex];
       if (group.dirty5a == 0)
       {
         continue;
@@ -211,6 +232,49 @@ namespace orphen::ported::psm2
         group.maxZ = std::max(group.maxZ, record78.bounds.max.z);
       }
       group.boundsValid = boundsValid;
+
+      // FUN_00208450:301-325, the carry. A grounded lead standing on this
+      // group is moved by the change in the group's transform since it was
+      // last applied: the same compose as the geometry, on the deltas, about
+      // the pivot. The result goes into the +0x30/+0x34 movement request, which
+      // FUN_002262C0 spends later this frame, and the facing turns with the
+      // rotation's z channel. Without it s05_e018's turning floor rings slid
+      // out from under Orphen instead of taking him round.
+      if (lead != nullptr && static_cast<int>(groupIndex) == riddenGroup &&
+          (lead->collisionFlags0c & 1u) != 0)
+      {
+        const orphen::ported::model::Matrix4 delta = orphen::ported::model::FUN_0020cf28_compose(
+            {group.translation.x - group.lastTranslation.x,
+             group.translation.y - group.lastTranslation.y,
+             group.translation.z - group.lastTranslation.z},
+            1.0f, 1.0f,
+            {group.rotation.x - group.lastRotation.x, group.rotation.y - group.lastRotation.y,
+             group.rotation.z - group.lastRotation.z},
+            orphen::ported::model::ComposeOrder::ZXY);
+        const Vec3 relative{lead->position.x - group.pivot.x, lead->position.y - group.pivot.y,
+                            lead->position.z - group.pivot.z};
+        const Vec3 carried = transformGroupPoint(relative, delta);
+        if (lead->desiredDeltaX30 != nullptr)
+        {
+          *lead->desiredDeltaX30 += (carried.x + group.pivot.x) - lead->position.x;
+        }
+        if (lead->desiredDeltaY34 != nullptr)
+        {
+          *lead->desiredDeltaY34 += (carried.y + group.pivot.y) - lead->position.y;
+        }
+        const float turn = group.rotation.z - group.lastRotation.z;
+        if (turn != 0.0f && lead->facing5c != nullptr)
+        {
+          *lead->facing5c = orphen::ported::model::FUN_00216690_wrap_angle(*lead->facing5c + turn);
+        }
+      }
+
+      // FUN_00208450:332-347.
+      if (group.type != kCollisionGroupTypeSkipped)
+      {
+        group.lastTranslation = group.translation;
+        group.lastRotation = group.rotation;
+      }
     }
 
     return moved;

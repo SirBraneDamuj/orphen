@@ -271,6 +271,22 @@ namespace orphen::ported::camera
     void followHorizontal(std::uint32_t frameTicks, float &eyeDeltaX, float &eyeDeltaY, float &currentYaw, float &horizontalDistance);
     void followVertical(std::uint32_t frameTicks, const CameraGroundSampler &groundSampler);
     void publishOrientation();
+
+    // FUN_00218710, which FUN_00216aa0:82 hands the frame to for submodes
+    // 0x1B..0x1E. Each one rebuilds the whole pose from the target every frame
+    // with no smoothing at all, so the camera is rigidly fixed to the target.
+    void FUN_00218710_manual_camera(std::uint32_t frameTicks, std::uint16_t rawHeldPad,
+                                    float autoFocusGoalYaw,
+                                    const orphen::ported::psm2::Vec3 &target);
+
+    // DAT_00354C88 / DAT_00354C8C / DAT_00354C90: submode 0x1B's distance,
+    // yaw and pitch, which FUN_002186E0 sets. The yaw is shared: 0x1C and 0x1E
+    // read it too, and L1/R1 turn it. Nothing else writes it, so it carries
+    // over from one scene to the next. 3.0 is the value hardware holds in
+    // s05_e018.
+    float DAT_00354c88_manualDistance_ = 3.0f;
+    float DAT_00354c8c_manualYaw_ = 0.0f;
+    float DAT_00354c90_manualPitch_ = 0.0f;
   };
 
 } // namespace orphen::ported::camera
