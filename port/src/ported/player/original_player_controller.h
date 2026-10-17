@@ -263,7 +263,12 @@ namespace orphen::ported::player
   {
   public:
     void resetAtOrigin(const OriginalTerrainSampler &terrainSampler);
-    void resetAt(const orphen::ported::psm2::Vec3 &spawn, const OriginalTerrainSampler &terrainSampler);
+    // keepPlacedHeight is FUN_0022A418:215-219's placement: +0x28 keeps the
+    // staged z and only +0x4C/+0x50 take the ground under it. Without it the
+    // lead is snapped onto that ground, which is the port's own convenience for
+    // --spawn and the script teleport.
+    void resetAt(const orphen::ported::psm2::Vec3 &spawn, const OriginalTerrainSampler &terrainSampler,
+                 bool keepPlacedHeight = false);
 
     // frameTicks is DAT_003555bc: elapsed time in units of 0x20 per 60 Hz frame.
     // See ported/original_frame_timing.h.

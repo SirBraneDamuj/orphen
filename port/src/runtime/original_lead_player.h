@@ -86,7 +86,8 @@ namespace orphen::port
     }
 
     void resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,
-                    const std::optional<orphen::ported::psm2::Vec3> &spawnOverride = std::nullopt);
+                    const std::optional<orphen::ported::psm2::Vec3> &spawnOverride = std::nullopt,
+                    bool keepPlacedHeight = false);
     void update(std::uint32_t frameTicks,
                 const orphen::ported::psm2::Vec3 &movementRequest,
                 float stickMagnitude,

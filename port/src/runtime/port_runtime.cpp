@@ -490,6 +490,12 @@ namespace orphen::port
       // boot, so the request has to stand before the load and be spent after
       // it -- FUN_002239c8 does the clearing for every later load.
       DAT_003551ec_sceneRequest_ = 0x2001;
+      if (config.arriveAt.has_value())
+      {
+        DAT_00325340_requestedSpawn_ = config.arriveAt;
+        requestedSpawnFromSceneDefaults_ = false;
+        DAT_003551ec_sceneRequest_ = 1;
+      }
       loadSceneForCurrentMap();
       DAT_003551ec_sceneRequest_ = 0;
       if (config.printScriptReport)
@@ -4935,7 +4941,7 @@ namespace orphen::port
                                 const orphen::ported::psm2::Vec3 &position)
   {
     const float departingFacing = entityPool_.leadPlayer().facingRadians5c;
-    leadPlayer_.resetToMap(map, position);
+    leadPlayer_.resetToMap(map, position, /*keepPlacedHeight=*/true);
     if ((DAT_003551ec_sceneRequest_ & 0x80000u) != 0)
     {
       entityPool_.leadPlayer().facingRadians5c = departingFacing;

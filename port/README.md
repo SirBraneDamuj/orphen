@@ -10629,6 +10629,39 @@ before the groups' first pass has placed them, so put the lead down on frame 3
 or later. And a teleported lead keeps its old `+0x0A` until it walks, on
 hardware as well as in the port, so it will not ride until it moves.
 
+### `s05_e019` sent the lead straight back down: placement keeps the height
+
+Riding `s05_e018`'s east lift loaded `s05_e019`, which loaded `s05_e018` again
+on its first frame. `s05_e019`'s per-frame entry has a fall check at `0x526`:
+`if (0x53(0, 2) <= -3.5) 0x8C(5, 18, 0, x, y, 9.0)`, which drops a lead that
+fell down the shaft back into `s05_e018` from above. It runs before the arrival
+machine and before `FUN_002261E0`, so on the first frame it reads wherever the
+load put the lead.
+
+The lift's warp (`s05_e018` `0x1296`) asks for (6.5, 0, -3.0).
+`FUN_0022A418:215-224` copies that into `+0x20..+0x28` and writes only
+`FUN_00227070`'s ground sample into `+0x4C`/`+0x50`. `FUN_00229c40` has just
+rebuilt the entity, so `+0x2C` is zero and `+0x0C` has no grounded bit, and
+the first physics step does the settling. The port's `resetAt` snapped `+0x28`
+onto the sample instead, here the lift's floor at -4, so the check fired.
+
+`standLeadAt` now passes `keepPlacedHeight`. `--spawn`, the script teleport and
+the port's spawn guess still snap. On hardware, with the warp staged by hand
+from `savestates/s05_e018_entry.p2s`, the lead is at -2.60 and rising 13 frames
+in, and ends at (5.0, 0, 0) standing, facing π. The port now does the same
+with `--scene s05_e019 --from-scene s05_e018 --arrive-at 6.5,0,-3.0`.
+`--arrive-at` is new: it boots a scene the way a `0x8C` warp would, with
+request bit 1 and `DAT_00325340` staged.
+
+Every boot placement changes with this, because the defaults block's z is now
+kept. Most scenes differ only in the spawn line. `s05_e019`'s own default is
+(-1.249, 5.162, 0.875), over the shaft, so a cold boot there falls and is sent
+to `s05_e018`. Hardware does the same: a `0x2001` load lands on -4 and leaves
+for entry 18 as the save prompt closes. `s14_e002`'s default (0, 1.5, -0.5)
+used to snap to the sea floor at -45. The lead now falls from -0.5 until the
+script puts it on deck, and the run's later state (boss position, facing)
+diverges from there. That scene is not hardware-checked.
+
 ### The five level-5 summons
 
 Released at full charge with a live target, an elemental spell is not thrown at

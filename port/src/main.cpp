@@ -47,6 +47,10 @@ namespace
                  "                  the pair opcode 0x3A reads. s01_e014 branches on\n"
                  "                  it, and without it a direct load takes that\n"
                  "                  switch's default arm.\n"
+                 "  --arrive-at x,y,z\n"
+                 "                  load the scene as a warp (opcode 0x8C) into it\n"
+                 "                  would: the lead is placed at that point, height\n"
+                 "                  kept, instead of at the scene's defaults block.\n"
                  "  --scr-report    print the scene script inventory after loading.\n"
                  "  --glyph-report  print the dialogue window's 300 glyph slots read\n"
                  "                  back as text whenever they change, next to what\n"
@@ -699,6 +703,27 @@ namespace
         spawn.y = std::stof(value.substr(firstComma + 1, secondComma - firstComma - 1));
         spawn.z = std::stof(value.substr(secondComma + 1));
         config.spawnOverride = spawn;
+        continue;
+      }
+      if (argument == "--arrive-at")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error("--arrive-at requires x,y,z");
+        }
+        const std::string value = argv[++argumentIndex];
+        const std::size_t firstComma = value.find(',');
+        const std::size_t secondComma = firstComma == std::string::npos ? std::string::npos
+                                                                       : value.find(',', firstComma + 1);
+        if (firstComma == std::string::npos || secondComma == std::string::npos)
+        {
+          throw std::runtime_error("--arrive-at expects x,y,z");
+        }
+        orphen::ported::psm2::Vec3 arrival;
+        arrival.x = std::stof(value.substr(0, firstComma));
+        arrival.y = std::stof(value.substr(firstComma + 1, secondComma - firstComma - 1));
+        arrival.z = std::stof(value.substr(secondComma + 1));
+        config.arriveAt = arrival;
         continue;
       }
       if (argument == "--place-slot")

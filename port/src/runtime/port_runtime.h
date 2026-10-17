@@ -345,6 +345,11 @@ namespace orphen::port
     // scene reload can be exercised without a window.
     std::uint32_t cycleMapEveryFrames = 0;
     std::optional<orphen::ported::psm2::Vec3> spawnOverride;
+    // --arrive-at x,y,z: boot the scene the way opcode 0x8C would have sent the
+    // lead into it -- request bit 1 with 0x2000 clear and DAT_00325340 staged
+    // -- so FUN_0022a418 places the lead at that point, height and all, instead
+    // of the scene's defaults block.
+    std::optional<orphen::ported::psm2::Vec3> arriveAt;
     // --place-slot: park one pool entity at a fixed world point every frame, so
     // a behaviour that depends on two entities being next to each other can be
     // exercised without waiting for the scene to arrange it. Debug scaffolding,

@@ -143,7 +143,8 @@ namespace orphen::port
   } // namespace
 
   void OriginalLeadPlayer::resetToMap(const orphen::ported::psm2::Psm2RuntimeState &map,
-                                      const std::optional<orphen::ported::psm2::Vec3> &spawnOverride)
+                                      const std::optional<orphen::ported::psm2::Vec3> &spawnOverride,
+                                      bool keepPlacedHeight)
   {
     const orphen::ported::psm2::Vec3 spawn = spawnOverride.has_value() ? *spawnOverride : chooseSpawnPoint(map);
     controller_.resetAt(spawn, [&map](float originalX,
@@ -156,7 +157,8 @@ namespace orphen::port
       {
         return std::optional<orphen::ported::player::OriginalTerrainSample>{};
       }
-      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)}; });
+      return std::optional<orphen::ported::player::OriginalTerrainSample>{toOriginalTerrainSample(*groundHit)}; },
+                        keepPlacedHeight);
     refreshViewState(map);
   }
 

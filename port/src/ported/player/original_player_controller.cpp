@@ -154,7 +154,8 @@ namespace orphen::ported::player
   }
 
   void OriginalPlayerController::resetAt(const orphen::ported::psm2::Vec3 &spawn,
-                                         const OriginalTerrainSampler &terrainSampler)
+                                         const OriginalTerrainSampler &terrainSampler,
+                                         bool keepPlacedHeight)
   {
     entity() = orphen::ported::entity::OriginalEntity{};
     // The lead player is type id 1. Confirmed from an EE dump, where pool slot 0
@@ -183,7 +184,19 @@ namespace orphen::ported::player
                                                entity().positionZ24,
                                                entity().positionY28,
                                                terrainQueryForEntity(entity().positionY28));
-      if (groundSample.has_value())
+      if (groundSample.has_value() && keepPlacedHeight)
+      {
+        // FUN_0022A418:215-224. +0x28 is the staged z as it stands, +0x4C and
+        // +0x50 are FUN_00227070's sample, and FUN_00229c40 left +0x2C at zero
+        // and +0x0C without the grounded bit: the first physics step settles
+        // the lead. s05_e018's lift warps to z -3.0 over s05_e019's lift
+        // floor at -4, and s05_e019's per-frame entry -- which runs before
+        // that step -- sends the lead back to s05_e018 at z <= -3.5. Snapped
+        // to -4, the lead bounced straight back down the shaft.
+        entity().groundHeight4c = groundSample->height;
+        entity().previousGroundHeight50 = groundSample->height;
+      }
+      else if (groundSample.has_value())
       {
         entity().groundHeight4c = groundSample->height;
         entity().previousGroundHeight50 = groundSample->height;
