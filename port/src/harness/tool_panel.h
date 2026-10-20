@@ -35,6 +35,8 @@ namespace orphen::harness
     // A button that stands for a text box: outlined in the heading colour while
     // it has the keyboard. The owner does the typing; this only draws it.
     void field(int column, std::string text, int id, bool focused);
+    // The same heading-colour outline on the button just added, to mark it.
+    void outlineLastButton(bool outlined);
     // A heading on a row of its own, with a little space above it.
     void heading(std::string text);
     // Move down a row. Rows holding buttons want the default pitch, which

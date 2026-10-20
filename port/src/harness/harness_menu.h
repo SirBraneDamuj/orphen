@@ -29,6 +29,7 @@ namespace orphen::harness
     ToggleItems,
     ToggleSettings,
     ToggleVoiceCheck,
+    ToggleMapSelect,
     Heal,               // 0
     HitScratch,         // 1
     HitHit,             // 2
@@ -92,6 +93,7 @@ namespace orphen::harness
     Items,
     Settings,
     VoiceCheck,
+    MapSelect,
   };
 
   // The Player Params panel: FUN_0026bc50's three rows, with a button for each
@@ -197,6 +199,47 @@ namespace orphen::harness
   // A step button's change to the id, or 0 for any other button.
   int voiceCheckStep(int buttonId);
 
+  // The Map Select panel: the debug menu's MAP SELECT page (FUN_00268E20). One
+  // section of the SCR.BIN scene table at a time, MP00..MP14, with a button per
+  // descriptor. The section is the viewer's to step; the runtime lists it.
+  struct MapSelectEntryView
+  {
+    // Where the descriptor sits in the section's list. A section-14 pick loads
+    // by this, not by the id.
+    int position = 0;
+    // The descriptor's +0x00, which the original prints.
+    int id = 0;
+    std::string label; // "MP0124", or "BG03" in section 14
+    // The scene MCB0.BIN would load for it, as the port names scenes.
+    std::string scene;
+    // False for the picks FUN_00268E20 ignores, and for a scene with no MCB0
+    // slot, which the original would walk off the table on.
+    bool selectable = false;
+    std::string why; // when not selectable
+    // The scene on screen.
+    bool current = false;
+  };
+  struct MapSelectView
+  {
+    // False with no scene table (SCR.BIN did not load).
+    bool available = false;
+    int section = 0;
+    std::vector<MapSelectEntryView> entries;
+    // The scene on screen, and a DAT_003551EC request still waiting to be
+    // spent -- FUN_002239C8 holds it in modes 9 and 10.
+    std::string currentScene;
+    std::uint32_t pendingRequest = 0;
+  };
+  // `hovered` is the entry under the pointer, whose scene the hint line names:
+  // in section 14 the label is the descriptor's id but the load is by position,
+  // so BG40 is s14_e031.
+  ToolPanel buildMapSelectPanel(float scale, float left, float top, const MapSelectView &view,
+                                std::optional<int> hoveredPosition);
+  inline constexpr int kMapSelectSectionCount = 15; // FUN_00268E20 wraps 0..0xE
+  inline constexpr int kMapSelectPreviousButton = 0;
+  inline constexpr int kMapSelectNextButton = 1;
+  inline constexpr int kMapSelectEntryButtonBase = 100; // + position
+
   // What a menu asks the runtime to do to the simulation. Applied between
   // steps, outside PortRuntime::update, so a --frames run never sees one.
   struct HarnessRequest
@@ -211,6 +254,7 @@ namespace orphen::harness
       SelectCharacter, // loadoutRow: the Spells/Items panels' tab
       PlayVoice,       // voiceId, clip: audio only, see applyHarnessRequests
       StopVoice,
+      SelectMap,       // mapSection, mapPosition: FUN_00268E20's pick
     };
     Kind kind = Kind::Heal;
     orphen::ported::debug::PlayerParam param = orphen::ported::debug::PlayerParam::HitPoints;
@@ -222,6 +266,8 @@ namespace orphen::harness
     int loadoutRow = 0;
     int voiceId = 0;
     int clip = 0;
+    int mapSection = 0;
+    int mapPosition = 0;
   };
 
   // A panel button's id back into the request it stands for.

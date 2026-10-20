@@ -831,6 +831,10 @@ namespace orphen::port
     int voiceCheckPlayingId_ = 0;
     int voiceCheckPlayingClip_ = -1;
     void playVoiceFromHarness(int voiceId, int clip);
+    // The fly view's Map Select panel: one section of the scene table, and
+    // FUN_00268E20's pick, which only writes the request words.
+    orphen::harness::MapSelectView mapSelectView(int section) const;
+    void FUN_00268e20_select_map(int section, int position);
     void cycleLoadoutFromHarness(int slot, int delta);
     // The loadout row the panels edit: the picked tab's, or the lead's while
     // harnessLoadoutRow_ is -1.

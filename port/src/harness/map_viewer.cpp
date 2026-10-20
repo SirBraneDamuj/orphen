@@ -3933,6 +3933,7 @@ namespace orphen::harness
               item("HEAL", "0", MenuCommand::Heal), item("HIT: SCRATCH", "1", MenuCommand::HitScratch),
               item("HIT: HIT", "2", MenuCommand::HitHit), item("HIT: KNOCKBACK", "3", MenuCommand::HitKnockback),
               item("HIT: FLATTEN", "4", MenuCommand::HitFlatten), item("HIT: LETHAL", "5", MenuCommand::HitLethal)}},
+        Menu{"SCENE", {check("MAP SELECT", "", MenuCommand::ToggleMapSelect, mapSelectVisible_)}},
         Menu{"SOUND", {check("VOICE CHECK", "", MenuCommand::ToggleVoiceCheck, voiceCheckVisible_)}},
         Menu{"SETTINGS", {check("SETTINGS", "", MenuCommand::ToggleSettings, settingsVisible_)}},
     };
@@ -3977,6 +3978,15 @@ namespace orphen::harness
     case MenuCommand::ToggleVoiceCheck:
       voiceCheckVisible_ = !voiceCheckVisible_;
       voiceCheckTyped_.reset();
+      break;
+    case MenuCommand::ToggleMapSelect:
+      mapSelectVisible_ = !mapSelectVisible_;
+      if (mapSelectSection_ < 0)
+      {
+        const auto scene = loadedDiscScene();
+        mapSelectSection_ =
+            scene.has_value() && scene->section < kMapSelectSectionCount ? static_cast<int>(scene->section) : 0;
+      }
       break;
     case MenuCommand::Heal:
     {
@@ -4091,6 +4101,23 @@ namespace orphen::harness
               stepVoiceCheckId(voiceCheckStep(*button));
             }
           }
+          else if (panel->kind == ToolPanelKind::MapSelect)
+          {
+            if (*button >= kMapSelectEntryButtonBase)
+            {
+              HarnessRequest request;
+              request.kind = HarnessRequest::Kind::SelectMap;
+              request.mapSection = mapSelectSection_;
+              request.mapPosition = *button - kMapSelectEntryButtonBase;
+              harnessRequests_.push_back(request);
+            }
+            else
+            {
+              // FUN_00268E20: past either end of 0..0xE wraps to the other.
+              const int step = *button == kMapSelectNextButton ? 1 : kMapSelectSectionCount - 1;
+              mapSelectSection_ = (mapSelectSection_ + step) % kMapSelectSectionCount;
+            }
+          }
           else if (const auto request = toolPanelRequest(panel->kind, *button); request.has_value())
           {
             harnessRequests_.push_back(*request);
@@ -4125,6 +4152,8 @@ namespace orphen::harness
       return settingsVisible_;
     case ToolPanelKind::VoiceCheck:
       return voiceCheckVisible_;
+    case ToolPanelKind::MapSelect:
+      return mapSelectVisible_;
     case ToolPanelKind::Items:
       break;
     }
@@ -4143,6 +4172,8 @@ namespace orphen::harness
       return settingsVisible_;
     case ToolPanelKind::VoiceCheck:
       return voiceCheckVisible_;
+    case ToolPanelKind::MapSelect:
+      return mapSelectVisible_;
     case ToolPanelKind::Items:
       break;
     }
@@ -4254,14 +4285,29 @@ namespace orphen::harness
         return buildSettingsPanel(scale, left, at, settings_);
       case ToolPanelKind::VoiceCheck:
         return buildVoiceCheckPanel(scale, left, at, voiceCheck_, voiceCheckTyped_);
+      case ToolPanelKind::MapSelect:
+      {
+        // Built twice: once to find the entry under the pointer, once to name
+        // its scene. The hint has a row of its own, so the grid is the same.
+        std::optional<int> hovered;
+        if (pointerInWindow_ && openMenu_ < 0)
+        {
+          const auto button = buildMapSelectPanel(scale, left, at, mapSelect_, std::nullopt).buttonAt(pointerX_, pointerY_);
+          if (button.has_value() && *button >= kMapSelectEntryButtonBase)
+          {
+            hovered = *button - kMapSelectEntryButtonBase;
+          }
+        }
+        return buildMapSelectPanel(scale, left, at, mapSelect_, hovered);
+      }
       case ToolPanelKind::Items:
         break;
       }
       return buildItemsPanel(scale, left, at, inventory_);
     };
     for (const ToolPanelKind kind :
-         {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items, ToolPanelKind::VoiceCheck,
-          ToolPanelKind::Settings})
+         {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items, ToolPanelKind::MapSelect,
+          ToolPanelKind::VoiceCheck, ToolPanelKind::Settings})
     {
       if (!toolPanelVisible(kind))
       {

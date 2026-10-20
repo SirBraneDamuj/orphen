@@ -239,6 +239,11 @@ namespace orphen::harness
     void setVoiceCheck(VoiceCheckView view) { voiceCheck_ = std::move(view); }
     // The id box has the keyboard; main() tells the window.
     bool textEntryActive() const { return voiceCheckVisible() && voiceCheckTyped_.has_value(); }
+    // The Map Select panel. The viewer owns the section being stepped; the
+    // runtime lists it before updateFlyCamera.
+    bool mapSelectVisible() const { return flyCameraActive_ && mapSelectVisible_; }
+    int mapSelectSection() const { return mapSelectSection_; }
+    void setMapSelect(MapSelectView view) { mapSelect_ = std::move(view); }
     // The Settings panel's volume as a gain, for main() to hand the audio
     // device each frame.
     float outputVolume() const { return static_cast<float>(settings_.volumePercent) / 100.0f; }
@@ -357,6 +362,8 @@ namespace orphen::harness
       }
       return discScenes_[currentDiscSceneIndex_];
     }
+    // Every scene MCB0.BIN has a slot for, empty until a disc scene loads.
+    const std::vector<McbSceneSelection> &discScenes() const { return discScenes_; }
     std::size_t loadedTexturePageCount() const { return texturePages_.size(); }
     const std::vector<LoadedDiscTexturePage> &loadedTexturePages() const { return texturePages_; }
 
@@ -450,6 +457,12 @@ namespace orphen::harness
     // FUN_002696a0 starts DAT_003550CC at 1.
     int voiceCheckVoiceId_ = 1;
     std::optional<std::string> voiceCheckTyped_;
+    bool mapSelectVisible_ = false;
+    MapSelectView mapSelect_;
+    // uGpffffbdd4, FUN_00268E20's section. Kept across closing the panel, as
+    // the original keeps it across closing the menu; -1 until first opened,
+    // which starts it on the scene on screen.
+    int mapSelectSection_ = -1;
     // FUN_002696a0's step: past either end jumps to the other.
     void stepVoiceCheckId(int delta);
     void playVoiceCheck(int clip);

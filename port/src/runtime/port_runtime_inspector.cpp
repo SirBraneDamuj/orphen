@@ -121,6 +121,10 @@ namespace orphen::port
       {
         mapViewer_.setVoiceCheck(voiceCheckView(mapViewer_.voiceCheckVoiceId()));
       }
+      if (mapViewer_.mapSelectVisible())
+      {
+        mapViewer_.setMapSelect(mapSelectView(mapViewer_.mapSelectSection()));
+      }
     }
     mapViewer_.updateFlyCamera(deltaSeconds, input);
     // Between steps, never inside one: a --frames run cannot click a menu.
@@ -137,6 +141,10 @@ namespace orphen::port
       if (mapViewer_.voiceCheckVisible())
       {
         mapViewer_.setVoiceCheck(voiceCheckView(mapViewer_.voiceCheckVoiceId()));
+      }
+      if (mapViewer_.mapSelectVisible())
+      {
+        mapViewer_.setMapSelect(mapSelectView(mapViewer_.mapSelectSection()));
       }
     }
     if (const auto slot = mapViewer_.inspectedEntitySlot(); slot.has_value())
@@ -205,6 +213,9 @@ namespace orphen::port
       case Request::Kind::StopVoice:
         soundEngine_.FUN_00206a48_stop_voice_line();
         voiceCheckPlayingClip_ = -1;
+        break;
+      case Request::Kind::SelectMap:
+        FUN_00268e20_select_map(request.mapSection, request.mapPosition);
         break;
       }
     }
@@ -279,6 +290,114 @@ namespace orphen::port
     voiceCheckPlayingId_ = voiceId;
     voiceCheckPlayingClip_ = clip;
     std::cout << "[voice check] voice " << voiceId << " sub " << clip << '\n';
+  }
+
+  orphen::harness::MapSelectView PortRuntime::mapSelectView(int section) const
+  {
+    orphen::harness::MapSelectView view;
+    view.section = section;
+    view.pendingRequest = DAT_003551ec_sceneRequest_;
+    const auto loaded = mapViewer_.loadedDiscScene();
+    view.currentScene = loaded.has_value() ? orphen::harness::sceneName(*loaded) : std::string("<none>");
+    const std::vector<std::int16_t> ids = itemDatabase_.FUN_0022a300_sceneIds(section);
+    view.available = itemDatabase_.loaded();
+    const auto &onDisc = mapViewer_.discScenes();
+    for (std::size_t position = 0; position < ids.size(); ++position)
+    {
+      orphen::harness::MapSelectEntryView entry;
+      entry.position = static_cast<int>(position);
+      entry.id = ids[position];
+      // FUN_00268E20:30-35: "MP%02d%02d" of section and id below 0xE,
+      // "BG%02d" of the id in section 14.
+      char label[16];
+      if (section < kGroupEScene)
+      {
+        std::snprintf(label, sizeof(label), "MP%02d%02d", section, entry.id);
+      }
+      else
+      {
+        std::snprintf(label, sizeof(label), "BG%02d", entry.id);
+      }
+      entry.label = label;
+      // A section-14 pick goes through DAT_003551F8, which FUN_0022A418 loads
+      // by position; anything else loads (section, id).
+      const orphen::harness::McbSceneSelection scene{
+          static_cast<std::uint16_t>(section),
+          static_cast<std::uint16_t>(section < kGroupEScene ? entry.id : static_cast<int>(position))};
+      entry.scene = orphen::harness::sceneName(scene);
+      const bool slotted = std::any_of(onDisc.begin(), onDisc.end(), [&](const orphen::harness::McbSceneSelection &at) {
+        return at.section == scene.section && at.entry == scene.entry;
+      });
+      // FUN_00268E20:91 ignores MP0099 and :113 the first line of section
+      // 14, which is id 99 as well. MP1211 is held back: it is the title with
+      // DAT_003555C7 raised, and the port reads that byte as a constant 0.
+      const bool ignored = section < kGroupEScene ? section == 0 && entry.id == 99 : position == 0;
+      const bool unmodelled = section == 0xC && entry.id == 11;
+      entry.selectable = slotted && !ignored && !unmodelled;
+      entry.why = ignored ? "GAME IGNORES IT" : unmodelled ? "NEEDS DAT_003555C7" : !slotted ? "NO MCB0 SLOT" : "";
+      entry.current = loaded.has_value() && loaded->section == scene.section && loaded->entry == scene.entry;
+      view.entries.push_back(std::move(entry));
+    }
+    return view;
+  }
+
+  // FUN_00268E20:79-128, the branch a pick takes. Nothing loads here: the
+  // request words are written and FUN_002239C8 spends them at the top of the
+  // next field frame, exactly as for a door. The two writes it makes to close
+  // the debug menu (uGpffffb0e4, uGpffffb124) have nothing to close.
+  void PortRuntime::FUN_00268e20_select_map(int section, int position)
+  {
+    const std::vector<std::int16_t> ids = itemDatabase_.FUN_0022a300_sceneIds(section);
+    if (position < 0 || position >= static_cast<int>(ids.size()))
+    {
+      return;
+    }
+    // :80-81. uGpffffae10/ae14, the pair opcode 0x3A reads, take the scene the
+    // game thinks it is in before anything else is touched.
+    DAT_00354d80_backupSection_ = DAT_003551f4_sceneSection_;
+    DAT_00354d84_backupEntry_ = DAT_003551f0_sceneEntry_;
+    std::uint32_t request = 0;
+    if (section < kGroupEScene)
+    {
+      const int id = ids[static_cast<std::size_t>(position)];
+      // :89-90 write the scene words before :91 can bail on MP0099.
+      DAT_003551f4_sceneSection_ = section;
+      DAT_003551f0_sceneEntry_ = id;
+      if (section == 0 && id == 99)
+      {
+        return;
+      }
+      // :92-106. s12_e010 is the title: picking it asks for the opening movie
+      // FUN_0022A418 would otherwise only queue on a cold load.
+      constexpr int kTitleSection = 0xC;
+      constexpr int kTitleEntry = 10;
+      // :99-102, id 11, is the title again with DAT_003555C7 raised and
+      // DAT_003555DA dropped. The port has no DAT_003555C7, so the panel does
+      // not offer it (mapSelectView).
+      if (section == kTitleSection && id == kTitleEntry)
+      {
+        DAT_003555d2_movieRequest_ = 0x12;
+      }
+    }
+    else
+    {
+      // :113-119. Line 1 of section 14 is ignored; the rest go by position,
+      // with the lead's position kept for the way back, as FUN_002610A8
+      // keeps it.
+      if (position == 0)
+      {
+        return;
+      }
+      request = 0x20000u;
+      DAT_003551f8_groupEntry_ = position;
+      const auto &lead = entityPool_.leadPlayer();
+      DAT_0031e668_departurePosition_ = {lead.positionX20, lead.positionZ24, lead.positionY28};
+    }
+    // :120-127. Bit 0x2000 puts the lead on the scene's own spawn.
+    DAT_003551ec_sceneRequest_ = request | 0x2001u;
+    std::cout << "[map select] MP" << (section < 10 ? "0" : "") << section << " line " << position + 1
+              << ": request 0x" << std::hex << DAT_003551ec_sceneRequest_ << std::dec << " (frame "
+              << frameCount_ << ")\n";
   }
 
   bool PortRuntime::selectEntity(std::size_t slot)

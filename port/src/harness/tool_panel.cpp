@@ -42,6 +42,14 @@ namespace orphen::harness
     buttons_.back().focused = focused;
   }
 
+  void ToolPanel::outlineLastButton(bool outlined)
+  {
+    if (!buttons_.empty())
+    {
+      buttons_.back().focused = outlined;
+    }
+  }
+
   void ToolPanel::heading(std::string text)
   {
     rowTop_ += 4.0f;

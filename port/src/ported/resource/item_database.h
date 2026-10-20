@@ -122,6 +122,12 @@ namespace orphen::ported::resource
                                                            std::int32_t entry,
                                                            bool groupE) const;
 
+    // FUN_0022A238(section) walked the way FUN_0022A300 counts it: every
+    // descriptor's +0x00 up to the zero that ends the list. This is what the
+    // debug menu's MAP SELECT (FUN_00268E20) lists, one line per id, with
+    // DAT_003555D3 forced clear so section 14 reads its own list too.
+    std::vector<std::int16_t> FUN_0022a300_sceneIds(std::int32_t section) const;
+
   private:
     std::vector<std::uint8_t> blob_;
     std::uint32_t recordTableOffset_ = 0;

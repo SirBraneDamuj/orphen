@@ -125,6 +125,12 @@ namespace orphen::harness
         {100, 26, "+100"},
     }};
 
+    // The Map Select panel: a row of section steppers, then the section's
+    // entries six to a row, "MP0124 " each.
+    constexpr int kMapSelectColumns = 42;
+    constexpr int kMapSelectEntryWidth = 7;
+    constexpr int kMapSelectEntriesPerRow = kMapSelectColumns / kMapSelectEntryWidth;
+
     // The Inventory panel's columns.
     //   "TRIANGLE <  Sword of the Fallen Devil >"
     //   "01 Sword of the Fallen Devil TRI   -  1  +"
@@ -539,6 +545,67 @@ namespace orphen::harness
     return panel;
   }
 
+  ToolPanel buildMapSelectPanel(float scale, float left, float top, const MapSelectView &view,
+                                std::optional<int> hoveredPosition)
+  {
+    ToolPanel panel("MAP SELECT", kMapSelectColumns, scale, left, top);
+    if (!view.available)
+    {
+      panel.text(0, "NO SCENE TABLE LOADED", ToolPanel::Tone::Dim);
+      panel.nextRow();
+      return panel;
+    }
+
+    // FUN_00268E20's title line, "MP%02d", stepped by left and right.
+    char title[8];
+    std::snprintf(title, sizeof(title), "MP%02d", view.section);
+    panel.button(0, "<", kMapSelectPreviousButton);
+    panel.text(3, title, ToolPanel::Tone::Heading);
+    panel.button(8, ">", kMapSelectNextButton);
+    const std::string now = "NOW " + view.currentScene;
+    panel.text(kMapSelectColumns - static_cast<int>(now.size()), now, ToolPanel::Tone::Dim);
+    panel.nextRow();
+    // Always a row, hovered or not, so the grid under it never moves.
+    for (const auto &entry : view.entries)
+    {
+      if (hoveredPosition == entry.position)
+      {
+        panel.text(0, entry.label + " LOADS " + entry.scene +
+                          (entry.selectable ? std::string() : std::string("  (") + entry.why + ")"),
+                   ToolPanel::Tone::Dim);
+      }
+    }
+    panel.nextRow(static_cast<float>(panel::kRowPitch));
+
+    if (view.entries.empty())
+    {
+      panel.text(0, "NO SCENES IN THIS SECTION", ToolPanel::Tone::Dim);
+      panel.nextRow();
+    }
+    for (std::size_t index = 0; index < view.entries.size(); ++index)
+    {
+      const auto &entry = view.entries[index];
+      const int column = static_cast<int>(index % kMapSelectEntriesPerRow) * kMapSelectEntryWidth;
+      // The scene on screen is outlined, and still a button: the original
+      // reloads it like any other.
+      panel.button(column, entry.label, kMapSelectEntryButtonBase + entry.position, entry.selectable);
+      panel.outlineLastButton(entry.current);
+      if (index % kMapSelectEntriesPerRow == kMapSelectEntriesPerRow - 1 || index + 1 == view.entries.size())
+      {
+        panel.nextRow();
+      }
+    }
+
+    if (view.pendingRequest != 0)
+    {
+      char pending[40];
+      std::snprintf(pending, sizeof(pending), "REQUEST 0x%X WAITING", view.pendingRequest);
+      panel.text(0, pending, ToolPanel::Tone::Dim);
+      panel.nextRow(static_cast<float>(panel::kRowPitch));
+    }
+    return panel;
+  }
+
   int voiceCheckStep(int buttonId)
   {
     if (buttonId < 0 || buttonId >= static_cast<int>(kVoiceStepButtons.size()))
@@ -593,6 +660,7 @@ namespace orphen::harness
       return request;
     case ToolPanelKind::Settings:
     case ToolPanelKind::VoiceCheck:
+    case ToolPanelKind::MapSelect:
       break;
     }
     return std::nullopt;

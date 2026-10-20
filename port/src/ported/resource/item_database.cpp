@@ -177,6 +177,31 @@ namespace orphen::ported::resource
     return stringAt(descriptionTableOffset_, itemId);
   }
 
+  std::vector<std::int16_t> ItemDatabase::FUN_0022a300_sceneIds(std::int32_t section) const
+  {
+    std::vector<std::int16_t> ids;
+    if (blob_.size() < 0x40 || section < 0 || section >= 16)
+    {
+      return ids;
+    }
+    const std::uint32_t table = u32At(blob_, kSceneTableDword * 4);
+    const std::uint32_t list = u32At(blob_, table + static_cast<std::uint32_t>(section) * 4);
+    if (list == 0)
+    {
+      return ids;
+    }
+    for (std::uint32_t at = list; at + kSceneDescriptorStride <= blob_.size(); at += kSceneDescriptorStride)
+    {
+      const std::int16_t id = static_cast<std::int16_t>(u16At(blob_, at));
+      if (id == 0)
+      {
+        break;
+      }
+      ids.push_back(id);
+    }
+    return ids;
+  }
+
   // The byte offset of one scene's descriptor in the blob, or 0 when the scene
   // has none. FUN_0022A238 picks the per-section list, FUN_0022A288 walks it.
   std::uint32_t ItemDatabase::sceneDescriptorOffset(std::int32_t section,
