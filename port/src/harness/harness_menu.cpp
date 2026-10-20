@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <string>
 
 namespace orphen::harness
@@ -101,6 +102,27 @@ namespace orphen::harness
         {-1, 12, "-1"},
         {1, 21, "+1"},
         {10, 24, "+10"},
+    }};
+
+    // The Voice Check panel. "-100 -10 -1   1234  +1 +10 +100"
+    constexpr int kVoiceCheckColumns = 30;
+    constexpr int kVoiceFieldColumn = 12;
+    constexpr int kVoiceFieldWidth = 6; // five digits and the cursor
+    constexpr int kVoiceRightColumn = 26; // STOP and the PLAY buttons
+    struct VoiceStepButton
+    {
+      int delta;
+      int column;
+      const char *text;
+    };
+    // FUN_002696a0's six pad steps: L1/R1 100, L2/R2 10, left/right 1.
+    constexpr std::array<VoiceStepButton, 6> kVoiceStepButtons = {{
+        {-100, 0, "-100"},
+        {-10, 5, "-10"},
+        {-1, 9, "-1"},
+        {1, 19, "+1"},
+        {10, 22, "+10"},
+        {100, 26, "+100"},
     }};
 
     // The Inventory panel's columns.
@@ -448,6 +470,84 @@ namespace orphen::harness
     return panel;
   }
 
+  ToolPanel buildVoiceCheckPanel(float scale, float left, float top, const VoiceCheckView &view,
+                                 const std::optional<std::string> &typed)
+  {
+    ToolPanel panel("VOICE CHECK", kVoiceCheckColumns, scale, left, top);
+    if (!view.available)
+    {
+      panel.text(0, "NO VOICE TABLE LOADED", ToolPanel::Tone::Dim);
+      panel.nextRow();
+      return panel;
+    }
+
+    panel.text(0, "VOICE NO");
+    const std::string range = "1.." + std::to_string(view.entryCount);
+    panel.text(kVoiceCheckColumns - static_cast<int>(range.size()), range, ToolPanel::Tone::Dim);
+    panel.nextRow();
+    for (std::size_t index = 0; index < kVoiceStepButtons.size(); ++index)
+    {
+      const auto &button = kVoiceStepButtons[index];
+      panel.button(button.column, button.text, static_cast<int>(index));
+    }
+    std::string field = typed.has_value() ? *typed + "_" : std::to_string(view.voiceId) + " ";
+    if (static_cast<int>(field.size()) < kVoiceFieldWidth)
+    {
+      field.insert(0, static_cast<std::size_t>(kVoiceFieldWidth) - field.size(), ' ');
+    }
+    panel.field(kVoiceFieldColumn, field, kVoiceCheckFieldButton, typed.has_value());
+    panel.nextRow();
+
+    // FUN_002696a0's status line, less " # LOADING #": the port reads a clip
+    // straight off the disc image, so a load is never in flight.
+    panel.text(0, "STATUS");
+    if (view.playing)
+    {
+      panel.text(7, view.pack ? "--PACK PLAY--" : " * PLAYING *", ToolPanel::Tone::Heading);
+    }
+    else
+    {
+      panel.text(7, "    STOP", ToolPanel::Tone::Dim);
+    }
+    panel.button(kVoiceRightColumn, "STOP", kVoiceCheckStopButton, view.playing);
+    panel.nextRow();
+
+    // The original's SUB NO row, as a list: a pack's clips each get a PLAY.
+    if (view.clips.empty())
+    {
+      panel.heading("NO CLIP");
+    }
+    else
+    {
+      panel.heading(view.pack ? "PACK OF " + std::to_string(view.clips.size()) + " CLIPS" : "ONE CLIP");
+    }
+    for (const auto &clip : view.clips)
+    {
+      const auto tone = clip.clip == view.playingClip ? ToolPanel::Tone::Heading : ToolPanel::Tone::Body;
+      char length[16];
+      std::snprintf(length, sizeof(length), "%6.2f S", static_cast<double>(clip.seconds));
+      panel.text(0, "SUB " + rightAligned(clip.clip, 2), tone);
+      panel.text(8, length, tone);
+      panel.button(kVoiceRightColumn, "PLAY", kVoiceCheckPlayButtonBase + clip.clip, view.canPlay);
+      panel.nextRow();
+    }
+    if (!view.canPlay)
+    {
+      panel.text(0, view.reason, ToolPanel::Tone::Dim);
+      panel.nextRow();
+    }
+    return panel;
+  }
+
+  int voiceCheckStep(int buttonId)
+  {
+    if (buttonId < 0 || buttonId >= static_cast<int>(kVoiceStepButtons.size()))
+    {
+      return 0;
+    }
+    return kVoiceStepButtons[static_cast<std::size_t>(buttonId)].delta;
+  }
+
   int settingsVolumeDelta(int buttonId)
   {
     if (buttonId < 0 || buttonId >= static_cast<int>(kVolumeButtons.size()))
@@ -492,6 +592,7 @@ namespace orphen::harness
       request.delta = (buttonId & 1) != 0 ? 1 : -1;
       return request;
     case ToolPanelKind::Settings:
+    case ToolPanelKind::VoiceCheck:
       break;
     }
     return std::nullopt;

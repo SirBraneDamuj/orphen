@@ -126,6 +126,12 @@ namespace orphen::ported::sound
     // of 0 on an entry with no directory answers the whole entry.
     BankClip FUN_00206f08_bankClip(std::uint32_t voiceId, std::uint32_t clipIndex) const;
 
+    // The directory's word 0 when FUN_00206d98 accepts it, 0 when the entry is
+    // one clip played whole -- the test FUN_002696a0 makes to pick between
+    // "--PACK PLAY--" and " * PLAYING *". Also 0 for an unknown id or with no
+    // audio file to read the directory from.
+    std::uint32_t bankClipCount(std::uint32_t voiceId) const;
+
     // The clip's stored ADPCM, sliced out of the bank. Empty when there is no
     // audio file, the id is unknown, or the directory has no such clip.
     std::vector<std::uint8_t> readBankClipAdpcm(std::uint32_t voiceId,
@@ -142,6 +148,7 @@ namespace orphen::ported::sound
 
   private:
     bool adopt(std::vector<std::uint32_t> table, std::string source);
+    std::uint32_t readBankDirectory(std::uint32_t voiceId, std::vector<std::uint32_t> &header) const;
 
     std::vector<std::uint32_t> entries_;
     std::string source_;

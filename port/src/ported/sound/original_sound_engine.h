@@ -194,6 +194,10 @@ namespace orphen::ported::sound
     void FUN_00207010_play_voice_line(std::vector<std::int16_t> pcm, float sampleRate);
     // FUN_00206a48, which drops DAT_00356788 back to zero.
     void FUN_00206a48_stop_voice_line();
+    // Whether the mixer is still reading the voice line's buffer. PC-only, for
+    // the fly view's Voice Check panel; the simulation keeps time with
+    // DAT_00356788 and never asks this.
+    bool voiceLinePlaying() const;
 
     // == The music slots ==
     //

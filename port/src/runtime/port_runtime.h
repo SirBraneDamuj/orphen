@@ -388,6 +388,8 @@ namespace orphen::port
     void updateFlyCamera(float deltaSeconds, const InputSnapshot &input);
     bool flyCameraActive() const { return mapViewer_.flyCameraActive(); }
     float outputVolume() const { return mapViewer_.outputVolume(); }
+    // A harness text box has the keyboard, for the window to route keys to it.
+    bool harnessTextEntryActive() const { return mapViewer_.textEntryActive(); }
     bool harnessUiCovers(int pixelX, int pixelY) const { return mapViewer_.harnessUiCovers(pixelX, pixelY); }
     // --select-entity's click. False until the slot is in the tree.
     bool selectEntity(std::size_t slot);
@@ -821,6 +823,14 @@ namespace orphen::port
     // screen it shortcuts).
     orphen::harness::InventoryView inventoryView() const;
     void adjustItemCountFromHarness(int item, int delta);
+    // The fly view's Voice Check panel. The clip list reads VOICE.BIN, so it is
+    // kept per id rather than rebuilt every frame.
+    orphen::harness::VoiceCheckView voiceCheckView(int voiceId);
+    orphen::harness::VoiceCheckView voiceCheckCache_;
+    // What the panel last started, so it can mark the row.
+    int voiceCheckPlayingId_ = 0;
+    int voiceCheckPlayingClip_ = -1;
+    void playVoiceFromHarness(int voiceId, int clip);
     void cycleLoadoutFromHarness(int slot, int delta);
     // The loadout row the panels edit: the picked tab's, or the lead's while
     // harnessLoadoutRow_ is -1.

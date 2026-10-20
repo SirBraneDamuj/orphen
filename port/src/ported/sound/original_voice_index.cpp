@@ -182,6 +182,39 @@ namespace orphen::ported::sound
     return entries_[voiceId];
   }
 
+  // FUN_00206d98's test on the entry's first 0x40 bytes. Returns the clip count
+  // with `header` holding the directory, or 0 for an entry that is one clip.
+  std::uint32_t VoiceIndex::readBankDirectory(std::uint32_t voiceId,
+                                              std::vector<std::uint32_t> &header) const
+  {
+    if (audioPath_.empty() || sizeBytes(voiceId) < 0x40)
+    {
+      return 0;
+    }
+    if (!readWords(audioPath_, fileOffset(voiceId), 0x10, header))
+    {
+      return 0;
+    }
+
+    // Both halves. The second is what stops an ordinary line whose first word
+    // happens to be small from being read as a directory.
+    const std::uint32_t count = header[0];
+    // DAT_00314BD6 is the halfword at +6, which little-endian is the *high*
+    // half of word 1 -- clip 0's offset field, in 16-byte units.
+    const std::uint32_t offsetField = (header[1] >> 16) & 0xFFFFu;
+    if (count - 1u >= 0xFu || (offsetField << 4) != ((count * 4u + 0x13u) & 0xFFFFFFF0u))
+    {
+      return 0;
+    }
+    return count;
+  }
+
+  std::uint32_t VoiceIndex::bankClipCount(std::uint32_t voiceId) const
+  {
+    std::vector<std::uint32_t> header;
+    return readBankDirectory(voiceId, header);
+  }
+
   VoiceIndex::BankClip VoiceIndex::FUN_00206f08_bankClip(std::uint32_t voiceId,
                                                          std::uint32_t clipIndex) const
   {
@@ -191,37 +224,19 @@ namespace orphen::ported::sound
     {
       return clip;
     }
-    // The whole-entry answer, which is what FUN_00206d98 falls back to.
-    const auto wholeEntry = [&] {
-      BankClip whole;
+
+    std::vector<std::uint32_t> header;
+    const std::uint32_t count = readBankDirectory(voiceId, header);
+    if (count == 0)
+    {
+      // The whole-entry answer, which is what FUN_00206d98 falls back to.
       if (clipIndex == 0)
       {
-        whole.offsetBytes = 0;
-        whole.sizeBytes = size;
-        whole.valid = true;
+        clip.offsetBytes = 0;
+        clip.sizeBytes = size;
+        clip.valid = true;
       }
-      return whole;
-    };
-
-    if (audioPath_.empty() || size < 0x40)
-    {
-      return wholeEntry();
-    }
-    std::vector<std::uint32_t> header;
-    if (!readWords(audioPath_, fileOffset(voiceId), 0x10, header))
-    {
-      return wholeEntry();
-    }
-
-    // FUN_00206d98's test, both halves. The second is what stops an ordinary
-    // line whose first word happens to be small from being read as a directory.
-    const std::uint32_t count = header[0];
-    // DAT_00314BD6 is the halfword at +6, which little-endian is the *high*
-    // half of word 1 -- clip 0's offset field, in 16-byte units.
-    const std::uint32_t offsetField = (header[1] >> 16) & 0xFFFFu;
-    if (count - 1u >= 0xFu || (offsetField << 4) != ((count * 4u + 0x13u) & 0xFFFFFFF0u))
-    {
-      return wholeEntry();
+      return clip;
     }
     if (clipIndex >= count)
     {

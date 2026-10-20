@@ -28,6 +28,7 @@ namespace orphen::harness
     ToggleInventory,
     ToggleItems,
     ToggleSettings,
+    ToggleVoiceCheck,
     Heal,               // 0
     HitScratch,         // 1
     HitHit,             // 2
@@ -90,6 +91,7 @@ namespace orphen::harness
     Inventory,
     Items,
     Settings,
+    VoiceCheck,
   };
 
   // The Player Params panel: FUN_0026bc50's three rows, with a button for each
@@ -157,6 +159,44 @@ namespace orphen::harness
   // out as a HarnessRequest.
   int settingsVolumeDelta(int buttonId);
 
+  // The Voice Check panel: the debug menu's VOICE CHECK page (FUN_002696a0),
+  // which steps a VOICE.BIN id and plays it, one clip of a pack at a time.
+  // The id is the viewer's to step; the runtime fills in what the table says
+  // about it.
+  struct VoiceCheckClipView
+  {
+    int clip = 0;
+    float seconds = 0.0f;
+  };
+  struct VoiceCheckView
+  {
+    // False with no voice table at all.
+    bool available = false;
+    // False without VOICE.BIN's audio or without an audio device; the table
+    // can still be browsed. `reason` says which.
+    bool canPlay = false;
+    std::string reason;
+    // FUN_00221c40(0): ids run 1..entryCount.
+    int entryCount = 0;
+    int voiceId = 0;
+    // FUN_00206d98's directory test passed: a pack of clips, not one line.
+    bool pack = false;
+    std::vector<VoiceCheckClipView> clips;
+    bool playing = false;
+    // The clip of this id the panel last started, while it is still playing.
+    int playingClip = -1;
+  };
+  // `typed` is the number being typed into the id box, while it has focus.
+  ToolPanel buildVoiceCheckPanel(float scale, float left, float top, const VoiceCheckView &view,
+                                 const std::optional<std::string> &typed);
+  // The Voice Check panel's buttons. Stepping and typing are the viewer's;
+  // playing and stopping go out as requests.
+  inline constexpr int kVoiceCheckFieldButton = 10;
+  inline constexpr int kVoiceCheckStopButton = 11;
+  inline constexpr int kVoiceCheckPlayButtonBase = 100; // + clip
+  // A step button's change to the id, or 0 for any other button.
+  int voiceCheckStep(int buttonId);
+
   // What a menu asks the runtime to do to the simulation. Applied between
   // steps, outside PortRuntime::update, so a --frames run never sees one.
   struct HarnessRequest
@@ -169,6 +209,8 @@ namespace orphen::harness
       AdjustItemCount, // item, delta
       CycleLoadout,    // slot, delta (+1 next held spell, -1 previous)
       SelectCharacter, // loadoutRow: the Spells/Items panels' tab
+      PlayVoice,       // voiceId, clip: audio only, see applyHarnessRequests
+      StopVoice,
     };
     Kind kind = Kind::Heal;
     orphen::ported::debug::PlayerParam param = orphen::ported::debug::PlayerParam::HitPoints;
@@ -178,6 +220,8 @@ namespace orphen::harness
     int slot = 0;
     int delta = 0;
     int loadoutRow = 0;
+    int voiceId = 0;
+    int clip = 0;
   };
 
   // A panel button's id back into the request it stands for.

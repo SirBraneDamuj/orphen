@@ -36,6 +36,12 @@ namespace orphen::harness
     text(column, std::move(label), enabled ? Tone::Body : Tone::Dim);
   }
 
+  void ToolPanel::field(int column, std::string text, int id, bool focused)
+  {
+    button(column, std::move(text), id);
+    buttons_.back().focused = focused;
+  }
+
   void ToolPanel::heading(std::string text)
   {
     rowTop_ += 4.0f;
@@ -107,8 +113,16 @@ namespace orphen::harness
         const float fill = !button.enabled ? 0.02f : hovered ? 0.25f : 0.07f;
         fillRect(scale_, button.rect.left, button.rect.top, button.rect.width, button.rect.height, 1.0f, 1.0f, 1.0f,
                  fill);
-        strokeRect(scale_, button.rect.left, button.rect.top, button.rect.width, button.rect.height, 1.0f, 1.0f,
-                   1.0f, button.enabled ? 0.35f : 0.12f);
+        if (button.focused)
+        {
+          strokeRect(scale_, button.rect.left, button.rect.top, button.rect.width, button.rect.height, kHeadingRed,
+                     kHeadingGreen, kHeadingBlue, 1.0f);
+        }
+        else
+        {
+          strokeRect(scale_, button.rect.left, button.rect.top, button.rect.width, button.rect.height, 1.0f, 1.0f,
+                     1.0f, button.enabled ? 0.35f : 0.12f);
+        }
       }
     }
 

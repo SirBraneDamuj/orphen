@@ -1718,6 +1718,7 @@ int main(int argc, char **argv)
           entitySelected = runtime.selectEntity(*config.selectEntity);
         }
         window.setFlyCameraActive(runtime.flyCameraActive());
+        window.setTextEntryActive(runtime.harnessTextEntryActive());
 
         // The selected entity's inspector window, open exactly while there is
         // one to show.

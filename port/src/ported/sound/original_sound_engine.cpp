@@ -600,6 +600,12 @@ namespace orphen::ported::sound
     voiceLinePosition_ = 0.0;
   }
 
+  bool SoundEngine::voiceLinePlaying() const
+  {
+    const std::lock_guard<std::mutex> guard(mixLock_);
+    return voiceLineActive_;
+  }
+
   void SoundEngine::mix(float *interleavedStereo, std::size_t frames)
   {
     std::memset(interleavedStereo, 0, frames * 2 * sizeof(float));

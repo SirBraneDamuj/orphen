@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace orphen::port
 {
@@ -90,6 +91,13 @@ namespace orphen::port
     // The inspector window's own: its close button, and its wheel.
     bool entityInspectorCloseRequested = false;
     int entityInspectorScrollSteps = 0;
+    // A harness text box with the keyboard (SdlGlWindow::setTextEntryActive).
+    // While one has it the keys it takes reach nothing else: the digits are not
+    // the 0..5 damage keys, Return is not Cross and Escape does not quit.
+    std::string textEntryDigits;
+    int textEntryBackspaces = 0;
+    bool textEntryCommitRequested = false; // Return
+    bool textEntryCancelRequested = false; // Escape
 
     // Free-viewer camera yaw, used only when no player is active. It rides the
     // same J/L keys as the game's L1/R1 rather than having bindings of its own.

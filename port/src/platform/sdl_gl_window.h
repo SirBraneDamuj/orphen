@@ -35,6 +35,10 @@ namespace orphen::port
     // fields instead of the game's movement stick, and the right mouse button
     // captures the pointer for mouse look. Off releases any capture.
     void setFlyCameraActive(bool active);
+    // While on, the keyboard types into a harness text box: digits, Backspace,
+    // Return and Escape land in InputSnapshot's textEntry fields and nowhere
+    // else, and every other key binding is skipped.
+    void setTextEntryActive(bool active) { textEntryActive_ = active; }
     void beginFrame(float red, float green, float blue);
     void swapBuffers();
 
@@ -81,6 +85,11 @@ namespace orphen::port
     // masks the new word with it to build DAT_00355600.
     std::uint16_t previousRawStickDirection_ = 0;
     bool flyCameraActive_ = false;
+    bool textEntryActive_ = false;
+    // Return committed a text box. It is also Cross, read as a held key, so it
+    // stays masked until it is let go -- otherwise the commit would press
+    // Cross into the game on the very next frame.
+    bool returnHeldByTextEntry_ = false;
     bool mouseLookHeld_ = false;
     void *glContext_ = nullptr;
     int width_ = 0;

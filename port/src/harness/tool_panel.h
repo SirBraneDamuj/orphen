@@ -32,6 +32,9 @@ namespace orphen::harness
     // Text and buttons go on the current row, at a character column.
     void text(int column, std::string text, Tone tone = Tone::Body);
     void button(int column, std::string label, int id, bool enabled = true);
+    // A button that stands for a text box: outlined in the heading colour while
+    // it has the keyboard. The owner does the typing; this only draws it.
+    void field(int column, std::string text, int id, bool focused);
     // A heading on a row of its own, with a little space above it.
     void heading(std::string text);
     // Move down a row. Rows holding buttons want the default pitch, which
@@ -65,6 +68,7 @@ namespace orphen::harness
       panel::Rect rect;
       int id = 0;
       bool enabled = true;
+      bool focused = false;
     };
 
     std::string title_;

@@ -279,6 +279,36 @@ namespace orphen::port
         }
         break;
       case SDL_KEYDOWN:
+        if (textEntryActive_)
+        {
+          const SDL_Keycode key = event.key.keysym.sym;
+          if (key >= SDLK_0 && key <= SDLK_9)
+          {
+            input.textEntryDigits.push_back(static_cast<char>('0' + (key - SDLK_0)));
+          }
+          else if (key >= SDLK_KP_1 && key <= SDLK_KP_9)
+          {
+            input.textEntryDigits.push_back(static_cast<char>('1' + (key - SDLK_KP_1)));
+          }
+          else if (key == SDLK_KP_0)
+          {
+            input.textEntryDigits.push_back('0');
+          }
+          else if (key == SDLK_BACKSPACE)
+          {
+            ++input.textEntryBackspaces;
+          }
+          else if (key == SDLK_RETURN || key == SDLK_KP_ENTER)
+          {
+            input.textEntryCommitRequested = true;
+            returnHeldByTextEntry_ = true;
+          }
+          else if (key == SDLK_ESCAPE)
+          {
+            input.textEntryCancelRequested = true;
+          }
+          break;
+        }
         if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_r)
         {
           input.resetRequested = true;
@@ -407,7 +437,11 @@ namespace orphen::port
     // Return stands in for Cross, the confirm button, so the interaction probe
     // is reachable without a pad. On a pad it is the south face button (A on an
     // Xbox layout), which is what the PS2 game uses.
-    bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0;
+    if (keys[SDL_SCANCODE_RETURN] == 0 && keys[SDL_SCANCODE_KP_ENTER] == 0)
+    {
+      returnHeldByTextEntry_ = false;
+    }
+    bool crossHeld = keys[SDL_SCANCODE_RETURN] != 0 && !returnHeldByTextEntry_;
     bool squareHeld = keys[SDL_SCANCODE_SPACE] != 0;
     // Tab stands in for Start: free, next to WASD, and hard to hit by accident.
     // Return was the obvious key and is already Cross.

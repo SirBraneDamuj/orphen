@@ -6,6 +6,7 @@
 
 #include "ported/debug/original_player_param_menu.h"
 #include "ported/entity/original_climb_graph.h"
+#include "ported/sound/original_sound_bank.h"
 
 #include <algorithm>
 #include <array>
@@ -116,6 +117,10 @@ namespace orphen::port
       {
         mapViewer_.setInventory(inventoryView());
       }
+      if (mapViewer_.voiceCheckVisible())
+      {
+        mapViewer_.setVoiceCheck(voiceCheckView(mapViewer_.voiceCheckVoiceId()));
+      }
     }
     mapViewer_.updateFlyCamera(deltaSeconds, input);
     // Between steps, never inside one: a --frames run cannot click a menu.
@@ -128,6 +133,10 @@ namespace orphen::port
       if (mapViewer_.inventoryVisible())
       {
         mapViewer_.setInventory(inventoryView());
+      }
+      if (mapViewer_.voiceCheckVisible())
+      {
+        mapViewer_.setVoiceCheck(voiceCheckView(mapViewer_.voiceCheckVoiceId()));
       }
     }
     if (const auto slot = mapViewer_.inspectedEntitySlot(); slot.has_value())
@@ -190,9 +199,86 @@ namespace orphen::port
       case Request::Kind::SelectCharacter:
         harnessLoadoutRow_ = request.loadoutRow;
         break;
+      case Request::Kind::PlayVoice:
+        playVoiceFromHarness(request.voiceId, request.clip);
+        break;
+      case Request::Kind::StopVoice:
+        soundEngine_.FUN_00206a48_stop_voice_line();
+        voiceCheckPlayingClip_ = -1;
+        break;
       }
     }
     return !requests.empty();
+  }
+
+  orphen::harness::VoiceCheckView PortRuntime::voiceCheckView(int voiceId)
+  {
+    namespace sound = orphen::ported::sound;
+    auto &view = voiceCheckCache_;
+    const int entryCount = static_cast<int>(voiceIndex_.FUN_00221c40_entryCount());
+    if (view.voiceId != voiceId || view.entryCount != entryCount)
+    {
+      view = {};
+      view.available = voiceIndex_.valid();
+      view.entryCount = entryCount;
+      view.voiceId = voiceId;
+      const auto id = static_cast<std::uint32_t>(voiceId);
+      const std::uint32_t packClips = voiceIndex_.bankClipCount(id);
+      view.pack = packClips != 0;
+      for (std::uint32_t clip = 0; clip < std::max<std::uint32_t>(packClips, 1); ++clip)
+      {
+        const auto bank = voiceIndex_.FUN_00206f08_bankClip(id, clip);
+        if (!bank.valid)
+        {
+          continue;
+        }
+        const double samples = static_cast<double>(bank.sizeBytes / sound::kAdpcmBlockBytes) *
+                               static_cast<double>(sound::kAdpcmBlockSamples);
+        view.clips.push_back({static_cast<int>(clip), static_cast<float>(samples / sound::kVoiceSampleRate)});
+      }
+      if (!voiceIndex_.hasAudio())
+      {
+        view.reason = "NO VOICE.BIN: LENGTHS ONLY";
+      }
+      else if (!voiceAudioEnabled_)
+      {
+        view.reason = "AUDIO IS OFF (--NO-AUDIO)";
+      }
+      view.canPlay = view.reason.empty();
+    }
+    // The mixer's word for it, not DAT_00356788: the panel plays around the
+    // simulation, so the hold that paces a cutscene never starts.
+    view.playing = soundEngine_.voiceLinePlaying();
+    if (!view.playing)
+    {
+      voiceCheckPlayingClip_ = -1;
+    }
+    view.playingClip = view.playing && voiceCheckPlayingId_ == voiceId ? voiceCheckPlayingClip_ : -1;
+    return view;
+  }
+
+  // FUN_002696a0's Circle, less the simulation. The original goes through
+  // channel 2 of DAT_00356480 and leaves DAT_00356788 counting down, which in
+  // the port would let a harness click hold a cutscene's 0x1A or a spell's
+  // voice wait. This decodes the same clip FUN_00206f08 would and hands it to
+  // the voice line directly, so a --frames run is the same with or without it.
+  void PortRuntime::playVoiceFromHarness(int voiceId, int clip)
+  {
+    if (!voiceAudioEnabled_ || !voiceIndex_.hasAudio() || voiceId <= 0 || clip < 0)
+    {
+      return;
+    }
+    const std::vector<std::uint8_t> adpcm =
+        voiceIndex_.readBankClipAdpcm(static_cast<std::uint32_t>(voiceId), static_cast<std::uint32_t>(clip));
+    if (adpcm.empty())
+    {
+      return;
+    }
+    soundEngine_.FUN_00207010_play_voice_line(orphen::ported::sound::decodePsAdpcm(adpcm).samples,
+                                              static_cast<float>(orphen::ported::sound::kVoiceSampleRate));
+    voiceCheckPlayingId_ = voiceId;
+    voiceCheckPlayingClip_ = clip;
+    std::cout << "[voice check] voice " << voiceId << " sub " << clip << '\n';
   }
 
   bool PortRuntime::selectEntity(std::size_t slot)

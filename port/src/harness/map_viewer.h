@@ -232,6 +232,13 @@ namespace orphen::harness
     // Either panel that inventoryView() feeds is open.
     bool inventoryVisible() const { return flyCameraActive_ && (inventoryVisible_ || itemsVisible_); }
     std::vector<HarnessRequest> takeHarnessRequests();
+    // The Voice Check panel. The viewer owns the id being stepped or typed; the
+    // runtime describes it before updateFlyCamera.
+    bool voiceCheckVisible() const { return flyCameraActive_ && voiceCheckVisible_; }
+    int voiceCheckVoiceId() const { return voiceCheckVoiceId_; }
+    void setVoiceCheck(VoiceCheckView view) { voiceCheck_ = std::move(view); }
+    // The id box has the keyboard; main() tells the window.
+    bool textEntryActive() const { return voiceCheckVisible() && voiceCheckTyped_.has_value(); }
     // The Settings panel's volume as a gain, for main() to hand the audio
     // device each frame.
     float outputVolume() const { return static_cast<float>(settings_.volumePercent) / 100.0f; }
@@ -438,6 +445,18 @@ namespace orphen::harness
     InventoryView inventory_;
     bool settingsVisible_ = false;
     SettingsView settings_;
+    bool voiceCheckVisible_ = false;
+    VoiceCheckView voiceCheck_;
+    // FUN_002696a0 starts DAT_003550CC at 1.
+    int voiceCheckVoiceId_ = 1;
+    std::optional<std::string> voiceCheckTyped_;
+    // FUN_002696a0's step: past either end jumps to the other.
+    void stepVoiceCheckId(int delta);
+    void playVoiceCheck(int clip);
+    // The typed number becomes the id, clamped to the table. False when nothing
+    // was typed.
+    bool commitVoiceCheckTyped();
+    void updateTextEntry(const orphen::port::InputSnapshot &input);
     // The open panels, built for this framebuffer from the current numbers,
     // in draw order.
     struct OpenToolPanel

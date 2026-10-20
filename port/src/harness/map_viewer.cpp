@@ -3899,6 +3899,7 @@ namespace orphen::harness
     // pointer first. Whatever they take -- the click, the hover -- the tree
     // and the world pick underneath do not also get.
     orphen::port::InputSnapshot underMenus = input;
+    updateTextEntry(input);
     updateMenuBar(underMenus);
     updateEntityTree(underMenus);
     updateWorldPick(underMenus);
@@ -3932,6 +3933,7 @@ namespace orphen::harness
               item("HEAL", "0", MenuCommand::Heal), item("HIT: SCRATCH", "1", MenuCommand::HitScratch),
               item("HIT: HIT", "2", MenuCommand::HitHit), item("HIT: KNOCKBACK", "3", MenuCommand::HitKnockback),
               item("HIT: FLATTEN", "4", MenuCommand::HitFlatten), item("HIT: LETHAL", "5", MenuCommand::HitLethal)}},
+        Menu{"SOUND", {check("VOICE CHECK", "", MenuCommand::ToggleVoiceCheck, voiceCheckVisible_)}},
         Menu{"SETTINGS", {check("SETTINGS", "", MenuCommand::ToggleSettings, settingsVisible_)}},
     };
   }
@@ -3971,6 +3973,10 @@ namespace orphen::harness
       break;
     case MenuCommand::ToggleSettings:
       settingsVisible_ = !settingsVisible_;
+      break;
+    case MenuCommand::ToggleVoiceCheck:
+      voiceCheckVisible_ = !voiceCheckVisible_;
+      voiceCheckTyped_.reset();
       break;
     case MenuCommand::Heal:
     {
@@ -4017,6 +4023,15 @@ namespace orphen::harness
       const int x = input.harnessUiClickX;
       const int y = input.harnessUiClickY;
       bool consumed = true;
+      // A click anywhere takes the keyboard off the id box, keeping what was
+      // typed -- except on the box itself, which leaves it typing.
+      const bool onVoiceField = std::any_of(panels.begin(), panels.end(), [&](const OpenToolPanel &open) {
+        return open.kind == ToolPanelKind::VoiceCheck && open.panel.buttonAt(x, y) == kVoiceCheckFieldButton;
+      });
+      if (!onVoiceField)
+      {
+        commitVoiceCheckTyped();
+      }
       // Panels are hit-tested top-most first, which is the reverse of the
       // order they are drawn in.
       const auto panel = std::find_if(panels.rbegin(), panels.rend(),
@@ -4040,12 +4055,41 @@ namespace orphen::harness
         if (panel->panel.closeAt(x, y))
         {
           toolPanelVisible(panel->kind) = false;
+          if (panel->kind == ToolPanelKind::VoiceCheck)
+          {
+            voiceCheckTyped_.reset();
+          }
         }
         else if (const auto button = panel->panel.buttonAt(x, y); button.has_value())
         {
           if (panel->kind == ToolPanelKind::Settings)
           {
             settings_.volumePercent = std::clamp(settings_.volumePercent + settingsVolumeDelta(*button), 0, 100);
+          }
+          else if (panel->kind == ToolPanelKind::VoiceCheck)
+          {
+            if (*button == kVoiceCheckFieldButton)
+            {
+              // Starts empty, so typing replaces the id rather than appending.
+              if (!voiceCheckTyped_.has_value())
+              {
+                voiceCheckTyped_ = std::string();
+              }
+            }
+            else if (*button == kVoiceCheckStopButton)
+            {
+              HarnessRequest request;
+              request.kind = HarnessRequest::Kind::StopVoice;
+              harnessRequests_.push_back(request);
+            }
+            else if (*button >= kVoiceCheckPlayButtonBase)
+            {
+              playVoiceCheck(*button - kVoiceCheckPlayButtonBase);
+            }
+            else
+            {
+              stepVoiceCheckId(voiceCheckStep(*button));
+            }
           }
           else if (const auto request = toolPanelRequest(panel->kind, *button); request.has_value())
           {
@@ -4079,6 +4123,8 @@ namespace orphen::harness
       return inventoryVisible_;
     case ToolPanelKind::Settings:
       return settingsVisible_;
+    case ToolPanelKind::VoiceCheck:
+      return voiceCheckVisible_;
     case ToolPanelKind::Items:
       break;
     }
@@ -4095,10 +4141,86 @@ namespace orphen::harness
       return inventoryVisible_;
     case ToolPanelKind::Settings:
       return settingsVisible_;
+    case ToolPanelKind::VoiceCheck:
+      return voiceCheckVisible_;
     case ToolPanelKind::Items:
       break;
     }
     return itemsVisible_;
+  }
+
+  void MapViewer::stepVoiceCheckId(int delta)
+  {
+    const int count = voiceCheck_.entryCount;
+    if (count <= 0)
+    {
+      return;
+    }
+    voiceCheckTyped_.reset();
+    voiceCheckVoiceId_ += delta;
+    if (voiceCheckVoiceId_ < 1)
+    {
+      voiceCheckVoiceId_ = count;
+    }
+    else if (voiceCheckVoiceId_ > count)
+    {
+      voiceCheckVoiceId_ = 1;
+    }
+  }
+
+  void MapViewer::playVoiceCheck(int clip)
+  {
+    HarnessRequest request;
+    request.kind = HarnessRequest::Kind::PlayVoice;
+    request.voiceId = voiceCheckVoiceId_;
+    request.clip = clip;
+    harnessRequests_.push_back(request);
+  }
+
+  bool MapViewer::commitVoiceCheckTyped()
+  {
+    if (!voiceCheckTyped_.has_value())
+    {
+      return false;
+    }
+    const std::string typed = *voiceCheckTyped_;
+    voiceCheckTyped_.reset();
+    if (typed.empty())
+    {
+      return false;
+    }
+    voiceCheckVoiceId_ = std::clamp(std::stoi(typed), 1, std::max(1, voiceCheck_.entryCount));
+    return true;
+  }
+
+  void MapViewer::updateTextEntry(const orphen::port::InputSnapshot &input)
+  {
+    if (!textEntryActive())
+    {
+      return;
+    }
+    std::string &typed = *voiceCheckTyped_;
+    for (int erase = 0; erase < input.textEntryBackspaces && !typed.empty(); ++erase)
+    {
+      typed.pop_back();
+    }
+    for (const char digit : input.textEntryDigits)
+    {
+      // Five digits covers the table, whose entries are 13 KB of words.
+      if (typed.size() < 5 && !(typed.empty() && digit == '0'))
+      {
+        typed.push_back(digit);
+      }
+    }
+    if (input.textEntryCancelRequested)
+    {
+      voiceCheckTyped_.reset();
+    }
+    else if (input.textEntryCommitRequested && commitVoiceCheckTyped())
+    {
+      // Return plays what was typed: type an id, hear it.
+      playVoiceCheck(0);
+    }
   }
 
   std::vector<MapViewer::OpenToolPanel> MapViewer::toolPanels(int framebufferWidth, int framebufferHeight) const
@@ -4130,13 +4252,16 @@ namespace orphen::harness
         return buildInventoryPanel(scale, left, at, inventory_);
       case ToolPanelKind::Settings:
         return buildSettingsPanel(scale, left, at, settings_);
+      case ToolPanelKind::VoiceCheck:
+        return buildVoiceCheckPanel(scale, left, at, voiceCheck_, voiceCheckTyped_);
       case ToolPanelKind::Items:
         break;
       }
       return buildItemsPanel(scale, left, at, inventory_);
     };
     for (const ToolPanelKind kind :
-         {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items, ToolPanelKind::Settings})
+         {ToolPanelKind::PlayerParams, ToolPanelKind::Inventory, ToolPanelKind::Items, ToolPanelKind::VoiceCheck,
+          ToolPanelKind::Settings})
     {
       if (!toolPanelVisible(kind))
       {
