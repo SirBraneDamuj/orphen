@@ -106,6 +106,8 @@ target_sources(orphen_port
         src/ported/movie/mv3_stream.h
         src/ported/movie/original_movie_session.h
         src/runtime/movie_host.h
+    src/harness/battle_scenario.cpp
+    src/harness/battle_scenario.h
     src/harness/debug_text.cpp
     src/harness/debug_text.h
     src/harness/entity_probe.cpp

@@ -1,5 +1,6 @@
 #include "platform/sdl_gl_window.h"
 #include "harness/map_viewer.h"
+#include "harness/battle_scenario.h"
 #include "harness/audio_device.h"
 #include "harness/movie_player.h"
 #include "runtime/port_runtime.h"
@@ -89,6 +90,10 @@ namespace
                  "                  Down jump half the table across.\n"
                  "  --hold-start    <first>-<last>   hold Start the same way; in the\n"
                  "                  field a press pauses and the next one resumes.\n"
+                 "  --scenario <file>  a timed battle test: held buttons, starting\n"
+                 "                  hit points and expectations checked as the run\n"
+                 "                  goes. Prints PASS/FAIL per expectation and exits 1\n"
+                 "                  on a failure. Syntax: src/harness/battle_scenario.h.\n"
                  "  --spell-power-scale <f>\n"
                  "                  multiply the player's spell power by <f> on the\n"
                  "                  way into the party record. A debug cheat for\n"
@@ -966,6 +971,22 @@ namespace
         }
       }
 
+      if (argument == "--scenario")
+      {
+        if (argumentIndex + 1 >= argc)
+        {
+          throw std::runtime_error(std::string(argument) + " requires a file");
+        }
+        config.scenario = orphen::harness::loadBattleScenario(argv[++argumentIndex]);
+        // Its holds are ordinary --hold-* ranges, so both frame loops press
+        // them exactly as they would the flag.
+        for (const auto &hold : config.scenario->holds)
+        {
+          config.holdFaceButtons[hold.button].emplace_back(hold.first, hold.last);
+        }
+        continue;
+      }
+
       if (argument == "--press-jump")
       {
         if (argumentIndex + 1 >= argc)
@@ -1336,7 +1357,7 @@ int main(int argc, char **argv)
                   << soundDump.size() / 2 << " frames)\n";
       }
       runtime.printExitReports();
-      return 0;
+      return runtime.finishScenario() ? 0 : 1;
     }
 
     // 4:3, the shape the game was displayed at. The 3D viewport letterboxes to
@@ -1815,7 +1836,7 @@ int main(int argc, char **argv)
     // dropped -- which matters most for the reports that can only be filled
     // from render(), since headless never calls it.
     runtime.printExitReports();
-    return 0;
+    return runtime.finishScenario() ? 0 : 1;
   }
   catch (const std::exception &error)
   {

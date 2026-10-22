@@ -407,6 +407,7 @@ namespace orphen::port
     printModelReport_ = config.printModelReport;
     hideSlots_ = config.hideSlots;
     snapshotFrame_ = config.snapshotFrame;
+    scenario_ = config.scenario;
     setWorkPending_ = config.hasSetWork;
     setWorkIndex_ = config.setWorkIndex;
     setWorkValue_ = config.setWorkValue;
@@ -3245,6 +3246,7 @@ namespace orphen::port
                                                           maxHitPoints, damage,
                                                           DAT_003555d3_groupEScene_);
     };
+    environment.FUN_00243d18_teardown = [this] { battleParty_.FUN_00243d18_teardown(battleEnvironment()); };
     // Class 5's spell states hang their effect off the caster's role-4 bone.
     environment.FUN_0020dd78_bone_for_role = [this](std::size_t slot, std::uint8_t role) -> std::size_t
     {
@@ -3395,6 +3397,214 @@ namespace orphen::port
               << '/' << static_cast<int>(lead.maxHitPoints128) << std::endl;
   }
 
+  // --scenario. Harness input, not ported code: see harness/battle_scenario.h.
+  // A set may only write a starting condition (hp, maxhp); everything after it
+  // is the ported code's to decide.
+  std::vector<int> PortRuntime::scenarioValues(const orphen::harness::ScenarioTarget &target,
+                                               orphen::harness::ScenarioField field) const
+  {
+    using orphen::harness::ScenarioField;
+    using orphen::harness::ScenarioTarget;
+    using orphen::ported::entity::SlotStatus;
+    std::vector<int> values;
+    const auto read = [&](std::size_t slot) {
+      const auto &entity = entityPool_.slot(slot);
+      switch (field)
+      {
+      case ScenarioField::Hp:
+        values.push_back(static_cast<std::int16_t>(entity.staggerTimer12a));
+        return;
+      case ScenarioField::MaxHp:
+        values.push_back(static_cast<std::int16_t>(entity.maxHitPoints128));
+        return;
+      case ScenarioField::State:
+        values.push_back(entity.state60 & 0xBFFF);
+        return;
+      case ScenarioField::Anim:
+        values.push_back(static_cast<std::int16_t>(entity.animationA0));
+        return;
+      case ScenarioField::Action:
+      {
+        // Only an entity a party control block names has an action byte.
+        using namespace orphen::ported::battle;
+        for (std::uint32_t member = 0; member < kControlBlockCount; ++member)
+        {
+          const std::uint32_t control = BattleTables::controlBlock(member);
+          if (battleParty_.entitySlotAt(control + control::kEntity08) == static_cast<std::int32_t>(slot))
+          {
+            values.push_back(battleParty_.tables().read<std::uint8_t>(control + control::kCurrentAction0f));
+            return;
+          }
+        }
+        return;
+      }
+      }
+    };
+    switch (target.kind)
+    {
+    case ScenarioTarget::Kind::Lead:
+      read(0);
+      break;
+    case ScenarioTarget::Kind::Slot:
+      if (target.value >= 0 && static_cast<std::size_t>(target.value) < entityPool_.slotCount() &&
+          entityPool_.status(static_cast<std::size_t>(target.value)) != SlotStatus::Free)
+      {
+        read(static_cast<std::size_t>(target.value));
+      }
+      break;
+    case ScenarioTarget::Kind::AnyOfType:
+      for (std::size_t slot = 0; slot < entityPool_.slotCount(); ++slot)
+      {
+        if (entityPool_.status(slot) != SlotStatus::Free && entityPool_.slot(slot).typeId00 == target.value)
+        {
+          read(slot);
+        }
+      }
+      break;
+    }
+    return values;
+  }
+
+  void PortRuntime::applyScenarioSets()
+  {
+    if (!scenario_.has_value())
+    {
+      return;
+    }
+    using orphen::harness::ScenarioField;
+    for (const auto &set : scenario_->sets)
+    {
+      if (set.frame != frameCount_)
+      {
+        continue;
+      }
+      const std::size_t slot = set.target.kind == orphen::harness::ScenarioTarget::Kind::Lead
+                                   ? 0
+                                   : static_cast<std::size_t>(set.target.value);
+      if (slot >= entityPool_.slotCount())
+      {
+        std::cout << "[scenario] line " << set.line << ": slot " << slot << " is out of range\n";
+        continue;
+      }
+      auto &entity = entityPool_.slot(slot);
+      if (set.field == ScenarioField::Hp)
+      {
+        entity.staggerTimer12a = static_cast<std::uint16_t>(set.value);
+      }
+      else if (set.field == ScenarioField::MaxHp)
+      {
+        entity.maxHitPoints128 = static_cast<std::uint16_t>(set.value);
+      }
+      std::cout << "[scenario] f=" << frameCount_ << " set slot " << slot << ' '
+                << orphen::harness::scenarioFieldName(set.field) << " = " << set.value << '\n';
+    }
+  }
+
+  void PortRuntime::checkScenarioExpectations()
+  {
+    if (!scenario_.has_value() || frameCount_ == 0 || scenarioCheckedFrame_ == frameCount_)
+    {
+      return;
+    }
+    scenarioCheckedFrame_ = frameCount_;
+    const std::uint32_t frame = frameCount_;
+    for (auto &expect : scenario_->expects)
+    {
+      if (frame < expect.first || frame > expect.last || expect.held || expect.broken)
+      {
+        continue;
+      }
+      ++expect.framesChecked;
+      const std::vector<int> values = scenarioValues(expect.target, expect.field);
+      // `expect` wants one matching entity on one frame; `expect-all` wants
+      // every matching entity on every frame. For type:N, none present is a
+      // pass for expect-all ("no 0x1C7 ever reads 3"); for lead or slot:N,
+      // nothing to read is a failure either way.
+      bool match = false;
+      if (expect.everyFrame)
+      {
+        match = !values.empty() || expect.target.kind == orphen::harness::ScenarioTarget::Kind::AnyOfType;
+        for (const int value : values)
+        {
+          if (!orphen::harness::scenarioCompare(value, expect.op, expect.value))
+          {
+            match = false;
+            expect.seenValue = value;
+            break;
+          }
+        }
+      }
+      else
+      {
+        for (const int value : values)
+        {
+          if (orphen::harness::scenarioCompare(value, expect.op, expect.value))
+          {
+            match = true;
+            expect.seenValue = value;
+            break;
+          }
+        }
+        if (!match && !values.empty())
+        {
+          expect.seenValue = values.front();
+        }
+      }
+      expect.sawValue = !values.empty();
+      if (expect.everyFrame && !match)
+      {
+        expect.broken = true;
+        expect.decidingFrame = frame;
+      }
+      else if (!expect.everyFrame && match)
+      {
+        expect.held = true;
+        expect.decidingFrame = frame;
+      }
+    }
+  }
+
+  bool PortRuntime::finishScenario()
+  {
+    if (!scenario_.has_value())
+    {
+      return true;
+    }
+    checkScenarioExpectations();
+    std::size_t passed = 0;
+    for (const auto &expect : scenario_->expects)
+    {
+      // An expect-all passes only if the run covered its whole range.
+      const bool covered = expect.framesChecked == expect.last - expect.first + 1;
+      const bool pass = expect.everyFrame ? !expect.broken && covered : expect.held;
+      passed += pass ? 1 : 0;
+      const std::string seen = expect.sawValue ? "value " + std::to_string(expect.seenValue)
+                                               : std::string("nothing to read");
+      std::cout << "[scenario] " << (pass ? "PASS" : "FAIL") << " line " << expect.line << ": "
+                << expect.text;
+      if (pass && !expect.everyFrame)
+      {
+        std::cout << "  (frame " << expect.decidingFrame << ", " << seen << ')';
+      }
+      else if (!pass && expect.broken)
+      {
+        std::cout << "  (frame " << expect.decidingFrame << ", " << seen << ')';
+      }
+      else if (!pass && expect.everyFrame)
+      {
+        std::cout << "  (run ended after " << expect.framesChecked << " of its frames)";
+      }
+      else if (!pass)
+      {
+        std::cout << "  (" << expect.framesChecked << " frames checked, last " << seen << ')';
+      }
+      std::cout << '\n';
+    }
+    std::cout << "[scenario] " << scenario_->path << ": " << passed << '/' << scenario_->expects.size()
+              << " passed\n";
+    return passed == scenario_->expects.size();
+  }
+
   void PortRuntime::sampleBattleTrace(std::uint32_t heldPad)
   {
     using namespace orphen::ported::battle;
@@ -3482,6 +3692,7 @@ namespace orphen::port
     // frame the enemy the D-pad picked.
     environment.camera = &fieldCamera_;
     environment.DAT_003551f8_sceneEntry = DAT_003551f8_groupEntry_;
+    environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
     // FUN_002334E8's four tables, and the glyph widths FUN_00238E68 measures
     // the two captions with.
     environment.stats = &characterStats_;
@@ -9372,6 +9583,8 @@ namespace orphen::port
 
   bool PortRuntime::update(const InputSnapshot &input, std::uint32_t frameTicks)
   {
+    // --scenario: last frame has fully run, so its expectations read now.
+    checkScenarioExpectations();
     ++frameCount_;
     // DAT_003555b4 and DAT_003555b8. Three EE dumps read b8 == b4 * 32 exactly,
     // so b8 accumulates DAT_003555bc rather than counting frames -- a dropped
@@ -9430,6 +9643,7 @@ namespace orphen::port
     }
 
     applyDebugDamageKeys(input);
+    applyScenarioSets();
 
     if (mapViewer_.loadedMapGeneration() != trackedMapGeneration_)
     {

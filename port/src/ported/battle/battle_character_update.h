@@ -103,6 +103,11 @@ namespace orphen::ported::battle
     std::function<void(bool upperBank, std::int32_t hitPoints, std::int32_t maxHitPoints,
                        std::int32_t damage)>
         FUN_002d5630_damage_bar;
+    // FUN_00243d18(0, 0), the battle teardown, through BattleParty with the
+    // runtime's setup environment. FUN_00249610 calls it the frame the lead
+    // takes a lethal hit, which ends the battle there and then and hands the
+    // lead back to its field controller to die.
+    std::function<void()> FUN_00243d18_teardown;
 
     // == The spell voice ==
     //

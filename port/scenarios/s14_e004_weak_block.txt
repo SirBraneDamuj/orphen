@@ -1,0 +1,19 @@
+# A weak block at full health: the leak is shown, never taken.
+#
+# orphen_port --disc-root disc --elf disc/SLUS_200.11 --scene s14_e004 \
+#   --no-audio --frames 1950 --scenario port/scenarios/s14_e004_weak_block.txt
+#
+# With no input, the first enemy swing lands on Orphen on frame 1751. Square
+# goes down 21 frames before it, inside the shield's first keyframes, where
+# its +0xAA bit 0x100 is up (FUN_0024CBA0 :88). Half the blow is the leak; it
+# is below 50, so 0x0024CE7C arms the HP bar with it and returns without
+# touching +0x12A.
+
+hold square 1730-1900
+
+# The block spark is a fresh 0x1C7; animation 4 is the leaking one, 3 clean.
+expect     1745-1760 type:0x1c7 anim == 4
+expect-all 1745-1760 type:0x1c7 anim != 3
+# The guard holds: action 0x90 through the hit, never the 0x83 stagger.
+expect-all 1735-1890 lead action == 0x90
+expect-all 1700-1900 lead hp == 50

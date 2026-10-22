@@ -11813,3 +11813,50 @@ ten times record `+0x25`. A hit is state 9 on animation 0x0F for record
 (`FUN_002F1420` / `FUN_002F1558`) on the way in. Action 9 is the same roll for
 codes 1 and 2 only. `FUN_002493B8` negates a target below -3; the port's copy
 did not.
+
+### A weak block, the lead's death in battle, and `--scenario`
+
+**The guard's first ~50 frames are a weak block.** The `+0xAA` that
+`FUN_0024CBA0` tests is the *shield's* (type 0x1C7, `DAT_0031DABC[member]`),
+and `+0xAA` is the trailing word of the current animation keyframe
+(`FUN_00225C90`). The shield's hold animation 0 carries bit 0x100 on keyframes
+1-4, so a hit inside roughly 50 frames of pressing Square leaks half its
+damage. The spark plays animation 4, and the rumble is 9 instead of 8. A leak
+below `+0x12A` only arms the HP bar (`0x0024CE7C`). A lethal one goes into
+`+0xBE`, with action 0x83 and state 0x66, and lands as a real hit. In s14_e004,
+holding Square from 1730 or 1700 is a weak block of the 1751 swing; from 1600
+it is a clean one.
+
+**The lead's lethal hit ends the battle.** `FUN_00249610:84-101`: when
+`+0x12A - +0xBE` drops below 1, any member counts `FUN_0023F620(0xB, 1)`. For
+the lead with a non-negative `+0xBE`:
+- `+0x04` bit 3 is cleared and `+0x44` gets `DAT_00352740` (0.00145) if it was
+  0.
+- `FUN_002445C8(lead, 0, 1)` frees its walk.
+- `FUN_00243D18` tears the battle down then and there.
+
+The field controller then spends the hit and plays the death (0x18, then
+0x1B). The port did only the first step and returned every frame, so **any**
+lethal hit froze the lead in its battle state with the damage never taken. With
+no input, s14_e001, s14_e003 and s14_e012 all reach one inside 6000 frames
+(4587, 4543 and 5511). They now end in the game over where they used to sit
+frozen. Their 3000-frame regressions are unchanged.
+
+`FUN_00243D18` came up to the disassembly at the same time:
+- It no longer writes `+0x04`. The record keeps it at `+0x08`, but the restore
+  never reads it.
+- It zeroes `+0x96`, `+0x134` and the 42-byte bone mode table at `+0x168`.
+- When the lead is dying, it skips the other members whose own hit is lethal.
+- It zeroes the summon smear (`DAT_0034387C/E`, `DAT_00355661`) and
+  `DAT_00354E96`.
+- It releases the camera (`FUN_00217E18(0)`).
+
+`uGpffffaf58` (0x00354EC8) and the voice stop are still unported. s14_e031's
+ordinary teardown is unchanged over 6000 frames.
+
+**`--scenario <file>`** is a timed battle test: held buttons, a starting HP and
+expectations checked as the run goes. It prints PASS/FAIL per line and exits 1
+on a failure. Syntax and rules are in `src/harness/battle_scenario.h`; the
+short version is that it may set the pad and a starting condition, never an
+outcome. `port/scenarios/` has the two weak-block cases above, at 50 HP and at
+1 HP.

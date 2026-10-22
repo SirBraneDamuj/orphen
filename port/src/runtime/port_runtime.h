@@ -4,6 +4,7 @@
 #include "runtime/input_state.h"
 #include "runtime/movie_host.h"
 #include "harness/map_viewer.h"
+#include "harness/battle_scenario.h"
 #include "runtime/original_lead_player.h"
 #include "ported/camera/original_field_camera.h"
 #include "ported/original_random.h"
@@ -325,6 +326,10 @@ namespace orphen::port
     // reads the pad's newly-pressed word, so a "hold" is one step at the start
     // of the range, which is exactly one cycle.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> holdFaceButtons[9];
+    // --scenario <file>: set-ups and expectations on a frame schedule. Its
+    // holds are merged into holdFaceButtons at parse time; see
+    // harness/battle_scenario.h for the rules on what it may touch.
+    std::optional<orphen::harness::BattleScenario> scenario;
     // --hold-stick <angle>,<magnitude>: drive the analog stick for every
     // headless or capture frame, so movement-driven behaviour -- footsteps
     // above all -- is reachable without a pad. Magnitude is the original's
@@ -408,6 +413,9 @@ namespace orphen::port
     // Reports that are only meaningful after frames have run. Called once at
     // shutdown; a no-op unless the matching flag was passed.
     void printExitReports() const;
+    // --scenario: settle the last frame, print one line per expectation and
+    // a total. False when any expectation failed; true with no scenario.
+    bool finishScenario();
 
     // --frame-stats. main() owns the loop, so it owns the simulation and
     // buffer-swap timings; the render breakdown is collected in here and read
@@ -1251,6 +1259,14 @@ namespace orphen::port
     void sampleBattleTrace(std::uint32_t heldPad);
     // The harness's 1..5 / 0 damage keys.
     void applyDebugDamageKeys(const InputSnapshot &input);
+    // --scenario. The sets run at the start of a frame; the expectations are
+    // read for the frame just finished, at the top of the next update.
+    void applyScenarioSets();
+    void checkScenarioExpectations();
+    std::vector<int> scenarioValues(const orphen::harness::ScenarioTarget &target,
+                                    orphen::harness::ScenarioField field) const;
+    std::optional<orphen::harness::BattleScenario> scenario_;
+    std::uint32_t scenarioCheckedFrame_ = 0;
     orphen::ported::battle::BattleTrace battleTrace_;
     void printBattleReport() const;
     void printTargetDisplayReport() const;

@@ -31,6 +31,7 @@
 #include "ported/battle/battle_target_markers.h"
 #include "ported/entity/entity_descriptor_table.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/render/original_frame_feedback.h"
 #include "ported/resource/elf_data_reader.h"
 #include "ported/resource/character_stats.h"
 #include "ported/resource/item_database.h"
@@ -123,6 +124,9 @@ namespace orphen::ported::battle
       // The camera FUN_0023C340 drives -- both the ambient spline shots and the
       // target framing. Null in a harness with no camera, which skips both.
       orphen::ported::camera::OriginalFieldCamera *camera = nullptr;
+      // DAT_00343878.. and DAT_00355661, the screen smear. FUN_00243d18 zeroes
+      // the scales and the target alpha a level-5 summon left set.
+      orphen::ported::render::FrameFeedback *DAT_00343878_frameFeedback = nullptr;
       // DAT_003551F8, the section-14 entry being played. FUN_0023E790 aims
       // its close-up from a fixed point in entries 0x11 and 0x29.
       std::int32_t DAT_003551f8_sceneEntry = -1;

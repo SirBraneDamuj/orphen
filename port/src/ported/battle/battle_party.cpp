@@ -358,10 +358,34 @@ namespace orphen::ported::battle
 
   std::uint32_t BattleParty::FUN_00243d18_teardown(const Environment &environment)
   {
-    // FUN_00243d18. The half that matters outside battle is the entity
-    // restore: every member's type id, flags, state and party slot go back to
-    // what FUN_002458a8 recorded, and the five effect entities are released.
+    // FUN_00243d18. Every member's type id, flags, state and party slot go back
+    // to what FUN_002458a8 recorded, and the five effect entities are released.
     sGpffffb052_ = static_cast<std::uint16_t>(sGpffffb052_ & 0xFFFC);
+    // 0x00243D44-0x00243D64. The summon smear's scales and target alpha, and
+    // the target readout's timer. uGpffffaf58 (0x00354EC8), a pointer whose
+    // +0x10 is zeroed and the pointer dropped, has no port counterpart yet.
+    if (environment.DAT_00343878_frameFeedback != nullptr)
+    {
+      environment.DAT_00343878_frameFeedback->set_DAT_0034387c_scale(0, 0);
+      environment.DAT_00343878_frameFeedback->FUN_00264448_set_alpha(0);
+    }
+    DAT_00354e96_ = 0;
+    // 0x00243D6C: FUN_00217e18(0), the battle camera handed back.
+    if (environment.camera != nullptr)
+    {
+      environment.camera->FUN_00217e18_release_manual_camera(false);
+    }
+
+    // 0x00243D88-0x00243D94. **When the lead is dying, so are the others left
+    // where they lie**: with the lead's +0x12A - +0xBE below 1, any other
+    // member whose own pending damage is lethal is skipped, so it keeps its
+    // battle type and state. The lead itself is always restored. That is
+    // FUN_00249610's lethal-hit branch calling in mid-frame.
+    const bool leadSurvives =
+        environment.pool == nullptr ||
+        static_cast<std::int32_t>(static_cast<std::int16_t>(environment.pool->leadPlayer().staggerTimer12a)) -
+                static_cast<std::int32_t>(static_cast<std::int16_t>(environment.pool->leadPlayer().pendingDamageBe)) >
+            0;
 
     for (std::int32_t member = 0; member < static_cast<std::int32_t>(kPartyRecordCount); ++member)
     {
@@ -372,14 +396,29 @@ namespace orphen::ported::battle
         continue;
       }
       auto &entity = environment.pool->slot(static_cast<std::size_t>(slot));
+      if (!leadSurvives && member != 0 &&
+          static_cast<std::int32_t>(static_cast<std::int16_t>(entity.staggerTimer12a)) -
+                  static_cast<std::int32_t>(static_cast<std::int16_t>(entity.pendingDamageBe)) <
+              1)
+      {
+        continue;
+      }
+      // 0x00243E0C-0x00243E68. Note what is *not* written: +0x04. The record
+      // holds it at +0x08 (FUN_002458a8 saves it), but the restore never reads
+      // it back. The port did, which this replaces.
       entity.typeId00 = tables_.read<std::int16_t>(base + record::kTypeId04);
       entity.descriptorFlags02 = tables_.read<std::uint16_t>(base + record::kFlags06);
-      entity.halfword04 = tables_.read<std::uint16_t>(base + record::kFlags08);
       entity.state60 = 0;
       entity.fadeRamp62 = tables_.read<std::uint16_t>(base + record::kSubState0c);
       entity.spawnParam94 = tables_.read<std::uint8_t>(base + record::kAnim0e);
       entity.byte95 = tables_.read<std::uint8_t>(base + record::kPartySlot0f);
       entity.flags06 = static_cast<std::uint16_t>(entity.flags06 & 0xFFEF);
+      entity.battleFlags96 = 0;
+      entity.fadeLevel134 = 0;
+      // +0x191 down to +0x168, 42 bytes: the whole bone mode table. For a
+      // class-1 member the original first runs FUN_0020d9c8 on bones 10, 0x20
+      // and 9, which only zero three of the same bytes.
+      environment.pool->clearBoneOverrides(static_cast<std::size_t>(slot));
     }
 
     // The five per-member effect entities.
@@ -405,6 +444,8 @@ namespace orphen::ported::battle
       environment.pool->releaseSlot(static_cast<std::size_t>(DAT_0031dad0_));
       DAT_0031dad0_ = kNoEntity;
     }
+    // 0x00243F40: FUN_00206a90() then FUN_00206ce0(), cut a voice line still
+    // playing. Mixer-level, unported here as in state 102.
     return 0;
   }
 

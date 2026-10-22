@@ -33,6 +33,9 @@ namespace orphen::ported::battle
     constexpr float kDAT_003527a8_shieldArc = 3.141592025756836f;
     constexpr float kDAT_003527ac_guardArc = 3.141592025756836f;
     constexpr float kDAT_003527b0_sparkOffset = 0.20000000298023224f;
+    // DAT_00352740 (0x3ABE0DED), the vertical velocity FUN_00249610 gives a
+    // lead that was standing still when the killing blow landed.
+    constexpr float kDAT_00352740_deathNudge = 0.0014499999815598130f;
 
     // FUN_0024a540 and FUN_0024a190, the damage state's own constants.
     constexpr std::uint16_t kFUN_0024a540_hurtCue = 0x52;
@@ -2982,10 +2985,36 @@ namespace orphen::ported::battle
     // so never reached the state that clears it -- the shield softlock.
     const auto hitPointsNow = static_cast<std::int16_t>(entity.staggerTimer12a);
     const auto damageNow = static_cast<std::int16_t>(entity.pendingDamageBe);
-    if (entitySlot == 0 && damageNow >= 0 &&
-        static_cast<std::int32_t>(hitPointsNow) - static_cast<std::int32_t>(damageNow) < 1)
+    const bool lethal = static_cast<std::int32_t>(hitPointsNow) - static_cast<std::int32_t>(damageNow) < 1;
+    // :84-86. Any member: the "fell in battle" counter.
+    if (lethal)
+    {
+      party.FUN_0023f620_count(0x0B, 1);
+    }
+    // :92-101. **The lead's lethal hit ends the battle on the spot.** Gravity
+    // back on (+0x04 bit 3 off) with a nudge of DAT_00352740 so the body
+    // falls, its walk cancelled, then FUN_00243d18's full teardown and the
+    // camera released. The hit itself is left in +0xBE for the field
+    // controller to spend, which is what plays the death. The port used to
+    // stop at the first statement and return every frame, which froze the lead
+    // in its battle state with the damage never taken.
+    if (entitySlot == 0 && damageNow >= 0 && lethal)
     {
       entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7);
+      if (entity.verticalVelocity44 == 0.0f)
+      {
+        entity.verticalVelocity44 = kDAT_00352740_deathNudge;
+      }
+      if (environment.paths != nullptr)
+      {
+        environment.paths->FUN_002445c8_release(0);
+      }
+      if (environment.FUN_00243d18_teardown)
+      {
+        environment.FUN_00243d18_teardown();
+      }
+      // FUN_00217e18(0) again; the teardown already released the camera, so
+      // the original's second call finds its flag clear and does nothing.
       return;
     }
 

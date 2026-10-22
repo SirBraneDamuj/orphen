@@ -1,0 +1,20 @@
+# A weak block at 1 HP: a leak that would kill lands as a real hit.
+#
+# orphen_port --disc-root disc --elf disc/SLUS_200.11 --scene s14_e004 \
+#   --no-audio --frames 2100 --scenario port/scenarios/s14_e004_weak_block_lethal.txt
+#
+# The same swing and the same late Square as s14_e004_weak_block.txt, but
+# Orphen starts the fight at 1 HP. The leak is no longer below +0x12A, so
+# FUN_0024CBA0 :106-110 parks it in +0xBE, sets action 0x83 and enters state
+# 0x66 (0x4066 with the entry bit), and the stagger spends it.
+
+# The battle sets +0x12A = +0x128 when it starts (FUN_00242DF0), so the
+# starting condition goes in after that.
+set 1500 lead hp 1
+hold square 1730-1900
+
+expect 1745-1760 lead action == 0x83
+expect 1745-1760 lead state == 0x66
+expect 1745-1800 lead hp <= 0
+# The leaking spark (4) is only set on the survivable path.
+expect-all 1745-1760 type:0x1c7 anim != 4

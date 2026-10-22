@@ -88,6 +88,11 @@ namespace orphen::ported::entity
     // wait loop tests.
     int FUN_002445c8_progress(std::size_t entitySlot) const;
 
+    // FUN_002445c8 with bit 0 of its third argument set: free every slot whose
+    // +0x10 names the entity. It tests the pointer before the mode, so a slot
+    // already free is "freed" again -- harmless, and kept that way.
+    void FUN_002445c8_release(std::size_t entitySlot);
+
     // FUN_002446e8. Must run *before* the actor loop: it writes +0x30/+0x34 and
     // the physics pass in that loop is what spends them.
     void FUN_002446e8_update(EntityPool &pool, std::uint32_t frameTicks);

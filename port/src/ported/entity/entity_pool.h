@@ -211,11 +211,14 @@ namespace orphen::ported::entity
 
     std::size_t scriptSpawnedCount() const;
 
-  private:
     // Mirrors FUN_00267e78(entity, 0x1d8) over the half of the slot the port
     // stores outside OriginalEntity. No-op until the table is installed, which
-    // keeps the pool usable in harnesses that have no skeleton at all.
+    // keeps the pool usable in harnesses that have no skeleton at all. Public
+    // for FUN_00243d18, whose restore loop zeroes +0x168..+0x191 -- exactly
+    // this table -- on every party member it hands back to the field.
     void clearBoneOverrides(std::size_t index);
+
+  private:
 
     std::array<OriginalEntity, kEntitySlotCount> slots_{};
     std::array<SlotStatus, kEntitySlotCount> status_{};

@@ -177,6 +177,17 @@ namespace orphen::ported::entity
     return 0;
   }
 
+  void PathFollowerTable::FUN_002445c8_release(std::size_t entitySlot)
+  {
+    for (auto &slot : slots_)
+    {
+      if (slot.entitySlot10 == static_cast<std::int32_t>(entitySlot))
+      {
+        slot.mode00 = 0;
+      }
+    }
+  }
+
   void PathFollowerTable::FUN_002446e8_update(EntityPool &pool, std::uint32_t frameTicks)
   {
     for (auto &slot : slots_)
