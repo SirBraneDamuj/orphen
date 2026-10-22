@@ -1,6 +1,7 @@
 #include "ported/entity/actor_frame_update.h"
 
 #include "ported/entity/original_battle_enemy.h"
+#include "ported/entity/original_tentacle_monster.h"
 #include "ported/entity/original_crab_boss.h"
 #include "ported/entity/original_mast_boss.h"
 #include "ported/entity/original_swarm_crab.h"
@@ -8823,6 +8824,8 @@ namespace orphen::ported::entity
     case 0x0027F288u: // FUN_0027f288, type 0x80, a battle enemy
     case 0x0028A958u: // FUN_0028a958, type 0x8A, a battle enemy
     case 0x0028B848u: // FUN_0028b848, type 0x8B, the s14_e031 target dummy
+    case 0x002F1558u: // FUN_002f1558, type 0x11E, the 0x8B's guard marker
+    case 0x00296030u: // FUN_00296030, type 0x93, the s14_e004 tentacle monster
     case 0x002D0EA8u: // FUN_002d0ea8, type 0x58, the field HP gauge
     case 0x002D5748u: // 0x002d5748, type 0x68, the health bar
     case 0x002EB990u: // FUN_002eb990, type 0x10E, the flyer's shot
@@ -9012,6 +9015,10 @@ namespace orphen::ported::entity
       return "FUN_0028a958 (battle enemy 0x8a)";
     case 0x0028B848u:
       return "FUN_0028b848 (target dummy 0x8b)";
+    case 0x002F1558u:
+      return "FUN_002f1558 (guard marker 0x11e)";
+    case 0x00296030u:
+      return "FUN_00296030 (tentacle monster 0x93)";
     case kFUN_002cfe08_streamedProp:
       return "FUN_002cfe08 (map-streamed prop)";
     case 0x002D04E0u:
@@ -9022,6 +9029,28 @@ namespace orphen::ported::entity
       return nullptr;
     }
   }
+
+  namespace
+  {
+    // The stand-in for an unported state 0's FUN_0023F8B8: bind on the first
+    // tick, the first frame that state 0 could have run -- so a slot parked by
+    // FUN_00244B40, or suspended by +0x04 bit 0x4000, stays out of the actor
+    // table until it really ticks. A ported state 0 has already bound and
+    // taken the record into +0x198 by the time this runs, so nothing is bound
+    // twice; the bind resets the record's action bytes.
+    void deferredStateZeroBind(OriginalEntity &entity, std::size_t slot, const ActorEnvironment &environment)
+    {
+      if (!entity.deferredBattleBind)
+      {
+        return;
+      }
+      entity.deferredBattleBind = false;
+      if (entity.battleActorRecord198 < 0 && environment.FUN_0023f8b8_bind_battle_actor)
+      {
+        entity.battleActorRecord198 = environment.FUN_0023f8b8_bind_battle_actor(slot);
+      }
+    }
+  } // namespace
 
   void FUN_00239ce0_update_actors(const ActorEnvironment &environment, ActorTrace &trace)
   {
@@ -9070,6 +9099,9 @@ namespace orphen::ported::entity
       trace.recordDispatch(entity.typeId00, slot, handler, implemented);
       if (!implemented)
       {
+        // The behaviour is not ported, but its state 0's bind still has to
+        // land on the frame it would have run.
+        deferredStateZeroBind(entity, slot, environment);
         continue;
       }
 
@@ -9362,11 +9394,18 @@ namespace orphen::ported::entity
       case 0x0028B848u:
         FUN_0028b848_enemy8b(entity, slot, slotEnvironment, trace);
         break;
+      case 0x002F1558u:
+        FUN_002f1558_guard_marker(entity, slot, slotEnvironment);
+        break;
+      case 0x00296030u:
+        FUN_00296030_tentacle93(entity, slot, slotEnvironment, trace);
+        break;
       case kFUN_00239e78_noOp:
       default:
         break;
       }
 
+      deferredStateZeroBind(entity, slot, environment);
     }
   }
 

@@ -72,6 +72,14 @@ namespace orphen::ported::text
     complete_ = false;
     pcGpffffaec0_windowUp_ = true;
 
+    // FUN_00237b38:42, `uGpffffbcf4 = 8` -- gp-0x430C, which is DAT_00355C64,
+    // the call depth -- on every open, whether or not the window was down. A
+    // record entered through a 0x10 call and closed by 0x02 never unwinds its
+    // frame, so without this each one leaked a level: s14_e004 voices every
+    // line that way, and its ninth line found the stack full, refused the call
+    // and drew the displacement bytes as "SÊÿÿ".
+    DAT_00355c64_callDepth_ = kCallDepth;
+
     // FUN_00237b38:14-30, the block that only runs when the window was closed.
     //
     // **It usually is not.** A record ends on control code 0x00, which is
@@ -549,9 +557,17 @@ namespace orphen::ported::text
       }
       return;
 
-    // 0x1B sets an event flag and 0x1C is the same handler failing its own
-    // opcode test. DialogueStream applies the sets when the record closes.
+    // LAB_00239AA0. 0x1B sets the event flag its two bytes name, and 0x1C is
+    // the same handler failing its own opcode test, so it sets nothing.
+    // DialogueStream spends what is queued here once the step is done.
     case 0x1B:
+      if (cursor_ + 2 < end_)
+      {
+        walkedFlags_.push_back(static_cast<std::uint32_t>(blob_[cursor_ + 1]) |
+                               (static_cast<std::uint32_t>(blob_[cursor_ + 2]) << 8));
+      }
+      cursor_ += 3;
+      return;
     case 0x1C:
       cursor_ += 3;
       return;

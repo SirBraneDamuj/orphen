@@ -101,6 +101,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace orphen::ported::text
@@ -207,6 +208,10 @@ namespace orphen::ported::text
       std::uint32_t value = 0;
     };
     std::optional<ChoiceAnswer> takeChoiceAnswer();
+    // The flag ids of the 0x1B codes the walk stepped over since the last
+    // call. LAB_00239AA0 sets them in place; the window has no script state, so
+    // DialogueStream does it.
+    std::vector<std::uint32_t> takeWalkedFlags() { return std::exchange(walkedFlags_, {}); }
 
     // FUN_00237b38 with a non-zero pointer, taking the branch where the window
     // was closed. `end` bounds the record -- the next dialogue pointer-table
@@ -379,6 +384,7 @@ namespace orphen::ported::text
     int DAT_005716cc_choiceCursorX_ = 0;
     int DAT_005716d0_choiceCursorY_ = 0;
     std::optional<ChoiceAnswer> choiceAnswer_;
+    std::vector<std::uint32_t> walkedFlags_;
 
     // FUN_0023B9F8's two counters: iGpffffaf00, the tick budget it spends one
     // step of the repeat ladder at a time, and sGpffffaefe, how many steps the

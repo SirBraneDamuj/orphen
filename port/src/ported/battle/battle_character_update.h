@@ -98,6 +98,11 @@ namespace orphen::ported::battle
     // FUN_0020dd78: the bone carrying a role nibble on an entity's model.
     // Class 5 hangs its spell effects off role 4 rather than a fixed bone.
     std::function<std::size_t(std::size_t slot, std::uint8_t role)> FUN_0020dd78_bone_for_role;
+    // FUN_002d5630, the segmented health bar. State 117 arms the lower bank
+    // when a guarded hit leaks half its damage through.
+    std::function<void(bool upperBank, std::int32_t hitPoints, std::int32_t maxHitPoints,
+                       std::int32_t damage)>
+        FUN_002d5630_damage_bar;
 
     // == The spell voice ==
     //

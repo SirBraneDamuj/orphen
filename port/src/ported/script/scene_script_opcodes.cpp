@@ -3956,17 +3956,20 @@ namespace orphen::ported::script
             next += 1;
           }
 
-          // The original defers this to the enemy's own state 0 -- FUN_0028ae10
-          // for type 0x8A, FUN_0027f978 for type 0x80, one per enemy type, each
-          // calling FUN_0023f8b8 immediately after the stat stamp above. Those
-          // two now do; the rest have no state machine, so the bind stays here
-          // for them: same frame, same observable result, and the record stops
-          // being a name with nothing behind it. A ported state 0 binds again
-          // and takes the record's offset for its own +0x198.
-          if (environment_.FUN_0023f8b8_bind_battle_actor)
-          {
-            environment_.FUN_0023f8b8_bind_battle_actor(slot);
-          }
+          // The bind itself is the enemy's own state 0 -- FUN_0028ae10 for type
+          // 0x8A, FUN_0027f978 for 0x80, FUN_00296218 for 0x93, one per type,
+          // each calling FUN_0023f8b8 after its stat stamp. Most have no ported
+          // state 0, so the actor loop binds on the entity's first tick in its
+          // place (see OriginalEntity::deferredBattleBind).
+          //
+          // It used to bind here, at the spawn, on the theory that the result
+          // was the same. It is not, for an entity the init parks with opcode
+          // 0xBD method 0x75 before it ever ticks: s14_e004's tentacle monster
+          // (0x93, record 0x21) stays out of the actor table on hardware until
+          // the intermission wakes it, and the master's opcode 17 at 0x5E38
+          // passes only because of that. Bound early, it waited forever for an
+          // action an unported monster never takes.
+          entity.deferredBattleBind = true;
         }
       }
 
@@ -5548,6 +5551,8 @@ namespace orphen::ported::script
       // every entity but the cursors while the D-pad timer runs. s14_e012 calls
       // it once a frame for the whole battle.
       case 0x68:
+      // 0x76 -> FUN_00244BF0, the scripted-beat bit. See BattleParty.
+      case 0x76:
       case 0x78:
       // 0x6F -> FUN_00244248, **the action request**, aimed at the entity the
       // selector picked rather than at the party as a whole. This is how a
@@ -5592,6 +5597,19 @@ namespace orphen::ported::script
         if (environment_.FUN_00206f08_play_voice)
         {
           environment_.FUN_00206f08_play_voice(arg3, arg4);
+        }
+        return 0;
+
+      // 0x75 -> FUN_00244B40(entity, mode). FUN_00242A18 hands an entity
+      // method the entity in a0 and arg3/arg4 in a1/a2 (0x00242A28/0x00242A38),
+      // which Ghidra's one-argument call drops. Mode 2 parks the entity, mode
+      // 1 wakes it. s14_e004's init parks the party members and the enemies
+      // its preamble has not shown yet; the port drew them from frame 0.
+      case 0x75:
+        if (currentEntity_ < orphen::ported::entity::kEntitySlotCount &&
+            environment_.entityPool != nullptr)
+        {
+          environment_.entityPool->FUN_00244b40_park(currentEntity_, static_cast<std::int32_t>(arg3));
         }
         return 0;
 

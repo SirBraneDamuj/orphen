@@ -86,6 +86,10 @@ namespace orphen::ported::entity
   // and 9 -- data, not code -- so the run really does end at 11.
   constexpr std::uint32_t kPTR_FUN_00325B60_enemy8bStates = 0x00325B60;
   constexpr std::size_t kEnemy8bStateCount = 12;
+  // Type 0x93, the s14_e004 tentacle monster. Seventeen handlers: the word at
+  // 0x00325CC4 is null and 0x00325CC8 starts the next type's table.
+  constexpr std::uint32_t kPTR_FUN_00325c80_enemy93States = 0x00325C80;
+  constexpr std::size_t kEnemy93StateCount = 17;
 
   // 0x0025ABB8: `jr ra; nop`, verified in the executable.
   constexpr std::uint32_t kLAB_0025abb8_noOp = 0x0025ABB8;

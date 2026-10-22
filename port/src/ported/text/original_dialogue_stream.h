@@ -194,9 +194,22 @@ namespace orphen::ported::text
       return typewriterHeldTicks_ / orphen::ported::kNominalFrameTicks;
     }
 
+    // DAT_00356788 is one byte, and FUN_00207010 raises it for every voice it
+    // starts -- a record's own 0x18 clip and a script's opcode 0xBD method 0x77
+    // bank clip alike. The bank clip is the runtime's countdown, so the runtime
+    // hands its half in here once a frame; 0x1A blocks while either is busy.
+    void setExternalVoiceBusy(bool busy) { externalVoiceBusy_ = busy; }
+    // This record's own clip, still speaking. The other half of DAT_00356788,
+    // for the runtime's FUN_00206A90.
+    bool ownClipPlaying() const { return active_ && holdTicks_ != 0 && !holdIsEstimate_; }
+
   private:
-    // The 0x1B flags this record collected, spent when it ends. Shared by both
-    // terminators.
+    // What 0x1A sees as DAT_00356788. An estimated hold is the port's own
+    // invention -- the record started no clip -- so it never blocks: the
+    // original's 0x1A passes at once unless some other voice is playing.
+    bool voiceBusy() const { return ownClipPlaying() || externalVoiceBusy_; }
+
+    // The 0x1B flags the walk has stepped over, set as they are reached.
     void applyPendingFlags(orphen::ported::script::SceneScriptState &state);
 
     // The advance each control code applies to the cursor, opcode byte
@@ -210,13 +223,13 @@ namespace orphen::ported::text
 
     bool active_ = false;
     std::uint32_t holdTicks_ = 0;
+    bool holdIsEstimate_ = false;
+    bool externalVoiceBusy_ = false;
     std::uint32_t frame_ = 0;
     std::string speaker_;
     std::string line_;
     // DAT_00356480: the clip cached on each of FUN_00206ae0's three channels.
     std::uint32_t voiceCache_[3] = {0, 0, 0};
-    // Event flags the record's 0x1B codes ask for, applied when it closes.
-    std::vector<std::uint32_t> pendingFlags_;
     // The 0x15 block's options and the work slot its answer goes to, for the
     // log and the report. The window owns the live selection.
     std::vector<std::string> options_;

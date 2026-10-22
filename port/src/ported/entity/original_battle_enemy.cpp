@@ -170,9 +170,10 @@ namespace orphen::ported::entity
                                          : DAT_005739b0_enemy80Attacks(),
           environment);
 
-      // FUN_0023f8b8, from the caller the original really uses. The port also
-      // calls it at the spawn, for the enemy types whose state 0 is not ported
-      // yet; the second call is idempotent.
+      // FUN_0023f8b8, from the caller the original really uses. For the enemy
+      // types whose state 0 is not ported, the actor loop stands in after their
+      // first tick (OriginalEntity::deferredBattleBind); this one sets +0x198
+      // first, so that stand-in skips it.
       if (environment.FUN_0023f8b8_bind_battle_actor)
       {
         entity.battleActorRecord198 = environment.FUN_0023f8b8_bind_battle_actor(slot);
@@ -1763,17 +1764,49 @@ namespace orphen::ported::entity
       entity.desiredDeltaZ34 -= step * std::sin(entity.facingRadians5c);
     }
 
+    // The guard roll FUN_0028C298 and FUN_0028BBE0's action 9 share. `threats`
+    // is how many of FUN_0023ECE8's codes count: 3 for state 1 (sword and both
+    // spell kinds), 2 for action 9 (sword and kind 12 only). True when the
+    // enemy went into state 9.
+    bool dummy8b_guard_roll(OriginalEntity &entity,
+                            std::size_t slot,
+                            const ActorEnvironment &environment,
+                            std::uint32_t threats)
+    {
+      const std::uint32_t threat =
+          environment.FUN_0023ece8_threat ? environment.FUN_0023ece8_threat(slot) : 0u;
+      if (threat - 1u >= threats)
+      {
+        return false;
+      }
+      const std::int32_t chance =
+          environment.FUN_0023ecb8_guard_chance ? environment.FUN_0023ecb8_guard_chance(entity.byte95) : 0;
+      const std::uint32_t roll = environment.random ? environment.random() : 0u;
+      if (static_cast<std::int32_t>(roll % 1000u) >= static_cast<std::int16_t>(chance * 10))
+      {
+        return false;
+      }
+      const std::int32_t ticks =
+          environment.FUN_0023ec80_guard_ticks ? environment.FUN_0023ec80_guard_ticks(entity.byte95) : 0;
+      entity.enemy8bHoldTimer1a4 = static_cast<std::uint16_t>(ticks << 5);
+      FUN_00225bf0_set_state_and_animation(entity, 9, 0x0F);
+      return true;
+    }
+
     // ------------------------------------------------------- the twelve states
 
-    // FUN_0028C298, state 1: turn toward +0x19C, then run the hold down. The
-    // counter roll it opens with -- FUN_0023ECE8 / FUN_0023ECB8 / FUN_0023EC80,
-    // "is someone aiming at me, and does my record want to flinch about it" --
-    // is **not ported**, so the roll never fires and the dummy stays in the
-    // branch below. That is the branch the retail dump takes too: at the frame
-    // pinnacle_of_the_sun was taken the dummy is in state 1 on animation 1,
-    // with the whole cast in flight. State 9 and FUN_002F1420's type 0x11E
-    // marker are the other half of the same deferral.
+    // FUN_0028C298, state 1: turn toward +0x19C, then run the hold down.
+    //
+    // **Once it faces where it wants to, it may raise its guard.** Every frame
+    // the turn is finished, FUN_0023ECE8 asks what the party is doing to it:
+    // a sword swing (1), a kind-12 spell's release (2) or a kind -2 spell's
+    // (3). Any of the three rolls `random % 1000` (unsigned, 0x0028C340)
+    // against ten times the record's +0x25, and a hit puts it in state 9 on
+    // animation 0x0F for the record's +0x24 * 4 frames. The s14_e031 dump
+    // has the dummy in state 1 with a cast in flight, i.e. a roll that
+    // missed or a record with no chance at all.
     void FUN_0028c298_dummy8b_turn(OriginalEntity &entity,
+                                   std::size_t slot,
                                    const ActorEnvironment &environment,
                                    ActorEnvironment::BattleActorView &view)
     {
@@ -1784,6 +1817,10 @@ namespace orphen::ported::entity
       if (step != 0.0f)
       {
         entity.facingRadians5c += step;
+        return;
+      }
+      if (dummy8b_guard_roll(entity, slot, environment, 3))
+      {
         return;
       }
       const std::int16_t remaining = FUN_0023a678_countdown(
@@ -2332,7 +2369,56 @@ namespace orphen::ported::entity
     // state 1 does, and is deferred with it: the original falls straight
     // through when the roll misses, publishing nothing, which is what this
     // does unconditionally.
+    // FUN_002F1420: spawn the type 0x11E marker on `owner`. A zero argument
+    // takes the default: `forward` half the owner's radius, `scale` 1.0,
+    // `lift` three quarters of its height. `watchState` is the owner state the
+    // marker stays up for.
+    void FUN_002f1420_spawn_guard_marker(const OriginalEntity &owner,
+                                         std::size_t ownerSlot,
+                                         const ActorEnvironment &environment,
+                                         float forward,
+                                         float scale,
+                                         float lift,
+                                         std::uint16_t watchState)
+    {
+      if (environment.entityPool == nullptr || environment.descriptors == nullptr)
+      {
+        return;
+      }
+      const std::size_t markerSlot =
+          environment.entityPool->FUN_00265e28_allocate_and_initialize(0x11E, *environment.descriptors);
+      if (markerSlot >= kEntitySlotCount)
+      {
+        return;
+      }
+      OriginalEntity &marker = environment.entityPool->slot(markerSlot);
+      marker.facingRadians5c = owner.facingRadians5c;
+      marker.halfword08 = static_cast<std::uint16_t>(marker.halfword08 | 0x4000u);
+      if (forward == 0.0f)
+      {
+        forward = owner.radius54 * 0.5f;
+      }
+      marker.positionX20 = forward * std::cos(owner.facingRadians5c) + owner.positionX20;
+      marker.positionZ24 = forward * std::sin(owner.facingRadians5c) + owner.positionZ24;
+      if (scale == 0.0f)
+      {
+        scale = 1.0f;
+      }
+      marker.scaleZ150 = scale;
+      marker.scale14c = scale;
+      if (lift == 0.0f)
+      {
+        lift = owner.height58 * 0.75f;
+      }
+      marker.positionY28 = owner.positionY28 + lift;
+      FUN_00225bc8_set_animation(marker, 1);
+      marker.state60 = watchState;
+      marker.guardMarkerTicks19c = 0x3C0;
+      marker.guardMarkerOwner198 = static_cast<std::int32_t>(ownerSlot);
+    }
+
     void FUN_0028bbe0_dummy8b_action(OriginalEntity &entity,
+                                     std::size_t slot,
                                      const ActorEnvironment &environment,
                                      ActorEnvironment::BattleActorView &view,
                                      std::int16_t action)
@@ -2423,8 +2509,15 @@ namespace orphen::ported::entity
         }
         else
         {
-          // Action 9 with the roll deferred, and every action the table does
-          // not name: the original returns without touching anything.
+          // Action 9 is the scripted guard: the same roll as state 1, but only
+          // against a sword swing or a kind-12 release (0x0028BFA4, `< 2`).
+          // On a hit the current action becomes 9, like any other order. A
+          // miss, and every action the table does not name, returns without
+          // touching anything.
+          if (action == 9 && dummy8b_guard_roll(entity, slot, environment, 2))
+          {
+            view.currentAction0f = 9;
+          }
           return;
         }
       }
@@ -2482,7 +2575,7 @@ namespace orphen::ported::entity
 
     if (!enemy_action_check(entity, environment, view, haveRecord, EnemyKind::Dummy8b,
                             [&](std::int16_t action)
-                            { FUN_0028bbe0_dummy8b_action(entity, environment, view, action); }))
+                            { FUN_0028bbe0_dummy8b_action(entity, slot, environment, view, action); }))
     {
       if (!FUN_0023a068_freeze_gate(entity, environment.frameTicks))
       {
@@ -2546,7 +2639,7 @@ namespace orphen::ported::entity
       switch (entity.state60)
       {
       case 1:
-        FUN_0028c298_dummy8b_turn(entity, environment, view);
+        FUN_0028c298_dummy8b_turn(entity, slot, environment, view);
         break;
       case 2:
         FUN_0028c3d0_dummy8b_close(entity, slot, environment, view);
@@ -2583,12 +2676,60 @@ namespace orphen::ported::entity
       }
     }
 
-    // :128-130. FUN_002F1420 spawns the type 0x11E marker the frame the dummy
-    // *enters* state 9. Deferred with the rest of the counter roll -- nothing
-    // reaches state 9 while FUN_0023ECE8 is unported -- and kept here so the
-    // edge test is not lost when it lands.
-    (void)entryState;
+    // :126-128. The frame the enemy *enters* state 9, FUN_002F1420(0.5, 0, 0,
+    // entity, 9) stands up the type 0x11E guard marker in front of it.
+    if (entity.state60 == 9 && entryState != 9)
+    {
+      FUN_002f1420_spawn_guard_marker(entity, slot, environment, 0.5f, 0.0f, 0.0f, 9);
+    }
 
     publish();
+  }
+
+  void FUN_002f1558_guard_marker(OriginalEntity &entity,
+                                 std::size_t slot,
+                                 const ActorEnvironment &environment)
+  {
+    if (environment.entityPool == nullptr || entity.guardMarkerOwner198 < 0 ||
+        static_cast<std::size_t>(entity.guardMarkerOwner198) >= kEntitySlotCount)
+    {
+      return;
+    }
+    // The original dereferences +0x198 unconditionally; the owner's slot can
+    // be reused after it dies, which reads whatever is there now, as it would.
+    const OriginalEntity &owner =
+        environment.entityPool->slot(static_cast<std::size_t>(entity.guardMarkerOwner198));
+    entity.halfword08 = static_cast<std::uint16_t>(entity.halfword08 | 0x4000u);
+    entity.facingRadians5c = owner.facingRadians5c;
+
+    if (entity.guardMarkerTicks19c == 0)
+    {
+      // :12-16. The minimum is spent: drop as soon as the owner is out of
+      // the state this marker was raised for.
+      if (owner.state60 != entity.state60 && entity.animationA0 != 2)
+      {
+        FUN_00225bc8_set_animation(entity, 2);
+      }
+    }
+    if (entity.guardMarkerTicks19c != 0)
+    {
+      const std::int32_t remaining =
+          entity.guardMarkerTicks19c - static_cast<std::int32_t>(environment.frameTicks);
+      entity.guardMarkerTicks19c = remaining < 0 ? 0 : remaining;
+    }
+
+    // :25-35. Animation 1 (the raise) runs into 0 (the hold); 2 (the drop)
+    // ends the marker.
+    if (entity.animationA0 == 1)
+    {
+      if ((entity.flags06 & 1u) != 0)
+      {
+        FUN_00225bc8_set_animation(entity, 0);
+      }
+    }
+    else if (entity.animationA0 == 2 && (entity.flags06 & 1u) != 0)
+    {
+      FUN_00265ec0_destroy_entity(slot, environment);
+    }
   }
 } // namespace orphen::ported::entity

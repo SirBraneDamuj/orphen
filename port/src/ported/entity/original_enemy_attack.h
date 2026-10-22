@@ -71,6 +71,9 @@ namespace orphen::ported::entity
   EnemyAttackRecords &DAT_0058b140_enemy8aAttacks();
   // 0x0058B150/54/58, type 0x8B's three, filled by FUN_0028C050.
   EnemyAttackRecords &DAT_0058b150_enemy8bAttacks();
+  // 0x0058B180/84/88, type 0x93's three, filled by FUN_00296218. Record 0 is
+  // what its grab charges on release.
+  EnemyAttackRecords &DAT_0058b180_enemy93Attacks();
 
   // The three FUN_00216078 calls at the top of FUN_0027f978 / FUN_0028ae10.
   void FUN_00216078_fill_attack_records(std::int16_t typeId,

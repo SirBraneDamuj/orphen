@@ -42,6 +42,39 @@ namespace orphen::ported::entity
     }
   }
 
+  void EntityPool::FUN_00244b40_park(std::size_t index, std::int32_t mode)
+  {
+    if (index >= kEntitySlotCount)
+    {
+      return;
+    }
+    OriginalEntity &entity = slots_[index];
+    // The type is negated before the status is looked at, so a slot whose byte
+    // is already the right sign still has its type corrected.
+    if (mode == 2)
+    {
+      if (entity.typeId00 > 0)
+      {
+        entity.typeId00 = static_cast<std::int16_t>(-entity.typeId00);
+      }
+      if (status_[index] == SlotStatus::ScriptSpawned)
+      {
+        status_[index] = SlotStatus::Allocated;
+      }
+    }
+    else if (mode == 1)
+    {
+      if (entity.typeId00 < 0)
+      {
+        entity.typeId00 = static_cast<std::int16_t>(-entity.typeId00);
+      }
+      if (status_[index] == SlotStatus::Allocated)
+      {
+        status_[index] = SlotStatus::ScriptSpawned;
+      }
+    }
+  }
+
   void EntityPool::swapSlots(std::size_t first, std::size_t second)
   {
     if (first >= kEntitySlotCount || second >= kEntitySlotCount || first == second)

@@ -26,6 +26,14 @@ namespace orphen::ported::battle
     // 0x96 is the pre-start hold the opener parks an idle member in.
     constexpr std::uint8_t kActionOpenerHold96 = 0x96;
 
+    // 0x003527A8 / 0x003527AC: the guard arcs states 115 and 117 write into
+    // +0x124. Both are pi (as stored, 3.141592), so either guard faces every
+    // direction. 0x003527B0: how far in front of the character state 117 puts
+    // the 0x1C7 spark when a blow lands on the shield.
+    constexpr float kDAT_003527a8_shieldArc = 3.141592025756836f;
+    constexpr float kDAT_003527ac_guardArc = 3.141592025756836f;
+    constexpr float kDAT_003527b0_sparkOffset = 0.20000000298023224f;
+
     // FUN_0024a540 and FUN_0024a190, the damage state's own constants.
     constexpr std::uint16_t kFUN_0024a540_hurtCue = 0x52;
     // DAT_0035277c: the upward nudge a corpse gets if it was standing still.
@@ -249,6 +257,22 @@ namespace orphen::ported::battle
       effect.flags06 = static_cast<std::uint16_t>(effect.flags06 | 0x11);
       effect.state60 = 0;
       effect.attachBone194 = 0;
+      return static_cast<std::int32_t>(slot);
+    }
+
+    // FUN_002d6c68: the bare allocation, without FUN_00245a00's effect setup.
+    std::int32_t FUN_002d6c68_spawn(const BattleUpdateEnvironment &environment, std::int32_t typeId)
+    {
+      if (environment.pool == nullptr || environment.descriptors == nullptr)
+      {
+        return kNoEntity;
+      }
+      const std::size_t slot =
+          environment.pool->FUN_00265e28_allocate_and_initialize(typeId, *environment.descriptors);
+      if (slot >= orphen::ported::entity::kEntitySlotCount)
+      {
+        return kNoEntity;
+      }
       return static_cast<std::int32_t>(slot);
     }
 
@@ -1603,18 +1627,109 @@ namespace orphen::ported::battle
       {
         setAction(context, 0x90);
       }
-      // uGpffff883c. The guard arc: a hit arriving inside this half-angle of
-      // the character's facing is negated by FUN_00216140.
-      constexpr float kGuardArc = 1.0471976f; // 60 degrees
-      entity.guardArc124 = kGuardArc;
+      // uGpffff883c (0x003527AC). The guard arc: a hit arriving inside this
+      // half-angle of the character's facing is negated by FUN_00216140. It is
+      // pi, so the shield takes a blow from any direction. The port had 60
+      // degrees here, which let side and rear hits through.
+      entity.guardArc124 = kDAT_003527ac_guardArc;
       if ((entity.flags06 & 1) != 0)
       {
         entity.flags06 = static_cast<std::uint16_t>(entity.flags06 | 0x10);
       }
-      // The damage half of this handler -- the halved hit, the 0x1C7 spark and
-      // the stagger threshold -- needs FUN_00216140 to be routing damage at the
-      // player, which nothing in this slice does. The original's `if (+0xBE ==
-      // 0) return 0` is the branch that lands here.
+
+      // :39-130. **A blocked hit has to be spent here.** FUN_00216140 left it
+      // in +0xBE negated, and FUN_0024a360 drops every pending request while
+      // +0xBE is non-zero -- the Square release included -- so leaving it
+      // parked holds the shield up for good. That was the softlock.
+      const auto blocked = static_cast<std::int16_t>(entity.pendingDamageBe);
+      if (blocked == 0)
+      {
+        return 0;
+      }
+      if (context.environment->FUN_00267d38_play_at_entity)
+      {
+        context.environment->FUN_00267d38_play_at_entity(0xE8, context.entitySlot);
+      }
+      entity.hitSourceC0 = 0;
+      entity.pendingDamageBe = 0;
+      entity.freezeTimerBd = 0;
+
+      // :48-74. The spark: a fresh 0x1C7, 0.2 in front of the character along
+      // the bearing to whoever landed the blow, at half its height.
+      const std::int32_t spark = context.environment->party != nullptr
+                                     ? FUN_002d6c68_spawn(*context.environment, 0x1C7)
+                                     : kNoEntity;
+      if (spark != kNoEntity)
+      {
+        auto &effect = context.environment->pool->slot(static_cast<std::size_t>(spark));
+        effect.halfword04 = static_cast<std::uint16_t>(effect.halfword04 | 0x10);
+        float bearing = entity.facingRadians5c;
+        if (entity.lastAttackerSlotCc >= 0 &&
+            static_cast<std::size_t>(entity.lastAttackerSlotCc) <
+                orphen::ported::entity::kEntitySlotCount)
+        {
+          const auto &attacker =
+              context.environment->pool->slot(static_cast<std::size_t>(entity.lastAttackerSlotCc));
+          if (attacker.positionZ24 != entity.positionZ24 ||
+              attacker.positionX20 != entity.positionX20)
+          {
+            bearing = std::atan2(attacker.positionZ24 - entity.positionZ24,
+                                 attacker.positionX20 - entity.positionX20);
+          }
+        }
+        effect.facingRadians5c = bearing;
+        effect.scaleZ150 = 1.0f;
+        effect.scale14c = 1.0f;
+        effect.positionX20 = std::cos(bearing) * kDAT_003527b0_sparkOffset + entity.positionX20;
+        effect.halfword08 = static_cast<std::uint16_t>(effect.halfword08 | 0x80);
+        effect.positionZ24 = std::sin(bearing) * kDAT_003527b0_sparkOffset + entity.positionZ24;
+        const float height = entity.positionY28 + entity.height58 * 0.5f;
+        effect.groundHeight4c = height;
+        effect.positionY28 = height;
+        effect.previousGroundHeight50 = height;
+      }
+
+      // :75-88. Half the blow leaks through, but only while the guard entity's
+      // animation has its +0xAA bit 0x100 up; otherwise none of it does.
+      std::int32_t leaked = blocked < 0 ? -blocked : blocked;
+      const std::int32_t guardNow =
+          party.entitySlotAt(kDAT_0031dabc_guardEntity + context.member * 4);
+      const bool leaks =
+          guardNow != kNoEntity &&
+          (context.environment->pool->slot(static_cast<std::size_t>(guardNow)).flagsAa & 0x100) != 0;
+      leaked = leaks ? static_cast<std::int16_t>(leaked / 2) : 0;
+
+      if (leaked != 0)
+      {
+        // :92. FUN_0023bbd8(0, 9), the lead's hurt rumble -- no motor here.
+        const auto hitPoints = static_cast<std::int16_t>(entity.staggerTimer12a);
+        if (leaked < hitPoints)
+        {
+          if (spark != kNoEntity)
+          {
+            context.environment->pool->slot(static_cast<std::size_t>(spark)).animationA0 = 4;
+          }
+          // :103. The bar is armed with the leak, but nothing here takes it off
+          // +0x12A -- the disassembly at 0x0024CE7C has no store to it.
+          if (context.environment->FUN_002d5630_damage_bar)
+          {
+            context.environment->FUN_002d5630_damage_bar(
+                false, hitPoints, static_cast<std::int16_t>(entity.maxHitPoints128), leaked);
+          }
+          return 0;
+        }
+        // :106-110. A leak that would kill is the full stagger, state 102.
+        entity.pendingDamageBe = static_cast<std::uint16_t>(leaked);
+        setAction(context, kActionStagger83);
+        entity.state60 = 0x4066;
+        return 1;
+      }
+      if (spark != kNoEntity)
+      {
+        context.environment->pool->slot(static_cast<std::size_t>(spark)).animationA0 = 3;
+      }
+      // :117-120. FUN_0023bbd8(0, 8) and uGpffffaf1c = 3 for the lead: the
+      // clean-block rumble. No motor here.
       return 0;
     }
 
@@ -1986,6 +2101,10 @@ namespace orphen::ported::battle
           party.entitySlotAt(kDAT_0031daac_shieldEntity + context.member * 4);
 
       std::int16_t reactionSource = static_cast<std::int16_t>(entity.timelineCursorA8);
+
+      // FUN_0024BD30:42, every frame. The port never wrote this, so a shield
+      // spell blocked nothing on the hit test's side.
+      entity.guardArc124 = kDAT_003527a8_shieldArc;
 
       if (entity.pendingDamageBe == 0)
       {
@@ -2856,16 +2975,18 @@ namespace orphen::ported::battle
       return;
     }
 
-    // :84-101. Death, and the lead's own end-of-battle path.
-    if (static_cast<std::int32_t>(entity.staggerTimer12a) -
-            static_cast<std::int32_t>(entity.pendingDamageBe) <
-        1)
+    // :84-101. Death, and the lead's own end-of-battle path. Both halfwords are
+    // signed `lh` loads, and **a negative +0xBE skips the test for the lead**:
+    // that is a blocked hit waiting for state 117 to spend it. Reading +0xBE
+    // unsigned turned a blocked 5 into 65531, took this return every frame, and
+    // so never reached the state that clears it -- the shield softlock.
+    const auto hitPointsNow = static_cast<std::int16_t>(entity.staggerTimer12a);
+    const auto damageNow = static_cast<std::int16_t>(entity.pendingDamageBe);
+    if (entitySlot == 0 && damageNow >= 0 &&
+        static_cast<std::int32_t>(hitPointsNow) - static_cast<std::int32_t>(damageNow) < 1)
     {
-      if (entitySlot == 0)
-      {
-        entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7);
-        return;
-      }
+      entity.halfword04 = static_cast<std::uint16_t>(entity.halfword04 & 0xFFF7);
+      return;
     }
 
     // :103-118. Two zeroed seven-float poses, the per-frame freeze reset, and

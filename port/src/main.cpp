@@ -70,6 +70,10 @@ namespace
                  "  --battle-report print the battle module's loadout-to-button\n"
                  "                  binding, the party the scene built, and every\n"
                  "                  frame the player's action byte or state moved.\n"
+                 "  --battle-vm-trace\n"
+                 "                  print every instruction FUN_0023FD30's three\n"
+                 "                  battle-script loops execute: frame, block, pc,\n"
+                 "                  the eight bytes there and the incoming yield.\n"
                  "  --hold-triangle <first>-<last>   hold one face button across an\n"
                  "  --hold-circle   <first>-<last>   inclusive 1-based frame range,\n"
                  "  --hold-cross    <first>-<last>   pressed on the first frame only.\n"
@@ -232,6 +236,11 @@ namespace
       if (argument == "--inventory-report")
       {
         config.printInventoryReport = true;
+        continue;
+      }
+      if (argument == "--battle-vm-trace")
+      {
+        orphen::ported::battle::gBattleVmTrace = true;
         continue;
       }
       if (argument == "--battle-report")

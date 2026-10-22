@@ -376,6 +376,36 @@ namespace orphen::ported::entity
     // bite, so it goes straight to its death state.
     std::function<std::int32_t()> FUN_0023eff8_enemy_count;
 
+    // FUN_0023ece8: what the party is doing to this entity. Every member whose
+    // FUN_002493b8 target is `slot` is looked at, and the highest of these is
+    // returned: 1 for a current action 0x84 (a sword swing), 2 for 0x8B (a
+    // kind-12 spell's release), 3 for 0x8D pending or current (a kind -2
+    // spell's). 0 when nobody is aiming at it.
+    std::function<std::uint32_t(std::size_t slot)> FUN_0023ece8_threat;
+    // FUN_0023ecb8 / FUN_0023ec80: bytes +0x25 and +0x24 of the bound actor
+    // record FUN_0023eba0(id, 0) finds -- the guard chance in tenths of a
+    // percent per roll, and the guard's length (the latter already times 4).
+    // 0 when no bound record has that id.
+    std::function<std::int32_t(std::uint8_t id)> FUN_0023ecb8_guard_chance;
+    std::function<std::int32_t(std::uint8_t id)> FUN_0023ec80_guard_ticks;
+
+    // The encounter's actor paths (BattleEncounter::FUN_002471e8_build_paths).
+    // A path is named by its record's script offset, 0 for none: FUN_002475b8
+    // finds one by (type, +0x95, key, nth, field), the record's +0x08 is its
+    // lap time in ticks, and FUN_00266ce8 samples its curve at 0..1.
+    std::function<std::uint32_t(std::int16_t type, std::int8_t id, std::int8_t key,
+                                std::int8_t nth, std::int8_t field)>
+        FUN_002475b8_find_path;
+    std::function<std::uint32_t(std::uint32_t record)> pathLapTicks;
+    std::function<std::optional<orphen::ported::psm2::Vec3>(std::uint32_t record, float t)>
+        FUN_00266ce8_sample_path;
+
+    // FUN_002d8948: spawn a target cursor riding this slot and store it in the
+    // +0x0D of the actor record carrying the entity's +0x95. An enemy whose
+    // state 0 runs after the battle's opening countdown gets its cursor here,
+    // since the countdown only covers the records bound at that moment.
+    std::function<void(std::size_t slot)> FUN_002d8948_attach_cursor;
+
     // DAT_003253C0, the boss-battle target marker table. Handed over whole
     // rather than through callbacks because FUN_0027DC38 -- the crab fight's
     // own bookkeeping -- walks its twenty rows directly every frame, adding a

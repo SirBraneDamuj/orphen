@@ -2,6 +2,7 @@
 
 #include "ported/battle/battle_tables.h"
 
+#include <cstdio>
 #include <iostream>
 
 namespace orphen::ported::battle
@@ -20,6 +21,12 @@ namespace orphen::ported::battle
     countdown_ = 0;
     cameraSplines_ = 0;
     cameraSplineCount_ = 0;
+    paths_ = 0;
+    pathCount_ = 0;
+    pathTable_ = 0;
+    pathTableCount_ = 0;
+    pathCurves_.clear();
+    kindZeroPaths_ = 0;
     masterPc_ = 0;
     masterYield_ = 0;
     masterTriggers_ = 0;
@@ -127,6 +134,109 @@ namespace orphen::ported::battle
 
     FUN_0023fb50_reset_records();
     return true;
+  }
+
+  // FUN_002471e8 and FUN_00247520. Run by the caller straight after
+  // FUN_0023f318_load, because FUN_0025d618 needs the scene script's own
+  // expression evaluator and this class only holds a copy of the bytes.
+  //
+  // FUN_002471e8 relocates each record's +0x04 by the script base; the port's
+  // offsets are script offsets already, so that is the identity. Its in-place
+  // FUN_0025d618 plus thousandths-to-float pass is the decoder's job.
+  void BattleEncounter::FUN_002471e8_build_paths(const WaypointDecoder &decode)
+  {
+    pathCurves_.clear();
+    kindZeroPaths_ = 0;
+    if (placement_ == 0 || placement_ + 0x74u > memory_.size())
+    {
+      return;
+    }
+
+    // FUN_002471e8. Its `+100 == 0` test is on the whole word; the loop bound
+    // is the halfword.
+    if (read<std::uint32_t>(placement_ + 0x64) != 0)
+    {
+      paths_ = read<std::uint32_t>(placement_ + 0x68);
+      pathCount_ = read<std::uint16_t>(placement_ + 0x64);
+      for (std::uint16_t index = 0; index < pathCount_; ++index)
+      {
+        const std::uint32_t at = paths_ + index * 0x210u;
+        if (at + 0x0Cu > memory_.size())
+        {
+          break;
+        }
+        const std::uint8_t kind = read<std::uint8_t>(at + 3) & 0x7Fu;
+        if (kind != 0 && kind != 1)
+        {
+          continue;
+        }
+        std::vector<orphen::ported::psm2::Vec3> points;
+        if (!decode || !decode(read<std::uint32_t>(at + 4), points) || points.empty())
+        {
+          continue;
+        }
+        // FUN_00266a78(record + 0x0C, list + 1, count, 1): chord-length knots.
+        // A kind-0 record builds the same curve inside FUN_002d8808.
+        orphen::ported::camera::Curve3 curve;
+        curve.FUN_00266a78_build(points, true);
+        pathCurves_[at] = curve;
+        write<std::uint8_t>(at + 3, static_cast<std::uint8_t>(read<std::uint8_t>(at + 3) | 0x80u));
+        if (kind == 0)
+        {
+          // FUN_002d8808: a type 0x192 spawned onto the path. Not ported.
+          ++kindZeroPaths_;
+        }
+      }
+    }
+
+    // FUN_00247520. The three answers per row are relocated by the script base,
+    // which is again the identity here.
+    if (read<std::uint32_t>(placement_ + 0x6C) != 0)
+    {
+      pathTableCount_ = read<std::int16_t>(placement_ + 0x6C);
+      pathTable_ = read<std::uint32_t>(placement_ + 0x70);
+    }
+  }
+
+  std::uint32_t BattleEncounter::FUN_002475b8_find(std::int16_t type, std::int8_t id,
+                                                   std::int8_t key, std::int8_t nth,
+                                                   std::int8_t field) const
+  {
+    if (placement_ == 0 || pathTable_ == 0 || read<std::uint32_t>(placement_ + 0x6C) == 0)
+    {
+      return 0;
+    }
+    std::int8_t matched = 0;
+    for (std::int16_t index = 0; index < pathTableCount_; ++index)
+    {
+      const std::uint32_t at = pathTable_ + static_cast<std::uint32_t>(index) * 0x10u;
+      if (at + 0x10u > memory_.size())
+      {
+        break;
+      }
+      if ((type != 0 && read<std::int16_t>(at + 0) != type) ||
+          (id != 0 && read<std::int8_t>(at + 2) != id) ||
+          (key != 0 && read<std::int8_t>(at + 3) != key))
+      {
+        continue;
+      }
+      if (matched++ == nth)
+      {
+        return field > 2 ? 0u : read<std::uint32_t>(at + 4u + static_cast<std::uint32_t>(field) * 4u);
+      }
+    }
+    return 0;
+  }
+
+  std::optional<orphen::ported::psm2::Vec3>
+  BattleEncounter::FUN_00266ce8_sample_path(std::uint32_t record, float t) const
+  {
+    const auto found = pathCurves_.find(record);
+    if (found == pathCurves_.end())
+    {
+      return std::nullopt;
+    }
+    return found->second.FUN_00266ce8_sample(t);
   }
 
   void BattleEncounter::FUN_0023fb50_reset_records()
@@ -704,12 +814,29 @@ namespace orphen::ported::battle
   {
     const orphen::ported::entity::EntityPool *pool = environment.pool;
 
-    for (int guard = 0; guard < 256; ++guard)
+    // Every `continue` below is a handler that returned a negative value, and
+    // FUN_0023FD30 answers that by zeroing +0x2E before the next opcode runs
+    // (`if (-1 < yield << 0x10) break; yield = 0;`), so the zeroing lives in the
+    // loop's increment where no `continue` can skip it. Without it a yield
+    // parked up by opcode 10 leaked into the next timed wait: opcode 5 sub-op
+    // 1 only loads its `operand * 2` when it arrives with zero, and s14_e004's
+    // master entered its 240-tick wait still holding the 200 frames it had
+    // spent waiting for the first hit, so it ran out after 100 frames.
+    for (int guard = 0; guard < 256; ++guard, block.yield = 0)
     {
       const std::uint8_t opcode = read<std::uint8_t>(block.pc);
       const std::uint32_t pc = block.pc;
       std::int32_t yield = 0;
       bool handled = true;
+      if (gBattleVmTrace)
+      {
+        std::printf("[bvm] f=%u %s%d pc=0x%x op=%u bytes=%02x %02x %02x %02x %02x %02x %02x %02x yield=%d\n",
+                    gBattleVmTraceFrame, block.member >= 0 ? "member" : (block.record == 0 ? "master" : "record@0x"),
+                    block.member >= 0 ? block.member : static_cast<int>(block.record), pc, opcode,
+                    read<std::uint8_t>(pc), read<std::uint8_t>(pc + 1), read<std::uint8_t>(pc + 2),
+                    read<std::uint8_t>(pc + 3), read<std::uint8_t>(pc + 4), read<std::uint8_t>(pc + 5),
+                    read<std::uint8_t>(pc + 6), read<std::uint8_t>(pc + 7), block.yield);
+      }
 
       switch (opcode)
       {

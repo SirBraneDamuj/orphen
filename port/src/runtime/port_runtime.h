@@ -718,6 +718,7 @@ namespace orphen::port
     // FUN_00206F08 with FUN_00206D98's fallback. Shared by the battle module's
     // spell lines and by script opcodes 0x135/0x136.
     bool FUN_00206f08_play_voice_clip(std::uint32_t channel, std::uint32_t clipIndex);
+    bool FUN_00206a90_voice_busy() const;
     std::uint32_t DAT_00356788_voiceHoldTicks_ = 0;
 
     // DAT_00355588. The shared hit effect's one-frame request word: FUN_002f1380

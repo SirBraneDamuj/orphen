@@ -183,6 +183,14 @@ namespace orphen::ported::battle
                                  BattleEncounter &encounter,
                                  std::uint32_t frameTicks);
 
+    // FUN_002d8948(entity): one cursor for an enemy that joins after the
+    // countdown above has handed them out -- FUN_002d86b0 onto its slot, then
+    // the cursor's slot into +0x0D of the record FUN_0023eba0 finds for its
+    // +0x95. Type 0x93's state 0 calls it while battle bit 0 is up.
+    void FUN_002d8948_attach_cursor(const Environment &environment,
+                                    BattleEncounter &encounter,
+                                    std::size_t slot);
+
     // FUN_0023c340, through opcode 0xBD method 0x68 (FUN_00242cf0) while script
     // variable 25 holds 500. The target display: the freeze it puts on every
     // entity but the cursors while it is up, and the two camera movers that
@@ -198,6 +206,17 @@ namespace orphen::ported::battle
     void FUN_0023c340_target_display(const Environment &environment,
                                      const BattleEncounter &encounter,
                                      std::uint32_t frameTicks);
+
+    // FUN_00244BF0, opcode 0xBD method 0x76: put the battle into a scripted
+    // beat and take it out again. Mode 1 raises bit 4 of DAT_00354FC2, which
+    // stops FUN_0023C340 driving the battle camera and hides the 0x192 target
+    // cursors (FUN_002D73E8 wants `state & 5 == 1`); the caller zeroes the
+    // screen smear, which the original does here too. Mode 2 drops the bit,
+    // sends the player's member back to idle (pending action 6) unless its
+    // entity is already in a battle state (0x65 and up), and clears that
+    // member's charge timer through FUN_00249108. Anything else does nothing.
+    // Returns true for mode 1, so the caller knows to clear the smear.
+    bool FUN_00244bf0_scripted_beat(std::int32_t mode, const orphen::ported::entity::EntityPool *pool);
 
     // FUN_0023DA10, FUN_00242CF0's camera for script variable 25 = 600: the
     // close-up on the enemy that fell last, which a master script asks for

@@ -142,6 +142,16 @@ namespace orphen::ported::entity
     // original does not touch.
     void swapSlots(std::size_t first, std::size_t second);
 
+    // FUN_00244B40, opcode 0xBD method 0x75: park an entity or wake it, by
+    // negating both its type id and its DAT_005A96B0 byte. Mode 2 parks (type
+    // made negative, status 1 -> -1), mode 1 wakes (both made positive again);
+    // any other mode does nothing. A parked slot keeps all of its state but is
+    // neither ticked nor drawn, because FUN_00239CE0 and FUN_0020C5A8 both
+    // want the byte above zero. A battle scene parks the cast of a later
+    // cutscene this way at init -- s14_e004 parks Cleo, Majic, its three
+    // enemies and the 0x93 -- so they stand invisible where they will appear.
+    void FUN_00244b40_park(std::size_t index, std::int32_t mode);
+
     // Iteration helper for rendering and reporting: every slot currently holding
     // a script-spawned entity.
     template <typename Visitor>

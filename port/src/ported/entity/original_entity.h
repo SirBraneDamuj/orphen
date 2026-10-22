@@ -338,6 +338,11 @@ namespace orphen::ported::entity
     //
     // Type 0x4F, Sephy's orb (FUN_002d06b0 / FUN_002d07d0):
     std::int32_t orbOwner198 = -1;         // +0x198: the caster, as a pool slot
+    // Type 0x11E, the guard marker FUN_002F1420 hangs on a guarding enemy:
+    // +0x198 the enemy (a pointer in the original, a pool slot here) and
+    // +0x19C the ticks before it may drop, 0x3C0 at spawn.
+    std::int32_t guardMarkerOwner198 = -1;
+    std::int32_t guardMarkerTicks19c = 0;
     std::int32_t orbTarget19c = -1;        // +0x19C: FUN_002d2ca8's pick, never read
     std::int32_t orbWord1a0 = 0;           // +0x1A0: 0x2580, never read
     float orbSpeed1a4 = 0.0f;              // +0x1A4: DAT_003545f0, units per tick
@@ -419,6 +424,13 @@ namespace orphen::ported::entity
     // spelled as a plain record index; -1 is the original's unbound case, where
     // FUN_0023f8b8 returns the scratch at DAT_0031D178 rather than null.
     std::int32_t battleActorRecord198 = -1;
+    // Port bookkeeping with no field behind it. FUN_0025EB48 stamps a group-2
+    // battle placement's +0x95, and the enemy's own state 0 then binds it with
+    // FUN_0023F8B8. Most enemy types have no ported state 0, so the actor loop
+    // stands in for it: on the first tick this is set and +0x198 is still -1,
+    // it binds. Doing it at the spawn instead was wrong for an entity parked
+    // there by FUN_00244B40 -- its state 0 does not run until it is woken.
+    bool deferredBattleBind = false;
     // +0x19C: the facing the enemy is turning *toward*. State 0 seeds it with
     // the placement's own +0x5C and the idle default (FUN_0027f5c0) re-aims it
     // at the target -- pool slot 0, the player, when there is none.
@@ -612,6 +624,17 @@ namespace orphen::ported::entity
     std::uint8_t mastCueLatch1c2 = 0;    // +0x1C2: one-shot for the pass's cue.
     std::int32_t mastChild1c4 = -1;      // +0x1C4: the effect entity a move owns.
     std::uint16_t mastSubTimer1c8 = 0;   // +0x1C8: the pass's own sub-timer.
+
+    // Type 0x93's block, the s14_e004 tentacle monster
+    // (original_tentacle_monster.h). Overlaps the crab, swarm and mast blocks
+    // the same way they overlap each other.
+    std::int16_t tentaclePhase19c = 0;      // +0x19C: the step inside states 2 and 8.
+    std::uint8_t tentacleFlags19f = 0;      // +0x19F: bit 0, rising in place -- no turn.
+    float tentacleHeading1a4 = 0.0f;        // +0x1A4: state 8's travel heading; state 2's
+                                            //         angle to the target.
+    float tentacleClimb1ac = 0.0f;          // +0x1AC: height change per tick.
+    std::uint32_t tentaclePath1bc = 0;      // +0x1BC: its encounter path record, 0 = none.
+    std::uint32_t tentaclePathTicks1c0 = 0; // +0x1C0: how far round the lap, in ticks.
 
     // Type 0x1E6, the streak a pass sheds -- the same overlay again, on a
     // different entity. FUN_0029E4F8 stamps the three; FUN_0029E668 is the only

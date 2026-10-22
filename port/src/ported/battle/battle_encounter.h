@@ -46,13 +46,17 @@
 // script the FUN_0023FD30 VM starts on.
 
 #include "ported/battle/battle_tables.h"
+#include "ported/camera/original_camera_path.h"
 #include "ported/entity/entity_pool.h"
+#include "ported/psm2/psm2_runtime.h"
 #include "ported/resource/hit_parameter_table.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
+#include <optional>
 #include <vector>
 
 namespace orphen::ported::battle
@@ -90,6 +94,12 @@ namespace orphen::ported::battle
   // The id at and above which a record is on the player's side. FUN_0023eff8
   // and FUN_0023f080 both stop counting here.
   inline constexpr std::uint8_t kFirstFriendlyId = 0x50;
+
+  // --battle-vm-trace: print every instruction FUN_0023FD30's three VM loops
+  // execute, with the block it ran on and the frame. Diagnostic only; nothing
+  // reads it back. The runtime stamps the frame before each master step.
+  inline bool gBattleVmTrace = false;
+  inline std::uint32_t gBattleVmTraceFrame = 0;
 
   class BattleEncounter
   {
@@ -464,6 +474,47 @@ namespace orphen::ported::battle
       return entry;
     }
 
+    // ---------------------------------------------------------- actor paths
+    //
+    // FUN_002471e8 and FUN_00247520, the last two things FUN_0023f318 does.
+    // The placement sub-blob carries a second set of splines besides the
+    // camera's: **paths for actors to ride.**
+    //
+    //   +0x64  u16 count, +0x68 the array (DAT_00354FB4), 0x210 bytes each:
+    //            +0x00  u8  the pool slot of the 0x192 a kind-0 record spawns
+    //            +0x01  u8  +0x95 for that 0x192; also what FUN_002473a0 matches
+    //            +0x02  u8  its hit points
+    //            +0x03  u8  kind in the low seven bits, bit 7 "curve built"
+    //            +0x04  the waypoint list, a script offset once relocated
+    //            +0x08  u32 the lap time in ticks
+    //            +0x0C  the curve FUN_00266a78 builds over the waypoints
+    //   +0x6C  u16 count, +0x70 the array (DAT_00354FBC), 0x10 bytes each:
+    //            +0x00  s16 entity type, +0x02 s8 its +0x95, +0x03 s8 a third
+    //            key, then three script offsets -- the answers FUN_002475b8
+    //            hands back, the first of which is a path record
+    //
+    // Kind 1 only builds the curve. Kind 0 also spawns a type 0x192 riding it
+    // (FUN_002d8808); no scene ported so far ships one, so it is reported
+    // rather than run. The curve lives here, keyed by the record's offset,
+    // rather than in the record's own 0x204 bytes.
+    using WaypointDecoder =
+        std::function<bool(std::uint32_t list, std::vector<orphen::ported::psm2::Vec3> &out)>;
+    void FUN_002471e8_build_paths(const WaypointDecoder &decode);
+    // FUN_002475b8(type, id, key, nth, field): the `nth` table row matching all
+    // three keys -- a zero key matches anything -- and its answer `field`.
+    // Zero when nothing matches, or field is above 2.
+    std::uint32_t FUN_002475b8_find(std::int16_t type, std::int8_t id, std::int8_t key,
+                                    std::int8_t nth, std::int8_t field) const;
+    // A path record's +0x08.
+    std::uint32_t pathLapTicks(std::uint32_t record) const
+    {
+      return record != 0 && record + 0x0Cu <= memory_.size() ? read<std::uint32_t>(record + 8) : 0u;
+    }
+    // FUN_00266ce8 over a path record's curve. Empty when the record has none.
+    std::optional<orphen::ported::psm2::Vec3> FUN_00266ce8_sample_path(std::uint32_t record,
+                                                                       float t) const;
+    std::uint32_t kindZeroPathCount() const { return kindZeroPaths_; }
+
     std::size_t windowSize() const { return memory_.size(); }
 
     // FUN_00244248. `entityId` is the entity's +0x95: below 11 it is a party
@@ -495,6 +546,12 @@ namespace orphen::ported::battle
     std::uint32_t DAT_00354fa4_ = 0; // DAT_00354F98 + count * 2 + 1
     std::uint32_t cameraSplines_ = 0;      // DAT_00354FAC
     std::uint32_t cameraSplineCount_ = 0;  // DAT_00354FB0
+    std::uint32_t paths_ = 0;              // DAT_00354FB4
+    std::uint16_t pathCount_ = 0;          // DAT_00354FA8 +0x64
+    std::uint32_t pathTable_ = 0;          // DAT_00354FBC
+    std::int16_t pathTableCount_ = 0;      // DAT_00354FC0
+    std::map<std::uint32_t, orphen::ported::camera::Curve3> pathCurves_;
+    std::uint32_t kindZeroPaths_ = 0;
 
     // The master pseudo-record DAT_0031DBA8's own three fields: +0x2E the
     // yield, +0x30 the program counter, +0x34 the trigger table.

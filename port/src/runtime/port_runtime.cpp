@@ -815,7 +815,7 @@ namespace orphen::port
     };
     environment.DAT_00354ec0_markerTable = battleParty_.DAT_00354ec0_markerTable();
     environment.DAT_00355700_globalFadeCap = &DAT_00355700_globalFadeCap_;
-    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206a90_voice_busy = [this] { return FUN_00206a90_voice_busy(); };
     environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
     { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
     environment.DAT_0031da65_voiceChannel = [this](std::int16_t partySlot) {
@@ -1019,6 +1019,62 @@ namespace orphen::port
     };
     environment.FUN_0023eff8_enemy_count = [this]() -> std::int32_t
     { return battleEncounter_.FUN_0023eff8_enemy_count(entityPool_); };
+    environment.FUN_0023ece8_threat = [this](std::size_t slot) -> std::uint32_t
+    {
+      using namespace orphen::ported::battle;
+      const auto &tables = battleParty_.tables();
+      std::uint32_t threat = 0;
+      const std::int32_t members = battleParty_.DAT_00354ebc_memberCount();
+      for (std::int32_t member = 0; member < members; ++member)
+      {
+        const auto memberU = static_cast<std::uint32_t>(member);
+        const std::uint32_t control = BattleTables::controlBlock(memberU);
+        if (battleParty_.entitySlotAt(control + control::kEntity08) == kNoEntity)
+        {
+          continue;
+        }
+        // The original compares the low byte of the slot against the target.
+        if (static_cast<std::uint32_t>(battleParty_.FUN_002493b8_target(memberU)) !=
+            (static_cast<std::uint32_t>(slot) & 0xFFu))
+        {
+          continue;
+        }
+        const auto pending = tables.read<std::uint8_t>(control + control::kPendingAction0e);
+        const auto current = tables.read<std::uint8_t>(control + control::kCurrentAction0f);
+        if (current == 0x84)
+        {
+          threat = std::max<std::uint32_t>(threat, 1);
+        }
+        else if (current == 0x8B)
+        {
+          threat = std::max<std::uint32_t>(threat, 2);
+        }
+        if (pending == 0x8D || current == 0x8D)
+        {
+          threat = std::max<std::uint32_t>(threat, 3);
+        }
+      }
+      return threat;
+    };
+    environment.FUN_0023ecb8_guard_chance = [this](std::uint8_t id) -> std::int32_t
+    {
+      const std::uint32_t record = battleEncounter_.FUN_0023eba0_find(id, false);
+      return record == 0 ? 0 : battleEncounter_.read<std::uint8_t>(record + 0x25);
+    };
+    environment.FUN_0023ec80_guard_ticks = [this](std::uint8_t id) -> std::int32_t
+    {
+      const std::uint32_t record = battleEncounter_.FUN_0023eba0_find(id, false);
+      return record == 0 ? 0 : static_cast<std::int32_t>(battleEncounter_.read<std::uint8_t>(record + 0x24)) << 2;
+    };
+    environment.FUN_002475b8_find_path = [this](std::int16_t type, std::int8_t id, std::int8_t key,
+                                                 std::int8_t nth, std::int8_t field)
+    { return battleEncounter_.FUN_002475b8_find(type, id, key, nth, field); };
+    environment.pathLapTicks = [this](std::uint32_t record)
+    { return battleEncounter_.pathLapTicks(record); };
+    environment.FUN_00266ce8_sample_path = [this](std::uint32_t record, float t)
+    { return battleEncounter_.FUN_00266ce8_sample_path(record, t); };
+    environment.FUN_002d8948_attach_cursor = [this](std::size_t slot)
+    { battleParty_.FUN_002d8948_attach_cursor(battleEnvironment(), battleEncounter_, slot); };
     // FUN_002f1380: place, size and un-hide the one shared hit effect. The
     // entity it moves is the battle module's DAT_0031DAD0; the word it raises
     // is the runtime's DAT_00355588. FUN_002deae8 calls it every frame Bite of
@@ -1966,6 +2022,15 @@ namespace orphen::port
           }
         }
         return 0;
+      case 0x76:
+        // FUN_00244BF0. Mode 1's other writes are the smear's: uGpffffb6f1 is
+        // DAT_00355661, the target alpha, and DAT_0034387C/E the scale.
+        if (battleParty_.FUN_00244bf0_scripted_beat(arg3, &entityPool_))
+        {
+          DAT_00343878_frameFeedback_.FUN_00264448_set_alpha(0);
+          DAT_00343878_frameFeedback_.set_DAT_0034387c_scale(0, 0);
+        }
+        return 0;
       case 0x78:
         return battleParty_.FUN_00244cc0_equip_spell(static_cast<std::uint32_t>(arg3), arg4,
                                                      sceneScript_.state().DAT_003437b8_itemCounts);
@@ -2226,6 +2291,7 @@ namespace orphen::port
         return;
       }
       const auto bounds = sceneScript_.dialogueRecordBounds(blobOffset);
+      dialogueStream_.setExternalVoiceBusy(DAT_00356788_voiceHoldTicks_ != 0);
       dialogueStream_.FUN_00237b38_start(sceneScript_.blob(), bounds.first, bounds.second,
                                          sceneScript_.state());
       const auto &entry = dialogueStream_.log().back();
@@ -2313,7 +2379,7 @@ namespace orphen::port
       return true;
     };
     environment.FUN_00206c28_voice_load_idle = [] { return true; };
-    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206a90_voice_busy = [this] { return FUN_00206a90_voice_busy(); };
     environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
     { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
     environment.FUN_00206d98_play_voice = [this](std::uint32_t channel)
@@ -3172,6 +3238,13 @@ namespace orphen::port
       soundEngine_.FUN_00267d38_play_at(cue, at.positionX20, at.positionZ24, at.positionY28);
     };
     environment.FUN_00216868_random = [this] { return FUN_00216868_random(); };
+    environment.FUN_002d5630_damage_bar = [this](bool upperBank, std::int32_t hitPoints,
+                                                 std::int32_t maxHitPoints, std::int32_t damage)
+    {
+      orphen::ported::entity::FUN_002d5630_arm_health_bar(entityPool_, upperBank, hitPoints,
+                                                          maxHitPoints, damage,
+                                                          DAT_003555d3_groupEScene_);
+    };
     // Class 5's spell states hang their effect off the caster's role-4 bone.
     environment.FUN_0020dd78_bone_for_role = [this](std::size_t slot, std::uint8_t role) -> std::size_t
     {
@@ -3204,7 +3277,7 @@ namespace orphen::port
     // Nothing streams asynchronously here: the bank is read straight off the
     // disc image, so a load is never in flight.
     environment.FUN_00206c28_voice_load_idle = [] { return true; };
-    environment.FUN_00206a90_voice_busy = [this] { return DAT_00356788_voiceHoldTicks_ != 0; };
+    environment.FUN_00206a90_voice_busy = [this] { return FUN_00206a90_voice_busy(); };
     environment.FUN_00206f08_play_voice = [this](std::uint32_t channel, std::uint32_t clipIndex)
     { return FUN_00206f08_play_voice_clip(channel, clipIndex); };
     return environment;
@@ -3214,9 +3287,23 @@ namespace orphen::port
   // channel. Shared by the battle module's spell lines (which name a clip inside
   // a multi-clip bank) and by script opcodes 0x135/0x136 (which want the whole
   // entry, i.e. clip 0).
+  // FUN_00206A90: DAT_00356788, the one "a voice is speaking" byte. The port
+  // keeps it in two places -- the bank-clip countdown here and the clip the
+  // current dialogue record started -- so the answer is either.
+  bool PortRuntime::FUN_00206a90_voice_busy() const
+  {
+    return DAT_00356788_voiceHoldTicks_ != 0 || dialogueStream_.ownClipPlaying();
+  }
+
   bool PortRuntime::FUN_00206f08_play_voice_clip(std::uint32_t channel, std::uint32_t clipIndex)
   {
     if (channel >= std::size(DAT_00356480_voiceBankCache_))
+    {
+      return false;
+    }
+    // FUN_00206F08:10. Nothing starts while DAT_00356788 is up, whichever
+    // voice raised it -- a cutscene record's own clip included.
+    if (FUN_00206a90_voice_busy())
     {
       return false;
     }
@@ -4719,6 +4806,15 @@ namespace orphen::port
     // with no battle leaves that entry zero and the call is a no-op.
     if (battleEncounter_.FUN_0023f318_load(decoded, sceneScript_.headerWord(7)))
     {
+      // FUN_0023f318's tail: FUN_002471e8 and FUN_00247520, the actor paths.
+      battleEncounter_.FUN_002471e8_build_paths(
+          [this](std::uint32_t at, std::vector<orphen::ported::psm2::Vec3> &out)
+          { return sceneScript_.FUN_0025d618_decode_waypoints(at, out); });
+      if (battleEncounter_.kindZeroPathCount() != 0)
+      {
+        std::cout << "[battle] " << battleEncounter_.kindZeroPathCount()
+                  << " kind-0 actor path(s): FUN_002d8808's type 0x192 rider is not ported\n";
+      }
       std::cout << "[battle] encounter table at 0x" << std::hex
                 << battleEncounter_.DAT_00354eb4_actorArray() << ", master script at 0x"
                 << battleEncounter_.DAT_0031dbd8_masterScript() << std::dec << "\n";
@@ -5548,6 +5644,14 @@ namespace orphen::port
     entityPool_.forEachActiveMutable(
         [&](std::size_t slot, orphen::ported::entity::OriginalEntity &entity)
         {
+          // FUN_0020C5A8:44 queues a slot only when its DAT_005A96B0 byte is
+          // above zero, the same signed test FUN_00239CE0 ticks on. A slot
+          // FUN_00244B40 has parked (-1) is skipped here, not merely untouched
+          // by its behaviour.
+          if (entityPool_.status(slot) != orphen::ported::entity::SlotStatus::ScriptSpawned)
+          {
+            return;
+          }
           if (FUN_0020c5a8_isUndrawable(entity))
           {
             return;
@@ -9304,6 +9408,7 @@ namespace orphen::port
     dialogueStream_.setFrame(static_cast<std::uint32_t>(frameCount_));
     // FUN_00237de8's slot in the frame: the stream ages before the script runs,
     // so a slot polling opcode 0x35 sees this frame's answer.
+    dialogueStream_.setExternalVoiceBusy(DAT_00356788_voiceHoldTicks_ != 0);
     dialogueStream_.update(frameTicks, sceneScript_.state());
     // The viewer's free camera and the follow-yaw easing still think in seconds.
     // One simulation step is one nominal frame, so hand them that directly
@@ -9836,6 +9941,7 @@ namespace orphen::port
         {
           const auto vm = battleVmEnvironment(static_cast<std::uint32_t>(frameTicks));
 
+          orphen::ported::battle::gBattleVmTraceFrame = frameCount_;
           const auto step = battleEncounter_.FUN_0023fd30_step_master_script(vm);
           if (step.halted && !battleMasterHaltReported_)
           {

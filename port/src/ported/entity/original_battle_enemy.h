@@ -137,4 +137,12 @@ namespace orphen::ported::entity
                             const ActorEnvironment &environment,
                             ActorTrace &trace);
 
+  // FUN_002f1558 (0x002f1558), type 0x11E -- the guard marker FUN_002F1420
+  // stands up when a type 0x8B enters state 9. It keeps its owner's facing,
+  // plays animation 1 into 0, and once its 0x3C0-tick minimum is spent and
+  // the owner has left the state it was spawned for, plays 2 and frees itself.
+  void FUN_002f1558_guard_marker(OriginalEntity &entity,
+                                 std::size_t slot,
+                                 const ActorEnvironment &environment);
+
 } // namespace orphen::ported::entity

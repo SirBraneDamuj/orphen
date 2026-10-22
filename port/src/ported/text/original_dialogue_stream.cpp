@@ -54,12 +54,12 @@ namespace orphen::ported::text
   {
     speaker_.clear();
     line_.clear();
-    pendingFlags_.clear();
     options_.clear();
     choiceWorkIndex_ = 0;
     heldByTypewriter_ = false;
 
     std::uint32_t playedVoice = 0;
+    holdIsEstimate_ = false;
 
     // A target that is not itself a pointer-table entry -- opcode 0x33's inline
     // text is the case -- has no next entry to bound it, so cap the record.
@@ -68,6 +68,13 @@ namespace orphen::ported::text
     constexpr std::size_t kMaxRecordBytes = 512;
     std::size_t end = std::min<std::size_t>(
         {static_cast<std::size_t>(recordEnd), blob.size(), recordBegin + kMaxRecordBytes});
+    // The pre-scan below re-aims `end` as it follows a 0x10 call, and a called
+    // record that closes on 0x02 never unwinds it -- so the window has to be
+    // opened on the record's own bound, kept here. s14_e004's lines are all
+    // `0x33 -> 10 <rel32> 00` calls into shared records ending `0C nn 02`, and
+    // handing the window the callee's end (below its own cursor) completed
+    // every one of them before a glyph was placed.
+    const std::size_t windowEnd = end;
 
     // LAB_00239548's call stack, the same eight frames DialogueWindow keeps.
     // This pre-scan has to follow a 0x10 as well, and for a second reason: the
@@ -295,16 +302,11 @@ namespace orphen::ported::text
         }
 
         case kControlSetFlag:
-          // 0x1B is the one control code that has to actually *run*: it sets an
-          // event flag, and the cutscene scheduler gates on those. s01_e012's
-          // opening waits on flag 0x6A, which nothing in the script sets -- it
-          // is written from the tail of Volcan's line. 0x1C shares the handler
-          // but fails its own opcode test and sets nothing.
-          if (at + 2 < end)
-          {
-            pendingFlags_.push_back(static_cast<std::uint32_t>(blob[at + 1]) |
-                                    (static_cast<std::uint32_t>(blob[at + 2]) << 8));
-          }
+          // 0x1B sets an event flag, and the cutscene scheduler gates on those.
+          // It runs where the *walk* reaches it -- DialogueWindow does that --
+          // not here: s14_e004's "Who's there!?" sets 0x32B fifteen frames into
+          // the record, ahead of its text, and the beat after it is gated on
+          // the flag.
           break;
 
         default:
@@ -344,19 +346,23 @@ namespace orphen::ported::text
     }
     else
     {
-      // Text with no clip behind it. The original waits for the player here
-      // rather than for audio, so a timer is the honest stand-in -- but it is
-      // still invented, and the report says so.
+      // Text with no clip behind it. The timer is invented and the report says
+      // so; it is kept for the log only. It does not hold 0x1A -- see
+      // voiceBusy() -- because the original's 0x1A waits on DAT_00356788,
+      // which only a real voice raises. A battle scene voices its lines with
+      // opcode 0xBD method 0x77 instead of 0x18, and that clip is the one the
+      // record's 0x1A has to wait out.
       holdTicks_ = (kBaseHoldFrames + kFramesPerCharacter * static_cast<std::uint32_t>(line_.size())) *
                    orphen::ported::kNominalFrameTicks;
       ++estimatedLines_;
+      holdIsEstimate_ = true;
     }
     active_ = true;
 
     // The rendering walk runs over the same bytes, on its own cursor, and its
     // 0x1A blocks on the clip this record just started.
-    window_.FUN_00237b38_open(blob, recordBegin, static_cast<std::uint32_t>(end));
-    window_.setVoiceBusy(holdTicks_ != 0);
+    window_.FUN_00237b38_open(blob, recordBegin, static_cast<std::uint32_t>(windowEnd));
+    window_.setVoiceBusy(voiceBusy());
 
     state.FUN_002663d8_clearEventFlag(kFlagWindowVisible);
     state.FUN_002663d8_clearEventFlag(kFlagTextIdleA);
@@ -399,18 +405,22 @@ namespace orphen::ported::text
     state.uGpffffb0f4_gateMask |= kGateBitRecordEnded;
   }
 
-  // The original executes 0x1B as the walk reaches it, so a flag at the tail of
-  // a record lands when the line finishes reading. The port scans the whole
-  // record up front, so the sets are held and applied when the record ends --
-  // which puts them at the right moment for every site this scene uses, all of
-  // which sit at the end of their record.
+  // LAB_00239AA0 executes 0x1B as the walk reaches it. The window records each
+  // one it steps over and this spends them, once after every walk step and
+  // again as a record ends. The two are the same frame in the original, which
+  // sets the flag from inside FUN_00237FC0.
+  //
+  // This used to collect every 0x1B in the up-front scan and set them all when
+  // the record closed. That is right for a flag at a record's tail, which is
+  // every site s01_e012 has, and wrong for s14_e004's "Who's there!?", whose
+  // 0x32B comes before the text: setting it at the close held the preamble 104
+  // frames longer than hardware does.
   void DialogueStream::applyPendingFlags(orphen::ported::script::SceneScriptState &state)
   {
-    for (std::uint32_t flagId : pendingFlags_)
+    for (std::uint32_t flagId : window_.takeWalkedFlags())
     {
       state.FUN_002663a0_setEventFlag(flagId);
     }
-    pendingFlags_.clear();
   }
 
   void DialogueStream::update(std::uint32_t frameTicks,
@@ -424,7 +434,7 @@ namespace orphen::ported::text
     // Burn the clip down. This is DAT_00356788's whole role here: while it is
     // set, the walk's 0x1A refuses to advance.
     holdTicks_ = holdTicks_ > frameTicks ? holdTicks_ - frameTicks : 0;
-    window_.setVoiceBusy(holdTicks_ != 0);
+    window_.setVoiceBusy(voiceBusy());
 
     // **The record ends where its bytes say it ends**, not when the clip runs
     // out. The two usually coincide, because 0x1A is the last thing before the
@@ -470,6 +480,7 @@ namespace orphen::ported::text
                                            orphen::ported::script::SceneScriptState &state)
   {
     window_.FUN_00237fc0_update(frameTicks, pad);
+    applyPendingFlags(state);
     if (const auto answer = window_.takeChoiceAnswer())
     {
       if (answer->workIndex < orphen::ported::script::SceneScriptState::kWorkWordCount)
@@ -489,7 +500,6 @@ namespace orphen::ported::text
     options_.clear();
     choiceWorkIndex_ = 0;
     voiceCache_[0] = voiceCache_[1] = voiceCache_[2] = 0;
-    pendingFlags_.clear();
     log_.clear();
     measuredLines_ = 0;
     estimatedLines_ = 0;

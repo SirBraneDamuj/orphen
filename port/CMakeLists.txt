@@ -238,6 +238,7 @@ target_sources(orphen_port
     src/ported/entity/original_climb_graph.cpp
     src/ported/player/original_player_climb.cpp
     src/ported/entity/original_battle_enemy.cpp
+    src/ported/entity/original_tentacle_monster.cpp
     src/ported/entity/original_summon_stage.cpp
     src/ported/entity/original_boss_camera.cpp
     src/ported/entity/original_crab_boss.cpp

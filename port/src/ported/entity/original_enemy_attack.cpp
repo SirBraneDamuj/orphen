@@ -104,6 +104,12 @@ namespace orphen::ported::entity
     return records;
   }
 
+  EnemyAttackRecords &DAT_0058b180_enemy93Attacks()
+  {
+    static EnemyAttackRecords records;
+    return records;
+  }
+
   void FUN_00216078_fill_attack_records(std::int16_t typeId,
                                         EnemyAttackRecords &records,
                                         const ActorEnvironment &environment)

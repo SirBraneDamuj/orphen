@@ -232,13 +232,53 @@ namespace orphen::ported::battle
     tables_.write<std::uint16_t>(BattleTables::partyRecord(member) + record::kChargeTimer3c, 0);
   }
 
+  bool BattleParty::FUN_00244bf0_scripted_beat(std::int32_t mode,
+                                               const orphen::ported::entity::EntityPool *pool)
+  {
+    if (mode == 1)
+    {
+      sGpffffb052_ = static_cast<std::uint16_t>(sGpffffb052_ | 4u);
+      return true;
+    }
+    if (mode != 2)
+    {
+      return false;
+    }
+    sGpffffb052_ = static_cast<std::uint16_t>(sGpffffb052_ & 0xFFFBu);
+    // (&DAT_0031D7B8)[(sGpffffaf4e - 1) * 0xF]: the player member's entity.
+    // The original dereferences it unconditionally; a battle that reaches mode
+    // 2 always has one.
+    const std::uint32_t member = static_cast<std::uint32_t>(DAT_00354ebe_ - 1);
+    const std::int32_t slot = entitySlotAt(BattleTables::controlBlock(member) + control::kEntity08);
+    if (pool == nullptr || slot < 0 || static_cast<std::size_t>(slot) >= pool->slotCount())
+    {
+      return false;
+    }
+    const auto &entity = pool->slot(static_cast<std::size_t>(slot));
+    if (static_cast<std::int16_t>(entity.state60 & 0xBFFFu) < 0x65)
+    {
+      tables_.write<std::uint8_t>(BattleTables::controlBlock(member) + control::kPendingAction0e, 6);
+    }
+    // FUN_00249108 indexes by the entity's +0x95, the 1-based party slot.
+    if (entity.byte95 >= 1)
+    {
+      FUN_00249108_clear_turn_flags(static_cast<std::uint32_t>(entity.byte95 - 1));
+    }
+    return false;
+  }
+
   std::int32_t BattleParty::FUN_002493b8_target(std::uint32_t member) const
   {
-    // FUN_002493b8. The `< -3` fixup re-reads the halfword through a signed
-    // 16-bit shift pair, which for a value already negative is a no-op -- it is
-    // there because the field is written both signed and unsigned.
+    // FUN_002493b8. **Below -3 the target is negated** (0x002493D4: `slti`,
+    // then `subu v0, zero, v1` and a 16-bit sign fold). State 106 marks a
+    // committed target by storing it negated, and this is what reads it back
+    // as a slot. -1..-3 are left alone as "no target".
     const std::int16_t target =
         tables_.read<std::int16_t>(BattleTables::controlBlock(member) + control::kTarget2c);
+    if (target < -3)
+    {
+      return static_cast<std::int16_t>(-target);
+    }
     return target;
   }
 
@@ -841,6 +881,27 @@ namespace orphen::ported::battle
     }
   }
 
+  void BattleParty::FUN_002d8948_attach_cursor(const Environment &environment,
+                                               BattleEncounter &encounter,
+                                               std::size_t slot)
+  {
+    if (environment.pool == nullptr || slot >= environment.pool->slotCount())
+    {
+      return;
+    }
+    const std::int32_t cursor =
+        FUN_002d86b0_spawn_cursor(environment, static_cast<std::int32_t>(slot));
+    // FUN_0023eb78 is FUN_0023eba0(id, 0): only a record with its entity bound.
+    const std::uint32_t at = encounter.FUN_0023eba0_find(environment.pool->slot(slot).byte95, false);
+    if (at != 0)
+    {
+      // The original stores `(cursor - pool) / 0x1D8` as a byte, so a failed
+      // spawn's null lands as a garbage slot; the port writes 0xFF instead.
+      encounter.write<std::uint8_t>(at + actor::kCursor0d,
+                                    static_cast<std::uint8_t>(cursor < 0 ? 0xFF : cursor));
+    }
+  }
+
   // FUN_002de5b8(1) and FUN_002de500 (0x002de5b8 / 0x002de500): **the pause.**
   //
   // Both walk the whole 256-slot entity pool and set or clear bit 0x800 of
@@ -1011,6 +1072,25 @@ namespace orphen::ported::battle
     if (DAT_00354ecc_ != 0)
     {
       DAT_00354fb2_ = 0xFFFF;
+      return;
+    }
+
+    // :51-61. Bit 4 of DAT_00354FC2 is the battle's cutscene bit, which opcode
+    // 0xBD method 0x76 (FUN_00244BF0) raises and drops around a scripted beat.
+    // While it is up the battle camera is not driven at all -- the shot is the
+    // scene script's -- and an open target display is shut, unfreezing the
+    // pool, exactly once. The spline is let go too, so the battle picks a fresh
+    // pair when the bit drops. s14_e004's intermission is the user: without
+    // this the battle splines kept flying over it.
+    if ((DAT_00354fc2() & 4u) != 0)
+    {
+      DAT_00354fb2_ = 0xFFFF;
+      if (DAT_00354e96_ != 0)
+      {
+        DAT_00354e90_ = -1;
+        FUN_002de500_unfreeze(*environment.pool);
+        DAT_00354e96_ = 0;
+      }
       return;
     }
 
