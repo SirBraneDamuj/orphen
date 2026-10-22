@@ -29,7 +29,7 @@ Two smaller things it gets wrong if you don't know: texcoords arrive as `ST`
 1..3, so `0x5000d` is GREATER, not GEQUAL, and that one bit is the difference
 between "the GS discards nothing" and "the GS is doing a cutout discard".
 
-Usage is `python -c` against the module; `port/README.md`'s "Notes on GS dumps"
+Usage is `python -c` against the module; `port/docs/rendering.md`'s "Notes on GS dumps"
 has the recipes.
 
 ## `runtime/scene_script_interpreter.{h,cpp}` + `runtime/scene_script_state.{h,cpp}`

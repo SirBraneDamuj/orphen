@@ -100,7 +100,7 @@ namespace orphen::ported::script
     //
     // These are the two the engine runs at load. The other three exist and are
     // reachable through runEntry, but nothing calls them yet -- see
-    // port/README.md for what turning them on pulls in.
+    // port/docs/scene-script.md for what turning them on pulls in.
     bool FUN_0025b6d0_run_init(const ScriptEnvironment &environment, ScriptTrace &trace);
     bool FUN_0025b728_run_start(const ScriptEnvironment &environment, ScriptTrace &trace);
 

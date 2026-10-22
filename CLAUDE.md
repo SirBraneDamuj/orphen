@@ -39,6 +39,8 @@ the two traps when measuring.
 - `scr/`, `scr_jp/` — Script data (binary and extracted)
 - `globals.json`, `strings.json` — Ghidra-exported metadata (gitignored, generated via scripts)
 - `port/` — Native C++ port harness (SDL2 + fixed-function OpenGL). See `port/README.md`.
+  Findings live in `port/docs/`, one file per subsystem (indexed from the
+  README) — add new write-ups to the matching file there, not to the README.
 
 ## Analysis Workflow
 

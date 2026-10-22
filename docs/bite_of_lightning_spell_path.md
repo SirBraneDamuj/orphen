@@ -8,7 +8,7 @@ The summon (max charge with a live target) is **out of scope here** — its entr
 point is identified at the bottom so it can be picked up next.
 
 > **Status: everything below except section 8 is ported** (2026-09-03).
-> `port/README.md` carries the write-up of what landed and how to exercise it;
+> `port/docs/battle/spells.md` carries the write-up of what landed and how to exercise it;
 > this file is kept as the read of `src/` it was built from. Section 7's gap list
 > is retained as a record of what the work was. Two corrections have been folded
 > in: `FUN_00305130` is `cosf` and `FUN_00305218` is `sinf` (section 2 had them
