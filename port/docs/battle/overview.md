@@ -347,3 +347,13 @@ A wind ball that traps its target raises the `FUN_00248D58`
 flag the type `0x6A` HUD sprite reads, and that sprite is not ported. Sephy as
 the lead never traps; see `FUN_002e45a0_wind_ball`.
 
+## Class-1 state handlers and the harness hold
+
+Of the 24 class-1 state handlers at `0x0031DD60`, all of 101..122 are ported
+now; 100 and 123 are the original's own null entries
+(`battle_character_update.cpp`). `--battle-report` names any state a run
+reached whose handler is missing.
+
+`--hold-square 300-380` works under `--screenshot` as well as `--frames`; it did
+not at first, and a capture "during a guard" was quietly of a character standing
+still. Both loops now apply the same synthetic hold.

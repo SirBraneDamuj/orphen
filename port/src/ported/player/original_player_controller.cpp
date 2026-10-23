@@ -256,7 +256,7 @@ namespace orphen::ported::player
     // wiped it. Focused on pool slot 0 the actor never moved, never reached its
     // target, never advanced +0x1BC and never set the event flag its cutscene
     // gates on. This is the same bug the actor loop had (see the FUN_00239ce0
-    // note in port/docs/voice.md); the lead's copy of it survived that fix.
+    // note in port/docs/scene-script.md); the lead's copy of it survived that fix.
 
     // FUN_00251ED8:60-71, the terrain-hazard entry. A surface whose terrain
     // word carries 0x1000000 -- water, lava, a pit -- takes the player into

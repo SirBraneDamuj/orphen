@@ -30,7 +30,7 @@ New findings go in the file for their subsystem, not in this README.
 
 - [Running the port](docs/running.md) - command-line flags, the fly camera, fast forward
 - [Debugging tools](docs/debugging-tools.md) - `G` snapshots, entity-pool diffs against EE dumps, POSITION_DISP, the debug HUD
-- [Scene script](docs/scene-script.md) - the SCR VM, the cutscene sequencer, how a cutscene is built
+- [Scene script](docs/scene-script.md) - the SCR VM, the cutscene sequencer, how a cutscene is built, the bugs s01_e012 surfaced
 - [Entities and the party](docs/entities-and-party.md) - the entity pool, actor behaviour, party following and navigation
 - [Physics and collision](docs/physics.md) - standing on things, slopes, collision groups, push-out, jumping
 - [Doors, triggers and scene transitions](docs/doors-and-transitions.md)
@@ -40,7 +40,7 @@ New findings go in the file for their subsystem, not in this README.
 - [Effects](docs/effects.md) - rain, smoke, the spark shower, the screen smear
 - [Player model, close-up rig and bandana](docs/player-model-and-bandana.md)
 - [Text, dialogue and subtitles](docs/text-and-subtitles.md)
-- [Voice](docs/voice.md) - VOICE.BIN, the voice handshake, cutscene timing
+- [Voice](docs/voice.md) - VOICE.BIN, how dialogue waits on its clip, multi-clip spell banks
 - [Sound effects and music](docs/audio.md)
 - [The title screen](docs/title-screen.md)
 - [Menus and game modes](docs/menus.md) - field menu, pause, equip, area map

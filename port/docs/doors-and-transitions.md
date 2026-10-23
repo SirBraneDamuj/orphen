@@ -1,6 +1,6 @@
 # Doors, triggers and scene transitions
 
-### The doors, and the pulse nothing was setting
+## The doors, and the pulse nothing was setting
 
 Every door in `s01_e012` was inert to the player, and the reason was one missing
 assignment.
@@ -61,7 +61,7 @@ frames and the subproc then retires, leaving the group where it stopped.
 Reproduce it headless:
 
 ```
---scr-tick --arm-stream d300:13400 --hold-stick 0,1 --press-confirm 15235
+--arm-stream d300:13400 --hold-stick 0,1 --press-confirm 15235
 ```
 
 which walks the lead out of the re-entry cutscene into slot 23's door and opens
@@ -69,7 +69,7 @@ it. (`--press-confirm` with a *list* of frames re-opens the same door each time
 it finishes, because `work[14]` is back to `-1` — that is the script's own
 behaviour, not a bug.)
 
-### The doorway scene: 0x64, 0x56, 0x8E and 0x13F
+## The doorway scene: 0x64, 0x56, 0x8E and 0x13F
 
 The doorway scene at the end of the hall — Orphen talking to Dortin and Volcan,
 armed as stream `0xd530` by the tile-`0x62` floor panel — started on its camera
@@ -161,23 +161,19 @@ last:
   what it does now.
 
 - **`0x13F`** (`FUN_002604a8`) publishes a type-`0x28` rig's two children into two
-  work slots. Operands only, and deliberately: the fields it reads (`+0x198` /
-  `+0x19C`) are filled by `FUN_002d2f40`, type `0x28`'s own behaviour, which
-  allocates types `0x27`, `0x26` and `0x19` and hangs them off each other by bone
-  role — `0x26` on the rig's role-1 bone, `0x19` on the `0x26`'s role-2 bone with
-  the index **negated** (`FUN_0020cdc0`'s middle, non-rigid branch) and `0x27` on
-  its role-1. That behaviour is unported, and `+0x198`/`+0x19C`/`+0x1A0` already
-  carry three different per-type meanings in `OriginalEntity`. Writing the work
-  slots from fields nothing populates would put stale indices in front of every
-  opcode that later reads them, which is worse than not writing them. It is one
-  contained job — `FUN_002d2f40` is 40 lines and every piece it needs is already
-  ported — but it is a storage change and belongs with the behaviour, not here.
+  work slots. The fields it reads (`+0x198` / `+0x19C`) are filled by
+  `FUN_002d2f40`, type `0x28`'s own behaviour, which allocates types `0x27`,
+  `0x26` and `0x19` and hangs them off each other by bone role — `0x26` on the
+  rig's role-1 bone, `0x19` on the `0x26`'s role-2 bone with the index
+  **negated** (`FUN_0020cdc0`'s middle, non-rigid branch) and `0x27` on its
+  role-1. It was operands-only until that behaviour was ported; both are
+  modelled now. See [Player model, close-up rig and bandana](player-model-and-bandana.md).
 
 With all four, `0xd780` runs its 43 records with **zero unimplemented opcodes**,
 ending on the last at frame 15874 with the player released in the doorway and no
 object-script slot left spinning.
 
-### Leaving for another scene
+## Leaving for another scene
 
 `0x8E` now performs the change rather than only reporting it, and the shape of
 that is worth writing down because almost none of it is in the opcode.
@@ -234,19 +230,17 @@ cutscene has to finish before the doorway is live at all. The per-frame entry
 holds that non-zero for its entire run — which is why `--scr-report` shows the
 panel sites at `0x3d43`..`0x402c` with far fewer tests than the ones in `0xb439`.
 
-Two things this does **not** yet do, both of them in the arriving scene rather
-than in the transition:
+`s14_e001`'s own script used to halt at once on the far side (`0x3C`, `0x117`,
+`0x46`); it now runs with zero unimplemented opcodes -- see
+[s14_e001](scenes/s14_e001-crab.md).
 
-- `s14_e001`'s own script halts immediately — `0x3C` at `0x803` (init), `0x117`
-  at `0x15b5` (start) and `0x46` at `0x208f` (per-frame). So the scene loads,
-  places its lead and draws, but does not run.
-- The screen comes back on its own. In the original the fade-out block is left
-  at `0x1FE0` across the load and the arriving scene's script is what reveals;
-  the port clears it in `resetLeadPlayerForLoadedMap`, which is a documented
-  divergence that predates this and is what stops the arrival being black while
-  the script above cannot run.
+**Known divergence: the screen comes back on its own.** In the original the
+fade-out block is left at `0x1FE0` across the load and the arriving scene's
+script is what reveals. The port still resets `DAT_00571dc0` in
+`resetLeadPlayerForLoadedMap`. That made sense while arriving scripts could not
+run; now that they can, it is a fidelity bug to remove, not a feature.
 
-### Arriving: what a group-0xE scene needs that no field scene did
+## Arriving: what a group-0xE scene needs that no field scene did
 
 `s14_e045` — where `s01_e024`'s floor panel goes — halted on its *first*
 statement and again on frame 2. Four opcodes and two missing lines of
@@ -257,8 +251,8 @@ the six are things only a scene reached this way ever exercises.
 `FUN_0025c258(&gp0xffffb298)`, and gp 0xffffb298 against the 0x00359F70 base is
 **0x00355208 — the map-prop bank**. Ghidra renders that one address as
 `iGpffffb298` inside `FUN_00229980` and as `DAT_00355208` inside `FUN_0022a418`,
-which is why `opcode_dispatch_tables.md` names it an "entity descriptor counter"
-on the strength of the gp spelling alone. It is the bank type ids
+which is why `opcode_dispatch_tables.md` used to name it an "entity descriptor
+counter" on the strength of the gp spelling alone. It is the bank type ids
 `0x272..0x371` resolve against, and since `0x8E` never writes `DAT_003551f4`, a
 scene arrived at through `0x8E` inherits the *departing* stage's bank. `0x3C` is
 how it names its own: `s14_e045`'s init opens with it and asks for bank 10.
@@ -295,9 +289,14 @@ entity pool at `DAT_0058d120` with indices 80..324, and it is neither:
 pool, and the `>> 3` on a counter that runs in eighths returns an ordinary slot
 index.
 
-#### Where it stops now, and why that is the battle system
+### Where it stopped, and why that was the battle system
 
-`s14_e045` reaches record 4 of its 52 and holds. Subproc `0x7E1` at `0x379e`
+**Status (2026-10-23):** a cold `--scene s14_e045 --frames 12000` now gets
+past this, dispatching 43 of the 52 records before halting on opcode `0xB6`
+(unimplemented) at `0x41e3`. The section below is why it used to stop at
+record 4.
+
+`s14_e045` reached record 4 of its 52 and held. Subproc `0x7E1` at `0x379e`
 selects `work[0x28]` — pool slot 11 — and spins on `objreg(current, 5) & 0x10`,
 which is entity `+0x06` bit 0x10.
 
@@ -318,10 +317,10 @@ Slot 11 will never set it, and that is not a port bug:
   caller in `src/`, so they are reached only through the battle actor vtables.
 
 So `s14_e045`'s opening is not a field cutscene that leads to a battle; it is
-already being driven by the battle module, and the first thing needed to get
-past record 4 is a slice of that module rather than another opcode.
+already being driven by the battle module, and what got it past record 4 was a
+slice of that module rather than another opcode. See [Battle](battle/overview.md).
 
-#### The floor panels are a 4-bit code
+### The floor panels are a 4-bit code
 
 `--scr-report` used to print a centroid per panel bit. It is grouped by the whole
 low byte now, because that is how the script reads them: the exit chain at
@@ -334,7 +333,7 @@ at all. `s01_e012`'s six doorways come out as codes `0x28`, `0x3a`, `0x46`, `0x5
 `0x62`, `0x84` and `0x9c`, and the one the transition wants is `0x62`, at
 `(5.50, -2.75)`.
 
-### The scene remembers where you came from: `0x3A` and `--from-scene`
+## The scene remembers where you came from: `0x3A` and `--from-scene`
 
 `s01_e014`, the ship interior after the crab, halted its **start entry** at
 `0x9a5` on an unimplemented `0x3A`, and everything the start entry had left to
@@ -378,7 +377,7 @@ A scene loaded straight off the command line has no departure, so
 `--from-scene sNN_eMMM` seeds the pair. Without it a direct load takes the
 default arm.
 
-### Which door you came in by: `DAT_00325340`
+## Which door you came in by: `DAT_00325340`
 
 Two doors lead from `s01_e014` into `s01_e013` and two lead back, and the port
 put the player through the same one every time. The doorway a scene drops you
@@ -425,7 +424,7 @@ default heading, and it is the destination that turns them: `s01_e013` does it
 from an object script at `0x5ADE`, one `0x77` on object register `0x0D` with
 180 degrees. Ported as written, bit and all.
 
-### What a scene already did: it was always the flag bank
+## What a scene already did: it was always the flag bank
 
 The other half of "two doors" is that the room should not replay its opening
 when you come back through one. That needed no new code — the game-wide flag
@@ -455,7 +454,7 @@ the first armed one and dispatched thirteen records. `--place-slot` grew the
 `:<first>-<last>` window for this; without it one run can only ever stand on
 one door.
 
-### Terrain triggers now print where to stand
+## Terrain triggers print where to stand
 
 The panel-code list under `--scr-report` groups by the terrain word's **low
 byte**, which is right for `s01_e012`'s doorway codes and useless for a scene

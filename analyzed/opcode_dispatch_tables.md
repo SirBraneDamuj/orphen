@@ -25,7 +25,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x39 variable_or_flag_alu  # alias of 0x37; same handler chooses mode by sGpffffbd68
 0x3A read_backup_map_coordinates_bcd  # orig FUN_0025dab8 — convert uGpffffae10/ae14 to BCD via FUN_0025da48, return combined 16-bit value (backup map coords); see analyzed/ops/0x3A_0x3B_0x3C_map_coordinate_opcodes.c
 0x3B read_current_map_coordinates_bcd  # orig FUN_0025da78 — convert uGpffffb284/b280 to BCD via FUN_0025da48, return combined 16-bit value (current map coords); see analyzed/ops/0x3A_0x3B_0x3C_map_coordinate_opcodes.c
-0x3C set_descriptor_counter  # orig FUN_0025daf8 — eval expr, store in uGpffffb298 (entity descriptor counter); see analyzed/ops/0x3A_0x3B_0x3C_map_coordinate_opcodes.c
+0x3C set_map_prop_bank  # orig FUN_0025daf8 — eval expr into gp 0xffffb298 = DAT_00355208, the map-prop bank that type ids 0x272..0x371 resolve against (FUN_00229980). Formerly named set_descriptor_counter from the gp spelling; see port/docs/doors-and-transitions.md and analyzed/ops/0x3A_0x3B_0x3C_map_coordinate_opcodes.c
 0x3D FUN_0025e560  # name: modify_flag_state (query/set/clear/toggle cluster via prev opcode)
 0x3E FUN_0025e560  # name: modify_flag_state
 0x3F FUN_0025e560  # name: modify_flag_state
@@ -63,7 +63,7 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0x5F calculate_polar_component  # orig FUN_0025f380 — eval magnitude + angle, calc magnitude*sin(angle)*scale, submit result; same handler as 0x5E, branches on opcode; see analyzed/ops/0x5E_0x5F_calculate_polar_component.c
 0x60 calculate_3d_magnitude  # orig FUN_0025f428 — eval 3 exprs (x,y,z), normalize, calc sqrt(x²+y²+z²), scale, submit result; see analyzed/ops/0x60_calculate_3d_magnitude.c
 0x61 test_lead_flag_word  # orig FUN_0025f4b8 — eval mask expr, read selector byte (bit 7 = which word; bits 0-6, if any set, gate on +0x0C bit 0), return (word & mask) != 0, or false when +0x0C has 0x100. **Correction:** the three globals are fields of pool slot 0, not standalone controller state — DAT_0058bebc is 0x58BEB0+0x0C, DAT_0058bf1c is +0x6C, DAT_0058bf20 is +0x70. analyzed/ops/0x61_test_controller_button_state.c reads them as cached controller words, which is a guess the addresses do not support; the file name and its button-mask speculation should be treated as unverified.
-0x62 find_entity_by_id_in_secondary_pool  # orig FUN_0025f548 — eval target_id, search secondary pool (DAT_0058d120, 245 entities), match entity[+0x95], return slot index (80-324) or 0; see analyzed/ops/0x62_find_entity_by_id_in_secondary_pool.c
+0x62 find_entity_by_tag  # orig FUN_0025f548 — eval target_id, scan the one entity pool from slot 10 (DAT_0058d120 = DAT_0058beb0 + 10*0x1D8) for entity[+0x95] == id, return the slot index; there is no secondary pool. See port/docs/doors-and-transitions.md
 0x63 set_entity_tracking_and_position  # orig FUN_0025f5d8 — eval 2 selectors + mode + 3 pos coords, link tracker→target entities, set tracking mode (+0xA0/192/194), set position; see analyzed/ops/0x63_set_entity_tracking_and_position.c
 0x64 FUN_0025f700   # name: update_object_transform_from_bone (tentative)
 0x65 FUN_0025f7d8   # name: multi_call_feeder
@@ -196,8 +196,8 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xE4 stage_swizzled_word_stream_upload  # orig FUN_00265148 — copy words into swizzled bank buffer and schedule DMA (FUN_00210b60)
 0xE5 load_backdrop_model  # orig FUN_002651a0 — two inline bytes are a PSB4 resource id, the expression is the background slot; see [analyzed/ops/0xE5_load_backdrop_model.c](../analyzed/ops/0xE5_load_backdrop_model.c)
 0xE6 set_backdrop_slot_shade  # orig FUN_00265200 — the four-entry table is background models, not minimap markers; see [analyzed/ops/0xE6_set_backdrop_slot_shade.c](../analyzed/ops/0xE6_set_backdrop_slot_shade.c)
-0xE7 get_or_set_global_short_355064  # orig FUN_00265290 — shared with 0xE8; see [analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c](../analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c)
-0xE8 get_or_set_global_short_355064  # orig FUN_00265290 — shared with 0xE7; see [analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c](../analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c)
+0xE7 get_or_set_scheduler_gate  # orig FUN_00265290 — shared with 0xE8; DAT_00355064 is uGpffffb0f4, the word an event-scheduler record with gate bit 15 set waits on, so 0xE8 lets a body open its own gate. See port/docs/doors-and-transitions.md and analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c
+0xE8 get_or_set_scheduler_gate  # orig FUN_00265290 — shared with 0xE7; DAT_00355064 is uGpffffb0f4, the word an event-scheduler record with gate bit 15 set waits on, so 0xE8 lets a body open its own gate. See port/docs/doors-and-transitions.md and analyzed/ops/0xE7_0xE8_get_or_set_global_short_355064.c
 0xE9 npc_consume_step_byte_1cc  # orig FUN_00265d88 — read+clear focus_npc[+0x1CC]; see [analyzed/ops/0xE9_npc_consume_step_byte_1cc.c](../analyzed/ops/0xE9_npc_consume_step_byte_1cc.c)
 0xEA npc_get_focus_pool_index  # orig FUN_00265818 — (focus_npc-entity_pool_base)*inv(0xEC*8)>>3; see [analyzed/ops/0xEA_npc_get_focus_pool_index.c](../analyzed/ops/0xEA_npc_get_focus_pool_index.c)
 0xEB set_npc_focus_entity  # orig FUN_00265840 — see [analyzed/ops/0xEB_set_npc_focus_entity.c](../analyzed/ops/0xEB_set_npc_focus_entity.c)
