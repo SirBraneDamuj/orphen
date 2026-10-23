@@ -1,6 +1,6 @@
 # Battle: sword and guard
 
-### The sword: charge, close, and two follow-up slashes
+## The sword: charge, close, and two follow-up slashes
 
 Cross is the kind-0 arm — the only one of the four whose release is not a single
 shot. It is four states rather than two, and the port had the shape of all four
@@ -61,7 +61,7 @@ the animation's cancel window — and the animation is not already `0x31`. That
 one line is what makes the follow-ups a timed input rather than a mash. The
 port returned the incoming `+0x62` unchanged, so the window was always open.
 
-#### The blade decides whether the swing is a fresh one, and it is not in `src/`
+### The blade decides whether the swing is a fresh one, and it is not in `src/`
 
 `FUN_0024ac88`'s entry gate has two doors into the fresh-swing setup, and this
 is the piece that took longest to find:
@@ -107,7 +107,7 @@ is in action `0x84`; a five-frame re-hit cooldown in `+0x62`; and a third-slash
 damage bump — reaction `0x1B` and `bonus + ((bonus / 2) | 1)`, so the last hit
 of the chain lands at about 1.5x.
 
-#### Every attack ended in a soft lock until state 108 was ported
+### Every attack ended in a soft lock until state 108 was ported
 
 `FUN_0024a870` is the walk back to the mark, and it is where all four arms
 finish. `FUN_002462c8` returns `0xffffff36` on `current == 0x87` **before it
@@ -132,7 +132,7 @@ its first frame. `--battle-report` now shows `f=409 action=0x87 state=0x406c`
 followed by `f=410 action=0x06 state=0x4078`, and a press at `f=412` starts the
 next charge.
 
-#### The target was never re-validated
+### The target was never re-validated
 
 `FUN_00249610:146-164` runs before every state dispatch and writes an invalid
 target back to the control block as `-1`. A candidate survives only if its
@@ -163,7 +163,7 @@ Animation `0x33` is up on the frame *after* 106, which is the whole of "he does
 not run first". The presses in between produce nothing: the window was shut, and
 after the third slash there is nothing alive to chain against.
 
-#### Guard, end to end
+### Guard, end to end
 
 Guard is the one command that runs all the way through, and it is worth reading
 as the template for the rest, because **the visible half of a command is not in
@@ -193,8 +193,8 @@ in code, and read the same way by two functions that never talk to each other.
 On `s14_e012` that is 500 frames: guard at 301, `0x91` armed at 801 with the pad
 still held, shield closed at 802.
 
-What is not ported is `FUN_0024cba0`'s damage half — the halved hit, the second
-`0x1C7` spawned at the impact bearing, cue `0xE8`, and the `0x4066` guard break.
-All of it is gated on `+0xBE`, which only an attacking enemy writes, so there is
-nothing yet to test it against.
+`FUN_0024cba0`'s damage half — the halved hit, the second `0x1C7` spawned at
+the impact bearing, cue `0xE8`, and the `0x4066` guard break — is ported too
+(`stateGuard117`, `battle_character_update.cpp`). It is gated on `+0xBE`, which
+only an attacking enemy writes; see [Enemies](enemies.md).
 

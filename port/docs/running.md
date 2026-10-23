@@ -65,10 +65,11 @@ port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load
 port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --frames 60
 port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load-only --scr-report
 port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load-only --actor-report
-port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --frames 120 --scr-report --actor-report
 ```
 
-`--scr-tick` runs the per-frame script entry and the object-script slots.
+The per-frame script entry and the object-script slots run by default;
+`--no-scr-tick` stops them (`--scr-tick` is still accepted; it is the default).
 `--actor-report` lists every live entity, the behavior address its type resolves
 to, and whether that behavior is ported; with `--frames` it also reports tick
 counts per type. Both reports resolve straight from the pool, so `--load-only`
@@ -101,14 +102,14 @@ moving -- the stick has to travel almost halfway first. The keyboard follows
 FUN_0023b5d8's digital branch instead, which writes 128.0 outright, so a held
 key always runs.
 
-Controls:
+## Controls
 
 Game inputs -- these reach the ported code as raw pad bits and nothing else:
 
 - `W/A/S/D` moves the runtime lead player relative to the current camera yaw.
 - `Space`, or gamepad X / face west (Square), jumps when the lead player is grounded.
-- `C`, or gamepad B (Circle), swings the sword when the lead player is grounded. See The sword attack, above.
-- `V`, or gamepad Y / face north (Triangle), casts the homing magic projectile, also only when grounded. See The magic cast, above.
+- `C`, or gamepad B (Circle), swings the sword when the lead player is grounded. See [Field combat](field-combat.md).
+- `V`, or gamepad Y / face north (Triangle), casts the homing magic projectile, also only when grounded. See [Field combat](field-combat.md).
 - Holding `C` re-arms the jump in mid-air. This one is a harness debug affordance, not something the original's airborne state does; it restarts state 2 / animation `0x0C` through the same startup and `+0x44` seed as a grounded jump, which is how you get up to a ceiling to test against. It shares Circle with the attack because the original's own gate on it is `input_flags & 0x20` (`FUN_00251ed8`, `uGpffffbd54`).
 - `Return`, or gamepad A (Cross), confirms -- the interaction probe, and dialogue advance.
 - `J/L` orbits the player camera, mapped onto the original's L1/R1 raw pad bits (0x04/0x08). With no player active they rotate the free viewer camera instead.
@@ -251,7 +252,7 @@ not survive into one.
 
 PLAYER > SPELLS opens a second panel, stacked under Player Params. It is a
 shortcut to what the Equip screen and opcode `0xBC` do, and writes the same two
-tables the same way (see the Equip screen section for both):
+tables the same way (see the Equip screen in [Menus](menus.md) for both):
 
 - **Spells.** Every item the lead could put in a spell slot is listed: the ring's
   own filter in `FUN_00230910`, an item record carrying the lead's roster bit
@@ -365,9 +366,9 @@ the present together and the game free-runs.
 The port does the same thing in the same place -- `main()` keeps calling
 `PortRuntime::update` with `render` and `swapBuffers` skipped. That is sound
 because the headless `--frames` path already runs `update` with no renderer at
-all; nothing in a step reads back from a draw. On this machine a step costs
-about 0.34 ms against a presented frame's ~16.6 ms, so the ceiling is roughly
-40x.
+all; nothing in a step reads back from a draw. On this machine a Release step
+costs about 0.3 ms against a presented frame's ~16.6 ms, so the ceiling is
+roughly 40-50x.
 
 Three things differ from the original, all of them harness concerns:
 

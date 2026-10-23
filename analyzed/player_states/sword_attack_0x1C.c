@@ -44,9 +44,8 @@
  *
  * FUN_002148a8, the swept hit test, and the damage it charges are analysed and
  * ported -- see analyzed/sword_hit_test_and_damage.c. FUN_002d59c0 is one call,
- * FUN_0023bbd8(0, 3), the hit cue on the sound engine's priority channel; the
- * port reaches the engine only through FUN_00267d38, so the branch is there and
- * the cue is not.
+ * FUN_0023bbd8(0, 3): the pad rumble, not a sound (corrected 2026-10-23; see
+ * port/docs/scene-script.md, opcode 0xDE). The port has no rumble path.
  */
 
 #include "orphen_globals.h"
@@ -190,7 +189,7 @@ void update_sword_blade_entity(entity *blade)
    * analyzed/sword_hit_test_and_damage.c. */
   if (FUN_002148a8(blade, &blade->hitParams_198) != 0)
   {
-    FUN_002d59c0(); /* FUN_0023bbd8(0, 3), the hit cue */
+    FUN_002d59c0(); /* FUN_0023bbd8(0, 3), the hit rumble */
   }
 
 light:

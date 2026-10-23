@@ -52,9 +52,9 @@ with an alpha-0 hole in the middle for the orb to show through — and
 `MapViewer::drawSpriteQuads` had no `GL_ALPHA_TEST`. A blended record hides its
 transparent texels through the blend, which is why no effect had ever noticed;
 a mode-0 record does not, so the ring painted its own hole opaque over the two
-records beneath it. The GS runs ATST GREATER for the whole frame (see
-`docs/map_cutout_alpha_test.md`), and this pass was the last one not modelling
-it. One `glEnable(GL_ALPHA_TEST)` and the gauge has a fill level again.
+records beneath it. The GS runs ATST GREATER for the whole frame (see the
+cutout section of [Rendering](rendering.md)), and this pass was the last one not
+modelling it. One `glEnable(GL_ALPHA_TEST)` and the gauge has a fill level again.
 
 ### Damage reaches the lead through `FUN_00251ED8`, not through an enemy
 
@@ -82,11 +82,10 @@ carries it on the body for fifteen frames. Slots 3 and above are the flat-tint
 band, so the whole character goes red for a quarter of a second.
 
 Left out, and named rather than silent: `FUN_00257B00`'s pad rumble (the port
-has no rumble path), `FUN_00205938(7, 0x2F, 0)`'s death sting (no SND table
-entry for it), `FUN_00255E40`'s respawn (it walks `DAT_00355704`, the lead
-trail, for a primitive carrying neither `0x0800000` nor `0x1000000`), and
-`FUN_00251ED8:104-110`, which detaches the object a state-9 carry is holding —
-the port has no state 9.
+has no rumble path) and `FUN_00251ED8:104-110`, which detaches the object a
+state-9 carry is holding — the port has no state 9. The death sting
+(`FUN_00205938(7, 0x2F, 0)`) and `FUN_00255E40`'s respawn were on this list and
+are both ported now; see below.
 
 ### Dying is a knockback, and then the room goes out
 
@@ -104,9 +103,8 @@ state `0x1A`.
 State `0x19` is the **terrain hazard**: `FUN_00251ED8:60-71` writes it when the
 surface under the player carries `0x1000000` — lava, or a hole — and
 `FUN_002557A0` sinks the body and hands it to `FUN_00255E40`, the respawn that
-puts the player back on the lead trail with one hit point. The entry test is not
-ported, so nothing reaches that handler yet; it is kept because it is correct
-for what it actually is.
+puts the player back on the lead trail with one hit point. The entry test and the
+respawn are both ported now (`original_player_controller.cpp`).
 
 Two more things the death branch had wrong, both from the same misreading:
 `psVar8` is a `short *`, so `psVar8[2] |= 0x11` is **+0x04**, not +0x02 — and
@@ -154,16 +152,17 @@ curling sideways on a heading taken from their own countdown.
 
 Once both ramps are done the state holds. `+0x1A4` counts 19200 ticks — ten
 seconds — down by the frame tick, and either that or a press of Circle or Cross
-hands off to `FUN_00237A08`. That function arms a fade, sets game mode `0xC` and
-calls `FUN_002241D8`: the return to the title screen. The port has no mode `0xC`,
-so it keeps the fade, leaves the lead in state 10 the way the original does
-first, and says on stdout what it dropped.
+hands off to `FUN_00237A08`, the return to the title screen. That is a fade
+and a scene load of `s12_e010`, not a game mode -- an earlier reading here had it
+setting mode `0xC`, which is the scene *section*. The hand-off now goes through
+the same code as the field menu's Return to Title (see [Menus](menus.md)).
 
 Also left out and named: `DAT_00343A10 = -1000.0`, which gates `FUN_002025E0`;
 `FUN_00212DB0(0, 0, 0)`, which sets the star field's count to zero rather than
-spawning one; `cGpffffb664`, a sound-suppression latch nothing in the port
-reads; and `cGpffffb6d0`, the death latch `FUN_00251ED8` raises to close a block
-in `FUN_00224ff0` — the pause menu, which the port does not have.
+spawning one; and `cGpffffb664`, a sound-suppression latch nothing in the port
+reads. (`cGpffffb6d0`, the death latch that closes the pause gate in
+`FUN_00224ff0`, used to be on this list; the pause is ported and the port raises
+the latch now.)
 
 ### The music is loaded by the death, not by the scene
 
@@ -212,9 +211,10 @@ death's fall reaches -0.045 and throws dust, a plain knockback's reaches -0.034
 (which is -4.35, truncating to -4) and does not. Rounding instead of truncating
 would put dust under the knockback as well.
 
-The port's touchdown test lives in the lead's own physics copy, because
-`FUN_002262C0` is still unported for slots 1..255 — so nothing else raises dust
-on landing yet.
+The port's touchdown test lives only in the lead's physics copy. The non-player
+copy of `FUN_002262C0` (`actor_frame_update.cpp`) does not have it yet, so no
+other actor raises dust on landing -- a fidelity gap, since the original's is
+shared.
 
 ### A faded model still writes depth
 
@@ -239,10 +239,10 @@ fix is to pass `mode` through unchanged and only raise `blend`.
 
 ### Checking it
 
-Nothing in the port lands a blow on the lead: no ported enemy runs an attack
-against it. So the harness writes `FUN_00216140`'s four output fields directly —
-`+0xBE` the damage, `+0xBC` the reaction, `+0xC0` its length, `+0xC4` the
-direction — and lets `FUN_00251ED8` spend them.
+Ported enemies do hit the lead now, but to test a reaction on demand the
+harness writes `FUN_00216140`'s four output fields directly — `+0xBE` the
+damage, `+0xBC` the reaction, `+0xC0` its length, `+0xC4` the direction — and
+lets `FUN_00251ED8` spend them.
 
 Keys `1`..`5` in the window, and `--damage <frame>[:<kind>][,...]` for a
 headless or captured run; `0` heals. The kinds are
@@ -262,6 +262,5 @@ orphen_port --disc-root disc --scene s01_e024 --no-audio \
 
 The whole death takes about twelve seconds, so a lethal capture wants a late
 frame: `--damage 20:5 --screenshot out.ppm:260` is the black room with the spark
-column, and running to frame 800 with `--actor-report` reaches the hand-off and
-leaves the lead in state 10.
+column, and running to frame 800 with `--actor-report` reaches the hand-off.
 

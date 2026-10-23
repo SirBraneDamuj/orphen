@@ -155,8 +155,8 @@ extern void FUN_00217d70(float x1, float y1, float z1, float x2, float y2, float
 extern uint32_t FUN_00216690(float angle); // Angle normalization
 
 // Trigonometric helpers
-extern float FUN_00305130(uint32_t param); // sin calculation
-extern float FUN_00305218(uint32_t param); // cos calculation
+extern float FUN_00305130(uint32_t param); // cosf (fdlibm; corrected 2026-10-23)
+extern float FUN_00305218(uint32_t param); // sinf (fdlibm; corrected 2026-10-23)
 
 // Flag system
 extern long FUN_00266368(uint32_t flag_index); // get_flag_state
@@ -239,15 +239,15 @@ void battle_logo_state_manager(int mode)
     FUN_00217e18(0);
     
     // Calculate position with trigonometric adjustments
-    float sin_val = (float)FUN_00305130(rotation);
-    float x_pos = (float)(&DAT_0058bed0)[entity_idx * 0x76] - DAT_00354c98 * sin_val;
+    float cos_val = (float)FUN_00305130(rotation);
+    float x_pos = (float)(&DAT_0058bed0)[entity_idx * 0x76] - DAT_00354c98 * cos_val;
     
-    float cos_val1 = (float)FUN_00305218(rotation);
+    float sin_val1 = (float)FUN_00305218(rotation);
     float y_pos = (float)(&DAT_0058bed4)[entity_idx * 0x76];
-    float y_offset = DAT_00354c98 * cos_val1;
+    float y_offset = DAT_00354c98 * sin_val1;
     
-    float cos_val2 = (float)FUN_00305218(DAT_00354c94);
-    float z_pos = (float)(&DAT_0058bed8)[entity_idx * 0x76] + DAT_00354c98 * cos_val2;
+    float sin_val2 = (float)FUN_00305218(DAT_00354c94);
+    float z_pos = (float)(&DAT_0058bed8)[entity_idx * 0x76] + DAT_00354c98 * sin_val2;
     
     // Apply position and camera setup
     FUN_00217d70(x_pos, y_pos - y_offset, z_pos,

@@ -1,6 +1,6 @@
 # Chapter 5: lifts, hazards and turning blocks
 
-### `s05_e011`'s lift: 0x11A, 0x120, 0x148 and 0xCF
+## `s05_e011`'s lift: 0x11A, 0x120, 0x148 and 0xCF
 
 After the reunion the party steps onto a lift, which in the port never moved.
 The stream at blob offset 0x6468 launches two scripts when they board. Slot 3
@@ -28,7 +28,7 @@ slot 3 runs its group move from frame 103 and flag 0x139 rises at frame 415.
 Armed that late, the party is not standing on the lift, so the replay says
 nothing about riding it. In play the lift goes on to `s05_e013`.
 
-### `s05_e013`: riding the lift, and when the lead's physics runs
+## `s05_e013`: riding the lift, and when the lead's physics runs
 
 The lift carries the party from `s05_e011` into `s05_e013`, which opens with the
 lift lowered to -3 (raw -3000 through 0x0F's x100 literal) and raises it 0.008 a
@@ -66,7 +66,7 @@ battle tick, as `FUN_002239C8` does, and at frame 3000 the lead faces
 slightly differently and the mast boss sits 1.0 lower on y. None of that is
 checked against hardware yet.
 
-### `s05_e013`'s west lift: 0xA9, and 0x13B in `s05_e018`
+## `s05_e013`'s west lift: 0xA9, and 0x13B in `s05_e018`
 
 The room has a second lift at its west end. Its trigger is a floor test, not
 an interaction: the per-frame entry's opcode 0x61 tests the lead's terrain
@@ -100,7 +100,7 @@ pixels, depth-tested, so distant geometry blurs: a depth of field.
 entry, so every scene in the game runs with all six passes. **The port draws
 none of them.** It stores the level and nothing reads it yet.
 
-### `s05_e011`'s spinning hazards, and why nothing could hit the lead
+## `s05_e011`'s spinning hazards, and why nothing could hit the lead
 
 The four type 0x276 props (slots 10-13, each with a partner in slots 42-45)
 are driven entirely by the per-frame entry; the type's own behaviour,
@@ -145,7 +145,7 @@ for 15 a contact and knocks it back to x = -2. Magnus, standing near hazard
 first 3000 frames, where they landed none before. None of that is checked
 against hardware.
 
-### `s05_e013`'s caged chest, and the push-out the lead never had
+## `s05_e013`'s caged chest, and the push-out the lead never had
 
 Chest slot 20 sits at (5.5, -2.5) under hanging cage slot 16. The cage's
 collision is static map geometry, not a group: an invisible octagon (record78
@@ -222,7 +222,7 @@ hardware dump's crab-start position, (-0.08, -0.25, -0.5), by frame 1500. That
 stretch is **not hardware-checked**: entering `s14_e001` from the debug menu
 skips it, and is at crab start 300 frames after load.
 
-### `s05_e018`: the texture table, the overhead camera and the turning blocks
+## `s05_e018`: the texture table, the overhead camera and the turning blocks
 
 Three separate gaps, all checked against `savestates/s05_e018_entry.p2s`.
 
@@ -284,7 +284,7 @@ before the groups' first pass has placed them, so put the lead down on frame 3
 or later. And a teleported lead keeps its old `+0x0A` until it walks, on
 hardware as well as in the port, so it will not ride until it moves.
 
-### `s05_e019` sent the lead straight back down: placement keeps the height
+## `s05_e019` sent the lead straight back down: placement keeps the height
 
 Riding `s05_e018`'s east lift loaded `s05_e019`, which loaded `s05_e018` again
 on its first frame. `s05_e019`'s per-frame entry has a fall check at `0x526`:

@@ -1311,10 +1311,8 @@ namespace orphen::ported::player
       {
         FUN_00267d38_playSound_(kSoundCueMagicLaunch, entity());
       }
-      // FUN_00257ad0 -> FUN_0023bbd8(0, 3) also fires here. That is the sound
-      // engine's priority-channel entry point rather than FUN_00267d38's, and
-      // the port reaches the engine only through the latter, so it is skipped
-      // rather than guessed at.
+      // FUN_00257ad0 -> FUN_0023bbd8(0, 3) also fires here: the pad rumble,
+      // skipped because the port has no rumble path.
     }
 
     // Every frame, charging or not: the hold. The callback checks the
@@ -1572,7 +1570,7 @@ namespace orphen::ported::player
       if (weapon != nullptr && actionEffect_.actorEnvironment)
       {
         // FUN_002148a8(weapon, weapon + 0x198); a contact is FUN_00257ab0,
-        // FUN_0023bbd8(0, 3), which the port skips.
+        // FUN_0023bbd8(0, 3), the pad rumble, which the port skips.
         orphen::ported::entity::partyWeaponHitTest(*weapon, static_cast<std::size_t>(weaponSlot),
                                                    weapon->hitParameters198,
                                                    actionEffect_.actorEnvironment(frameTicks));

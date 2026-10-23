@@ -1,6 +1,6 @@
 # Battle: targeting
 
-#### One frame of `FUN_0023FD30` decides how the first target appears
+## One frame of `FUN_0023FD30` decides how the first target appears
 
 `FUN_0023FD30`'s two arms are exclusive, and the countdown is tested **before**
 it is stepped:
@@ -42,7 +42,7 @@ assigned at 261, every other cursor is idle from 261, the target's grows in
 262–274 and settles into animation 11 at 278. The player's turn onto it runs
 262–269.
 
-#### Targeting: where the enemies come from, and how the cursor finds them
+## Targeting: where the enemies come from, and how the cursor finds them
 
 The battle module has two 0x3C-byte record arrays with the same field layout,
 and confusing them costs a lot of time:
@@ -57,7 +57,7 @@ id: below 10 is a control block, 10 and up is an actor record. **Ids at and
 above `0x50` are the party side** -- `FUN_0023eff8` and `FUN_0023f080` both stop
 counting there, and `FUN_00241a88`'s AI skips anything above `'O'`.
 
-##### Where the actor table comes from
+### Where the actor table comes from
 
 Not the executable. `FUN_0022a418:261` calls `FUN_0023f318(0)`, which calls
 `FUN_0025ba28(0)` -- the scene script's **own section table**, at script header
@@ -80,7 +80,7 @@ offsets into a mutable copy of the decoded script, so a value in
 s14_e012 ships six records: `0x1E 0x1F 0x20 0x22 0x23` on the enemy side and
 `0x50` on the party side.
 
-##### The enemies are placement records, and they bind themselves
+### The enemies are placement records, and they bind themselves
 
 This is the part that is easy to get exactly backwards, and doing so costs a day:
 **the actor table never goes looking for entities. An enemy registers itself.**
@@ -138,7 +138,7 @@ The port does the bind at the spawn site rather than in a per-type state 0,
 because it has no enemy state machines yet. Same frame, same observable result,
 and it is named as a stand-in where it happens.
 
-##### An enemy is not the only thing in the actor table
+### An enemy is not the only thing in the actor table
 
 s14_e012's sixth record is `id 0x50`, and no group-2 placement carries that id.
 It belongs to a **group 4** one, and it arrives through the other placement
@@ -168,7 +168,7 @@ its slots 20 and 22 read `+0x02 = 0x4080`, `+0x04 = 0x00D9`, `+0x08 = 0x0011`,
 `+0x95 = 3` and `5`, against `+0x02 = 0x0080`, `+0x04 = 0x00D8`, `+0x95 = 0` on
 every untagged prop beside them.
 
-###### FUN_002F0608 retypes the entity
+#### FUN_002F0608 retypes the entity
 
 `FUN_0025E7C0` spawned it as `(id - 1) + 0x373` = `0x37C`, a plain streamed prop.
 `FUN_002F0608` then looks *that* type up through `FUN_0025BA98` -- SCR.BIN `0xBD`
@@ -210,7 +210,7 @@ The damage each object deals is not on the entity. `FUN_002F0608` writes it into
 row per *type*, which `FUN_002F08F8` hands straight to the hit test. That
 behaviour is not ported; the table is filled anyway.
 
-###### The tail every other placement takes
+#### The tail every other placement takes
 
 `FUN_002F0608` returning 1 is the only way past `FUN_0025E7C0:81-119`, which
 stamps the same `FUN_0025BA98` row onto the entity:
@@ -243,7 +243,7 @@ carry stats or those flag bits, and `s01_e012` and `s01_e024` place none of them
 which is why the guard did not move. `s03_e001` does -- its `0x272` rows carry
 `+0x00 = 0x6000` and `+0x09 = 1`, and come out at `+0x02 = 0x0190`.
 
-##### The master battle script
+### The master battle script
 
 `FUN_0023fd30` steps a second bytecode VM -- nineteen opcodes at
 `PTR_LAB_0031d118` -- on the master pseudo-record, and then the same VM on every
@@ -283,7 +283,7 @@ Variable 25 is the point of the first instruction. Opcode `0xBD` method `0x68`
 method 400 times in 400 frames -- and 500 is what makes it `FUN_0023c340`, the
 target display.
 
-##### The D-pad, and why Up feels different from Right
+### The D-pad, and why Up feels different from Right
 
 `FUN_002462c8:73-148`, and the bit tests are the whole of it:
 
@@ -334,7 +334,7 @@ is greater than zero, so the cycler runs, `FUN_00247d80` fails to find a record
 for pool slot 1's `+0x95`, and the search starts from the top of the table and
 takes the first live enemy.
 
-##### The battle camera is a pair of splines, walked back and forth
+### The battle camera is a pair of splines, walked back and forth
 
 The shot a battle plays in is not a follow camera at all. `FUN_00246FC0` reads
 the encounter's placement sub-blob at `+0x5C`/`+0x60` -- a count and an array of
@@ -386,7 +386,7 @@ that reaches the idle path sees it non-zero and re-arms `DAT_00354FB2` instead o
 continuing. So the shot after a target display is a *fresh* pair, not the one it
 interrupted -- and the port needs no save-and-restore of its own.
 
-##### The camera, for those 120 frames
+### The camera, for those 120 frames
 
 `FUN_0023C340` is the whole battle camera and most of it is out of scope -- the
 encounter's own spline pairs, the per-action framing at `DAT_00355C90`/`C94`/
@@ -434,7 +434,7 @@ shot through `FUN_0023E090` / `FUN_0023D730` / `FUN_0023D8B0`), and
 `DAT_00354E84`/`E8C` the reaction shots and their screen flash. All read zero in
 the port, so `FUN_0023C340` falls through to the idle path every frame.
 
-##### The pause is one bit on everything
+### The pause is one bit on everything
 
 Every D-pad step re-arms `DAT_00354E96` to 120 frames, and **that is the pause**:
 while it is non-zero `FUN_0023c340` calls `FUN_002de5b8(1)`, which sets `+0x02`
@@ -444,7 +444,8 @@ skip on, so the field freezes and only the cursors keep updating.
 `FUN_002de500` lifts it. `FUN_0023c340` also returns immediately when
 `DAT_00354FAC` is null -- the battle camera's spline pairs, which `FUN_00246fc0`
 takes from the placement sub-blob's `+0x5C` count and `+0x60` array -- so the
-port carries that pointer even though the camera swing itself is not reproduced.
+port carries that pointer. The spline walk and the 120-frame swing after a step
+are both ported; see the two camera sections above.
 
 There is a second targeting mode, taken when `DAT_00354EC0` is non-zero: a static
 20-entry marker table at `0x003253C0`, cycled by `FUN_002481F0` and refreshed by
@@ -452,7 +453,7 @@ There is a second targeting mode, taken when `DAT_00354EC0` is non-zero: a stati
 `FUN_00247F18`, the only thing that installs it, is in the `0x0026Cxxx` block --
 the scripted set pieces. A normal battle leaves it null.
 
-##### The cursor is a type `0x192`, and it is a sprite
+### The cursor is a type `0x192`, and it is a sprite
 
 `FUN_002d86b0` spawns one per bound record, from `FUN_0023fd30` on the frame the
 pre-battle countdown `sGpffffb054` reaches zero (`FUN_0023fb50` seeds that with
@@ -493,7 +494,7 @@ for the branch itself.
 Type `0x192` doubles as a scripted marker when its `+0x19A` names its own slot;
 that is the branch `FUN_002d8808` sets up and it has nothing to do with targeting.
 
-##### The readout: a name, the hit points, and the elemental pentagon
+### The readout: a name, the hit points, and the elemental pentagon
 
 `FUN_0023C340` calls two more things while the display is up. `FUN_002334E8`
 fills one 0xE8-byte block at `0x005715B8`, once, on the frame the timer is armed;
@@ -598,9 +599,11 @@ step above the `0x7F` `FUN_00267D38` would have used. Because the trigger is the
 *transition*, holding a direction on the same target is silent, and the first
 chime of a fight is the one the initial selection fires when the cursors appear.
 
-What is **not** here: the player's own panel. `FUN_00230E50` draws a second
-pentagon with `FUN_0022EC30`'s other banding -- `param_4` 0, effectiveness over
-ten capped at three -- from `DAT_00570DB0` at `(0x220, 0xD0)`, plus a bar through
-`FUN_00230DB0` and `FUN_0022EF10`. It hangs off `FUN_0022E910`, the battle UI
-state machine at `DAT_00354DA0`, which is a layer the port has none of.
+Not part of the readout: a second pentagon `FUN_00230E50` draws with
+`FUN_0022EC30`'s other banding -- `param_4` 0, effectiveness over ten capped at
+three -- from `DAT_00570DB0` at `(0x220, 0xD0)`, plus a bar through
+`FUN_00230DB0` and `FUN_0022EF10`. An earlier note here called its caller
+`FUN_0022E910` "the battle UI state machine"; it is the Equip screen's state
+machine, and that pentagon is the Equip screen's spell panel, ported with it
+(see [Menus](../menus.md)).
 

@@ -104,21 +104,18 @@ probe, the camera's recentre -- saw the same press once per step. The original
 computes it as `held & ~previous` once per tick, which can only be true on one
 of them.
 
-### Not ported
+### What landed later
 
-`FUN_002148a8`, the swept hit test the blade runs on its animations 0 and 1, and
-`FUN_002d59c0`, the reaction it triggers. It is several hundred lines of capsule
-sweeps against the entity pool, and nothing in the port takes damage yet.
-`FUN_00216078(ownerType, 0, effect + 0x198)`, which fills the blade's `+0x198`
-from a per-type parameter table, is skipped with it -- that field is the hit
-test's only reader. Entity `+0x12C`, the attack power `FUN_00215670` subtracts
-the defender's `+0x12E` from, *is* modelled and copied onto the blade, but
-nothing fills the player's copy: `FUN_00251dc0` reads it out of the party stat
-table at `DAT_0034368F`, which the port does not load.
+This section used to list the swept hit test (`FUN_002148a8`), the blade's
+`+0x198` parameters (`FUN_00216078`) and the lead's attack power
+(`FUN_00251dc0`) as missing. All three are ported now; see "Contact, damage and
+death" below. `FUN_002d59c0`, what a contact triggers, is the pad rumble, and
+the port has no rumble.
 
-Weapon classes 1..5 -- the other things the lead can be holding, two of which
-throw a type `0x4E`/`0x50` projectile from this same branch -- are not
-reproduced, because there is no inventory to reach them through.
+The other weapon classes -- the other party members' attacks, two of which
+throw a type `0x4E`/`0x50` projectile from this same branch -- are ported in
+`src/ported/entity/original_party_weapons.*`, keyed by character class rather
+than by inventory.
 
 ### Checking it
 
@@ -242,7 +239,7 @@ dropped lived forever and the pool filled in a few seconds.
 The projectile is drawn by the **second** entity pass, `FUN_0020f3e0`, not the
 skeletal one -- `FUN_0020c5a8` refuses a `0x200` entity outright, so `NODRAW` in
 the actor report is the correct answer for that pass and always was. That second
-pass is ported now; see The billboard pass, below. `grp_017e` is a strip of
+pass is ported now; see the billboard pass in [Rendering](rendering.md). `grp_017e` is a strip of
 billboard sprite records rather than a mesh, and the bolt is a two-column looping
 glow with a trail of shrinking copies behind it.
 
@@ -257,10 +254,6 @@ which fills the `+0x1AC` parameters it is the only reader of, are both ported
 now; see Contact, damage and death, below. So is the hundred-particle impact
 burst, and so is state 4. The lifetime is complete, and a bolt that reaches an
 enemy detonates on it rather than flying on to its timeout.
-
-One caveat that is not the projectile's fault. `integrateNonPlayerMovement` is
-not `FUN_002262c0` -- see the note on it -- so where a flying actor is stopped is
-approximate, and the detonation point with it.
 
 ### Checking it
 
@@ -411,8 +404,8 @@ gives one contact, one point, one death and the impact burst.
 
 ### The hit sparks
 
-`FUN_002206a8` is a **third** particle system, sharing nothing with the other
-two: a thousand entries of `0x38` bytes at `DAT_00355b74` in ten fixed groups of
+`FUN_002206a8` is another particle system, sharing nothing with the others
+(there are nine; see [Effects](effects.md)): a thousand entries of `0x38` bytes at `DAT_00355b74` in ten fixed groups of
 a hundred, no behaviour pointer, and a quad oriented in world space. Ten hits
 can be showing at once and an eleventh silently shows nothing, because a burst
 takes the first group whose count is not positive and gives up if there is none.
@@ -523,11 +516,8 @@ and the port.
 
 ### What is not ported
 
-Called out at their sites: `FUN_00215670` (a third hit-test
-form, used by enemy attacks), `FUN_002d5630` (the HP bar, gated on
-`DAT_003555D3`, which is zero in both dumps), `FUN_002d59c0` (the hit cue, on
-the sound engine's priority channel that the port does not reach), and the
-`FUN_0025ba98` branch of the resistance lookup, which no attacker in this scene
-can reach because a streamed prop's `+0x02` is not in the `0x2048` candidate
-mask.
+Called out at their sites: `FUN_00215670` (a third hit-test form) and
+`FUN_002d59c0` (the pad rumble; the port has no rumble path). `FUN_002d5630`,
+the HP bar, and the `FUN_0025ba98` branch of the resistance lookup were on this
+list and are ported now (`original_health_bar.cpp`, `original_hit_test.cpp`).
 

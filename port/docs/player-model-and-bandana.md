@@ -1,6 +1,6 @@
 # Player model, close-up rig and bandana
 
-### The close-up rig, and the draw walk's deferral queue
+## The close-up rig, and the draw walk's deferral queue
 
 The doorway scene swaps Orphen for a close-up model with an animating head, and
 in the port the head never appeared and his bandana stayed behind in the corridor.
@@ -66,7 +66,7 @@ cargo hatch at the end of the corridor with Dortin and Volcan beyond it, and the
 mount stands 0.91 m to the field model's ~1.0 m: "close-up" here means a
 higher-detail model with a real face, not a smaller one.
 
-### The field model is hidden with `+0x08` bit 0, and its bandana has to go too
+## The field model is hidden with `+0x08` bit 0, and its bandana has to go too
 
 The bandana that stayed behind in the doorway was not the rig's. It was slot 4,
 the *field* player's, and the port was drawing it for the whole cutscene after
@@ -108,7 +108,7 @@ Verified by instrumenting the publish: slot 4 reaches the view list on frames
 and post-fix capture of frame 15030 differ only in a red bandana strip beside
 Orphen's head.
 
-### `0x6D` hides the bandana too, and a save state proved the head was fine
+## `0x6D` hides the bandana too, and a save state proved the head was fine
 
 A PCSX2 save state taken during the close-up settled both halves of this, and
 one of them the wrong way round: **the head was never deformed.**
@@ -158,7 +158,7 @@ camera, so the same build renders the same frame clean. **A cutscene reproduced
 by arming its stream does not put the player where play does**, and anything
 parented to the player will lie about it.
 
-### The bandana
+## The bandana
 
 Orphen's bandana is not part of his mesh. It is a **separate entity** -- type
 `0x19`, model `grp_001E` -- in reserved pool slot 4, attached to the player's
@@ -198,7 +198,8 @@ Three things the port did not have before:
 
 **`FUN_00305218` is `sinf` and `FUN_00305130` is `cosf`**, not the reverse --
 0x00305218's small-|x| path calls `__kernel_sin(x, 0, 0)` and its `n&3` switch is
-fdlibm's sine. Two older files under `analyzed/` label them backwards. It matters:
+fdlibm's sine. Older files under `analyzed/` had them backwards; the last one,
+`battle_logo_state_manager.c`, was corrected on 2026-10-23. It matters:
 `FUN_00213720` stores sine at scratch `+0x15` and cosine at `+0x16`, and swapping
 them rotates the tail frame a quarter turn, which puts `DAT_003151a0`'s body
 clamp -- up to 0.067, six times the 0.011 tail spread -- on the sideways axis. The
@@ -216,32 +217,20 @@ port's own anchor, tip, span and tip-bone translation beside slot 4.
 
 **Actor behavior dispatches twice.** `FUN_0025ab68` and `FUN_002cd0a0` are shells
 that index a per-type state table with `+0x60`; those tables are read out of the
-executable too. `--actor-report` now shows the second dispatch, because a type can
-be dispatched and still do nothing when the *state* it is in has no port:
+executable too. `--actor-report` shows the second dispatch, because a type can be
+dispatched and still do nothing when the *state* it is in has no port:
 
 ```
 type=0x3  state=0 -> 0x25abb8 ticks=120  implemented   (jr ra; nop -- a real no-op)
 type=0x62 state=0 -> 0x2cd210 ticks=1    implemented   (init; hands to state 3)
-type=0x62 state=3 -> 0x2cd3a0 ticks=119  UNIMPLEMENTED (hover and chase)
 ```
 
-So one unimplemented behavior type is left (`0x272`, the streamed prop) and one
-unimplemented state. **Non-player physics is still absent**, which is why the
-enemy's chase state is not ported yet: it writes movement into `+0x30`/`+0x34`
-and a hover height into `+0x38`, and none of that is integrated for slots
-1..255, so porting it would look like nothing happened.
+As of 2026-10-23 `s01_e024` over 600 frames reports **zero** unimplemented
+behaviours and zero unimplemented states. Non-player physics is ported too (see
+[Physics](physics.md)); `integrateNonPlayerMovement`, which once stood in for
+it, is now the non-player copy of `FUN_002262c0`.
 
-`integrateNonPlayerMovement` stands in for the vertical part of it, and it will
-only *raise* an actor that asked to move this frame. `FUN_002262c0` raises
-`+0x28` in exactly one branch, gated on the cached primitive at `+0x0A` being
-valid and carrying the same material as the one just sampled — an actor walks up
-a ramp it was already standing on, it is not teleported onto whatever is
-overhead. The port models neither `+0x0A` nor the material table, and an actor
-whose behavior moved it is the nearest test it has. A script-placed cutscene
-actor never qualifies, so its authored height survives, which is the point:
-`s01_e012` writes its cast onto the deck and an ungated snap lifted them off it.
-
-### The second bandana, and why destroying an entity is not releasing a slot
+## The second bandana, and why destroying an entity is not releasing a slot
 
 Orphen wore two bandanas through `s14_e031`'s camera swoop -- one trailing off
 the close-up bust correctly, a second forking away from it. The extra one was a

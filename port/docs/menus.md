@@ -48,6 +48,8 @@ NUL-terminated ASCII rather than a dialogue stream:
 2  Analog Controller Vibration   6  Equip
 ```
 
+(Item 3's label, message `0x42`, was never written down here.)
+
 Each is centred at entry y `0x70 - index * 0x1E` with a bar two units below it,
 the widest label plus `0x20` wide for all seven. `FUN_002318C0` walks the alpha
 byte of each label's colour word towards `0x80` for the selected item and `0x20`
@@ -73,8 +75,9 @@ selection and plays the move cue -- so **Left and Right click without moving**.
 The repeat ladder is that helper's: the first press fires, then nothing for
 eleven frames, then every fourth.
 
-Only **Return to Title Screen** of the seven submenus is ported (below). Cross
-on any other available item logs the selection and leaves the panel up.
+**Return to Title Screen** (4), **Item** (5) and **Equip** (6) are ported; see
+below and "The Equip screen". Cross on any other available item logs the
+selection and leaves the panel up.
 
 ### Return to Title Screen
 
@@ -114,11 +117,11 @@ Confirmed on PCSX2 from `entry_stable.p2s`: the confirm opens on No, the dim is
 0.62x, and Yes lands on the title with the logo up and no movie, with
 `DAT_003551EC` spent.
 
-The port's overlay is sticky where the original's quad lives for one frame (see
-the screen overlay note), so the runtime releases the dim at the top of the next
-frame and the confirm puts it back if it is still up.
+The dim is a one-frame quad, as `FUN_0025D0E0`'s is in the original: the runtime
+releases the overlay at the top of every frame and the confirm puts it back
+while it is still up.
 
-**Not ported: module 12's mode 0.** `FUN_00271220(0)` runs on every title load,
+**Not ported: module 12's mode 0** (still true 2026-10-23). `FUN_00271220(0)` runs on every title load,
 and when the previous scene was not section 12 it calls `FUN_002294D0` -- the
 new-game wipe: every event flag cleared except `0x50C..0x50F`, party records
 reloaded, inventory and item counters zeroed, the default loadout copied back.
@@ -128,8 +131,8 @@ items until START. START then runs the same reset through flag `0x500` (see
 
 ### On the keyboard
 
-The D-pad is the **arrow keys**, not WASD. See the battle-target-cycling note
-for why: the D-pad does not walk the character on hardware, and sharing the
+The D-pad is the **arrow keys**, not WASD. See target cycling in
+[Battle: targeting](battle/targeting.md) for why: the D-pad does not walk the character on hardware, and sharing the
 nibble with WASD made every step forward open the menu. `[` and `]` cycle the
 map, which is what Left and Right arrow used to do.
 
@@ -203,7 +206,8 @@ Not ported:
 
 The dim alpha goes through the same `FUN_0025D0E0` path as the save prompt's
 `0x50`, which draws it as `0x50/0xFF`. Whether the GS reads that byte against
-`0x80` instead has not been checked on hardware.
+`0x80` instead has not been checked on hardware. (The Return to Title dim was
+measured at 0.62x on both, which fits `0x60/0xFF`, not `0x60/0x80`.)
 
 ## The Equip screen, and how spells are learned
 

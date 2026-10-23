@@ -1,6 +1,6 @@
 # Text, dialogue and subtitles
 
-### The dialogue font and the book prompt
+## The dialogue font and the book prompt
 
 `ported/text/original_dialogue_text.*` is the sheet, the metrics and the
 prompt; `MapViewer::drawDialogueSprites` blits what it produces.
@@ -38,7 +38,7 @@ frames a cycle.
 32x32 face-button icon from slot `0x2C` through the UV table at `0x0031C220` —
 is documented in the header but not reachable from a caption.
 
-### Cutscene subtitles, and why the US release has none
+## Cutscene subtitles, and why the US release has none
 
 `ported/text/original_dialogue_window.*` is the real text engine: the 300-entry
 glyph slot array, the stream walk, word wrap, the typewriter and the scroll,
@@ -67,7 +67,8 @@ build's glyph enqueue, `src-jp/FUN_0023ade8.c`, is the same function with those
 four lines absent — the text was cut for the US release by adding a test, not by
 editing the scripts.
 
-**The port drops the gate.** That is the only deliberate divergence in the file.
+**The port drops the gate**, deliberately, so cutscenes are subtitled. This is a
+chosen divergence from the US build, not a fidelity gap.
 
 The codes `s01_e012` actually uses are `0x00 0x01 0x02 0x07 0x0C 0x13 0x16 0x17
 0x18 0x1A 0x1B` — a small set, all handled. Anything else is stepped over by its
@@ -89,9 +90,13 @@ Two divergences the port's structure forces, both in the header:
   than on `DAT_00356788`.
 - `0x01` raises the book prompt and, in the original, holds for Cross — 28 of
   the 84 records use it. The port spawns the sprite and lets the record close on
-  its clip, taking the Cross press for granted (which is `FUN_00237fc0:108-115`,
-  flags and all — see below). A cutscene that stopped for input every fourth
-  line would not be the same scene, and the port has no input model for it.
+  its clip, standing in for the Cross press (`FUN_00237fc0:108-115`, flags and
+  all — see below). **This is an open divergence.** It was justified by the port
+  having no input model, which is no longer true (choice menus read Cross). What
+  needs checking first, on hardware, is whether the US build -- whose text is
+  hidden -- still waits for Cross on these records. `0x03`/`0x04`/`0x05` have the
+  same shortcut and also finish the record where the original resumes it; no
+  `s01_e012` record uses them.
 
 **Making `0x1A` block is what fixed the record tails.** A record's hold is not
 its clip; it is where its *bytes* end, and a record can put codes after the
@@ -100,7 +105,8 @@ audio stops. Closing on the clip alone dropped that second. With the walk
 driving the close instead, every record picks up at least the two steps the walk
 needs to consume its `0x1A` and then its terminator, and Dortin's picks up 65.
 Across the whole scene that is 264 frames of held text, and flag `0x515` — the
-handoff to player control — moves from 13122 to **13317**:
+handoff to player control — moved from 13122 to **13317** (13250 as of
+2026-10-23):
 
 ```
 dialogue lines: 42  (38 timed by their voice clip, 0 estimated, 4 empty)
@@ -113,7 +119,7 @@ Checkable at any frame:
 orphen_port --disc-root disc --scene s01_e012 --screenshot shot.png:700
 ```
 
-### A record does not close the window, and that is where the speaker lives
+## A record does not close the window, and that is where the speaker lives
 
 Five of `s01_e012`'s records carry no `0x13` at all -- "Hey... Volcan... You
 notice anything peculiar?", both of Volcan's `[vomits]`, and two of Sephy's --
@@ -156,29 +162,9 @@ raises `0x8FF`/`0x8FE`/`0x6000` without touching the slots, and the port stands
 in for the press immediately, exactly as it always has.
 
 None of this moves a single frame. The full run is byte-identical: 42 lines on
-the same frames, 208 event records, flag `0x515` still at 13317.
+the same frames, 208 event records, flag `0x515` still at 13317 at the time.
 
-For the camera half of `FUN_00234400`, `FUN_00217d70`'s own save/restore pair
-covers it.
-
-Checkable without a window, and `--press-confirm` now works under
-`--screenshot` too:
-
-```
-orphen_port --disc-root disc --scene s01_e024 --frames 620 \
-    --spawn -4.5,-10.5,0 --press-confirm 60,440 --actor-report
-```
-
-That spawns beside chest slot 17, facing it, and the report ends with that
-chest on animation 6 and every other one still on 4.
-
-**Both presses matter.** The first opens the chest; the second dismisses the
-item caption, which state `0x12` waits on. With only the first, the cutscene
-parks at `0x12` forever and the last four state changes never happen — that
-looks exactly like a regression and is not one. The ten transitions land on
-frames 61, 89, 111, 365, 366, 399, 441, 469, 475 and 497.
-
-### The cinematic bars, and where they put the subtitles
+## The cinematic bars, and where they put the subtitles
 
 `ported/render/original_letterbox.*` is `FUN_0025cfb8`, which `FUN_0025b778`
 runs at the end of every script tick. Two flat black sprites, full width, one

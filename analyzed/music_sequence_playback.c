@@ -240,8 +240,9 @@
  * - FUN_0023baf8, which opcodes 0xDC and 0xDD reach, is an **empty stub** in the
  *   retail build. Those two opcodes do nothing at all. The dispatch-table files
  *   name them "audio_dispatch_*", which is misleading.
- * - FUN_0023bbd8 (opcode 0xDE) is not audio either despite its name: it is a
- *   four-channel timer over DAT_00571b50, parallel to the event scheduler.
+ * - FUN_0023bbd8 (opcode 0xDE) is not audio either despite its name: it starts
+ *   a pad vibration pattern on one of four channels at DAT_00571b50, which
+ *   FUN_0023bd00 feeds to the actuator block at DAT_00571a40.
  * - Reverb. FUN_00205938:90-113 sets an SPU2 reverb type and depth per slot
  *   through commands 0x7314 and 0x0A. Not ported; the sequences play dry.
  */

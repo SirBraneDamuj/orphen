@@ -4216,10 +4216,9 @@ namespace orphen::port
       return;
     }
 
-    // Mode 4, the per-frame hook. Only module 10's is ported, because s14_e001
-    // is the only scene that names one this port can run; the rest are a
-    // handful of lines each against DAT_0031DA0C and DAT_0035521D and are named
-    // rather than guessed at.
+    // Mode 4, the per-frame hook. Modules 10, 18, 31 and 32 are ported below;
+    // the rest are a handful of lines each against DAT_0031DA0C and
+    // DAT_0035521D and are named rather than guessed at.
     if (mode == 4 && DAT_0032536c_sceneModule_ == 10)
     {
       const std::int32_t member = battleParty_.DAT_00354ebe_playerSlot() - 1;

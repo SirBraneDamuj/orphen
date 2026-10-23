@@ -1,5 +1,9 @@
 # Sound effects and music
 
+Voice lines are in [Voice](voice.md).
+
+## Sound effects
+
 ### Cues
 
 `FUN_00228e28` loads 711 eight-byte records out of **SCR.BIN resource 199**:
@@ -149,7 +153,8 @@ slot 6  0x007f  cat 2 index 127  -> SND resource 213  vol 80
 
 Slot 2 is the only one with bit 15 set, and it is the wind that runs under the
 whole scene. Slot 6 is started later by the script: opcode **0x129** at blob
-offset `0x5e56`, `(slot 6, fader 1000)` -- the piece under Sephy's scene.
+offset `0x5e56`, `(slot 6, fader 1000)` -- a five-second sting, not the piece
+under Sephy's scene (that is slot 7; see "Sephy's cue" below).
 
 ### The wind is four notes long
 
@@ -319,8 +324,8 @@ the bank index. So a "scene-streamed" effect is not a separate system: it plays
 out of a music slot's VAB.
 
 In `s01_e012` cues 677..680 carry `+7 = 127`, slot 6 requests category-2 index
-127, and that is SND resource 213 — the same bank whose *sequence* is the cue
-under Sephy's scene. Its **program 4** holds Volcan's sword: draw, sheathe and
+127, and that is SND resource 213 — the same bank whose *sequence* is slot 6's
+sting. Its **program 4** holds Volcan's sword: draw, sheathe and
 flourish on notes 60/61/62, plus a hard-panned stereo pair on 63. They come out
 at 22057 Hz, which is 22050 to within a cent — a good check on the pitch maths.
 
@@ -433,7 +438,8 @@ swelled in over the intro.
 
 ### A cue's bank byte can name a music slot
 
-Chasing the rumble that goes with that shake turned up a second gap. Cue 702
+Chasing the rumble that goes with opcode `0x94`'s camera shake (see
+[Scene script](scene-script.md)) turned up a second gap. Cue 702
 was resolving and then reporting **"bank not loaded"**, because the engine held
 three banks and the cue asked for bank 4.
 
@@ -464,9 +470,12 @@ orphen_port --disc-root disc --scene s01_e012 --frames 600 --sound-dump out/audi
 ```
 
 The report's music section names every slot, what it resolved to, and every
-play/ramp with its frame. For `s01_e012` that is slot 2 at frame 0, slot 7 up at
-6805 and down at 8420, slot 6 (Sephy) at 11564, and the wind ramping down at
-13122 as the scene hands over.
+play/ramp with its frame. For `s01_e012` (re-measured 2026-10-23) that is slot 2
+at frame 0, slot 7 (Sephy's cue) up at 6766 and down at 8387, slot 6's sting
+from 11678 to 11987, and at 13250, as the scene hands over, the wind ramping
+down to fader 500 and slot 3 (SND resource 113) ramping up. Frame numbers in the
+sections above are from earlier runs; they shift whenever cutscene pacing gets
+more faithful, but the gaps between them (the sting's 309 frames) do not.
 
 The sequencer runs on the mixer's clock, like the voice line, so none of it can
 reach the simulation: `--frames 20000` is byte-identical across runs with and

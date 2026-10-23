@@ -34,8 +34,7 @@
 // holds the pool side -- the spawns and the six entity behaviours.
 //
 // FUN_0023BBD8(0, 3), which several of these call on a hit or a launch, is
-// skipped here for the same reason the sword and Orphen's magic skip it: the
-// port reaches the engine only through FUN_00267D38.
+// the pad rumble, and is skipped because the port has no rumble path.
 
 #include "ported/entity/actor_frame_update.h"
 #include "ported/entity/original_entity.h"

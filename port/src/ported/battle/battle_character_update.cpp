@@ -1890,9 +1890,8 @@ namespace orphen::ported::battle
       if ((entity.state60 & 0x4000) != 0)
       {
         entity.state60 = static_cast<std::uint16_t>(entity.state60 & 0xBFFF);
-        // FUN_00206ce0: cut the line the character was speaking. Mixer-level,
-        // the same reason FUN_0023bbd8 below is a comment -- the port reaches
-        // the engine only through FUN_00267d38.
+        // FUN_00206ce0: cut the line the character was speaking. Mixer-level;
+        // the port reaches the engine only through FUN_00267d38.
         if (FUN_00249348_is_voiced_player(party, entity) &&
             context.environment->FUN_00206a90_voice_busy &&
             context.environment->FUN_00206a90_voice_busy())
@@ -1901,7 +1900,7 @@ namespace orphen::ported::battle
         }
         if (entity.byte95 == 1)
         {
-          // FUN_0023bbd8(0, 9): the lead's hurt cue, on the priority channel.
+          // FUN_0023bbd8(0, 9): the lead's hurt rumble. No rumble path.
         }
 
         if (static_cast<std::int16_t>(entity.pendingDamageBe) >= 0)
@@ -2138,9 +2137,9 @@ namespace orphen::ported::battle
           {
             context.environment->FUN_00267d38_play_at_entity(0xD0, context.entitySlot);
           }
-          // FUN_0023BBD8(0, 8) is the player's own guard-broke HUD cue and
-          // FUN_0023F620(4, slot) the turn bookkeeping; neither is in this
-          // slice, and both are cosmetic against what the state itself does.
+          // FUN_0023BBD8(0, 8) is the player's guard-broke rumble (no rumble
+          // path) and FUN_0023F620(4, slot) the turn bookkeeping, which is not
+          // in this slice.
           return 0;
         }
 

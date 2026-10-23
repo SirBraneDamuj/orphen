@@ -1,6 +1,6 @@
 # s14_e001: the crab
 
-#### s14_e001 is one actor away from a battle
+## s14_e001 is one actor away from a battle
 
 `s14_e001` is the giant crab: the encounter `s01_e012` hands off to. It opens
 with a long animatic -- the crab wades in, throws Dortin and Volcan into the
@@ -9,7 +9,7 @@ the pair before the fight starts. The port loaded the scene and then sat there.
 
 Six things were in the way, and five of them were the script.
 
-##### The structural opcode table was read one slot early
+### The structural opcode table was read one slot early
 
 `analyzed/structural_ops/structural_ops_dispatch_table.md` lists 0x04 as
 "(inline handler)" with no address and then reads the rest of
@@ -32,7 +32,7 @@ and the next byte decodes as nonsense -- which is how the scene died on
 "unimplemented opcode 0xf" at 0x15c8, four bytes into the else arm of the
 if/else that ends its start entry. The doc is corrected too.
 
-##### Five opcodes
+### Five opcodes
 
 | opcode | original | what it is |
 |---|---|---|
@@ -42,7 +42,7 @@ if/else that ends its start entry. The doc is corrected too.
 | `0x7F` / `0x80` | `FUN_00260880` | the **read** side of 0x7D/0x7E: a collision group's rotation (+0x3C) or translation (+0x48) channel, scaled back up by 100000.0 |
 | `0x8F` | `LAB_002610f8` | two instructions, `jr ra; lw v0, -0x49b4(gp)` -- `DAT_003555BC`, the frame tick count |
 
-##### And method 0x6F, which is how a cutscene drives a boss
+### And method 0x6F, which is how a cutscene drives a boss
 
 `0xBD`'s method table has three battle-entry methods the port already had (1, 2,
 3) and `0x6F`, which is `FUN_00244248` -- **the same action request the battle
@@ -52,9 +52,9 @@ selected entity, so `ScriptEnvironment::FUN_00242a18_battle_method` now carries
 one and the port shares a single `battleVmEnvironment()` between the per-frame
 battle step and the script.
 
-##### What was left was the crab itself
+### What was left was the crab itself
 
-(Ported in the next commit; see the section after this one.) With those in, the
+(Ported since; see the next section.) With those in, the
 scene script runs clean -- zero unimplemented opcodes over
 12000 frames, on every entry -- and the animatic gets as far as its own logic
 allows. It is a duet, and only one voice is singing:
@@ -89,7 +89,7 @@ action. Reachable from those roots are 50 functions in the `0x27xxxx` band,
 about 7900 lines of decompiled C; everything else they call is engine code the
 port already has.
 
-##### Verified
+### Verified
 
 Forcing the two crab-dependent waits -- `work[1]` non-zero and the placement
 scan empty -- and changing nothing else, `s14_e001` builds the party and starts
@@ -100,13 +100,13 @@ is missing. `s14_e012` still builds on frame 2, starts on 247 and binds 5 of 5
 enemies. `s01_e024` and `s01_e012` are byte-identical over 3000 frames with
 `--actor-report` and `--scr-report`.
 
-#### The crab, and the two things that were stopping it
+## The crab, and the two things that were stopping it
 
 With the script opcodes in, `s14_e001` still parked at its own beat 110 waiting
 on script work word 1, which only the crab writes. Porting the crab found two
 bugs that had nothing to do with the crab.
 
-##### The actor count was established too late
+### The actor count was established too late
 
 `FUN_0023fb50` ends on `FUN_0023fc08`, and `FUN_0023f318` calls `FUN_0023fb50`
 as it loads the scene's encounter data. So `DAT_00354EBA`, the actor count, is
@@ -119,7 +119,7 @@ The pool-reading half of `FUN_0023fc08` is inert at load -- every record has jus
 been given "no entity" -- so the fix is the counting half, called from
 `FUN_0023fb50` where the original calls it.
 
-##### Orphen's dodge is what lets the crab swing twice
+### Orphen's dodge is what lets the crab swing twice
 
 `FUN_0027c458`, the swipe, latches `DAT_0035526B` the moment the claw connects,
 and its own "ask for another swipe" arm is gated on that byte being clear.
@@ -135,7 +135,7 @@ So the "Orphen jumps around dodging" half of the animatic is not an animation
 the script plays. It is a state machine on one byte, shared between the boss and
 the player, and the boss cannot finish its own three swipes without it.
 
-##### What is ported
+### What is ported
 
 Type 0x7F is `FUN_00279298` and a sixteen-entry table at `PTR_FUN_00325930`.
 The table has no terminator and the next type's starts right after it, so
@@ -161,7 +161,7 @@ crab only reaches them once it has taken enough damage to shed a leg, and
 director, is ported -- see *The boss camera, and the shot that takes the close-up
 rig away* below.
 
-##### Verified
+### Verified
 
 `s14_e001`, 12000 frames, no input. The crab inits, is bound 1 of 1, takes the
 animatic's actions 11, 12, 13 and 14 in order, runs the throw for 872 ticks and
@@ -171,7 +171,7 @@ unimplemented state handlers on either side. `s14_e012` still builds on frame 2,
 starts on 247 and binds 5 of 5. `s01_e024` and `s01_e012` are byte-identical
 over 3000 frames with `--actor-report` and `--scr-report`.
 
-#### The boss camera, and the shot that takes the close-up rig away
+## The boss camera, and the shot that takes the close-up rig away
 
 `FUN_00277d30` is the boss camera director, and leaving it out cost more than
 the view. It is one function with fifteen numbered shots, a sub-shot number, a
@@ -187,7 +187,7 @@ puts a fresh manual camera at the origin, which the shot then moves the same
 frame. Releasing does **not** put the field camera back; it only clears the
 latch, so the pose stands until something else asks.
 
-##### The spline stride is twelve, and the copies prove it
+### The spline stride is twelve, and the copies prove it
 
 `FUN_00217FE8(eye, rollZoomPairs, count, lookAt, lookCount)` walks its point
 arrays at a stride the decompilation does not state. The three callers here
@@ -205,7 +205,7 @@ shot 14  0x0034E550  2 look-at -- the first sampled live off DAT_0058BE90 --
                      3 eye, 3 pairs, over 0x12C0 ticks
 ```
 
-##### Shot 3 is what rolls `DAT_0035528C` over
+### Shot 3 is what rolls `DAT_0035528C` over
 
 The crab reads `DAT_0035528C` to decide which side each of its shots comes from,
 and nothing in the crab writes it except its own init. Shot 3 -- the slow orbit
@@ -220,7 +220,7 @@ entry -- so the shot always looks three units along +X of the player. And shot
 6's sub-shot 2 swings off the *player's* facing where sub-shot 1 swings off the
 boss's; they read `+0x5C` from different entities.
 
-##### `uGpffffb6f1` and `DAT_00343880` are the screen smear
+### `uGpffffb6f1` and `DAT_00343880` are the screen smear
 
 Both are already modelled: `uGpffffb6f1` is `DAT_00355661`, the smear's target
 alpha, and `DAT_00343880` is the rotation the `0xC9` transform carries. The
@@ -229,7 +229,7 @@ the impact, and the crab's wrapper clears the whole `0xC9` block plus the camera
 roll every fight frame before `FUN_00279180` gets a say -- so a shot that wants
 the smear has to re-raise it every frame, which is exactly what it does.
 
-##### The close-up rig is a cinematic prop, and only the swipe puts it away
+### The close-up rig is a cinematic prop, and only the swipe puts it away
 
 `s14_e001` places a type `0x28` close-up mount at load, hides it, and tags it
 `0x2E`; opcode `0x13F` builds its rig and the script tags the published bust and
@@ -251,7 +251,7 @@ nothing to release: the mount stood in the middle of the arena for the rest of
 the scene and the player never came back out of hiding. That is the "Orphen
 floats in the middle of the battle" the animatic ended on.
 
-##### Verified
+### Verified
 
 `s14_e001`, 2500 frames, no input. The camera now moves through the animatic --
 shot 9's fixed look-at `(1.810, -7.426, 0.770)` at frame 700, shot 10 mid-spline
@@ -262,7 +262,7 @@ starts on frame 1863, `s14_e012` still builds on frame 2 and binds 5 of 5, and
 `s01_e024` and `s01_e012` are byte-identical over 3000 frames with
 `--actor-report` and `--scr-report`.
 
-##### The hurl's heading is three turns and a nudge, and the nudge is not ninety degrees
+### The hurl's heading is three turns and a nudge, and the nudge is not ninety degrees
 
 Shot 9 -- the one that watches the pair go into the sea -- has a **fixed**
 look-at, `(1.810, -7.426, 0.770)`, and the crab is teleported to a fixed
@@ -296,7 +296,7 @@ gp-relative word and three neighbours being the same value is not evidence about
 the fourth; all thirteen of `0x00353180..0x003531B0` are now checked against the
 ELF, and the other twelve were right.
 
-##### The `[embed]` lines in this scene are the diagnostic working
+### The `[embed]` lines in this scene are the diagnostic working
 
 `s14_e001` prints 42 of them, all for the crab, all in the first fifty frames.
 They are not a defect. The scene drives a collision group with opcode `0x7D`
@@ -308,12 +308,12 @@ authored curve runs one to ten hundredths of a unit under a seabed that is
 rising faster than it is. The message says the ejection is armed on the same
 frame the placement needs it, which is the case it was written to confirm.
 
-#### The thrown pair, the water, and where the crab's noise comes from
+## The thrown pair, the water, and where the crab's noise comes from
 
 Three things the animatic was missing, all of them hanging off the crab's
 wrapper rather than off any state.
 
-##### `FUN_0027CFE0` is the only thing that takes the thrown pair away
+### `FUN_0027CFE0` is the only thing that takes the thrown pair away
 
 The wrapper runs it every frame its mode byte is 12, which is the whole of the
 throw. The subject is the entity at `+0x1C0`, and it does nothing until the hurl
@@ -336,7 +336,7 @@ state 13 clears that state on entry. Then four steps counted in the *victim's*
 Step 3 is the whole of it. Without it the thrown character floats in the water
 for the rest of the scene and the water never makes a sound.
 
-##### Type 0x10D is the water, and it is thirty lines
+### Type 0x10D is the water, and it is thirty lines
 
 `PTR_LAB_0031CAB0`'s entry for 0x10D is `FUN_002EB180`: shrink both scales
 toward the end of the timer, die on zero, and drift outward along the heading
@@ -359,7 +359,7 @@ and playing one of its six moving clips -- the spray it kicks up wading in --
 and `FUN_0027CFE0` calls the first twice when the pair lands. Sixty of them now
 spawn across a 2500-frame run of `s14_e001`, where before there were none.
 
-##### `FUN_0027EF40` is the crab's entire sound layer
+### `FUN_0027EF40` is the crab's entire sound layer
 
 The wrapper runs it outside the mode gate and outside the beat ceiling, so it is
 the one piece of the crab that is audible from the frame the scene loads. Every
@@ -379,21 +379,19 @@ A 2500-frame run went from **8 sound events to 41**: seven 0x114, six each of
 0x115, 0x116 and 0x117, nine 0x119, and the splash. 0x118 never fires in this
 arena because the crab is never above the shallow line.
 
-##### Still out
+### Still out
 
-`FUN_0027F1A8`, which animations 0, 1 and 3 also reach, puts two puffs on the
-crab's bones 2 and 3 through `FUN_0021F6E8` -- the same spawner the status aura
-wants, and the port still has no equivalent. `FUN_0027ED58` (the three debris
-pools, and cue 0xC0 when the crab drops what it is holding), `FUN_0027E118` (the
-falling debris, type 0x10B) and `FUN_0027DC38` are the wrapper's other three
-mode-14 helpers and are not ported. `FUN_0027CF20`'s impact dust needs
-`FUN_0021A4F8`'s pool, which is a third particle system with its own step and
-draw. `FUN_002EAC48`, state 5's bubble rings, is unported. So is the pad rumble,
-`FUN_0023BBD8`.
+Of what this section used to list, only two things are left:
+`FUN_0027F1A8`, which animations 0, 1 and 3 also reach and which puts two puffs
+on the crab's bones 2 and 3 through `FUN_0021F6E8`, and the pad rumble,
+`FUN_0023BBD8`. The rest are ported now: `FUN_0027ED58` (the three debris pools,
+and cue 0xC0 when the crab drops what it is holding), `FUN_0027E118` (the falling
+debris, type 0x10B), `FUN_0027DC38`, `FUN_0027CF20`'s impact dust on
+`FUN_0021A4F8`'s pool, and `FUN_002EAC48`, state 5's bubble rings.
 
-#### The crab's effects: a bubble, a fourth particle system, and three debris pools
+## The crab's effects: a bubble, a fourth particle system, and three debris pools
 
-##### Type 0x10C is the stamp's bubbles
+### Type 0x10C is the stamp's bubbles
 
 `PTR_LAB_0031CAB0`'s entry for 0x10C is `FUN_002EA7F0`, a two-stage rise. Stage
 one runs the spawn timer down while the bubble travels along `+0x5C` and climbs
@@ -413,7 +411,7 @@ two legs gone it doubles the spread as well -- off bone 6, then three more of
 mode 4 in a half-unit ring at 0, 120 and 240 degrees. Nineteen of them now spawn
 across a 2500-frame run.
 
-##### The fourth particle system
+### The fourth particle system
 
 `DAT_00355A9C` is a thousand entries of `0x28` with no behaviour pointer at all:
 `FUN_0021A820` is the only thing that ever steps one. It shares nothing with
@@ -460,7 +458,7 @@ reach the GS at twice the alpha the hardware would use. No scene the harness can
 capture has either pool alive, so the correction is unverified and has not been
 made.
 
-##### The three debris pools
+### The three debris pools
 
 `FUN_00279940` clears thirty entries at `DAT_005737E8`, fifty at `DAT_00573860`
 and thirty at `DAT_00573928`, and the crab's wrapper walks them through
@@ -491,31 +489,31 @@ which is **negative** for 0x10B, so the original copies a byte from before the
 group into `+0x12C`. There is no faithful value to port; the field keeps its
 default and the read is noted where it would have been.
 
-##### Still out, and why
+### Still out, and why
 
 `FUN_0021F6E8` is a **fifth** particle system and it is two pools, not one: a
 hundred emitters of `0x3C` that spawn into a thousand particles of `0x24`, and
-only the second of those draws. `FUN_0021FB68` has no packet in it at all. So it
-is the whole subsystem -- seven functions, two pools, two draw paths -- or
-nothing, and it is the only thing blocking `FUN_0027F1A8` (the crab's bone dust
-on animations 0, 1 and 3) and `FUN_002EF688`'s kinds 2 and 3 (the crate and
-barrel bursts). Both call sites are in place with the gap named.
+only the second of those draws. `FUN_0021FB68` has no packet in it at all. It was
+the whole subsystem or nothing, and it is ported now as the plume pool (see
+[Effects](../effects.md)); `FUN_002EF688`'s kinds 2 and 3 (the crate and barrel
+bursts) go through it. `FUN_0027F1A8`, the crab's bone dust on animations 0, 1
+and 3, still does not: the pool is there, the call is not.
 
 `FUN_0027DC38` is the fight's own bookkeeping -- the live-enemy count, the
 target list, the music step-downs, and the write of 3000 into script work word 0
-that ends the battle. It belongs with the battle module rather than the crab.
+that ends the battle. It is ported; see the boss-targeting section below.
 
 `FUN_0023BBD8` is the pad rumble. The port has no motor anywhere, and three
 other places already say so.
 
 **Type 0x7E**, the swarm the corpse lets out, is ported -- see below.
 
-#### The crab could only ever fight with a third of itself
+## The crab could only ever fight with a third of itself
 
 Two separate faults, and between them they were the whole fight after the first
 hit landed.
 
-##### The rotation's other two tables had no handlers
+### The rotation's other two tables had no handlers
 
 `FUN_0027C7B8` is the crab's move chooser and it walks one of three tables,
 picked by how far through its damage thresholds it is:
@@ -568,7 +566,7 @@ rubble.
 lets out of the corpse -- a second enemy with its own wrapper and its own state
 table. It has its own section below.
 
-##### The 0.26 step cap was not a step cap
+### The 0.26 step cap was not a step cap
 
 The other half, and it predates all of the above: the crab could not climb out
 of its own arena.
@@ -605,7 +603,7 @@ one that stops a follower ratcheting up the shop counter, and `s01_e012`'s
 followers still sit exactly on their floors over twelve thousand frames. Both
 regression scenes are byte-identical without the cap.
 
-##### Verified
+### Verified
 
 `s14_e001`, sixteen thousand frames with the sword swinging on a repeating
 range: `--actor-report` reaches states 0, 1, 2, 3, **4**, 5, **7**, 8, 12, 13
@@ -618,7 +616,7 @@ the pool and up against Orphen mid-attack.
 `s01_e024` and `s01_e012` are byte-identical over 3000 frames with
 `--actor-report --scr-report`.
 
-#### One countdown in the fight ends on zero, and it is the one that matters
+## One countdown in the fight ends on zero, and it is the one that matters
 
 `FUN_00279298`'s invulnerability timer is spelled differently from every other
 timer in the crab:
@@ -657,7 +655,7 @@ never came off -- and nothing lands again. With the inclusive test the same run
 reads `f=2920 flinch=0 af=0080` and carries on 120, 108, 96, 84, 72, 60, 48 down
 to zero.
 
-##### `FUN_00215E48` is the already-hit set, not a contact flag
+### `FUN_00215E48` is the already-hit set, not a contact flag
 
 Found next to it. `FUN_00215E48` zeroes the nine words from `+0xCC` to `+0xEC`
 and drops `+0x06` bit 0x40; those words are the set `FUN_002148A8` and
@@ -669,14 +667,14 @@ state 3 -- the charge and slam -- is the one caller. So the crab's slam
 remembered its victim between swings and could land on Orphen exactly once in
 the whole fight. Type 0x7E's leap makes the same call and now makes the same one.
 
-##### Verified
+### Verified
 
 `s14_e001` with Hand of Pyro on a repeating range and no forced phases: the crab
 goes from 120 hit points to 0 by frame 6055, and `--actor-report` reaches **all
 sixteen** of its states plus the swarm's five, none unimplemented. `s01_e024` and
 `s01_e012` byte-identical.
 
-#### Type 0x7E is the swarm, and it is a whole enemy
+## Type 0x7E is the swarm, and it is a whole enemy
 
 Nothing spawns a `0x7E` from a placement. `FUN_0027C950` -- the crab's state 11,
 its death -- allocates a hundred of them around the corpse and numbers them off
@@ -705,7 +703,7 @@ between 2.00 and 2.99 onto both scale axes.
 6  FUN_002778B0  the leap
 ```
 
-##### State 5 is thirteen instructions and has no `src/` file
+### State 5 is thirteen instructions and has no `src/` file
 
 `PTR_FUN_00325868[5]` is `0x00277828`, which sits between the end of
 `FUN_00277410` and the start of `FUN_00277860`. Ghidra has no function there --
@@ -730,7 +728,7 @@ is the flag `FUN_00239CE0` reads *instead of* the type handler, so from the next
 frame on the corpse belongs to `FUN_0023A568`'s fade path and this state never
 runs again. That is the whole death: no burst, no cue, no record release.
 
-##### The leap is a Bezier with the pitch swept through it
+### The leap is a Bezier with the pitch swept through it
 
 State 6 is three phases on `+0x94`. Phase 0 closes to a unit and a half short of
 the player at thirty -- and the stopping point is measured from the *player* back
@@ -745,17 +743,18 @@ sweeping `+0x154` a quarter turn back the other way and sweeping its own body bo
 A wall mid-flight -- `+0x0C` bit 1 -- resets the arc timer to zero rather than
 ending the leap, so it simply tries again from wherever it stopped.
 
-##### The action check only understands two orders
+### The action check only understands two orders
 
 `FUN_00276D50` clears `+0x154`, writes 1 into the record's `+0x2C` and drops
 `+0x04` bit 3 for any pending byte at all, then: **10** means stop, and it is the
 only one that returns "handled" *and* leaves the pending byte standing so it
 fires again next frame; **11** means hold, without suppressing the state;
 everything else is swallowed and cleared. The battle AI VM is what would send
-those, and it is still out -- but the swarm never needed it, because nothing in
-the crab's death path issues an order.
+those (it is ported now; see [Battle: enemies](../battle/enemies.md)), but the
+swarm never needed it, because nothing in the crab's death path issues an
+order.
 
-##### Verified
+### Verified
 
 `s14_e001`, sixteen thousand frames with both damage phases forced: a hundred
 `0x7E` allocate and every one survives the run, `--actor-report` reaches their
@@ -764,7 +763,7 @@ from four sweeps to 37893 -- the leaps landing on Orphen, four contacts and 48
 damage. All hundred sit on their own floors at the end. States 4 and 5 need
 something to damage *them*, which nothing headless does.
 
-#### 0xAF and 0xAE are entity types, not sound cues
+## 0xAF and 0xAE are entity types, not sound cues
 
 `FUN_0027CCD0` is the crab's damage staging: at six tenths and again at three
 tenths of maximum hit points it sheds a claw, and the stage it raises is also
@@ -791,7 +790,7 @@ the close-up rig went in.
 So the crab kept both claws for the whole fight and made a noise it should not
 have made twice.
 
-##### Verified
+### Verified
 
 `s14_e001` with Hand of Pyro on a repeating range: the first claw goes at 60 hit
 points of 120 and the second at 24, one type 0xAF and one type 0xAE spawn and
@@ -799,7 +798,7 @@ each runs 325 frames before freeing its slot, and the crab's silhouette at frame
 5200 has neither pincer where at 3100 it has both. `s01_e024` and `s01_e012`
 byte-identical.
 
-#### The wall came down in silence: three dust opcodes the script layer threw away
+## The wall came down in silence: three dust opcodes the script layer threw away
 
 s14_e001 opens with the crab coming through the pier wall, and in the port that
 happened with no dust at all. The crab's own impacts were fine -- `FUN_0027CF20`
@@ -848,7 +847,7 @@ hold `0x40C90FD8`, which is 6.283184 and not `float(2*pi)` (`0x40C90FDB`). The
 port had the mathematical constant in all four, which walks the outer ring by a
 very slightly different step. Fixed with the opcodes.
 
-#### The crab fights in the water, and two things were keeping it on the pier
+## The crab fights in the water, and two things were keeping it on the pier
 
 A PCSX2 save state taken as the battle opens has the crab at **(0.00, -3.18,
 -1.00)** with `+0x4C` = -1.00, all four corner heights -1.000 and `+0x0A` =
@@ -856,7 +855,7 @@ A PCSX2 save state taken as the battle opens has the crab at **(0.00, -3.18,
 planks beside the player, stepping on and off them for the rest of the fight.
 Two separate causes, one of them a correction this port had made to itself.
 
-##### `FUN_0022DC68` is not `FUN_0022DBC8`, and the crab calls it
+### `FUN_0022DC68` is not `FUN_0022DBC8`, and the crab calls it
 
 The arena is a pool floor at -1.0 (primitives 649 and 680, `x` -5..5, `y` -5..0)
 with three planked sections laid over it at -0.5, tagged 1, 2 and 4 in record78
@@ -889,7 +888,7 @@ and differ only in what they write:
 | `FUN_0022DBC8` | record78 +0x04 | record80 +0x70 bit 0x20 | hide from the draw |
 | `FUN_0022DC68` | record78 +0x04 | record78 +0x00 bit 0x800 | stop being ground |
 
-##### A non-player actor may not step up more than 0.26 either
+### A non-player actor may not step up more than 0.26 either
 
 With the planks gone the crab still climbed them, because the port's actor
 physics had no step limit at all. The predicate was `slopeAngle <= +0x80` and
@@ -921,7 +920,7 @@ s14_e001 dump reads +0x7C = 100.0**, crab, lead and props alike, so neither can
 fire, and the workspace's `w[6]` -- the lowest of the four corners -- is not
 carried yet. They are noted in the code rather than guessed at.
 
-##### Verified
+### Verified
 
 `s14_e001`: the crab's walk-in now ends at (0.51, -3.53, **-1.00**) facing
 1.571, against the save state's (0.00, -3.18, -1.00) facing 1.5708, and it stays
@@ -930,7 +929,7 @@ player's own ground primitive moves from 370 (`lead` 0xA20, a plank the crab has
 already broken) to 459 (0xA04), the same class of primitive as the save state's
 483. `s01_e024` and `s01_e012` byte-identical over 3000 frames.
 
-##### The endpoint is emergent, and the save state is a retry
+### The endpoint is emergent, and the save state is a retry
 
 The walk-in ends half a unit short and half a unit right of the save state's
 crab. Chasing it settled what the number is made of, and the first guess -- "a
@@ -974,7 +973,7 @@ Reproducing that state in the port -- planks cleared from frame 0 -- puts the
 crab at (0.00, -3.50, -1.00) facing 1.5708 at the same beat, which is the same
 spot and the same facing to two decimals.
 
-##### Retracted: the trig is not the difference
+### Retracted: the trig is not the difference
 
 An earlier pass here claimed the save state proved the original's trig differs
 from libm. It does not. The crab holds `+0x5C` = `+0x19C` = **0x3FC90FA6**, and
@@ -1004,7 +1003,7 @@ class of thing is real elsewhere -- every full-turn word the dust rings step by
 (`fGpffff8384`/`8388`/`838c`, `DAT_00352300`) holds `0x40C90FD8`, 6.283184, and
 the port had `float(2*pi)` = `0x40C90FDB` in all four.
 
-#### A boss fight targets from a different table, and the port had never built it
+## A boss fight targets from a different table, and the port had never built it
 
 `FUN_002462C8` has two targeting modes and picks between them on one word:
 
@@ -1050,7 +1049,7 @@ all, so the crab fight ran the field encounter's paused display over an actor
 table that holds exactly one record -- the crab -- and the moment the crab died
 there was nothing left in the game the player could aim at.
 
-##### The marker table is a registry of live cursors
+### The marker table is a registry of live cursors
 
 `DAT_003253C0`, twenty rows of `{s16 kind, s16 slot, s16 cursor, f32 x, f32 y,
 f32 z}`. `FUN_00247F28` stamps a row, raises the entity's `+0x96` bit 0 and --
@@ -1060,7 +1059,7 @@ from three places that all matter here: the swarm crab's own wrapper when one
 walks off the map, `FUN_0027D860` when the fight ends, and `FUN_0027DA48` before
 it re-aims.
 
-##### `FUN_0027DC38` is the fight's bookkeeping, and it is what fills the table
+### `FUN_0027DC38` is the fight's bookkeeping, and it is what fills the table
 
 Called once a frame from `FUN_00279298`, between the camera and the wreckage
 drop. It was the one helper of the crab's six that was still out; without it the
@@ -1078,7 +1077,7 @@ splits it:
   theirs alongside it, and when the last crab dies the music stops, script work
   word 0 takes 3000 and every row is released.
 
-##### Nine state handlers were returning the charge instead of spending it
+### Nine state handlers were returning the charge instead of spending it
 
 Found on the way, and the reason **no spell could be cast for the rest of the
 scene** once the crab was dead. `FUN_00249610` writes each handler's return
@@ -1100,7 +1099,7 @@ the run ends. State 120 then handed 6400 back every frame, bit 0 never came down
 and the pad was dead from the dodge onward. The three returns in `FUN_0024CF20`
 are 0, 0 and 1.
 
-##### `+0x0C` bit 0x1000 is "I was drawn this frame", and the model path never set it
+### `+0x0C` bit 0x1000 is "I was drawn this frame", and the model path never set it
 
 The marker table went in and still no cursor appeared. `FUN_0027DC38`'s prune
 drops the row of anything that has stopped being drawn:
@@ -1136,7 +1135,7 @@ Three things read the bit, and all three were reading a permanent zero:
 Not modelled: the culls `FUN_0020C810` takes before line 219, so an entity the
 original would have dropped still latches in the port.
 
-##### Verified
+### Verified
 
 `s14_e001`: the crab wears a cursor from the opening of the fight and it is the
 selected one -- animation 11, the pi/4 bracket -- with the standing wreckage
@@ -1148,12 +1147,13 @@ used to do nothing. `--battle-report` names the scene module and whether its
 marker table went in. `s01_e024` and `s01_e012` byte-identical over 3000 frames
 with the draw latch in.
 
-Still out: the per-frame hooks of the other twenty-seven modules -- eighteen of
-them belong to field scenes, and `s01_e024` is module 13 -- and the two music
-step-downs `FUN_0027DC38` makes as the swarm thins, which are channel fades this
-port's audio path handles for itself.
+Still out: the per-frame (mode 4) hooks of most other modules. Modules 10, 18,
+31 and 32 have theirs (`PortRuntime`'s scene-module dispatch); eighteen of the
+rest belong to field scenes, and `s01_e024` is module 13. The two music
+step-downs `FUN_0027DC38` makes as the swarm thins, at seventy and thirty crabs
+left, are ported.
 
-#### The handback after the fight is three writes, not one
+## The handback after the fight is three writes, not one
 
 `FUN_0027D230`'s `DAT_0035526B == 9` branch -- the frame the crab's finale gives
 the player back -- is four statements, and the port had transcribed one of them:
@@ -1188,7 +1188,7 @@ on the spot, at (-15.00, 4.00), for the rest of the scene. That is the "jumping
 in place". With the re-record he arrives and stands: the trace ends at f=7457
 and nothing moves again.
 
-##### And the swarm was spawned where its marks belong
+### And the swarm was spawned where its marks belong
 
 `FUN_0027C950`'s inner loop places each crab with `FUN_002662E0` at the corpse's
 bone 0 -- all hundred stacked on the body -- and writes the scattered point into
@@ -1211,7 +1211,7 @@ to x in -11..-6 and z about 4, and state 3's mark creeps 0.05 further along -x
 every time its hold expires while the player is more than a unit away. The swarm
 walks down the beach after Orphen and leaps at him from a unit and a half out.
 
-##### Verified
+### Verified
 
 `s14_e001` with Hand of Pyro on a repeating range: the crab dies at frame 6055,
 the hundred spawn on the corpse at (0.00, 5.30), and the lead ends the run at

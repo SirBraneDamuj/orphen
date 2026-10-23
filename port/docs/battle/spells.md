@@ -1,6 +1,6 @@
 # Battle: spells
 
-#### The ground ring: what a GS dump and a save state have ruled out
+## The ground ring: what a GS dump and a save state have ruled out
 
 The ring (type `0x18F`, `grp_00a8`) draws with a hard-edged translucent box
 around it that the real game does not have, and it lacks a shimmer the real one
@@ -45,7 +45,7 @@ variants selected by its `+0x19A`, and raises the matching bit in
 `+0x5C += frameTicks * 0.00226893` — so it is an animated ring, just a
 conditional one.
 
-#### The ring's shimmer is the model's own UV animation script
+## The ring's shimmer is the model's own UV animation script
 
 Two `.gs` captures of a *resting* battle ring, four frames each, plus the pyro
 one, settle what the shimmer is. It is not the pose and it is not the geometry:
@@ -104,7 +104,7 @@ Two other things the same dumps settle:
   original emits no alpha-12 vertices at all; that was read off a max-charge
   capture. A resting ring emits 192 of them.
 
-#### The ring drew untextured because one of the three model tables was missing
+## The ring drew untextured because one of the three model tables was missing
 
 The ring was a white drum until its sheet was actually loaded, and none of that
 was the draw path's doing.
@@ -134,7 +134,7 @@ as a translucent textured swirl with the UV animation running on it. `--frames
 3000 --actor-report --scr-report` on `s01_e024` and `s01_e012` is unchanged
 except for the texture cache's generation counter, which counts one more load.
 
-#### Hand of Pyro flies along the caster's facing, and nothing else
+## Hand of Pyro flies along the caster's facing, and nothing else
 
 Worth stating because it is the only thing aiming the volley. `FUN_002DAB70`
 takes the target only to compute two *scalars* — `+0x1BC`, the horizontal speed,
@@ -170,7 +170,7 @@ chain, picks one of four fixed spreads (0 rises only at charge 5, 1 turns right,
 five-link chain arcs apart because its links disagree, not because anything
 divides an angle.
 
-##### `FUN_002DB230`, type `0x173`: recovered from the ELF, ten instructions
+### `FUN_002DB230`, type `0x173`: recovered from the ELF, ten instructions
 
 The burst a fireball turns into on contact. It is not in `src/` and — unlike
 `FUN_002E4C00`, the lightning flash it is shaped like — Ghidra has no function
@@ -196,7 +196,7 @@ Two effect types on the spell paths were in this position; the other,
 `FUN_002E4C00`, was already recovered the same way. Nothing on the Hand of Pyro
 or Bite of Lightning chain is reported `UNIMPLEMENTED` now.
 
-#### Bite of Lightning, end to end
+## Bite of Lightning, end to end
 
 Circle's spell, the kind `< 0` arm, and the second command whose whole chain is
 ported. It is not shaped like Hand of Pyro: the fire spell throws a projectile,
@@ -220,7 +220,7 @@ neither — it is the single type `0x1E3` in `DAT_0031DAD0`, moved and resized
 every frame by `FUN_002f1380`, whose only callers anywhere in `src/` are the six
 elemental hand effects. It is the targeting marker, not a general hit flash.
 
-##### Where the circle goes when there is no target
+### Where the circle goes when there is no target
 
 `FUN_002493f0` is the whole rule and there is nothing random in it:
 
@@ -249,7 +249,7 @@ With a target it is the target, exactly: `FUN_002493f0` reads the three floats
 state 113 has been tracking there, so on `s14_e012` the landing comes out
 `(1.389, -3.188, 0.000)` against pool slot 12's `(1.39, -3.19, 0.00)`.
 
-##### The character turns onto the target, and the port had that as a stub
+### The character turns onto the target, and the port had that as a stub
 
 `FUN_00249610:166-310`, between the state translation and the dispatch. It was
 the one place in the battle module the port left as a counter rather than code,
@@ -319,7 +319,7 @@ Two smaller divergences fell out of reading the block's neighbourhood:
   The port never cleared it, which left a guard arc up for the rest of the
   scene after one Square press.
 
-##### Party record `+0x45` is a frame number, not a flag
+### Party record `+0x45` is a frame number, not a flag
 
 It starts at `-1`. When the cast animation raises `+0xAA` bit `0x200`, state 113
 copies the animation cursor `+0xA8` into it, halved; from then on the state's
@@ -334,7 +334,7 @@ State 111 is not this shape. It captures the target position once on entry and
 gates on `+0xAA` bit `0x800`; copying its body onto 113 loses the tracking, the
 pin and the charge gate all at once.
 
-##### The release is not `FUN_0024bae0`
+### The release is not `FUN_0024bae0`
 
 112 tail-calls it, 114 does not — 114 is the only release state with its own
 body. It holds animation `0x3A` rather than `0x14`, clears the *character's* hit
@@ -344,7 +344,7 @@ is the summon. Its `return 1` while `+0x06` bit 0 is down is the input lock:
 `FUN_00249610` writes the return into `+0x62` and raises control block `+0x38`
 bit 0 for any non-zero value, which is what stops a second press mid-cast.
 
-##### `FUN_002de650` allocates both spawns as `0x174` and retypes them
+### `FUN_002de650` allocates both spawns as `0x174` and retypes them
 
 Both the damage disc and the flash are `FUN_002d6c68(0x174)` with `+0x00`
 overwritten afterwards — `0x15C` and `0x178`. They get `0x174`'s descriptor and
@@ -364,7 +364,7 @@ void FUN_002e4c00(entity) { if (entity->flags06 & 1) FUN_00265ec0(entity); }
 A pure one-shot: play the animation the launch set, destroy on the
 animation-finished flag. Its 32-frame `+0x1B0` timer is never read.
 
-##### What `--battle-report` shows
+### What `--battle-report` shows
 
 `ring=` is the `0x18F` marker's `+0x14C` and `hitfx=` is `DAT_0031DAD0`'s, both
 in thousandths. Without them the growth is invisible in a headless run.
@@ -397,15 +397,15 @@ The hold *must* start after the battle does. `--hold-circle` presses on its firs
 frame only, and `s14_e012` raises `sGpffffb052` bit 0 on frame 247; a press
 before that is simply not seen.
 
-##### Deliberately not ported: the summon
+### The summon branch
 
 `FUN_002deef0` is the only entry, taken from `FUN_002de650` on `level == 5 &&
 target > 1`. It spawns type `0x13E` at animation 5 (behaviour `FUN_002df018`, in
 `src/`), arms a 32-frame timer at `+0x1AC`, and raises `uGpffffaf5c` — the
 battle-interrupt flag that stops the rest of the battle while the spirit plays.
-The port returns 0 from that branch with a comment rather than approximating it.
+This used to be left out; it is ported now, as the next section describes.
 
-### The five level-5 summons
+## The five level-5 summons
 
 Released at full charge with a live target, an elemental spell is not thrown at
 all -- it becomes a creature, and the creature takes the scene over for its run:
@@ -466,7 +466,7 @@ Not ported, and named at the call sites:
 - `DAT_0031DA1E`, the first-time spirit-name banner. Four of the five arm it;
   nothing in the executable draws it, and its only reader counts its timer down.
 
-### The barrier was attached to the caster's hand
+## The barrier was attached to the caster's hand
 
 For a while the shield barrier drew as a flat green slab standing beside the
 player instead of a cylinder around him, and it read as a poser bug because the
@@ -490,7 +490,7 @@ at `(0.222, -0.037, 0.753)`, `(0.219, -0.007, 0.806)`, `(0.220, -0.039, 0.702)`
 and on through bone 9's sentinel, every one of them the `shield_of_immunity`
 value to three decimals.
 
-### Orphen stood in front of his own shield: entity `+0x133`
+## Orphen stood in front of his own shield: entity `+0x133`
 
 With the barrier rooted correctly it was still drawn *behind* the caster -- the
 cylinder's near wall never covered him, where hardware shows him dimly through
@@ -523,7 +523,7 @@ does sort at the caster's own depth on hardware.
 `s01_e024` and `s14_e012` are visually unchanged by it, and the `--frames 1200
 --actor-report --scr-report` guard is byte-identical on both plus `s14_e001`:
 this is a render-side read of a field the simulation was already writing.
-### Two HUD pieces the spell demo showed and hardware does not
+## Two HUD pieces the spell demo showed and hardware does not
 
 `s14_e031` drew a health bar for every spell that lands on the target dummy, and
 left the target cursor parked in the corner of the screen through the narration

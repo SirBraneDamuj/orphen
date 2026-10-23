@@ -1,6 +1,6 @@
 # Battle mode
 
-## Battle mode
+## The first slice: s14_e012
 
 `s14_e045` stopped because it was already being driven by the battle module.
 This is the first slice of that module: the player half, against **`s14_e012`**
@@ -137,7 +137,7 @@ same statement.
 `FUN_0024cf20` forces that halfword positive and, when it is zero, to 1 — so the
 report prints `target=1` rather than `-1`, and the `< 3` test still takes the
 no-target branch. State 106 reads the same field and collapses to a single frame
-for the same reason; see the sword section above.
+for the same reason; see [Sword and guard](sword-and-guard.md).
 
 State 106 also *negates* the halfword on the frame it commits, which is what
 `target=-12` in the report means. `FUN_002493B8` reads it back through its own
@@ -178,23 +178,23 @@ same thing said from the other side.
 
 Named by `--battle-report` rather than left silent:
 
-- **`FUN_0023fd30`'s second loop.** The battle master tick runs a *second*
+- **The allies' AI scripts.** The battle master tick runs a *second*
   bytecode interpreter — 19 opcodes at `PTR_LAB_0031d118`
   (`src/PTR_LAB_0031d118.txt`) — over a master battle script and a per-member AI
-  script off control block `+0x30`. The master script is stepped; the per-member
-  ones are installed and then not, so the enemies stand where they spawned. The
-  player never needed them: `FUN_00243f80` installs them only on members *other*
-  than index 0.
+  script off control block `+0x30`. The master script and the enemies' scripts
+  run now (`--battle-report`'s "per-actor VM" line). A party member other than
+  the lead gets an executable-resident script (`PTR_DAT_0031d1a8`, or
+  `PTR_DAT_0031d1f0` for class 3) that the port does not install, so allies
+  stand still (`battle_party.cpp`).
 - **The per-action camera framing and the reaction shots.**
   `DAT_00355C90`/`C94`/`C98` and `DAT_00354E84`/`E8C` all read zero, so
   `FUN_0023C340` falls through to the spline walk every frame.
-- **Classes 3, 4, 5, 6 and 7,** and class 1's states 102 and 115.
+- **Classes 3, 4, 6 and 7.** Class 1 (Orphen) and class 5 (Sephy, below) are
+  ported.
 
-Of the effect entities `FUN_00242df0` and the state handlers spawn — types
-`0x118`, `0x139`, `0x13D`, `0x174`, `0x1C7`, and the `0x15B`/`0x15C`/`0x173`/
-`0x178` the casts throw — only `0x118` is still reported `UNIMPLEMENTED` by
-`--actor-report`. It sits where `FUN_00242df0` left it,
-hidden by the `+0x08` bit 0 it spawns it with.
+The effect entities `FUN_00242df0` and the state handlers spawn — types
+`0x118` (the status aura, `FUN_002d8ce0`), `0x139`, `0x13D`, `0x174`, `0x1C7`,
+and the `0x15B`/`0x15C`/`0x173`/`0x178` the casts throw — are all ported.
 
 #### `uGpffffb052` and `DAT_00354fc2` are one halfword
 
@@ -288,16 +288,16 @@ position *after* the start entry — so seeding from the script's placement rath
 than from the port's guess is the correction, not a regression. Reachability
 (159/3948) and the 900-frame capture are unchanged, and `s01_e024` is untouched.
 
-Two things the same save-state diff turned up that are **not** fixed:
+The same save-state diff turned up two more differences, both fixed since:
 
 - Every enemy on hardware is turned to face the player at spawn — slots 11..14
   carry `2.7909`, `2.1516`, `1.5819`, `2.5425`, and each is `atan2` of the
-  offset to `(-0.9, 0.3)` to four decimals. The port leaves them all at the
-  placement default `1.5708`, because the type `0x8A`/`0x80` behaviours
-  (`FUN_002484D0` / `FUN_00248888`) are still `UNIMPLEMENTED`.
+  offset to `(-0.9, 0.3)` to four decimals. The port left them at the placement
+  default `1.5708` until the type `0x8A`/`0x80` behaviours were ported; the turn
+  is the enemy's own idle default (see [Enemies](enemies.md)).
 - Hardware slot 10 is type `0x072` with `+0x95 = 0x50`, bound to the encounter's
-  party record `[4]`. The port spawns the same placement as a streamed prop
-  (`0x37C`) and leaves that record unbound.
+  party record `[4]`. The port binds it now. Its behaviour (`0x2f1200`) is
+  still `UNIMPLEMENTED`, as is the type `0x74` that fills slots 15..30.
 
 ### Sephy fights as battle class 5
 

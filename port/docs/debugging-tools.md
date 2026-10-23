@@ -1,6 +1,6 @@
 # Debugging tools
 
-### SCR SUBPROC DISP
+## SCR SUBPROC DISP
 
 `FUN_0025b778:22-24` prints one line per occupied object-script slot, before
 that slot runs, gated on `DAT_003555dd` bit 7 — the debug menu's
@@ -20,7 +20,7 @@ The port holds the bit set by default, the same way it holds
 here, and these lines belong to the same readout as the position display. `O`
 toggles it, `--no-scr-subproc-disp` starts it off.
 
-### `G`: snapshot the frame you are looking at
+## `G`: snapshot the frame you are looking at
 
 The failures worth chasing in this port are increasingly the ones that only
 appear when the scene is **played**. The script reaches them carrying state an
@@ -62,7 +62,7 @@ word, each set bit printing ` %02d:%d(%X)` (`0x0034CA78`) for
 mask, so it stays zero and the loop prints nothing until a slot is turned on.
 Ported and inert, which is what the original does.
 
-### Diffing the entity pool against hardware, field by field
+## Diffing the entity pool against hardware, field by field
 
 `G` (or `--snapshot-at <frame>` headless) now ends its report with the entity
 pool laid out in fixed-width columns at the original's own offsets, and
@@ -93,31 +93,40 @@ Run against `eeMemory.bin` at frame 1091 it immediately found two fields wrong o
 
 Both regression scenes stayed byte-identical at 3000 frames across both fixes.
 
-#### Still wrong, and named
+### Still different (re-run 2026-10-23)
 
-The same comparison leaves three gaps standing. None is guesswork -- each is a
-specific line of the decompilation the port does not run:
+The three gaps this section used to list are closed: the ground query writes
+`+0x0A` / `+0x6C` / `+0x70` back (`FUN_00227070:128-138`, in
+`actor_frame_update.cpp`), a static prop's `+0x0C` is rebuilt every frame, and
+placement samples the floor only for a record carrying `0x8000`, as
+`FUN_0025e7c0:115-120` does.
 
-- **The ground query's writeback.** Hardware carries `+0x0A` (the packed
-  `primitive | (half << 14)`) and `+0x6C` / `+0x70` (the winning and ANDed
-  terrain flags) on every entity that has been queried; the port leaves all
-  three at their spawn values. `FUN_002262c0`'s resample block reads `+0x0A`,
-  and `0` for every s01_e012 primitive's `+0x13` is the only reason that has not
-  bitten yet.
-- **`+0x0C` on a static prop.** Hardware reads `0x0005` / `0x3015`; the port
-  reads `0`, because it does not tick `FUN_002262c0` for entities that never
-  move. The original does, every frame, and rebuilds the word from scratch.
-- **Placement does not always ground.** `FUN_0025e7c0:115-120` samples the floor
-  **only** when the type's record carries `0x8000`, and then through
-  `FUN_00227798` -- the single-point, body-less probe -- clearing `+0x04` bit 8
-  on the same branch. Everything else keeps the authored z that `FUN_002662e0`
-  mirrored into `+0x4C`. The port grounds every placed record unconditionally,
-  which is why a dozen props read `-1.500` against hardware's `-1.250` and the
-  shop clutter reads `0.250` against `0.259`. Since `+0x4C` is exactly what
-  `FUN_002262c0`'s landing snap raises an actor to, this is the first place to
-  look when something stands on scenery it should be beside.
+The frame-1091 dump is no longer on disk. The re-run used the `sea_low` save
+state instead, which is the same stream two records later: channel 0 at `0xCAC0`,
+timer 3424, 18 consumed. The port reaches exactly that state at **frame 1284**
+(`--snapshot-at 1284`). Every position but one matches, Magnus included. What
+still differs, none of it traced yet:
 
-### `eeMemory.bin` is frame ~1091, and Volcan was never a bug
+- **`+0x08` bits.** The ~50 static props read `0x10` / `0x18` on hardware and `0`
+  in the port; slots 63-70 lack `0x08`; the lead and slots 84/85 lack `0x04`
+  (`0x137` / `0x13B` on hardware, `0x133` in the port).
+- **Slots 75-79** (`+0x08` bit `0x20`, the push-out gate) carry a ground query's
+  `+0x0A` / `+0x6C` / `+0x70` on hardware; the port leaves them at `-1` / `0`.
+  They never move, so the only query that could have written them is the
+  push-out branch's corner sample, which in the port does not write back.
+- **`+0x0C` on static props**: `0x0005` on hardware, `0x3005` in the port. The low
+  bits agree. `0x3000` is the "I was drawn" latch `FUN_0020C810` raises. The port
+  raises it for everything it submits, because the distance-fade and near-plane
+  culls ahead of `FUN_0020C810:219` are not modelled. That is the likely cause,
+  though where in the frame the dump was taken could also explain it.
+- **`+0x64` on slots 0 and 1** is `-1` in the port and `0` on hardware: those two
+  slots are not built through `FUN_00229c40`'s clear.
+- **Slot 1** differs in radius (`+0x54`, 0.30 on hardware against 0.15), height
+  (`+0x58`, 0.60 against 0.80), `+0x62` and `+0x192`. **Slots 5 and 6** are
+  occupied on hardware and empty in the port. **Slot 8** is parked at a different
+  off-screen y.
+
+## `eeMemory.bin` is frame ~1091, and Volcan was never a bug
 
 The single most expensive mistake in this area, recorded so it is not repeated:
 **the dump had been dated by eyeballing the camera, which put it at frame ~9600.
@@ -149,10 +158,8 @@ that `currentOpcode_` is clobbered by the nested opcodes operand evaluation
 dispatches, so a print placed after the operand reads names the wrong opcode;
 `FUN_0025eeb0` captures it at entry for exactly that reason.
 
-One real residual remains: Magnus (slot 81) sits at `-1.19x` where the dump has
-exactly `-1.200`, stable across frames. Primitive 9 is flat, so the scan should
-return its `+0x2C` of `-1.200` outright — the port is landing somewhere else.
-Small, but it is a genuine divergence and belongs on the fix list.
+A residual recorded here, Magnus (slot 81) at `-1.19x` against the dump's
+`-1.200`, is gone: the re-run above matches him exactly.
 
 `--probe x,y,z[,r]` prints `lead=` (record78 `+0x00`) beside `terrain=`
 (`+0x04`); the scan gates on the first and the reject mask on the second, and
@@ -171,8 +178,9 @@ against a dump's entity block.
 - `original_position_display.*` is the `cGpffffb128` block of `FUN_002239c8`,
   which is what the debug menu's `ON :POSITION DISP` row turns on.
 
-It draws **always** for now. `cGpffffb128` (`DAT_00355098`) is held on and both
-debug gates with it, because nothing reaches `FUN_00268d30`'s menu yet.
+`cGpffffb128` (`DAT_00355098`) is held on, and both debug gates with it,
+because nothing reaches `FUN_00268d30`'s menu yet. Whether it reaches the screen
+is the `H` toggle; see Debug HUD below.
 
 There are two readouts and the original picks between them on the gates:
 `cGpffffb66a == 0 || cGpffffb66c != 0` takes the detailed one, otherwise the
@@ -192,9 +200,10 @@ is the check the layout was built against: the unlabelled first line is the lead
 player's `+0x20` triple, `tPOS` is the camera's look-at (`DAT_0058be90`), `cPOS`
 is the camera entity's own position (`0x0058C088 + 0x20`), and `MAP` is
 `DAT_003551f4` / `DAT_003551f0`, which are the MCB section and entry. Positions
-are scaled by 1000 and truncated. **`AF`/`SF` do not match the dump yet** --
-`FUN_0022a418`'s `DAT_0058beb4 = ... | 0x3000` and `DAT_0058beb8 |= 4` are not
-in the port's scene bootstrap, so those two read 0.
+are scaled by 1000 and truncated. `AF` matches now:
+`FUN_0022a418_stamp_lead_player_flags` applies `DAT_0058beb4 = ... | 0x3000`.
+`SF` does not yet. It is still missing bit `0x04`, which is the
+`DAT_0058beb8 |= 4` from the same function; the diff above shows it.
 
 ### Coordinates
 

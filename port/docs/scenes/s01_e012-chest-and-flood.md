@@ -1,6 +1,10 @@
-# s01_e012: the chest and the flood
+# s01_e012: the flood, and the chest cutscene
 
-### The flooding of the hold
+The flood is `s01_e012`'s story chest. The ordinary chest cutscene is generic --
+player states `0x0C`..`0x15` -- and its frame numbers below are from
+`s01_e024`'s chest slot 17, the cheapest one to reach.
+
+## The flooding of the hold
 
 The story chest — pool slot **78**, at `(-12.731, -1.373, -1.50)` — opens a
 cutscene that floods the map and ends on the save prompt. It reaches the player
@@ -29,7 +33,7 @@ Stream `0xd430` is 29 records: a camera move, subproc **3205**, three flag joins
 the map swap, five dialogue lines and the save prompt. Reproduce it with
 
 ```
---scr-tick --arm-stream d300:13400 --hold-stick -1.9,1 --press-confirm <frames>
+--arm-stream d300:13400 --hold-stick -1.9,1 --press-confirm <frames>
 ```
 
 which walks the lead out of the re-entry cutscene to that chest.
@@ -72,12 +76,13 @@ the next:
 
 With those three the chain runs with **zero unimplemented opcodes**: 284 event
 records, all seven join flags (`0x12C`, `0x12D`, `0x12E`, `0x130`..`0x133`), five
-dialogue lines, and it ends on `0xE1` at `0x8c20` — the save/menu mode. There is
-no save menu, so `DAT_00354d2c` is raised to `0x10`, the following `0x6D` hands
-control back and play continues on the flooded map. That last part is the known
-gap, not a halt.
+dialogue lines, and it ends on `0xE1` at `0x8c20`, which raises the save prompt
+(game mode `0x10`). The prompt and its wait mode `0x11` are ported
+(`src/ported/scene/save_prompt.*`). The memory-card save screen behind Yes
+(`FUN_00234468`, mode 8) is not: on Yes the port backs out to the field the way
+No does, and says so on the console. That is a known divergence.
 
-### The lead is walked by the script too, and its request was being wiped
+## The lead is walked by the script too, and its request was being wiped
 
 `s01_e012`'s re-entry cutscene -- floor panel `0x3d94`'s second branch, arming
 scheduler stream `0xd300` -- softlocked forever. Three characters walk back into
@@ -109,7 +114,8 @@ clear and it clears only after spending them. `FUN_00253080`, the drift pass
 `0xD`-class surface, or while airborne with residual drift; on ordinary ground
 `bVar3` stays false and it leaves them alone.
 
-This is the same bug the actor loop had (see the `FUN_00239ce0` note above); the
+This is the same bug the actor loop had (see the `FUN_00239ce0` note in
+[Scene script](../scene-script.md)); the
 lead's copy of it survived that fix because nothing had yet asked the script to
 move slot 0. Removing it leaves `--frames 4000 --actor-report --scr-report`
 byte-identical on both `s01_e012` and `s01_e024`.
@@ -120,18 +126,17 @@ Armed any earlier it fails for unrelated reasons -- before the opening's `0x78`
 at script `0x5f8e` clears `+0x04` bit `0x108`, physics is off on the lead
 entirely, and armed at frame 1 he walks into a map blocker no opening has moved.
 
-**Where physics actually lives, which the port does not reproduce.** No state
-handler calls `FUN_002262c0`, and neither does `FUN_00239ce0`. The only caller
-is `FUN_002261e0`, a single late pass that walks all 256 pool slots -- *from slot
-0* -- running `FUN_00225c90` then `FUN_002262c0` on each live one whose `+0x02`
-bit `0x800` is clear and whose `+0x192` is negative. `FUN_002239c8` orders it
-`FUN_0025b778`, `FUN_00251ed8`, `FUN_00239ce0`, `FUN_00208450`, **`FUN_002261e0`**,
-`FUN_0025b918`, `FUN_00216aa0`. The port instead runs physics inside the player
-controller and again inside the actor loop, which puts both before
-`FUN_00208450` rather than after it. Nothing in either scene depends on the
-difference yet, but a moving door would.
+**Where physics actually lives.** No state handler calls `FUN_002262c0`, and
+neither does `FUN_00239ce0`. The only caller is `FUN_002261e0`, a single late
+pass that walks all 256 pool slots -- *from slot 0* -- running `FUN_00225c90`
+then `FUN_002262c0` on each live one whose `+0x02` bit `0x800` is clear and whose
+`+0x192` is negative. `FUN_002239c8` orders it `FUN_0025b778`, `FUN_00251ed8`,
+`FUN_00239ce0`, `FUN_00208450`, **`FUN_002261e0`**, `FUN_0025b918`,
+`FUN_00216aa0`. The port used to run physics inside the player controller and
+the actor loop; it now has `FUN_002261e0` as its own pass in that slot, lead
+included (see [Physics](../physics.md)).
 
-### The chest cutscene
+## The chest cutscene
 
 `src/ported/player/original_chest_cutscene.*` is player states `0x0C`..`0x15`,
 the sequence `FUN_00252828`'s chest branch starts. `analyzed/player_states/chest_cutscene_0x0C_0x15.c`
@@ -149,10 +154,13 @@ What runs, with the frame each transition lands on in `s01_e024`:
 | `0x0F` | on the animation's marked keyframe, **set the chest's event flag**; on its last, build the item and hand on | 365 |
 | `0x10` | reveal the item entity | 366 |
 | `0x11` | cross-fade the chest and player out, the item in, raise the caption | 399 |
-| `0x12` | on the caption being dismissed with Cross, arm the fade to white | — |
-| `0x13` | on white: release the camera, push the player clear of the chest, leave mode 6 | 394 |
-| `0x14` | once grounded, arm the fade in from white | 400 |
-| `0x15` | on visible, back to idle | 422 |
+| `0x12` | on the caption being dismissed with Cross, arm the fade to white | 441 |
+| `0x13` | on white: release the camera, push the player clear of the chest, leave mode 6 | 469 |
+| `0x14` | once grounded, arm the fade in from white | 475 |
+| `0x15` | on visible, back to idle | 497 |
+
+The frame is when the state hands on, with the caption dismissed at frame 440
+(re-measured 2026-10-23 with the command at the end of this file).
 
 Those 254 frames in state `0x0F` are exactly the sum of animation `0x57`'s
 twelve keyframe durations, read out of `grp_0001`. Its keyframe 1 carries
@@ -231,8 +239,7 @@ derivative over six. `FUN_00266a78` and `FUN_00266738` build the curves,
 the chest's own `+0x19C` timer against `0x1680` (180 frames).
 
 `FUN_00217b88`, the interpolator `FUN_00216aa0` runs for submode `0x23`, is
-dead code in the retail build: a scan of the whole text segment finds no store
-of a non-zero duration to `iGpffffbb0c` or `iGpffffbb14`. The only thing that
+dead code in the retail build (see [Camera](../camera.md)); the only thing that
 moves a `0x23` camera is `FUN_00218158`.
 
 `FUN_002241d8`'s `DAT_00355658 = 1.0` puts the projection back at state
@@ -273,7 +280,8 @@ Three separate things in `FUN_002342c0`, and none of them is the fade:
 
 `FUN_00234400` undoes all three: its own loop restores `+0x04` and `+0x08` per
 slot, and `FUN_00233eb8` puts the camera, the lights, the fog and
-`DAT_00355700` back — the last from snapshot byte `+0x1DA65`.
+`DAT_00355700` back — the last from snapshot byte `+0x1DA65`. For the camera
+half, `FUN_00217d70`'s own save/restore pair covers it.
 
 It restores those two words from `FUN_00233b28`'s copy; it does not just clear
 the bits it set. The port used to clear them, which un-hid every entity that was
@@ -352,10 +360,28 @@ a chest holding item 0 down the empty path.)
 reads the real streams and expands the four codes above, but the other 27 stop
 the reader and get reported; there is no wrapping against `FUN_00237b38`'s
 600-unit width, and the glyph list is rebuilt each frame rather than
-accumulated. The real one now exists — `ported/text/original_dialogue_window.*`,
-below — and this file should be folded into it. It has not been yet, because the
-chest caption is the one place that needs `0x14`'s item-name splice and a real
-Cross press, and the cutscene walk does neither.
+accumulated. The real engine is `ported/text/original_dialogue_window.*` (see
+[Text](../text-and-subtitles.md)), and this file should be folded into it. It has
+not been yet, because the chest caption is the one place that needs `0x14`'s
+item-name splice and a real Cross press, and the cutscene walk does neither.
 
-The *font*, on the other hand, is the real one — see below.
+The *font* is the real one, from the same doc.
 
+## Checking the chest cutscene headlessly
+
+Checkable without a window, and `--press-confirm` now works under
+`--screenshot` too:
+
+```
+orphen_port --disc-root disc --scene s01_e024 --frames 620 \
+    --spawn -4.5,-10.5,0 --press-confirm 60,440 --actor-report
+```
+
+That spawns beside chest slot 17, facing it, and the report ends with that
+chest on animation 6 and every other one still on 4.
+
+**Both presses matter.** The first opens the chest; the second dismisses the
+item caption, which state `0x12` waits on. With only the first, the cutscene
+parks at `0x12` forever and the last four state changes never happen — that
+looks exactly like a regression and is not one. The ten transitions land on
+frames 61, 89, 111, 365, 366, 399, 441, 469, 475 and 497.

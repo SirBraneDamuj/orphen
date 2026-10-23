@@ -63,22 +63,21 @@ on screen" actually was. State 115 also has to stamp `+0x94` (the caster's pool
 slot, which the barrier rides every frame), `+0x12C` and `+0x198`; none of the
 four were being written.
 
-### GRP.BIN, and why no spell effect draws
+### GRP.BIN, and why no spell effect drew
 
-`--model-report` reports `NO MODEL: missing PSC3 magic` for every hand effect,
-projectile and barrier in this scene, and it is not a behaviour problem --
-Bite of Lightning is just as affected here.
+`--model-report` used to report `NO MODEL: missing PSC3 magic` for every hand
+effect, projectile and barrier in this scene. It was not a behaviour problem --
+Bite of Lightning was just as affected. `GRP.BIN` is in `disc/` now, and a
+2400-frame run (2026-10-23) reports no missing models.
 
 An entity model does not come from a scene bundle in the original.
 `FUN_00222498` loads it straight out of a flat archive by mesh id, and the model
 record's `+0x04` **bit 6** picks which: set means `MAP.BIN`, clear means
 `GRP.BIN`. Every spell effect record carries `flags04 = 0x2D`, bit 6 clear.
 
-`GRP.BIN` is not in the disc root. `EntityModelStore::loadModel` now takes the
-record's flags and falls back bundle -> (`GRP.BIN` | `MAP.BIN`) -> `ITM.BIN`, and
-the texture loader falls back to `TEX.BIN` -- which *is* present, and which on its
-own cleared every "no pixels" slot. Drop `GRP.BIN` in beside the other archives
-and the effects become visible with no further code change.
+`EntityModelStore::loadModel` takes the record's flags and falls back bundle ->
+(`GRP.BIN` | `MAP.BIN`) -> `ITM.BIN`, and the texture loader falls back to
+`TEX.BIN`. A disc root without `GRP.BIN` loses every spell effect again.
 
 Do not shortcut this with a blanket `MAP.BIN` fallback: `MAP.BIN` id `0xBD` is a
 perfectly valid but completely unrelated PSC3, so the guess returns a plausible

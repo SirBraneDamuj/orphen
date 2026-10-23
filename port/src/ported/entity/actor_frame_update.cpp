@@ -776,12 +776,11 @@ namespace orphen::ported::entity
   // integrates it. FUN_00239ce0's actors had no such pass in this port, so
   // everything a behavior asked for was silently discarded.
   //
-  // **This is not FUN_002262c0.** It integrates the request and keeps a flying
-  // actor above the floor, which is what type 0x62 needs; it does not do the
-  // four-corner footprint sample, step-height acceptance, ceiling test or axis
-  // fallback that the lead player's path does. Slot 0 still runs the real thing.
-  // Porting FUN_002262c0 properly for slots 1..255 is the outstanding work, and
-  // until then a non-player actor can pass through walls.
+  // This is the non-player copy of FUN_002262c0: the +0x04 0x100 gate, group
+  // riding, gravity, the embedded-corner push-out, the four-corner footprint
+  // sample, the 0.26 step and slope gates, and the rotated retry ladder for
+  // walls. The lead's copy lives in original_player_controller.cpp. What is
+  // still missing from both is listed in port/docs/physics.md.
   bool gPushProbe = false;
 
   void integrateNonPlayerMovement(OriginalEntity &entity, const ActorEnvironment &environment,
@@ -1081,9 +1080,9 @@ namespace orphen::ported::entity
     // FUN_002262c0 reaches FUN_00227390 from exactly two places: the velocity
     // loop at :230-450, which runs only when +0x30 / +0x34 are non-zero, and the
     // stationary branch at :112-122, which is gated on `DAT_003555d0 != 0 &&
-    // (entity +0x08 & 0x20)`. DAT_003555d0 is **0** in eeMemory.bin, so the
-    // stationary branch never runs for anybody and only the player gets the
-    // periodic refresh at :114.
+    // (entity +0x08 & 0x20)` -- the push-out above, which only runs on a frame
+    // a collision group moved. Only the player gets the periodic refresh at
+    // :114.
     //
     // So a script-placed actor that never moves keeps the +0x4C its placement
     // opcode gave it, for the whole scene. That is directly visible in the dump:
@@ -1735,10 +1734,10 @@ namespace orphen::ported::entity
   //
   // The fourth job is the one that makes the swing mean anything: on animations
   // 0 and 1 the blade runs FUN_002148a8, the swept hit test, against the whole
-  // pool. FUN_002d59c0 -- `FUN_0023bbd8(0, 3)` -- is the reaction it would
-  // trigger, but FUN_002148a8's return value is unreachable-dead in this build
-  // and always zero, so the call site is written the original's way and never
-  // fires. See ported/entity/original_hit_test.cpp.
+  // pool. FUN_002d59c0 -- `FUN_0023bbd8(0, 3)`, the pad rumble -- is what a
+  // contact triggers. FUN_002148a8 returns its contact count (the decompiler
+  // hides that; see port/docs/field-combat.md), so the branch is live; the port
+  // has no rumble, so it is empty. See ported/entity/original_hit_test.cpp.
   void FUN_002d21b8_sword_effect(OriginalEntity &effect,
                                  std::size_t slot,
                                  const ActorEnvironment &environment)
@@ -1773,12 +1772,9 @@ namespace orphen::ported::entity
           FUN_002148a8_swept_hit_test(effect, slot, parameters, *environment.hitTest);
       if (contacts != 0)
       {
-        // FUN_002d59c0, one call: FUN_0023bbd8(0, 3), the hit cue. That is the
-        // sound engine's priority-channel entry point rather than
-        // FUN_00267d38's, and the port reaches the engine only through the
-        // latter -- the same reason the magic launch skips its own
-        // FUN_0023bbd8. The branch is here so the cue is one line away once
-        // that path exists.
+        // FUN_002d59c0, one call: FUN_0023bbd8(0, 3), the pad rumble -- a
+        // vibration pattern, not a sound (port/docs/scene-script.md, opcode
+        // 0xDE). The port has no rumble, so the branch is empty.
       }
     }
 

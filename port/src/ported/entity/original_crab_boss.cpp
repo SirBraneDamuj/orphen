@@ -1601,8 +1601,8 @@ namespace orphen::ported::entity
     //   animation 0x19 backing up    cursor 4         -> 0x118 above -4, else 0x119
     //
     // Not ported: FUN_0027F1A8, which animations 0, 1 and 3 also reach. It puts
-    // two puffs on the crab's bones 2 and 3 through FUN_0021F6E8, the same
-    // particle spawner the status aura wants and the port has no equivalent for.
+    // two puffs on the crab's bones 2 and 3 through FUN_0021F6E8, the plume
+    // pool, which is ported; this call into it is not.
     void FUN_0027ef40_crab_sounds(OriginalEntity &entity, const ActorEnvironment &environment)
     {
       if (!environment.FUN_00267d38_playSound)
@@ -1645,7 +1645,7 @@ namespace orphen::ported::entity
                                                                 : kFUN_0027ef40_stepDeep);
       }
       // FUN_0027F1A8 on animations 0 and 1, and on 3 with the leg bit -- the
-      // bone dust, left out with the rest of FUN_0021F6E8's pool.
+      // bone dust, not ported (see above).
     }
 
     // FUN_0027c8a0: the body sweep. Only while the crab is deep -- below -4.5 --

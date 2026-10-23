@@ -1,6 +1,6 @@
 # Battle: enemies
 
-#### An enemy turns to face you without any AI at all
+## An enemy turns to face you without any AI at all
 
 The enemies in `s14_e012` all stood facing the same way -- 1.571 radians, which
 is the placement byte's own `0 * 45 + 90`. The placement angle was never the
@@ -49,7 +49,7 @@ absent from the port: they fill globals at `0x005739B0` / `0x0058B140` that
 nothing reads back, and their one lasting effect -- `DAT_00354C64` -- the bind
 on the next line re-establishes for itself.
 
-##### Type 0x8A re-aims every frame, and that is the original
+### Type 0x8A re-aims every frame, and that is the original
 
 `FUN_0027FA88` **sets** the busy bit and only clears it when the turn has
 finished and the hold has run out, so a type 0x80 aims once and then holds.
@@ -63,7 +63,7 @@ between 0, 2 and 3.
 That is not a port bug and it is what hardware does too, but it is only visible
 while the record is idle -- and once the AI is running it rarely is.
 
-#### The enemy AI is a second bytecode VM, and it only needs five opcodes
+## The enemy AI is a second bytecode VM, and it only needs five opcodes
 
 `FUN_0023FD30` runs a VM that has nothing to do with the scene script's 271
 opcodes. It has nineteen, at `PTR_LAB_0031D118`, and three loops that step them:
@@ -104,7 +104,7 @@ how crowded the fight is, repeat. **Opcode 17 sub-op 1 is why enemies take turns
 instead of swarming** -- it scans the entire actor table and holds while any
 record's current *or* pending action is in 2..5.
 
-##### FUN_00244248 is the handshake, and it is biased by 0x0C twice
+### FUN_00244248 is the handshake, and it is biased by 0x0C twice
 
 An order does not simply overwrite the pending byte. `FUN_00244248` picks its
 block by the entity's `+0x95`: below 11 it is a party slot and the block is
@@ -120,7 +120,7 @@ is already 6. Opcode 13's sub-op 0x80 parks the script on itself when it gets
 that -1 and tries again next frame -- unless the actor has died, which is the
 one thing that stops it spinning forever.
 
-##### An idle enemy aims at slot 0; an enemy under AI is *assigned* a target
+### An idle enemy aims at slot 0; an enemy under AI is *assigned* a target
 
 The second loop does one more thing per record, and it runs whether or not the
 record has a script: it validates `+0x2C` and, when it has gone negative, walks
@@ -136,7 +136,7 @@ The difference is that they are now aimed there *by the retargeter* rather than
 by `FUN_0023A958`'s no-target fallback, and a second party member would split
 them.
 
-##### What the actions actually do
+### What the actions actually do
 
 `FUN_0027F5C8` and `FUN_0028AC40` are the two action tables, and they are not
 symmetrical, because the two enemies are not the same shape. Type 0x80 flies:
@@ -159,13 +159,12 @@ loop: 0x80 when state 6 has landed it back home, 0x8A when the attack animation
 comes round with nothing left in flight. Only then does the idle default stamp
 the current action back to 6 and let the script's gate through.
 
-**The damage an enemy deals is not ported.** `FUN_002EBDE0`, `FUN_002EBAD8`,
-`FUN_002EC920`, `FUN_002ECC68` and `FUN_00280698` are the five calls that spawn
-the hit volume. Every attack plays through to its damage frame and counts itself
--- `--actor-report` prints "enemy attacks that reached their damage frame" --
-and lands on nobody.
+**The damage an enemy deals** comes from five calls: `FUN_002EBDE0`,
+`FUN_002EBAD8`, `FUN_002EC920`, `FUN_002ECC68` and `FUN_00280698`. They were the
+last piece missing here and are ported now; see "Four of the six enemy attacks
+were firing an empty gun" below (`original_enemy_attack.*`).
 
-##### Damage the other way is what the reel and the death states are for
+### Damage the other way is what the reel and the death states are for
 
 An enemy hit by a spell takes the damage as `+0xBE`, and each wrapper drains it
 against `+0x12A` before it dispatches: survived goes to a stagger state, killed
@@ -187,7 +186,7 @@ whittled down to `live enemies: 1 of 1 bound` with the survivor still spitting.
 Without the stagger states an enemy hit mid-attack sat in an unimplemented state
 forever, holding both the busy bit and its own script's gate.
 
-#### The health bar is an entity, and there are exactly two of them
+## The health bar is an entity, and there are exactly two of them
 
 Hitting something raises a five-segment gauge, and it is not a HUD widget drawn
 by the UI pass -- it is a **type 0x68 entity in pool slot 3**, with a twin in
@@ -231,7 +230,7 @@ as geometry -- three banks of five, `base - segments + 21` while arming,
 `+0xA0` rather than through `FUN_00225BC8`, so a bar mid-drain does not restart
 its clip.
 
-##### It also found three things wrong in the sprite pass
+### It also found three things wrong in the sprite pass
 
 The bar is the first entity either scene fields that is screen-space, asks to be
 drawn in front, and lives on a 4-bit sheet, and it exposed all three.
@@ -272,7 +271,7 @@ of Pyro's impact: its four-pointed star reads as a blue-white flare rather than
 the washed-out smear the 8-bit page gave. Neither field scene has such a sprite
 on screen at frame 900, so both guard captures are unchanged.
 
-#### Four of the six enemy attacks were firing an empty gun
+## Four of the six enemy attacks were firing an empty gun
 
 The killer bee has two attacks and the Maneater has two, and only one of the
 four did anything: the bee's dive, because its damage is its own body sweeping
@@ -297,7 +296,7 @@ the target's midriff — speed 60 units per 32000 ticks, and a drop rate compute
 so it arrives rather than a gravity constant. Read as a ram it looks like a
 lunge that misses on purpose; it is a lunge that shoots.
 
-##### Type 0x112 has no handler, and that is deliberate
+### Type 0x112 has no handler, and that is deliberate
 
 The seed's slot in `PTR_LAB_0031CAB0` is `FUN_00239E78`, the no-op. It does not
 tick itself — the Maneater that spat it calls `FUN_002EC750` on it from its own
@@ -318,7 +317,7 @@ only place in either enemy that writes another entity's flags. Then 0x0C80 ticks
 of chewing, one direct charge of attack record 0, and it dies. Miss, and it dies
 immediately.
 
-##### `+0x1AC` was the wrong way round
+### `+0x1AC` was the wrong way round
 
 `FUN_0028AE10`, type 0x8A's state 0, ends with `+0x1AC = 1`. The port had read
 `FUN_0028B568`'s branch as "a placed Maneater has 0 there", which made a corpse
@@ -327,7 +326,7 @@ exist: 1 means "I own the seed at `+0x1A8`, and my record is not released until
 both it and the clone are gone"; 2, which `FUN_0028B740` stamps, means "I am a
 clone, and all I have to do is clear my parent's `+0x1A4`".
 
-##### The player froze in state 102 the moment any of it landed
+### The player froze in state 102 the moment any of it landed
 
 With the attacks firing, `FUN_00216140` started charging the player's `+0xBE`
 and `FUN_0024A360` did what it always did — action 0x83, state 102 — and state
@@ -347,7 +346,7 @@ The frames after it are the getting up — 0x20 down, 0x22 the push-up after
 fifteen frames on the floor, 0x23 the stand, then state 108 with action 0x87 to
 walk back to the recorded spot.
 
-##### The two enemies inflict statuses, and something has to take them off again
+### The two enemies inflict statuses, and something has to take them off again
 
 The attack records, read out of SCR.BIN 0xBE at run time, are not all plain
 physical hits:
@@ -377,7 +376,7 @@ hide. Statuses 4 and 9 add a hit point per animation loop off the victim and arm
 the **lower** health bar with it — the first live caller the port has for the
 player's own gauge — and they stop at five points, so a status never kills.
 
-##### Verified
+### Verified
 
 `s14_e012`, 8000 frames, no input. All four effect types spawn (`0x10E` once
 per lunge, `0x10F` in rings of six, `0x112` per bite, `0x113` in volleys of

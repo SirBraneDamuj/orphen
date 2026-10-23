@@ -1,6 +1,6 @@
 # s14_e002: the mast boss
 
-## s14_e002: the boss *is* the scene
+## The boss *is* the scene
 
 `s01_e013` hands off to `s14_e002`, the fight in the ship's rigging. The port
 dropped Orphen into empty air and stopped dead.
@@ -188,19 +188,16 @@ Ported as written, marked where they sit:
   back from `+0x1BF == 2`, so the counter never reaches 3 with the block in
   reach.
 
-#### `FUN_0025D0E0` is per-frame in the original and sticky here
+#### `FUN_0025D0E0` is per-frame
 
 Both of state 9's white flashes paint the screen through `FUN_0025D0E0`. In the
 original that pushes one screen-sized sprite into *this frame's* draw list, so a
 caller that stops calling it stops covering the screen. The port's `ScreenFade`
-holds the last value it was handed and `PortRuntime` pushes that to the renderer
-every frame, so the first build of state 9 whited the screen out at phase 5 and
-never took it back -- a `--screenshot` of the frames after phase 5 came out
-solid 0xFFFFFF.
-
-Anything in the port that paints the overlay directly has to release it. Both of
-the boss's users now do -- phase 5 on its way to phase 6, and `FUN_0023ABD0` on
-the frame it reports done.
+used to hold the last value it was handed, so the first build of state 9 whited
+the screen out at phase 5 and never took it back -- a `--screenshot` of the
+frames after phase 5 came out solid 0xFFFFFF. The runtime now releases the
+overlay at the top of every frame (`port_runtime.cpp`, ahead of the script
+tick), so it is one frame long, as in the original.
 
 #### The rest of the director: shots 3, 4, 6, 7, 8, 10 and 12
 
@@ -335,6 +332,10 @@ The consequence is not limited to the wash: outside a battle that retypes the
 lead to `0x5C` (which does `+0x02 |= 1` at `battle_party.cpp:667`), **no attack
 in the game can land on the player at all.** `s14_e002` is such a scene --
 hardware keeps the lead at type 1 through the whole fight.
+
+Fixed since: `FUN_0022a418_stamp_lead_player_flags` copies descriptor `+0x04`
+into the lead's `+0x02`, as `FUN_00229c40` does, and enemies hit the lead in the
+field now.
 
 #### The disintegration sparkle ended up on Orphen
 
