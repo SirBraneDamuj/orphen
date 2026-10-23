@@ -65,10 +65,20 @@ otherwise — the per-vertex path early-outs on the light count. `s01_e024` and
 `s01_e012` before frame 1409 render **byte-identically** with and without it.
 `--lighting-no-points` turns it off for A/B. It defaults **on**, because the VU0
 list was read back out of a save state and matched the script's table exactly
-rather than being derived from the microprogram alone. So does the light floor
-below; `--lighting-unlit` is the one lighting behaviour still off by default.
+rather than being derived from the microprogram alone.
 
-### The lantern's light pool: the unlit flag, and the GS's missing octave
+The three lighting switches and their defaults:
+
+| behaviour | default | flag |
+|---|---|---|
+| dynamic point lights | on | `--lighting-no-points` turns off |
+| unlit flag (decals drawn at vertex colour) | on | `--lighting-no-unlit` turns off |
+| per-material light floor (VU1 `0x01d1` `MAXz`) | **off** -- retracted, below | `--lighting-floor` turns on |
+
+`--lighting-all` turns on both of the last two; `--lighting-unlit` and
+`--lighting-no-floor` are kept as aliases for the default.
+
+## The lantern's light pool: the unlit flag, and the GS's missing octave
 
 A GS dump plus a save state of s01_e012's shop settled two things at once and
 **corrected an earlier wrong call**, so the retraction comes first.
@@ -127,7 +137,8 @@ this file first read that as `ATST` GEQUAL against `AREF` 0 -- a test that never
 rejects -- and built two open questions on top of it. `ATST` is bits 1..3, so
 `0xd` is `110` = **GREATER**, not `101` = GEQUAL. `ATE` on, GREATER, `AREF` 0,
 `AFAIL` KEEP is exactly `glAlphaFunc(GL_GREATER, 0)`: the GS discards alpha-zero
-texels and nothing else. See the chains section.
+texels and nothing else. See "The cutout discard the map path was missing" in
+[Rendering](rendering.md).
 
 The four VU1 register blocks at `608 + mode*3`, read straight out of
 `vu1Memory.bin`, are exactly what this file already claimed: mode 0 `ALPHA 0x44`
@@ -145,7 +156,7 @@ the visible change is the chest lid plus a slightly bluer floor. That is the roo
 where the old clamp point was actually biting: e024's modulator exceeds 1.0 in
 blue, e012's never does.
 
-### The lantern hung a quarter unit too high
+## The lantern hung a quarter unit too high
 
 Same save state, a different bug, and the cheapest kind to confirm: the entity
 pool is at `DAT_0058beb0` with a `0x1D8` stride, type at `+0x00` and position at
@@ -179,6 +190,6 @@ s01_e012 f6000 moves 1.2% of pixels, which is the lantern coming down.
 
 Worth keeping in mind for the rest of the placed props: a prop is only visibly
 wrong when it happens to sit over geometry, so this class of bug hides until the
-camera finds the one instance that does.
-
+camera finds the one instance that does. (Slot 35 was the other half of
+[Physics](physics.md)'s placement-grounding note.)
 

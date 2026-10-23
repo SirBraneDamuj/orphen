@@ -1,295 +1,12 @@
 # Rendering
 
-### The backdrop is a model, and `FUN_0020C290` draws it
+`src/ported/render/` is the draw side: the map pipeline, the entity (PSC3) and
+sprite passes, and the camera-locked backdrop. The renderer is fixed-function
+OpenGL; where the GS does something GL cannot express directly, the section
+says what the port does instead. [Lighting](lighting.md) has the light model;
+[Effects](effects.md) has the particle pools and the screen smear.
 
-`src/ported/render/original_background_model.*` is `FUN_0022CE60` and
-`FUN_0020C2F0`: the fog sphere `s01_e013`'s boat deck stands inside.
-
-`FUN_0020C290` reads like a display-list kick sitting next to `FUN_0020C5A8`
-and `FUN_0020F3E0` in `FUN_002239C8`'s draw block. It is not. It walks four
-descriptors at `DAT_00345A18` -- stride `0x24`, counted *down* from
-`DAT_00345A84` -- and hands each to `FUN_0020C2F0`, which draws a whole model.
-It was the last call in that block the port did not have, and it is why the
-deck sat in a black void where the retail game has weather.
-
-It was found by patching `jr ra; nop` over one candidate function at a time in
-PCSX2 and screenshotting. **EE code patches through the debugger interface do
-take effect**, despite the MCP tool's warning about recompiled blocks, which
-made the search cheap. The fog survived the map, the entity models, the sprite
-pass, `FUN_002192C0`, the actor loop, the scene script and `FUN_00207DE8`
-before `FUN_0020C2F0` turned out to be the last thing standing.
-
-#### Where the model comes from
-
-A **PSB4** record in the scene bundle's **category 2** -- the same category the
-PSM2 map lives in. `s01_e013`'s is id `0x009E`, and it is the *first* category-2
-record, which is why `loadFirstPsm2FromSceneResources` walked straight past it
-looking for PSM2 magic. `s14_e001`'s pier uses the same one.
-
-No script installs it. `FUN_0022A418:134` calls `FUN_0022CDE8(descriptor, 0)`,
-which reads the **halfword at scene descriptor +0x08** and loads that id into
-slot 0 with its shade byte seeded to `0x80`. Opcode `0xE5` is the other way in,
-and `0xE6` sets a slot's shade and Z rotation -- see
-`analyzed/ops/0xE5_load_backdrop_model.c`, which used to be filed as an audio
-opcode.
-
-The file is a 16-byte header and three sections: vertices (`s16` count, then
-xyz floats at a stride of 12), primitives (22 bytes each), and a UV animation
-script in the format the map's section G already uses. A primitive is a flags
-halfword, four vertex indices and four three-byte groups, and `flags & 0x800`
-picks how those three bytes read -- the same bit the map and PSC3 builders
-test. Set, they are `(u, v, textureSlot)`; clear, a flat RGB.
-
-Everything else is in the flags word, and every bit of it is confirmed against
-a GS dump of the live frame: `0x7000` the blend mode, `0x0700` a CLUT bank
-(dead for an 8-bit page), `0x00FE` **the vertex alpha, halved**, and `0x8000`
-the UV animation selector. The colour is not in the file at all: `FUN_00211B80`
-hands VU1 the literal `DAT_00808080`, which is why every backdrop vertex in the
-dump reads `(128, 128, 128)`.
-
-`s01_e013`'s model is a sphere: 312 vertices, 391 quads, 24 segments around and
-13 rings, radius 35 at the equator closing to 10 at the poles. Its cloud band
-is above the equator and its teal mist below, which is the order the dump's
-quads land on screen. Every primitive names **global texture slot 8** -- the
-map's ninth and last texture page, which no map primitive uses. That page being
-referenced by nothing was the first hard evidence the backdrop existed.
-
-#### Camera-locked, and never in front of anything
-
-`FUN_0020BEC8:43-45` puts the model at **the camera eye's x and y**, with
-`z = eye z + fGpffff808c` = 0.4. It rides the camera exactly, so a mesh 35 units
-across reads as a cylinder wrapped around the whole scene however far you walk.
-
-Its packets end in `MSCAL 0x228`, a different VU1 program from the map's
-`0x13B`/`0x14B`, and the dump shows what that program does differently: every
-backdrop vertex reaches the GS at **Z = 2** -- the far end of that frame's
-2..1108 range, whatever the geometry's real depth -- with `PRIM.FGE` clear where
-every map primitive has it set, and `ZBUF.ZMSK` set where the map clears it.
-Fog off, depth write off, always behind.
-
-The port draws it before the map with the depth test and the depth mask both
-off, which is the same picture by the only means GL offers. **It needs its own
-projection.** The world is drawn with a far plane of `drawDistance + 8` -- 28
-units in `s01_e013` -- and this model reaches 50 units from the eye, so the
-frustum the map uses clips every one of its primitives away. The first build
-loaded, parsed, transformed and submitted all 391 quads and drew nothing at
-all. The backdrop pass pushes the far plane to 4096 instead, which costs
-nothing because it neither tests nor writes depth.
-
-#### What is checked, and what is not
-
-`--render-report` prints the model and the quads it builds; `--no-background`
-turns it off for an A/B. `--dump-scene-resources <dir>` writes every decoded
-record of a scene bundle, which is how the PSB4 was read in the first place.
-
-Brightness lines up: a backdrop-only frame measures `(27, 36, 37)` mean RGB in
-the port against `(23, 32, 33)` in a retail frame with everything else patched
-away. `s01_e024`, `s01_e012` and `s14_e001` reports are unchanged but for the
-new load line.
-
-Not checked: a pixel-for-pixel frame against retail. The one player position
-where the port's camera lands exactly on the retail camera -- `(14.112, 2.5,
-5.5)`, where `s01_e013`'s forced-camera zone engages -- renders a near-white
-frame in the port, and `--no-background` shows the backdrop is not what causes
-it. That white-out is its own bug and is not chased here.
-
-## The billboard pass, and why there are two entity draws
-
-`FUN_0020c5a8` -- the skeletal entity pass -- refuses any entity whose `+0x02`
-carries bit `0x200`. `FUN_0020f3e0` then walks the same 256 slots for exactly
-those. The two passes **partition** the pool rather than filtering it: an effect
-entity is never a candidate for the skinned path, and a character is never a
-candidate for this one. The port had only ever had the first, which is why every
-sprite effect was invisible.
-
-`FUN_0020f3e0`'s guards are the mirror image: a live type id, `+0x02` bit
-`0x200` set, `+0x08` bit 0 clear. It also clears `+0x0C` bit `0x1000` on the way
-in, and `FUN_0020f510` sets it back on anything it submits -- a "was drawn this
-frame" latch nothing else reads.
-
-### The model is a strip of sprite records
-
-Parsed by `loadSpriteStripModel`. No PSC3 magic, and the header's `+0x00` is a
-**column** count, not a record count:
-
-```
-+0x00 u16  column count
-+0x02 u16  animation count
-+0x04 u32  column table:  {u16 firstRecord, u16 recordCount} per column
-+0x08 u32  sprite record table, 16 bytes each
-+0x0C u32  animation table, one u32 timeline offset per animation
-```
-
-The animation picks a column (entity `+0xAC`) and the column names a run of
-records, drawn **back to front** -- `FUN_0020f510` seeds its cursor at the last
-record of the run and walks down. `grp_017e`, the magic projectile's, is twelve
-columns of one record each.
-
-Each record:
-
-| off | what |
-|---|---|
-| `+0x00` | bits 0-1 blend mode, `0x10` flip X, `0x20` flip Y |
-| `+0x01`/`+0x02` | texel origin |
-| `+0x03`/`+0x04` | extent, **one more** than the real width and height |
-| `+0x05` | twice the alpha byte |
-| `+0x06`/`+0x07` | offset in whole sprite units, signed |
-| `+0x08` | depth bias, over 100, added to the view depth |
-| `+0x0C` | float scale |
-
-The blend mode is the same 0..3 the map and PSC3 paths already use, so it goes
-straight into `setMapBlendMode`. That is not a guess: `FUN_0020f510` packs the
-GS PRIM word as `0x0D` or `0x1D` (untextured / textured triangle strip) and ORs
-bit `0x40` -- **ABE** -- for any non-zero mode. Mode 0 does not blend at all,
-which is also why its alpha byte is forced to `0x80` and never read.
-
-### The quad is built on the projected origin
-
-`FUN_0020b600` projects the entity origin to an integer GS screen position, and
-**every corner is an offset from it**, in GS units:
-
-```
-projScaleX = trunc(entity+0x14C * 280.0 * G / viewZ)      G = 2 * DAT_00355658
-gsX = originX + (spriteX * projScaleX >> 8)               spriteX in 1/16 units
-gsY = originY + (spriteY * projScaleY >> 9)               note the extra shift
-```
-
-The quad is axis-aligned in screen space, which is why a sprite never rotates
-with the camera. Both `projScale`s are truncated to integers before being used
-as fixed point, so a distant sprite's size quantises in visible steps rather
-than shrinking smoothly; the record's own scale at `+0x0C` truncates the same
-way. The extra shift on Y is not a bug to correct: the GS output is 640x224
-shown at 4:3, so its pixels are 2:1 and a square sprite has to be twice as wide
-in pixels. `X` uses `+0x14C` and `Y` uses `+0x150`, which is why a non-uniform
-entity scale stretches the sprite.
-
-The port runs that arithmetic in GS integers and then un-projects the four
-finished corners back to view space, because it draws through the same
-projection the world does instead of writing GIF packets. Re-projecting them
-gives back the same GS numbers -- it is the inverse of the transform above, at
-the depth the GS z was keyed off. That is the only adaptation in the function,
-and `drawSpriteQuads` accordingly runs with the modelview at identity, the
-scene's own projection, and depth writes off. PRIM's `FGE` bit is clear in both
-of `FUN_0020f510`'s words, so a sprite is never fogged however far away it is.
-
-> The first cut of this pass emitted the offsets *without* the origin, on the
-> reasoning that the perspective divide made the quad a fixed size in view space
-> and the origin would come out in the wash. It does not: the offsets are
-> relative to a point that has to be added back. Every sprite landed dead centre
-> of the screen at its own depth, so the bolt sat on Orphen and vanished behind
-> him as it flew away. Reformulating the maths is how that got missed; the port
-> now follows `FUN_0020f510`'s own shape and adapts only at the last step.
-
-### Depth is keyed off a different number than the position
-
-```
-depth = viewZ + (char)entity+0x133 * DAT_003520a0        (0.08)
-              + (char)record+0x08 / 100.0
-gsZ   = trunc(DAT_003555a4 / depth + DAT_003555a0)       floored at 0
-```
-
-Both biases move the sprite in depth only -- the position and size came out of
-`projScale`, which used the unbiased `viewZ`. Entity `+0x133` is copied from
-descriptor `+0x02` by `FUN_00229c40`, and most effect descriptors carry `-12`, so
-the usual effect sits about a unit nearer the camera than it stands. Entity
-`+0x08` bit `0x40` throws all of it away for a flat `0xFFFF`, nearer than
-anything the world writes.
-
-Submission is a 4096-bucket display list on `gsZ >> 4` clamped to `1..0xFFF`,
-plus the `0x1005` bucket above it for the `bit 0x40` sprites. `gsZ` rises as a
-sprite comes nearer, so ascending bucket is back to front, and the port sorts
-the same way. The one thing it does not reproduce is that the original links
-each packet in at the *head* of its bucket, so co-bucketed sprites come out
-reversed among themselves -- invisible for the additive blending everything
-drawn so far uses.
-
-### The colour
-
-`FUN_0020f3e0` stages `max(DAT_0035566c, DAT_00355670)` per channel -- the scene
-ambient against light 0's colour -- and `FUN_0020f510` averages that with the VU0
-point-light contribution at the sprite's own position, saturating. `+0x08` bit
-`0x4000` skips the whole thing for a flat `0x80`. GS bytes throughout, `0x80` for
-1.0, so a sprite can be brighter than white before the blend.
-
-The near clip here is `DAT_0035209c`, **0.3** -- not the `0.4` the geometry path
-uses. The far one is the scene's draw distance.
-
-### What is still missing
-
-Nothing, now. Both of the branches this section used to list as missing landed
-with the battle target cursor, which is the one thing in the executable that
-takes them together:
-
-- **The rotation branch**, `+0x08` bit `0x400`, rebuilds the quad as four
-  rotated corners off the angle table at entity `+0x168`, for record indices
-  under nine. Angle 0 swings the quad's *centre* about the sprite origin; angle
-  N -- N being the record's own descending index -- spins the quad about its own
-  centre. Everything is done with Y doubled, because the GS output is 640x224 at
-  4:3 and rotating in raw GS units would shear the sprite; the sine term is
-  halved on the way back out.
-
-  `FUN_002D73E8` writes those angles: `DAT_003547A4`, which is pi/4 to the bit,
-  while the cursor is the player's target, and an accumulation of `DAT_003555BC
-  * DAT_003547A8` -- about 25 degrees a second -- when it is not. That is the
-  difference between the selected bracket sitting corner-up and the rest slowly
-  drifting.
-- **The HUD branch**, `+0x08` bit `0x1000`, takes a position that is already in
-  screen space rather than projecting one: a flat `+0x14C * 256` scale with no
-  perspective divide, and a GS z read back out of `+0x28` as an integer.
-
-Note the aliasing on `+0x168`. For a skinned entity those 42 bytes are the
-per-bone override modes (see "`+0x168` is inside the slot"); for a sprite entity
--- which carries `+0x02` bit `0x200` and can never reach `FUN_0020C5A8` -- they
-are seven floats of quad angles. The two never coexist. The port splits them:
-bone modes live in `EntityBoneOverrides`, angles in `OriginalEntity`.
-
-### Checking it
-
-```sh
-port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
-    --no-audio --spawn -2.5,-8,0 --press-magic 60 --screenshot shot.png:112
-```
-
-catches the bolt as a glowing orb in Orphen's hands; frames 124 onward have it
-clear of him and travelling with its trail. Four casts over 900 frames still
-report `live actors: 20`, and `--render-bench 6` reports the same primitive and
-batch counts as it did before the pass existed -- which is the check worth
-making, because absolute frame times on this machine move by 30% run to run for
-reasons that have nothing to do with the port. Compare the counts, not the
-milliseconds.
-
-### A hidden parent must stay "queued", not "posed"
-
-`FUN_0020c5a8`'s second pass has four outcomes per slot, and the status byte it
-writes -- or does not write -- is what the *children* read:
-
-```
-+0x08 bit 0 set        clear +0x0C bits 0x3000, raise +0x08 bit 0x10,
-                       **leave the status byte at 0**
-parent < 0             pose and draw, status = 1
-status[parent] == 0    push this slot on the back of the queue
-status[parent] == 1    pose and draw, status = 1
-status[parent] == 0xFF neither; dropped this frame
-```
-
-The port had the hidden test inside its publish helper, which returned early --
-and then the walk wrote `status = 1` over the top anyway. A hidden slot
-therefore read as *posed*, and every child bound to it was drawn.
-
-In s01_e012 that child is **slot 61**, a type `0x2C4` parented to slot 83
-(Dortin, `+0x08 = 0x0133`, hidden from the first frame). With no parent palette
-to resolve against it fell back to its own `+0x20`, which for a bone-local
-attachment is near enough the world origin -- putting the sack Dortin is
-supposed to be carrying on the floor of the middle doorway for the whole scene,
-and then again in his hand once he was drawn. The EE dump agrees with the port
-on every field of slots 61-64, so this was never a spawn or placement problem;
-only the draw walk's bookkeeping.
-
-The hidden branch's third write, `+0xB0 = 0`, is the pose blend's "no previous
-column" (`FUN_0020e840:60` reads it next to `+0xAA`). The port's pose filter
-keeps that in its own state, so there is no field to write.
-
-## Rendering
+## The map draw pipeline
 
 `src/ported/render/` is a port of the map draw pipeline. `docs/rendering_pipeline_analysis.md`
 is the reading it is built from; the short version is that the original builds
@@ -436,11 +153,15 @@ it the run stops at state `0x12` and the last four states never run.
 
 ### Draw distance and fog
 
-`DAT_00355628` defaults to 32.0 (`FUN_0022a360`) and is overridden per scene by
-script (`FUN_00263cb8`), which is not wired up yet -- `--draw-distance` is there
-to experiment with in the meantime. Fog starts at a quarter of the draw distance
-and ends at it, and the PRIM word only carries the fog bit when that start is
-below 5.0, so a stock 32.0 map renders unfogged.
+`DAT_00355628` defaults to 32.0 (`FUN_0022a360`) and is overridden per scene:
+by the scene script's defaults block (word 3, read with the spawn) and by opcode
+`0xB8` (`FUN_00263cb8`), which writes it alongside the camera distance. Both are
+wired (`port_runtime.cpp`); `--draw-distance` overrides both.
+
+Fog defaults to starting at a quarter of the draw distance and ending at it;
+opcode `0xBB` (`FUN_00263db0`) sets the near and far radii explicitly, and
+`0xB9`/`0xBA` the colours. The PRIM word only carries the fog bit when the start
+is below 5.0, so a stock 32.0 map with no `0xBB` renders unfogged.
 
 ### PSM2 record fixes this needed
 
@@ -451,6 +172,20 @@ section E index, and w15 is the section B index whose entry is the primitive's
 **face normal**. `psm2_material_expansion.*` ports `FUN_0022c3d8`, which expands
 those selectors and turns the colour index into real per-vertex colours out of
 the map's palette (PSM2 header word `0x10`), replacing the placeholder shading.
+
+### The map draws a pass per material slot
+
+`FUN_00211230:104-360` loops material slots 0..3 and emits a GS packet for every
+slot whose `type` is `>= -1`, each with its own texture page, UVs, flat colour,
+alpha and blend mode. The port drew slot 0 only. `s01_e012` has 202 primitives
+with two slots and 68 with three; drawing them all takes the shot at frame 200
+from 437 to 518 map triangles for the same 226 primitives, at no measurable cost.
+
+Honest caveat: this is faithful to the decompilation and the extra passes are
+demonstrably emitted, but **no shot checked so far looks different with them on**
+(`--map-base-slot` renders identically at f1500 and f3600, and `s01_e024` is
+byte-identical). The layers are there in the data; what they are for has not been
+seen yet.
 
 ### Map blending, and the black slabs around the lanterns
 
@@ -475,8 +210,8 @@ cull mode only, so all 841 of `s01_e012`'s flagged primitives -- 21% of the map
 -- drew opaque. The visible result was a black stair-stepped slab behind every
 hanging lantern: the glow quads are `flags=0x20, alpha=0x1F`, so mode 2 at 24%,
 and drawing an additive glow opaquely paints its black surround over the wall.
-The stair-stepping was the alpha test doing its job on a low-resolution texture
-while the surviving texels came out solid.
+(The stair-stepping was first put down to the alpha test; the map path had no
+alpha test then. It came from an inherited blend state -- see the next section.)
 
 The mode numbering is the same 0..3 the PSC3 path uses, and both feed VU1
 programs that select GS state by it, so `setMapBlendMode` mirrors
@@ -484,10 +219,10 @@ programs that select GS state by it, so `setMapBlendMode` mirrors
 map primitives and entities already merge into one shared far-to-near bucket
 table, which is how the original sorts them too.
 
-Slot 0 is the slot asked, because slot 0 is the one this renderer draws -- it
-supplies the texture page and the UVs as well. The original emits a pass per
-slot and would blend on *any* slot's flags, so 158 of the 841 still come out
-opaque here; all of them have an untextured slot 0.
+Slot 0 is the slot asked here. The original emits a pass per material slot and
+blends each on its own flags; the port now does the same (see "The map draws a
+pass per material slot" below), which covers the 158 primitives whose untextured
+slot 0 left them opaque at the time.
 
 `--map-no-blend` restores the old look for an A/B. At `s01_e012` f3000 the two
 differ in 25.2% of pixels, at f6000 12.0%; `s01_e024` is **byte-identical**, so
@@ -533,11 +268,6 @@ The 20000-frame `--actor-report`/`--scr-report` is byte-identical. `s01_e012`
 f6000 is unchanged, f3000 differs in 11 pixels (max delta 6, in a near-black
 corner), and `s01_e024` at f600 differs in 0.35% -- a second cutout slab, in the
 floor grating at the bottom right, going away for the same reason.
-
-The earlier claim in the section above that the lanterns' stair-stepped
-silhouette was "the alpha test doing its job" was wrong about the mechanism: the
-map path had no alpha test to do it. The stair-stepping came from the same
-inherited blend.
 
 **Settled by a GS dump taken at the chains** (`s01_e024`, player standing in the
 doorway, four captured frames, 1212 draws each). Both chains are `tbp 5760`
@@ -679,11 +409,62 @@ are median RGB `(70, 51, 25)`, alpha 128 throughout. So the residual is a
 scene-lighting brightness question -- the same thread as the lantern work's
 "the port is overall too bright" -- and not a property of the hair at all.
 
-~~**Worth carrying forward: the GS discards nothing here.**~~ **Withdrawn.**
-`TEST_1` is `0x5000d` on every draw in the capture, and `ATST` is bits 1..3, so
-that is GREATER against `AREF` 0 -- a cutout discard -- not GEQUAL. The port's
-`glAlphaFunc(GL_GREATER, 0)` on both paths is the exact equivalent. Draw order
-matters too, but it is not doing this job alone.
+The GS does discard here: `TEST_1` is `0x5000d` on every draw in the capture,
+which is GREATER against `AREF` 0 (`ATST` is bits 1..3), and the port's
+`glAlphaFunc(GL_GREATER, 0)` on both paths is the exact equivalent.
+
+### Texture slots are global, and a pass picks its own
+
+The window curtains in `s01_e012` drew as the shop's gold medallion instead of
+white sheer fabric. Neither the model nor the texture binding was wrong —
+`eeMemory.bin` agrees with the port on both, entity by entity. What was wrong is
+that **the port drew every textured pass with the entity's one bound texture**.
+
+Two facts, and the second follows from the first.
+
+**`DAT_003429a8` is one global array of 64 texture slots.** Entity models take
+slots 10..23 and 24..39 through `FUN_00266118`'s two banks, the boot binds take
+32..48 — and the *map's own texture pages* take slots 0..9, loaded by
+`FUN_0022a178` from a ten-entry table at `DAT_00325394`. The dump confirms both:
+`DAT_00325394` = `{0286, 0002, 02c8, 0253, 000d, 02c9, 000f}` and
+`DAT_003429a8[0..6]` holds the same ids in the same order, which is exactly the
+port's map page list. So a PSM2 material slot's `type` byte was never a page
+index — it is a slot index that happens to start at 0. `FUN_0022a178_bind_map_textures`
+now loads them, which is what makes the rest of this resolvable.
+
+**Every PSC3 subdraw names its own texture.** `FUN_00212058:180-208` reads
+`texFlags` bits 10..7 and writes packet byte 6 from it:
+
+| selector | primitive flag 0x800 | byte 6 | means |
+|---|---|---|---|
+| 0 | either | 0x3F | the entity's bound slot |
+| 0xF | either | 0x3E, byte 5 = 0x11 | the special mode the map path reaches through its own type 9 |
+| 1..0xE | clear | the selector | **global slot `selector - 1`** |
+| 1..0xE | set | 0x3F, selector rides in byte 5 | the bound slot still wins |
+
+Byte 6 is `globalSlot + 1` on the map path too (`FUN_00211230:186`), which is what
+pins the arithmetic down.
+
+`--model-report` prints the histogram per entity as `passes={…}`. For `s01_e012`:
+
+| model | passes | drew with | should draw with |
+|---|---|---|---|
+| grp_01d5 window curtain | `gslot3:48` | tex_0133, the gold medallion | tex_0253, the white sheer curtain |
+| grp_00ae window frame | `gslot3:96` | tex_0130 | tex_0253 |
+| grp_01d6 window surround | `gslot0:30` | tex_0133 | tex_0286, the sea |
+| grp_00c6 lantern | `bound:49 gslot1:4` | all tex_012f | four passes on tex_0002, the flame sheet |
+| grp_0172 chest | `bound+4/6/8` | tex_0179 | tex_0179 — the 0x800 form, already right |
+
+The frames looked plausible before because tex_0130 and tex_0253 share their top
+half; only the bottom differs, and the curtain lives there. The lanterns were
+unlit for the same reason — their flame pass was being drawn with the lantern's
+own sheet.
+
+`s01_e024` renders **byte-identical** (nothing in it uses a selector),
+`s01_e012` stays deterministic, flag `0x515` still lands at 13122, and the chest
+cutscene still runs its ten states.
+
+## Entity models
 
 ### The shop's additive props: a bundle-lookup order bug
 
@@ -777,77 +558,303 @@ rather than as obviously broken geometry.
 `s01_e024` renders **byte-identical**, `s01_e012` stays deterministic, flag
 `0x515` still lands at 13122, and the chest cutscene still runs its ten states.
 
-### Texture slots are global, and a pass picks its own
+## The billboard pass, and why there are two entity draws
 
-The window curtains in `s01_e012` drew as the shop's gold medallion instead of
-white sheer fabric. Neither the model nor the texture binding was wrong —
-`eeMemory.bin` agrees with the port on both, entity by entity. What was wrong is
-that **the port drew every textured pass with the entity's one bound texture**.
+`FUN_0020c5a8` -- the skeletal entity pass -- refuses any entity whose `+0x02`
+carries bit `0x200`. `FUN_0020f3e0` then walks the same 256 slots for exactly
+those. The two passes **partition** the pool rather than filtering it: an effect
+entity is never a candidate for the skinned path, and a character is never a
+candidate for this one. The port had only ever had the first, which is why every
+sprite effect was invisible.
 
-Two facts, and the second follows from the first.
+`FUN_0020f3e0`'s guards are the mirror image: a live type id, `+0x02` bit
+`0x200` set, `+0x08` bit 0 clear. It also clears `+0x0C` bit `0x1000` on the way
+in, and `FUN_0020f510` sets it back on anything it submits -- a "was drawn this
+frame" latch nothing else reads.
 
-**`DAT_003429a8` is one global array of 64 texture slots.** Entity models take
-slots 10..23 and 24..39 through `FUN_00266118`'s two banks, the boot binds take
-32..48 — and the *map's own texture pages* take slots 0..9, loaded by
-`FUN_0022a178` from a ten-entry table at `DAT_00325394`. The dump confirms both:
-`DAT_00325394` = `{0286, 0002, 02c8, 0253, 000d, 02c9, 000f}` and
-`DAT_003429a8[0..6]` holds the same ids in the same order, which is exactly the
-port's map page list. So a PSM2 material slot's `type` byte was never a page
-index — it is a slot index that happens to start at 0. `FUN_0022a178_bind_map_textures`
-now loads them, which is what makes the rest of this resolvable.
+### The model is a strip of sprite records
 
-**Every PSC3 subdraw names its own texture.** `FUN_00212058:180-208` reads
-`texFlags` bits 10..7 and writes packet byte 6 from it:
+Parsed by `loadSpriteStripModel`. No PSC3 magic, and the header's `+0x00` is a
+**column** count, not a record count:
 
-| selector | primitive flag 0x800 | byte 6 | means |
-|---|---|---|---|
-| 0 | either | 0x3F | the entity's bound slot |
-| 0xF | either | 0x3E, byte 5 = 0x11 | the special mode the map path reaches through its own type 9 |
-| 1..0xE | clear | the selector | **global slot `selector - 1`** |
-| 1..0xE | set | 0x3F, selector rides in byte 5 | the bound slot still wins |
+```
++0x00 u16  column count
++0x02 u16  animation count
++0x04 u32  column table:  {u16 firstRecord, u16 recordCount} per column
++0x08 u32  sprite record table, 16 bytes each
++0x0C u32  animation table, one u32 timeline offset per animation
+```
 
-Byte 6 is `globalSlot + 1` on the map path too (`FUN_00211230:186`), which is what
-pins the arithmetic down.
+The animation picks a column (entity `+0xAC`) and the column names a run of
+records, drawn **back to front** -- `FUN_0020f510` seeds its cursor at the last
+record of the run and walks down. `grp_017e`, the magic projectile's, is twelve
+columns of one record each.
 
-`--model-report` prints the histogram per entity as `passes={…}`. For `s01_e012`:
+Each record:
 
-| model | passes | drew with | should draw with |
-|---|---|---|---|
-| grp_01d5 window curtain | `gslot3:48` | tex_0133, the gold medallion | tex_0253, the white sheer curtain |
-| grp_00ae window frame | `gslot3:96` | tex_0130 | tex_0253 |
-| grp_01d6 window surround | `gslot0:30` | tex_0133 | tex_0286, the sea |
-| grp_00c6 lantern | `bound:49 gslot1:4` | all tex_012f | four passes on tex_0002, the flame sheet |
-| grp_0172 chest | `bound+4/6/8` | tex_0179 | tex_0179 — the 0x800 form, already right |
+| off | what |
+|---|---|
+| `+0x00` | bits 0-1 blend mode, `0x10` flip X, `0x20` flip Y |
+| `+0x01`/`+0x02` | texel origin |
+| `+0x03`/`+0x04` | extent, **one more** than the real width and height |
+| `+0x05` | twice the alpha byte |
+| `+0x06`/`+0x07` | offset in whole sprite units, signed |
+| `+0x08` | depth bias, over 100, added to the view depth |
+| `+0x0C` | float scale |
 
-The frames looked plausible before because tex_0130 and tex_0253 share their top
-half; only the bottom differs, and the curtain lives there. The lanterns were
-unlit for the same reason — their flame pass was being drawn with the lantern's
-own sheet.
+The blend mode is the same 0..3 the map and PSC3 paths already use, so it goes
+straight into `setMapBlendMode`. That is not a guess: `FUN_0020f510` packs the
+GS PRIM word as `0x0D` or `0x1D` (untextured / textured triangle strip) and ORs
+bit `0x40` -- **ABE** -- for any non-zero mode. Mode 0 does not blend at all,
+which is also why its alpha byte is forced to `0x80` and never read.
 
-`s01_e024` renders **byte-identical** (nothing in it uses a selector),
-`s01_e012` stays deterministic, flag `0x515` still lands at 13122, and the chest
-cutscene still runs its ten states.
+### The quad is built on the projected origin
 
-### The map draws a pass per material slot
+`FUN_0020b600` projects the entity origin to an integer GS screen position, and
+**every corner is an offset from it**, in GS units:
 
-`FUN_00211230:104-360` loops material slots 0..3 and emits a GS packet for every
-slot whose `type` is `>= -1`, each with its own texture page, UVs, flat colour,
-alpha and blend mode. The port drew slot 0 only. `s01_e012` has 202 primitives
-with two slots and 68 with three; drawing them all takes the shot at frame 200
-from 437 to 518 map triangles for the same 226 primitives, at no measurable cost.
+```
+projScaleX = trunc(entity+0x14C * 280.0 * G / viewZ)      G = 2 * DAT_00355658
+gsX = originX + (spriteX * projScaleX >> 8)               spriteX in 1/16 units
+gsY = originY + (spriteY * projScaleY >> 9)               note the extra shift
+```
 
-Honest caveat: this is faithful to the decompilation and the extra passes are
-demonstrably emitted, but **no shot checked so far looks different with them on**
-(`--map-base-slot` renders identically at f1500 and f3600, and `s01_e024` is
-byte-identical). The layers are there in the data; what they are for has not been
-seen yet.
+The quad is axis-aligned in screen space, which is why a sprite never rotates
+with the camera. Both `projScale`s are truncated to integers before being used
+as fixed point, so a distant sprite's size quantises in visible steps rather
+than shrinking smoothly; the record's own scale at `+0x0C` truncates the same
+way. The extra shift on Y is not a bug to correct: the GS output is 640x224
+shown at 4:3, so its pixels are 2:1 and a square sprite has to be twice as wide
+in pixels. `X` uses `+0x14C` and `Y` uses `+0x150`, which is why a non-uniform
+entity scale stretches the sprite.
 
-### Notes on GS dumps
+The port runs that arithmetic in GS integers and then un-projects the four
+finished corners back to view space, because it draws through the same
+projection the world does instead of writing GIF packets. Re-projecting them
+gives back the same GS numbers -- it is the inverse of the transform above, at
+the depth the GS z was keyed off. That is the only adaptation in the function,
+and `drawSpriteQuads` accordingly runs with the modelview at identity, the
+scene's own projection, and depth writes off. PRIM's `FGE` bit is clear in both
+of `FUN_0020f510`'s words, so a sprite is never fogged however far away it is.
 
-`tools/gs_dump_parse.py` drops VSync boundaries, so re-walk the packets if you
-need per-frame draw lists. The field is **640x224** with XYOFFSET
-(2048-320, 2048-112) — the measured vertex y span of 226.6 settles it. ABE is
-not a useful discriminator in this game: most of the scene is blended, and
-nearly every texture shows opaque ~= abe because each primitive gets a second
-packet.
+> The first cut of this pass emitted the offsets *without* the origin, on the
+> reasoning that the perspective divide made the quad a fixed size in view space
+> and the origin would come out in the wash. It does not: the offsets are
+> relative to a point that has to be added back. Every sprite landed dead centre
+> of the screen at its own depth, so the bolt sat on Orphen and vanished behind
+> him as it flew away. Reformulating the maths is how that got missed; the port
+> now follows `FUN_0020f510`'s own shape and adapts only at the last step.
 
+### Depth is keyed off a different number than the position
+
+```
+depth = viewZ + (char)entity+0x133 * DAT_003520a0        (0.08)
+              + (char)record+0x08 / 100.0
+gsZ   = trunc(DAT_003555a4 / depth + DAT_003555a0)       floored at 0
+```
+
+Both biases move the sprite in depth only -- the position and size came out of
+`projScale`, which used the unbiased `viewZ`. Entity `+0x133` is copied from
+descriptor `+0x02` by `FUN_00229c40`, and most effect descriptors carry `-12`, so
+the usual effect sits about a unit nearer the camera than it stands. Entity
+`+0x08` bit `0x40` throws all of it away for a flat `0xFFFF`, nearer than
+anything the world writes.
+
+Submission is a 4096-bucket display list on `gsZ >> 4` clamped to `1..0xFFF`,
+plus the `0x1005` bucket above it for the `bit 0x40` sprites. `gsZ` rises as a
+sprite comes nearer, so ascending bucket is back to front, and the port sorts
+the same way. The one thing it does not reproduce is that the original links
+each packet in at the *head* of its bucket, so co-bucketed sprites come out
+reversed among themselves -- invisible for the additive blending everything
+drawn so far uses.
+
+### The colour
+
+`FUN_0020f3e0` stages `max(DAT_0035566c, DAT_00355670)` per channel -- the scene
+ambient against light 0's colour -- and `FUN_0020f510` averages that with the VU0
+point-light contribution at the sprite's own position, saturating. `+0x08` bit
+`0x4000` skips the whole thing for a flat `0x80`. GS bytes throughout, `0x80` for
+1.0, so a sprite can be brighter than white before the blend.
+
+The near clip here is `DAT_0035209c`, **0.3** -- not the `0.4` the geometry path
+uses. The far one is the scene's draw distance.
+
+### The rotation and HUD branches
+
+Both landed with the battle target cursor, which is the one thing in the
+executable that takes them together:
+
+- **The rotation branch**, `+0x08` bit `0x400`, rebuilds the quad as four
+  rotated corners off the angle table at entity `+0x168`, for record indices
+  under nine. Angle 0 swings the quad's *centre* about the sprite origin; angle
+  N -- N being the record's own descending index -- spins the quad about its own
+  centre. Everything is done with Y doubled, because the GS output is 640x224 at
+  4:3 and rotating in raw GS units would shear the sprite; the sine term is
+  halved on the way back out.
+
+  `FUN_002D73E8` writes those angles: `DAT_003547A4`, which is pi/4 to the bit,
+  while the cursor is the player's target, and an accumulation of `DAT_003555BC
+  * DAT_003547A8` -- about 25 degrees a second -- when it is not. That is the
+  difference between the selected bracket sitting corner-up and the rest slowly
+  drifting.
+- **The HUD branch**, `+0x08` bit `0x1000`, takes a position that is already in
+  screen space rather than projecting one: a flat `+0x14C * 256` scale with no
+  perspective divide, and a GS z read back out of `+0x28` as an integer.
+
+Note the aliasing on `+0x168`. For a skinned entity those 42 bytes are the
+per-bone override modes (see "`+0x168` is inside the slot" in
+[Entities](entities-and-party.md)); for a sprite entity
+-- which carries `+0x02` bit `0x200` and can never reach `FUN_0020C5A8` -- they
+are seven floats of quad angles. The two never coexist. The port splits them:
+bone modes live in `EntityBoneOverrides`, angles in `OriginalEntity`.
+
+### Checking it
+
+```sh
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
+    --no-audio --spawn -2.5,-8,0 --press-magic 60 --screenshot shot.png:112
+```
+
+catches the bolt as a glowing orb in Orphen's hands; frames 124 onward have it
+clear of him and travelling with its trail. Four casts over 900 frames still
+report `live actors: 20`, and `--render-bench 6` reports the same primitive and
+batch counts as it did before the pass existed -- which is the check worth
+making, because absolute frame times on this machine move by 30% run to run for
+reasons that have nothing to do with the port. Compare the counts, not the
+milliseconds.
+
+## A hidden parent must stay "queued", not "posed"
+
+`FUN_0020c5a8`'s second pass has four outcomes per slot, and the status byte it
+writes -- or does not write -- is what the *children* read:
+
+```
++0x08 bit 0 set        clear +0x0C bits 0x3000, raise +0x08 bit 0x10,
+                       **leave the status byte at 0**
+parent < 0             pose and draw, status = 1
+status[parent] == 0    push this slot on the back of the queue
+status[parent] == 1    pose and draw, status = 1
+status[parent] == 0xFF neither; dropped this frame
+```
+
+The port had the hidden test inside its publish helper, which returned early --
+and then the walk wrote `status = 1` over the top anyway. A hidden slot
+therefore read as *posed*, and every child bound to it was drawn.
+
+In s01_e012 that child is **slot 61**, a type `0x2C4` parented to slot 83
+(Dortin, `+0x08 = 0x0133`, hidden from the first frame). With no parent palette
+to resolve against it fell back to its own `+0x20`, which for a bone-local
+attachment is near enough the world origin -- putting the sack Dortin is
+supposed to be carrying on the floor of the middle doorway for the whole scene,
+and then again in his hand once he was drawn. The EE dump agrees with the port
+on every field of slots 61-64, so this was never a spawn or placement problem;
+only the draw walk's bookkeeping.
+
+The hidden branch's third write, `+0xB0 = 0`, is the pose blend's "no previous
+column" (`FUN_0020e840:60` reads it next to `+0xAA`). The port's pose filter
+keeps that in its own state, so there is no field to write.
+
+## The backdrop is a model, and `FUN_0020C290` draws it
+
+`src/ported/render/original_background_model.*` is `FUN_0022CE60` and
+`FUN_0020C2F0`: the fog sphere `s01_e013`'s boat deck stands inside.
+
+`FUN_0020C290` reads like a display-list kick sitting next to `FUN_0020C5A8`
+and `FUN_0020F3E0` in `FUN_002239C8`'s draw block. It is not. It walks four
+descriptors at `DAT_00345A18` -- stride `0x24`, counted *down* from
+`DAT_00345A84` -- and hands each to `FUN_0020C2F0`, which draws a whole model.
+It was the last call in that block the port did not have, and it is why the
+deck sat in a black void where the retail game has weather.
+
+It was found by patching `jr ra; nop` over one candidate function at a time in
+PCSX2 and screenshotting. **EE code patches through the debugger interface do
+take effect**, despite the MCP tool's warning about recompiled blocks, which
+made the search cheap. The fog survived the map, the entity models, the sprite
+pass, `FUN_002192C0`, the actor loop, the scene script and `FUN_00207DE8`
+before `FUN_0020C2F0` turned out to be the last thing standing.
+
+### Where the model comes from
+
+A **PSB4** record in the scene bundle's **category 2** -- the same category the
+PSM2 map lives in. `s01_e013`'s is id `0x009E`, and it is the *first* category-2
+record, which is why `loadFirstPsm2FromSceneResources` walked straight past it
+looking for PSM2 magic. `s14_e001`'s pier uses the same one.
+
+No script installs it. `FUN_0022A418:134` calls `FUN_0022CDE8(descriptor, 0)`,
+which reads the **halfword at scene descriptor +0x08** and loads that id into
+slot 0 with its shade byte seeded to `0x80`. Opcode `0xE5` is the other way in,
+and `0xE6` sets a slot's shade and Z rotation -- see
+`analyzed/ops/0xE5_load_backdrop_model.c`, which used to be filed as an audio
+opcode.
+
+The file is a 16-byte header and three sections: vertices (`s16` count, then
+xyz floats at a stride of 12), primitives (22 bytes each), and a UV animation
+script in the format the map's section G already uses. A primitive is a flags
+halfword, four vertex indices and four three-byte groups, and `flags & 0x800`
+picks how those three bytes read -- the same bit the map and PSC3 builders
+test. Set, they are `(u, v, textureSlot)`; clear, a flat RGB.
+
+Everything else is in the flags word, and every bit of it is confirmed against
+a GS dump of the live frame: `0x7000` the blend mode, `0x0700` a CLUT bank
+(dead for an 8-bit page), `0x00FE` **the vertex alpha, halved**, and `0x8000`
+the UV animation selector. The colour is not in the file at all: `FUN_00211B80`
+hands VU1 the literal `DAT_00808080`, which is why every backdrop vertex in the
+dump reads `(128, 128, 128)`.
+
+`s01_e013`'s model is a sphere: 312 vertices, 391 quads, 24 segments around and
+13 rings, radius 35 at the equator closing to 10 at the poles. Its cloud band
+is above the equator and its teal mist below, which is the order the dump's
+quads land on screen. Every primitive names **global texture slot 8** -- the
+map's ninth and last texture page, which no map primitive uses. That page being
+referenced by nothing was the first hard evidence the backdrop existed.
+
+### Camera-locked, and never in front of anything
+
+`FUN_0020BEC8:43-45` puts the model at **the camera eye's x and y**, with
+`z = eye z + fGpffff808c` = 0.4. It rides the camera exactly, so a mesh 35 units
+across reads as a cylinder wrapped around the whole scene however far you walk.
+
+Its packets end in `MSCAL 0x228`, a different VU1 program from the map's
+`0x13B`/`0x14B`, and the dump shows what that program does differently: every
+backdrop vertex reaches the GS at **Z = 2** -- the far end of that frame's
+2..1108 range, whatever the geometry's real depth -- with `PRIM.FGE` clear where
+every map primitive has it set, and `ZBUF.ZMSK` set where the map clears it.
+Fog off, depth write off, always behind.
+
+The port draws it before the map with the depth test and the depth mask both
+off, which is the same picture by the only means GL offers. **It needs its own
+projection.** The world is drawn with a far plane of `drawDistance + 8` -- 28
+units in `s01_e013` -- and this model reaches 50 units from the eye, so the
+frustum the map uses clips every one of its primitives away. The first build
+loaded, parsed, transformed and submitted all 391 quads and drew nothing at
+all. The backdrop pass pushes the far plane to 4096 instead, which costs
+nothing because it neither tests nor writes depth.
+
+### What is checked, and what is not
+
+`--render-report` prints the model and the quads it builds; `--no-background`
+turns it off for an A/B. `--dump-scene-resources <dir>` writes every decoded
+record of a scene bundle, which is how the PSB4 was read in the first place.
+
+Brightness lines up: a backdrop-only frame measures `(27, 36, 37)` mean RGB in
+the port against `(23, 32, 33)` in a retail frame with everything else patched
+away. `s01_e024`, `s01_e012` and `s14_e001` reports are unchanged but for the
+new load line.
+
+Not checked: a pixel-for-pixel frame against retail. The one player position
+where the port's camera lands exactly on the retail camera -- `(14.112, 2.5,
+5.5)`, where `s01_e013`'s forced-camera zone engages -- renders a near-white
+frame in the port, and `--no-background` shows the backdrop is not what causes
+it. That white-out is its own bug and is not chased here.
+
+## Notes on GS dumps
+
+`port/attic/gsparse.py` is the parser the dumps above were read with (see
+`port/attic/README.md`); it snapshots TEX0 only, so a PSMT4 page's real format
+arrives in a TEX2 write it does not show. `tools/gs_dump_parse.py` drops VSync
+boundaries, so re-walk the packets if you need per-frame draw lists. The field is **640x224** with XYOFFSET
+(2048-320, 2048-112) — the measured vertex y span of 226.6 settles it. ABE alone is
+not a useful discriminator in this game: most of the scene is blended, nearly
+every texture shows opaque ~= abe because each primitive gets a second packet,
+and the register-block index is a separate thing (see "`ABE` is not the
+register-block index").
