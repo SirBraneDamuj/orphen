@@ -1,6 +1,12 @@
 # Effects
 
-### The rain, and the fold that was hiding in it
+The effect pools: rain, the smoke cloud, the spark pool, and the screen smear.
+The pools share nothing with each other (each has its own storage and step
+function); what they do share is `FUN_00207DE8`'s colour fold and
+`FUN_0020B6A0`'s clip reject. Dust, plumes, haze and the other pools are in
+the scene and battle docs that first needed them.
+
+## The rain, and the fold that was hiding in it
 
 `s01_e013`'s deck is in a downpour on hardware and was dry in the port. The rain
 is opcode `0x102`, which the port was consuming the operands of and dropping:
@@ -38,7 +44,7 @@ Three things worth keeping:
   writes 100 and `height > 1` then writes 50 over it, so the 100 is unreachable.
   Checked in the disassembly at `0x0021B26C` before reproducing it.
 
-#### FUN_00207DE8's colour fold, finally verifiable
+### FUN_00207DE8's colour fold, finally verifiable
 
 The first build of this drew bright white bars instead of drizzle. A GS dump of
 `s01_e013` settles why. Every one of the frame's 411 streak draws carries vertex
@@ -58,15 +64,17 @@ were skipping the fold, which was recorded as unverified because no capturable
 scene had a `FUN_002190F8` pool alive. The rain is one, and it says the fold is
 real, so a spark is `0.9375x` white rather than `1.875x`.
 
-Not reproduced, as everywhere else: `FUN_0020B6A0`'s `& 0xE0` clip reject, which
-drops a quad whose corners have slid off the screen rect. The port draws a few
-more streaks per frame than the dump does (470-ish against 411) and that is
-where the difference is. `FUN_00218EE0`'s near test **is** modelled.
+Not reproduced for the rain: `FUN_0020B6A0`'s `& 0xE0` clip reject, which drops
+a quad whose corners have slid off a widened screen rect. The box is known now
+(`kFUN_0020b6a0_clip*` in `src/ported/render/original_sprite_pass.h`, read from
+`0x00314F90`) and the haze and `FUN_00220210`'s plume pool apply it, but the rain
+does not yet. That is where its extra streaks come from: the port draws 470-ish
+a frame against the dump's 411. `FUN_00218EE0`'s near test **is** modelled.
 
 Splash counts line up where it can be checked: parked at the dump's own player
 position, `--actor-report` prints `splashes=7` against the dump's 9.
 
-### The smoke cloud, and the halt hiding behind it
+## The smoke cloud, and the halt hiding behind it
 
 The `0x400`/`0x10000` zone — the "which way do we go" argument — played its whole
 dialogue and then never gave control back. The cause was one unimplemented
@@ -106,17 +114,21 @@ stand — or, when standing, an actual change in position.
 `src/ported/entity/original_smoke_cloud.*` is all of that, stepped in
 FUN_002192C0's first slot and reported by `--actor-report`.
 
-**It is not drawn, deliberately.** `FUN_00212F38` builds a VU1 program's input,
-not a GIF stream: 40 quadwords of template to VU address 32, then 32 positions
-(V4-32 to address 6) and 32 four-byte attribute quads (V4-8 to address 47) whose
-byte 0 is `(i & 3) * 10` and byte 3 the alpha. The template's GIFtag reads
-NLOOP 1, EOP, PRE, NREG 9, PACKED, REGS = RGBAQ then four (UV, XYZ2) pairs, and
-PRIM = triangle fan with TME, ABE and FST set — a flat, textured, blended quad
-whose corners are `0x510` and `0x5F0` in 4-bit fixed, texels 81..95 on both
-axes. **There is no TEX0 anywhere in the packet**, and no ALPHA register behind
-that ABE, so which sheet those texels belong to and how it blends are not in
-this function. Picking either would be a guess. A GS dump taken while the smoke
-is up, read with `port/attic/gsparse.py`, settles both.
+**It is drawn, from a GS dump.** `FUN_00212F38` builds a VU1 program's input,
+not a GIF stream, and the packet carries no TEX0, no ALPHA and no quad size --
+the microprogram applies those. A dump taken at s01_e014's "Hey! Smoke!" beat
+(2026-09-18) settled all three: texture slot `0x2A` (texture `0x178`, PSMT4
+bank 0, the sheet the book prompt and HUD pips already use), `ALPHA 0x44`
+plain source-alpha, depth tested `GEQUAL` with writes off, bilinear, and a
+half-width of `zoom * scale * gsZ`. The cloud skips `FUN_00207DE8`'s fold and
+has no display-list bucket of its own: it lands after every `0x1000` effect
+packet and before the `0x1005` overlays. `original_smoke_cloud.h` has the full
+reading, including two traps in reading the dump (TEX2 carries a PSMT4 page's
+real format, and a save state's end-of-frame register file is not attribution).
+
+It also needs the full 32-bit RNG: `FUN_00212DB0` seeds each phase with a whole
+`FUN_00216868()`, and a 15-bit stand-in the port used to have left half of every
+axis unreachable, so the cloud filled 60% of its box and looked too dense.
 
 Nothing in this scene reads an event flag it does not also write — the arrival
 branch is the only thing it inherits from the scene before it.
@@ -132,7 +144,7 @@ skips the pool entirely, however much of it is marked alive.
 
 `FUN_0022a418` resets the pool at scene init. **That reset draws from the RNG
 once per entry** — 1536 draws — and writes each into `+0x22` as a stagger. Only
-the unported ambient-dust behaviour reads that stagger; the spark path
+`FUN_002d3320`, the game-over dust, reads that stagger; the spark path
 overwrites `+0x22` on spawn. So for sparks the reset's only observable effect is
 the advance of the shared generator, and porting it faithfully moved this
 port's `--actor-report` baseline. Runs remain reproducible; the numbers are just
@@ -203,12 +215,13 @@ only guard is the clip flags. The port rejects a particle behind the eye, which
 `FUN_0020b600`'s `w` clamp cannot save and which would otherwise smear across
 the screen, and nothing else.
 
-### What is not ported
+### The other behaviour: the game-over dust
 
-`FUN_002d3320`, the ambient dust `FUN_002d36f8` installs into the same pool. It
-reseeds its own particles off the player's bones through `FUN_0020dc88` and
-reads a per-character colour table at `DAT_00326708`; it is a separate effect
-that happens to share the storage.
+`FUN_002d3320`, which `FUN_002d36f8` installs into the same pool, is ported too.
+It is not ambient scenery: `FUN_002d36f8`'s only caller is the game-over state,
+and it reseeds its particles off the dead body's bones through `FUN_0020dc88`
+with a per-character colour table at `DAT_00326708` -- the rising column of
+sparks over the body. See [Field damage and death](field-damage-and-death.md).
 
 ### Checking it
 

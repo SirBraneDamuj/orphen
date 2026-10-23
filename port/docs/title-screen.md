@@ -1,7 +1,5 @@
 # The title screen
 
-## The title screen
-
 `--scene` is now optional: `--disc-root <dir>` on its own boots into **s12_e010**,
 which is what `FUN_002000C0:163-165` does at power-on --
 
@@ -31,7 +29,7 @@ mode 4 arms of `PortRuntime::FUN_0032536c_scene_module`:
 The orbit itself is `FUN_00272010`: `fGpffff8f58 = 0.0001875` radians per frame
 tick, so a revolution is about 1047 frames.
 
-### The logo is an entity, not an overlay
+## The logo is an entity, not an overlay
 
 Mode 3 spawns entity type **0x48** into the record at `0x0058C7E8` -- pool slot 5
 -- and parks it at `DAT_00352EC4 = 1.6` over the pedestal, with `+0x04 |= 0x100`
@@ -53,7 +51,7 @@ port missed it for a while, and the logo stood bolt upright under a camera
 looking down at it: a faint trapezoid, easiest to see as the lean in the
 vertical bar of the O.
 
-### The prompt is one sprite off a map page
+## The prompt is one sprite off a map page
 
 `FUN_00272100` draws the `FUN_00239020` entry at `0x00325738`: texture slot 5,
 256x40, entry `(-128, -112)`, which is `(192, 336)` in the 640x448 screen the
@@ -61,7 +59,7 @@ subtitles land in. Slot 5 is an ordinary map texture page -- `0x0103` for this
 scene -- whose top 256x40 band is the words "Press START button". The rest of
 that page is the copyright block the legal screen uses.
 
-### START is New Game
+## START is New Game
 
 START or Cross runs the original's states straight through, with one shim in
 the middle. `FUN_00271558` state 1 sees the press, and in the same call puts the
