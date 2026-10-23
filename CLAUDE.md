@@ -17,7 +17,7 @@ some of it. If you need a clean tree, copy the files aside or make a branch.
 
 ```bat
 port\build-msvc.bat Release
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024 --no-audio
+port\build\msvc-Release\orphen_port.exe --disc-root disc --scene s01_e024 --no-audio
 ```
 
 Always pass `--no-audio` unless audio behaviour is what is being tested, and
@@ -72,13 +72,13 @@ disagrees with the binary, the binary wins — and fix the note in the same pass
 
 **Build Release for anything involving frame rate, and confirm which build is
 running before investigating a performance complaint.** `port/build-msvc.bat`
-defaults to `Debug`, and Debug is ~8x slower here: MSVC's debug runtime makes
+defaults to `Debug`, and Debug is ~5x slower here: MSVC's debug runtime makes
 every `std::vector` index a checked call and inlines nothing, which this
 renderer — a tight `std::vector` loop doing per-vertex maths on the CPU — is
-the worst case for. Measured on `s01_e024`: 40.5 ms/frame Debug vs 4.9 ms
+the worst case for. Measured on `s01_e024` (2026-10-23): 36.8 ms/frame Debug vs 6.7 ms
 Release. It presents worse than that, because `main()`'s fixed-timestep
 accumulator runs catch-up simulation steps when a frame overruns 16.6 ms, so a
-slow frame makes itself slower; Debug settles at ~4.4 steps/frame and ~12 fps.
+slow frame makes itself slower; Debug settles at ~3.1 steps/frame and ~19 fps.
 
 (Invocation is in `## Build & Run` above.) Debug is still the right build for
 debugging. Just never quote a frame time

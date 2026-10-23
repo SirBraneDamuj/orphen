@@ -8,7 +8,7 @@ This is the first slice of that module: the player half, against **`s14_e012`**
 speak of.
 
 ```
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s14_e012 \
+port\build\msvc-Release\orphen_port.exe --disc-root disc --scene s14_e012 \
     --frames 460 --hold-cross 300-360 --battle-report
 ```
 

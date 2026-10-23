@@ -2,6 +2,13 @@
 // Original: FUN_00264f50
 // Opcode: 0xDE
 // Handler: Set audio channel parameter (volume/pitch/pan)
+//
+// CORRECTION (2026-10-23): this is not audio. FUN_0023bbd8 starts a controller
+// vibration pattern: the second operand is a pattern offset in script memory
+// (FUN_00229640's range check is a pointer check), and FUN_0023bd00 feeds the
+// four channels at DAT_00571b50 into the pad actuator block DAT_00571a40 that
+// FUN_0023af50, the pad driver, sends. See port/docs/scene-script.md. The
+// audio naming below is kept as the original hypothesis.
 
 // Behavior:
 // - Evaluates two expressions: raw_value (int) and channel_index.

@@ -1,7 +1,5 @@
 # Scene script
 
-## Scene Script
-
 `src/ported/script/` is a narrow, faithful port of the SCR bytecode VM:
 `FUN_0025bc68`'s three dispatch tables with the 16-deep call stack, plus
 `FUN_0025c258` and `FUN_0025bf70` as methods of the same object, because
@@ -13,8 +11,8 @@ entrypoints as named functions. Words 0 and 1 run at load, which is what
 `FUN_0022a418` does -- it invokes `FUN_0025b6d0` and `FUN_0025b728` from
 different points in the bootstrap, with a lot of state setup between them.
 
-The per-frame entry (`FUN_0025b778`, word 2) runs behind `--scr-tick`, off by
-default so the determinism baseline is unchanged. It runs header word 2, then
+The per-frame entry (`FUN_0025b778`, word 2) runs every frame by default;
+`--no-scr-tick` turns it off. It runs header word 2, then
 every occupied slot of the 65-entry object-script table, then the lead-bound
 slot `0x40` with the entity selection on pool slot 0.
 
@@ -59,7 +57,7 @@ dispatch table has since disproved, and `0xA4`/`0xA5`/`0xA6` are named
 `--scr-report` prints every opcode reached with its level, hit count and first
 offset, plus the spawn list and the map's placement table.
 
-### The cutscene sequencer
+## The cutscene sequencer
 
 `FUN_0025ce30`, in `SceneScript::FUN_0025ce30_run_event_scheduler`. **This is the
 mechanism a cutscene is actually built out of**, and without it no story scene
@@ -118,7 +116,7 @@ a model up by the raw type after that finds nothing, which left a whole cast
 un-animated. `OriginalEntity::effectiveTypeId()` is the test every original makes
 in the same situation.
 
-### Where scene objects actually come from
+## Where scene objects actually come from
 
 Not the script. PSM2 header word 13 holds a count followed by 16-byte placement
 records -- position, angle byte, group byte, id byte, param -- which
@@ -137,10 +135,11 @@ The script-to-world coordinate scale is `fGpffff8c40` = 100000.0, not the 4096
 fixed point used elsewhere in the engine. With the `0x0F` literal's built-in
 `* 100`, a script value of 1000 is one world unit.
 
-### State of play
+## State of play: `s01_e012`
 
 `s01_e012`, the game's first scene, runs its init, start and per-frame entries
-with **zero unimplemented opcodes over 4000 frames** and spawns 77 entities. Its
+with **zero unimplemented opcodes over 4000 frames** and spawns 77 entities
+(re-checked 2026-10-23). Its
 scene script is byte-identical to `scr/scr2.out`, so the whole existing scr2 body
 of work applies -- `docs/scr2_offset_tables_dialogue_voice_flow.md` most of all.
 
@@ -149,25 +148,26 @@ The opening cutscene chain **runs to its end.** From `--scr-report`:
 ```
 event records dispatched: 208     event flag changes: 60+
   frame     1  -> 0x40b2 (slot)      frame   634  -> 0x2c (dialogue)
-  frame   544  -> 0x461f (slot)      frame 13279  -> 0xb63 (dialogue)
-  frame 13317  flag 0x515 set  at 0x6813
+  frame   544  -> 0x461f (slot)      frame 13212  -> 0xb63 (dialogue)
+  frame 13250  flag 0x515 set  at 0x6813
 0x6D player lock mode=-1  (state 10)   ...   mode=1  (release)
 ```
 
 Forty-two lines of dialogue, a dozen camera shots, and characters walking
 between marks -- about **three and a half minutes** of cutscene, with **zero
-unimplemented opcodes** and `--frames` byte-identical run to run. (The last two
-frame numbers used to read 10354 and 10426; the chain got longer, and correctly
-so, when dialogue holds started being timed from the voice clip -- see Voice.)
+unimplemented opcodes** and `--frames` byte-identical run to run. The frame
+numbers move whenever pacing gets more faithful -- they read 10354 and 10426
+before dialogue holds were timed from the voice clip (see [Voice](voice.md)) --
+so treat them as a snapshot, not a constant.
 
 `0x515` is the handoff latch: `docs/scr2_offset_tables_dialogue_voice_flow.md`
 identifies it as what the opening sets when it gives the player control, and the
 matching `0x6D` release is in the report beside it. So the scene reaches its
 first interactive moment.
 
-### How a cutscene is actually built
+## How a cutscene is actually built
 
-Three mechanisms, and none of them is a linear script:
+Five mechanisms, and none of them is a linear script:
 
 1. **The event scheduler** (`FUN_0025ce30`) pays out a stream of
    `[delay][gate][target]` records, sending each either to the dialogue driver
@@ -196,8 +196,8 @@ Three mechanisms, and none of them is a linear script:
    cast: two rows of cabin doors at `x = 5.5 / -0.5 / -6.5`, `y = ±1.2`, plus one
    at `(-9.885, 0.099)`. Their bodies are seven copies of the same 0x78-byte
    routine laid end to end from `0x39d9` (`0x39d9`, `0x3a52`, `0x3aca`, `0x3b42`,
-   `0x3bba`, `0x3c32`, `0x3caa`), each differing only in its door id — see The
-   doors below. The other seven are types `0x281` and `0x2ca`; the five `0x281`
+   `0x3bba`, `0x3c32`, `0x3caa`), each differing only in its door id — see
+   [Doors](doors-and-transitions.md). The other seven are types `0x281` and `0x2ca`; the five `0x281`
    share body `0x397c`, which is not an interaction at all but a visibility gate
    (`switch (0xED) { case 0: if (flag 0x28A) clear +0x08 bit 0; }`).
    `--actor-report` prints the real type and the body offset behind the role,
@@ -221,8 +221,8 @@ Three mechanisms, and none of them is a linear script:
    `0x9c`. `--scr-report` prints where each panel bit sits so a trigger can be
    walked onto deliberately.
 
-   The panels only start being tested around frame 10400, when the opening hands
-   over control — which is the shape the scene is authored in: one automatic
+   The panels only start being tested once the opening hands over control
+   (flag `0x515`, around frame 13250) — which is the shape the scene is authored in: one automatic
    opening chain, then player-driven cutscenes from there.
 
    **Most of the scene's choreography lives behind them.** The blob has twelve
@@ -230,16 +230,30 @@ Three mechanisms, and none of them is a linear script:
    `0x705d`..`0xa812`, and stream `0xca30` never targets anything above
    `0x6526` — but `0xd0c0` targets exactly that range. Six opcodes had to be
    ported before it would run: `0x6E`, `0x72`, `0x73` (angle helpers), and
-   `0x94`, `0xDE`, `0x10A`, `0x10B` (audio and graphics submitters, operands
-   only). Each halt named the next one, which is what the halt discipline is
-   for.
+   `0x94`, `0xDE`, `0x10A`, `0x10B`, first as operands-only. `0x94` (camera
+   shake, below) and `0x10A`/`0x10B` (the impact-dust pool, see
+   [Effects](effects.md)) have since been modelled. Each halt named the next
+   one, which is what the halt discipline is for.
 
-### Three names in the dispatch tables that are wrong
+## Three names in the dispatch tables that were wrong
 
-`analyzed/opcode_dispatch_tables.md` calls opcodes **0xDC** and **0xDD**
+`analyzed/opcode_dispatch_tables.md` called opcodes **0xDC** and **0xDD**
 "audio_dispatch". They reach `FUN_0023baf8`, which is an **empty stub in the
-retail build** -- they do nothing at all. **0xDE** is not audio either: it is a
-four-channel timer over `DAT_00571b50`, parallel to the event scheduler.
+retail build** -- they do nothing at all.
+
+**0xDE** is not audio either: it starts a **controller vibration pattern**.
+`FUN_0023bbd8` scales its first operand to a strength (`(10 - x) * fGpffff86dc`,
+clamped to `0x3C..0x100`), resolves the second to a pattern in script memory,
+and parks it in one of four channels at `DAT_00571b50` (a full set evicts a
+random one through `FUN_00216868`). `FUN_0023bd00` walks the channels each frame
+and writes the result into `DAT_00571a40 + pad * 6`: on/off words at `+0` and
+`+2` and a strength byte at `+4`. That block belongs to `FUN_0023af50`, the pad
+driver (`scePadGetState`/`scePadRead` on the `DAT_00571a00` buffers), which is
+what makes these actuator settings. `FUN_0023bd00` also limits total buzz time:
+past `0x2580` ticks in a row it fades the strength out and holds it off for a
+cool-down. A non-zero `cGpffffb656` refuses the request outright. The port has no
+rumble, so `0xDE` stays operands-only; the one thing it skips that touches game
+state is that rare `FUN_00216868` draw.
 
 **0x94 is the camera shake**, not "set_audio_position_normalized". It picked up
 the audio name from the same stub: `FUN_002612e0` divides its first expression

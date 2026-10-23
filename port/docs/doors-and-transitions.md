@@ -223,7 +223,7 @@ The map-cycle path clears the flag for the same reason `FUN_0022b300` writes
 **`s14_e001`**:
 
 ```
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e012 \
+port\build\msvc-Release\orphen_port.exe --disc-root disc --scene s01_e012 \
     --arm-stream d780:2 --frames 3000
 [scene] s01_e012 -> s14_e001 (request 0x20001, frame 2533)
 ```

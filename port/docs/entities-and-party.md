@@ -1,6 +1,6 @@
 # Entities and the party
 
-### Entity pool
+## Entity pool
 
 `src/ported/entity/` is the pool at `DAT_0058beb0`: 256 slots of **0x1D8** bytes
 (the decompiled `slot * 0xec` is over an `undefined2 *`, so it is halfwords), with
@@ -14,10 +14,12 @@ tables inside `SLUS_200.11` rather than in any disc resource.
 `src/ported/resource/elf_data_reader.*` maps PS2 virtual addresses to file
 offsets so those tables can be read directly. It is optional: `--elf` overrides,
 the disc root is searched for `SLUS_200.11`, and without it objects fall back to
-a default box size and say so. Ids from `0x272` up ship with the map and cannot
-be resolved this way at all.
+a default box size and say so. Ids from `0x272` up are map-streamed props with
+no ELF table; `FUN_00228e28` derives their model records from SCR.BIN resource
+`0xBD` and `FUN_00229980` maps them onto a bank by the scene's stage number
+(`src/ported/entity/map_prop_descriptor_table.*`).
 
-### Actor behavior is not script
+## Actor behavior is not script
 
 Once an entity exists, what it does each frame comes from native code, not from
 the SCR. `FUN_00239ce0` walks pool slots 2..255 and calls a function selected by
@@ -37,15 +39,15 @@ opcode VM uses. `--actor-report` lists every live entity with the handler addres
 it resolves to and whether that handler is ported. That report, not guesswork,
 picks the next behavior to write.
 
-Several behaviors are implemented outright. Type `0x37`, `FUN_00258ab8`, the
-party follower, has its own section below. Type `0x3A`, `FUN_002d1ea8`, the
-treasure chest.
-It is the only handler in the game with no state table -- it switches on the
+Many types are ported now; `--actor-report` on a scene is the current list.
+Type `0x37`, `FUN_00258ab8`, the party follower, has its own section below.
+Type `0x3A`, `FUN_002d1ea8`, the treasure chest, is the only handler in the
+game with no state table -- it switches on the
 animation id directly. Its `+0x198` is an **event flag id** (the placement
 record's param byte plus `0x400`), not a pointer; flag clear means closed, set
 means opened. See `analyzed/actor_behaviors/type_0x3A_treasure_chest.c`.
 
-### The party follows Orphen (type `0x37`)
+## The party follows Orphen (type `0x37`)
 
 After the opening cutscenes hand control back, Cleo and Magnus are supposed to
 walk after the player. They stood still, and the reason was one operand.
@@ -69,7 +71,8 @@ its state table `PTR_FUN_0031e1a0`:
 | 1 | `FUN_002597d0` | idle: watch the lead, then decide whether to walk |
 | 2 | `FUN_00259D00` | turn to an angle, then push through on it |
 | 3 | `FUN_00259e50` | turn in place |
-| 4, 5 | — | navmesh walk, waypoint walk. **Not ported** |
+| 4 | `FUN_00259ec0` | walk the navigation graph |
+| 5 | `FUN_0025a0c8` | waypoint walk. **Not ported** -- unreachable, see below |
 | 6 | `FUN_0025a298` | wedged: teleport back onto the lead's trail |
 | 7 | `FUN_0025a450` | walk blind, after being shoved |
 | 8 | `FUN_0025a500` | **the follow walk** |
@@ -102,7 +105,7 @@ It is not map data: it is a 512-entry ring of where the lead has actually been,
 appended to whenever it moves a quarter unit. State 6 walks it backwards for
 somewhere off camera to reappear, which is a follower's only way out of a wedge.
 
-#### The navigation graph
+### The navigation graph
 
 `ported/entity/follower_navmesh.*` is `DAT_00355038`: one 0x34-byte record per
 map primitive, holding four neighbours, a BFS depth per follower lane, and a
@@ -136,7 +139,7 @@ map -- walls, ceilings, props -- so a small first number is normal. A first
 number of 0 or 1 means the seed missed the floor, and every follower in that
 scene will fall back to `FUN_00259178`'s blind turns.
 
-#### What is still missing
+### What is still missing
 
 `FUN_0025a0c8`, state 5, and only because **nothing can reach it**.
 `FUN_00259378` gets there through `FUN_00258b80`, whose retail body is a
@@ -145,7 +148,10 @@ computes and then returns `-1` unconditionally (`addiu $v0, $zero, -1` at
 0x00258c48; Ghidra reports the same thing as an unreachable block). The `-1`
 always routes to state 6 instead.
 
-#### Leaving the party releases two bones
+`FUN_00251db8`, the follower re-sort that leaving the party runs (next section),
+is also not modelled (`scene_script_opcodes.cpp`).
+
+### Leaving the party releases two bones
 
 `FUN_002589c0` -- the thing opcodes 0xAD/0xAE reach, and what a cutscene runs to
 take a follower back under script control -- ends with more than a type
@@ -166,7 +172,7 @@ Magnus' torso upright through the flooding shot in `s01_e012` with his bust
 still aimed at where Orphen had been standing. The block clear is ported with
 them; `FUN_00251db8` is not.
 
-#### Falling
+### Falling
 
 `FUN_002262c0:99-113` integrates gravity into `+0x38` for every actor, and the
 only thing gating it is **`+0x04` bit 3**:
@@ -195,7 +201,7 @@ the port's clamp only ever raised. The small bumps in the floor of `s01_e012`'s
 chest room left Cleo and Magnus hovering a tenth of a unit up for the rest of
 the scene.
 
-#### Walls: the retry ladder, not an axis split
+### Walls: the retry ladder, not an axis split
 
 The party follower is the port's first ground-*walking* non-player actor, and it
 found two things `integrateNonPlayerMovement` had invented.
@@ -218,7 +224,8 @@ headings derived from the request's own -- constants from the block at
 Each retry does `flags & 0xffff7ffd | 0x4000`, so the refusal bit comes back
 down and a graze the fan-out resolves does not count as a block at all. The port
 used to try X alone and then Z alone, which is a different shape and grinds
-along a wall instead of going round it.
+along a wall instead of going round it. The lead's copy of `FUN_002262c0` runs
+the same ladder (`original_player_controller.cpp`); see [Physics](physics.md).
 
 **`0x20` and `0x40` are entity bits, not terrain bits.** `FUN_00228380` /
 `FUN_002285d8` (the X sweeps) write `0x20`; `FUN_00228838` / `FUN_00228a90` (Z)
@@ -242,7 +249,7 @@ The change is toward the original, not away from it -- `FUN_002262c0` is one
 function and every actor goes through it -- but it is a visible change to a
 scene that was tuned without it, so it is called out here rather than buried.
 
-### `+0x168` is inside the slot, so clearing the slot clears it
+## `+0x168` is inside the slot, so clearing the slot clears it
 
 Orphen's jaw came apart in the s01_e012 close-up when the scene was **played**,
 and never under `--arm-stream d780:13400`. The armed run put the close-up head in
@@ -290,5 +297,9 @@ correct to hardware. The armed-stream capture at 15810 is unchanged.
 **The lesson is about storage, not animation.** Any per-slot state the port keeps
 outside `OriginalEntity` has to be cleared by whatever clears the slot, because
 in the original it was never outside it. The pose filter bank at `0x003FFE00` is
-the other one, and it is handled separately -- see the `seeded` flag.
+the other one, and it is handled separately -- see the `seeded` flag in the PSC3
+pose filter (`src/ported/model/psc3_skeleton.*`).
+
+A second case of the same lesson -- a destroyed entity whose slot was not
+released -- is in [Player model and bandana](player-model-and-bandana.md).
 

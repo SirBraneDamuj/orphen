@@ -4980,9 +4980,11 @@ namespace orphen::ported::script
       return 0;
     }
 
-    // 0xDE (FUN_00264f50): two expressions -- a channel id and a level -- into
-    // FUN_0023bbd8, which sets audio channel state. The mixer does not model
-    // per-channel state, so the operands are consumed and the effect is not.
+    // 0xDE (FUN_00264f50): two expressions -- a strength and a pattern offset --
+    // into FUN_0023bbd8, which starts a controller vibration pattern on one of
+    // four channels at DAT_00571b50 (FUN_0023bd00 feeds them to the pad
+    // actuators at DAT_00571a40). The port has no rumble, so the operands are
+    // consumed and the effect is not; see port/docs/scene-script.md.
     case 0xDE:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 2);

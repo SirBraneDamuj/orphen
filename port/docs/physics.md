@@ -1,6 +1,345 @@
 # Physics and collision
 
-### `+0x80` is a slope limit, and the wall test was invented
+`FUN_002262c0` is the one physics step every actor goes through. The port has two
+copies of it: the lead's in `src/ported/player/original_player_controller.cpp`
+and everyone else's in `src/ported/entity/actor_frame_update.cpp`. The ground
+query (`FUN_00227070` / `FUN_00227390` / `FUN_00227840`) is
+`src/runtime/psm2_ground_query.*`. Walls are handled by the rotated retry ladder,
+not an axis split -- see [Entities and the party](entities-and-party.md).
+
+Lead movement constants, all read from the binary: grounded run step
+`fGpffff8a4c = 0.045` per nominal frame, jump seed `DAT_00355000 = 0.053`, and
+gravity `+0x48 = 0.00075` (the debug menu's `JUMP TEST` `G_FORCE 00075`, at its
+x100000 scale; `eeMemory.bin` reads the same for the lead and the party).
+Movement is camera-relative through `FUN_00256ab0`.
+
+## The ground query: the map ships the answer
+
+An earlier pass here invented a "step-up bit" — `record78 +0x04` bit `0x100` —
+to decide which of two candidate surfaces an actor stands on. **It does not
+exist.** It was a rule fitted to two data points because the port had no way to
+break the tie. The engine does not break ties at all, and the reason is that the
+map file tells it the order outright. `analyzed/terrain_ground_query.c` is the
+full reading; the short version:
+
+**`FUN_00227840` is an ordered walk, not a search.** PSM2 header word 6 holds a
+64×64 grid of `int16` cell heads and a shared run list, and `FUN_0022b5a8`
+copies both out of the file computing nothing. The scan walks one cell's run in
+the authored order, keeps the first front-facing hit, and stops at the first hit
+at or below the head. That order *is* the tie-break. The port now loads the
+section (`loadCollisionGrid`) and walks it; every scoring heuristic it used
+before — nearest height, highest eligible, the step-up bit — is gone.
+
+Verified byte for byte rather than by eye: `out/mapbin/0001.psm2` reproduces the
+dump's grid 4096/4096 and its cell list 1022/1022. All 165 PSM2 maps carry the
+section, so the old unordered scan survives only as a fallback for a map that
+fails to parse.
+
+Three flags on `leadingWord` drive it, all read rather than guessed: `0x800`
+"participates in collision", `0x200` "flat, height is the constant at `+0x2C`"
+(which is the primitive's *maximum* corner z), and `0x100` "ceiling". A ceiling
+does **not** reject — on a hit it clears the have-recorded latch without writing
+a height, so a later front face below it replaces whatever was latched above.
+The reject mask is entity `+0x74`, per entity, not a constant.
+
+### Landing snap, and actors that never resample
+
+**And the lift is a landing snap, not a material gate.** `FUN_002262c0:41-85`'s
+resample block needs the cached primitive's `+0x13` to be non-zero, and that is
+`0` for every primitive in s01_e012 — it never fires there. What raises `+0x28`
+is `:502-520`: `pos <= +0x4C → pos = +0x4C`.
+
+The other half of that: **a stationary non-player actor never resamples the
+ground.** `FUN_00227390` is reached only from the velocity loop or from a branch
+gated on `DAT_003555d0 != 0`, and that global is `0` in the dump. Such an actor
+keeps the `+0x4C` its placement opcode gave it for the whole scene — `0x55`
+calls the query and gets a real height, `0x54` just mirrors the authored z. So
+Magnus's `0x55` writes `-1.200` (hidden flat quad #9 over the bed) while leaving
+him at the authored `-1.500`, and the snap lifts him. Slots 82 and 84 have
+`+0x0A = -1` and `+0x6C = 0` — never queried — and sampling them every frame is
+exactly what put them at the wrong height.
+
+### Checked against the dump
+
+**Checked against the dump, entity by entity: 80 of 82 positions match.** The
+two that do not are Volcan, whom the port moves when the original does not (his
+`+0x04` reads `0x21` against the dump's `0x23`), and one NPC mid-walk. Both
+predate this. `s01_e024` still runs all ten chest states with zero unimplemented
+opcodes, and s01_e012 stays deterministic over 20,000 frames with `0x515` at
+13122.
+
+### Collision groups and four-corner sampling
+
+**The collision groups, and four-corner sampling.** Two things this pass first
+listed as gaps and then closed, because a gap between the port and the
+decompilation is a bug, not a design choice.
+
+`FUN_00227840` has a **second loop** over the `0x74`-stride collision groups at
+`DAT_003556e0`. Those groups own a block of primitives at the top of the
+record78 array that the cell grid never indexes — in s01_e012 the grid stops
+near 2500 and the groups run 3131..3948 — so without the loop roughly 800
+primitives did not collide at all. It needs two more map sections: header word 1
+(descriptors, **file stride 24**, which is what makes `4 + count * 24` land
+exactly on the next section) and header word 7 (groups). The group's XY box is
+not in the file — `FUN_00208450` recomputes it per frame — but for a group that
+never moves it is exactly the union of its primitives' bounds, verified **20/20**
+against the dump. `FUN_00208450` is now ported and rebuilds the box from the
+live vertices every frame (`src/ported/psm2/psm2_collision_groups.cpp`).
+
+`FUN_00227070` samples **four corners**, at ±`entity+0x54`, and takes the
+maximum, unless `entity+0x04 & 2` selects a single point. Party members read
+`0xAF` (single); props, NPCs and the player (`0x312C`) are all four-corner, so
+the port's single point was wrong for nearly everything — that is why an actor
+would not stand on the edge of anything. The bookkeeping is not just a max:
+`+0x6C` takes the winning sample's flags and ORs in any that tie, `+0x70` takes
+the AND across all four, `+0x0A` only updates when the new sample found
+something, and `+0x84..+0x90` publish the four heights.
+
+`FUN_002281a0` (the dynamic `0x10000` plane resolve) and `FUN_00208450` were
+named as missing here and have since been ported; see Moving collision groups
+below. `FUN_00228cf0` (riding another entity) is still open.
+
+### Ceilings, and terrain above the head
+
+The sample is posed with the actor's body, which `FUN_00227390` stages at its
+workspace `+0x2C`/`+0x30` (entity `+0x28`, and that plus `+0x58`). Two things
+fall out of that:
+
+- **Terrain above the head is not ground.** `FUN_00227840` will not settle on a surface above `+0x30`. Without the limit, a footprint corner over a hole in the floor picks the *storey overhead* as its ground and the move is refused as an impossible step. `s01_e024` has a 0.05-wide seam at `y = -4.475` where the room floor stops and the corridor floor starts, and walking north at `x = -1.13` stopped dead there while a jump crossed it, because a jump is ungrounded and skips the step test.
+- **`0x100` marks the ceilings.** `FUN_00227840` sets the workspace's `+0x22` winding selector for those records and `FUN_00227d28` then reverses every edge test, so they are the downward-facing surfaces -- in `s01_e024`, 427 of the 435 point straight down and no up-facing primitive carries the bit. The original never records one as ground; it only lets a ceiling at or below the head stop the scan, which returns "no ground". The port had been treating all of them as walkable floor.
+
+Together those give the head bump: `FUN_002262c0` at `0x00226cb4` treats an upward step as provisional, writing the raised height into entity `+0x28` in the delay slot of a `FUN_00227390` call so the query is posed from where the actor is trying to get to. A ceiling inside the body means no ground, the rise is given back whole from workspace `+0x0C`, and `+0x44` is zeroed. It is the only place upward motion is cancelled.
+
+### The overlap test has no tolerance, and inventing one moves people
+
+`FUN_00227d28` decides whether a query point is on a primitive, and the port had
+been answering that question with a winding-agnostic barycentric test carrying
+`-0.0005` of slack. Both halves of that were invented.
+
+The original is an ordered set of `FUN_00228058` edge functions with plain `<`
+and `>` against zero:
+
+- A **triangle** (corner 2 == corner 3) wants `(0,1)`, `(1,2)` and `(2,0)` all
+  `>= 0`.
+- A **quad** is split on the `1--3` diagonal, and `cross(v1, v3)` *selects* the
+  half rather than both being tried. On or left of it, test half 0 = `(3,0,1)`;
+  right of it, half 1 = `(1,2,3)`, which is also the only path that writes
+  `+0xD0 = 1`.
+- Every comparison **reverses** when `+0x22` is set, which `FUN_00227840` does
+  for `kCeilingBit` primitives. A primitive whose authored winding disagrees
+  with its ceiling bit therefore does not collide at all — that is the hardware
+  behaviour, not an omission to paper over.
+
+The slack is what put Magnus on the crates in the middle of `s01_e012`. He
+stands at `(5.366, 0.128)` with a `0.15` radius, and four-corner sampling asks
+at `(5.516, -0.022)` among others. Crate top 1114 is a quad whose `v1--v2` edge
+runs through `x = 5.5161` at that `y`: the corner is **outside it by 1e-4 of
+world space**, or `-0.00048` in barycentric units. That cleared `-0.0005` by a
+hair, so the corner "hit" the crate at `-0.500`, the four-corner max took it
+over the floor at `-1.500`, and `FUN_002262c0`'s landing snap stood him on top.
+
+With the edge functions the query returns `-1.500` on primitive `1734` —
+`eeMemory.bin`'s `+0x4C` and `+0x0A` for that slot, exactly. Twelve of the
+sixteen entities in the `magnus_floor` save state that carry a queried `+0x0A`
+now reproduce both fields; three of the other four are bandana rope nodes whose
+`+0x4C` is not a ground answer (their primitive index matches), and the fourth
+is the corridor chest sitting on group primitive `3292`, which carries the
+`0x10000` dynamic bit and needs `FUN_002281a0`.
+
+Both regression scenes are byte-identical over 3000 frames, so nothing in the
+opening of either was leaning on the tolerance.
+
+## The frame's order: behaviours, then groups, then physics
+
+`FUN_002239c8:116-135` is explicit about this and the port had it wrong:
+
+```
+FUN_0025b778   script tick -- 0x55 placements, 0x7E collision-group moves
+FUN_00251ed8   lead player
+FUN_00239ce0   actor behaviours
+FUN_00208450   collision groups          -> sets DAT_003555d0
+FUN_002261e0   physics, FUN_002262c0     -> reads DAT_003555d0
+```
+
+Two separate walks of the pool, and `FUN_00208450` sits **between** them. The
+port fused physics into the behaviour loop (`FUN_00239ce0_update_actors` called
+`integrateNonPlayerMovement` at the bottom of each iteration) and ran the groups
+afterwards. That is wrong twice over: entity A's physics ran before entity B's
+behaviour, and `DAT_003555d0` was always a **frame stale**.
+
+The stale frame is what kept Magnus on the crates. A cutscene `0x55` that drops
+an actor inside scenery gets exactly one physics pass to push it out before the
+vertical settle stands it on top -- so the flag has to be readable on the same
+frame the script raised it, which is precisely why the original puts
+`FUN_00208450` immediately in front of `FUN_002261e0`. The port now has
+`FUN_002261e0_update_physics` as its own pass in that slot.
+
+Confirmed on hardware by forcing `DAT_003555d0` to 0 through the door-close
+animation: the game then leaves Magnus at `(5.546, 0.128, -0.500)` on primitive
+1114 -- the port's exact output, to the last decimal.
+
+**This moves both regression scenes, and two props get worse.** `s01_e024`'s type
+`0x62` enemies shift, because all behaviours now run before any physics. In
+`s01_e012`, slots 35 and 40 now settle onto a floor 0.04 and 0.25 above where
+hardware has them. That was not the reorder's fault -- their `+0x4C` was already
+wrong, and the reorder merely gave the landing snap a chance to act on it. The
+cause was placement grounding: `FUN_0025e7c0` writes the record's z into `+0x28`
+and `+0x4C` and does not sample terrain, and its tail grounds a placed record
+**only** when its `FUN_0025ba98` row (SCR.BIN `0xBD`, `uGpffffadf4`) carries
+`0x8000`. The port used to ground every one; it now follows both rules
+(`scene_script_opcodes.cpp`, `FUN_0025e7c0_apply_object_record`).
+
+**A diagnostic worth keeping.** Opcode `0x55` now prints when a placement lands
+inside geometry -- the query answered above the authored z -- along with
+`DAT_003555d0` as the script saw it:
+
+```
+[embed] frame 90 slot 81 placed at (5.546, 0.128, -1.5) but the floor there is -0.5 -- DAT_003555d0=0
+```
+
+That one line is what turned "the push never fires" into "the flag is one frame
+late", after three rounds of static reading had failed to.
+
+### `DAT_003555d0` is not dead, it is transient
+
+Recorded here because it cost most of a session and the wrong conclusion was
+written down twice. `FUN_002262c0:112` has a branch that lets a **stationary**
+actor resample the floor, gated on `DAT_003555d0 != 0 && (entity +0x08 & 0x20)`.
+Three EE dumps all read `0` there, and that was taken as proof the branch never
+runs. It is a **per-frame flag**: `FUN_00208450` clears it at the top of every
+frame and raises it for any collision group with a live dirty byte -- so it is up
+only while a door is swinging or the sea is rolling, and a save state almost
+never lands on one of those frames.
+
+What the branch does is eject an actor from scenery it is standing inside.
+Sample the four footprint corners where the actor already is; set bit `n` when
+corner `n`'s ground is **above** `+0x28`; index `DAT_00318ad0`, sixteen `(x, z)`
+pairs of `0` and `±0.18`:
+
+```
++0x30 = +0x30 * 0.5 + table[mask].x
++0x34 = +0x34 * 0.5 + table[mask].z
+```
+
+It is a movement *request*, spent the same frame by the velocity section, so the
+ejection still obeys walls and step height. Mask `0xF` -- every corner buried, no
+"away" to push toward -- probes 0.5 back along the facing instead, rotating by
+`pi/2` up to four times. The lead additionally gets the same push every 64 frames
+(`DAT_003555b4 & 0x3F`) with no group needed.
+
+**It has exactly one frame to work.** A cutscene `0x55` leaves the actor's feet
+at the authored z with `+0x4C` up on the obstacle, and the vertical settle lifts
+him onto it that same frame. After that the corners are level with the feet, the
+mask reads 0, and he is standing on the crate for good.
+
+That is "Magnus stands on the crates". `0x55` puts him at `(5.546, 0.128)` with a
+`0.15` radius, burying corners 1 and 2 in crate primitive 1114 at `-0.5`. Mask 6,
+table entry `(-0.18, 0.00)`, and hardware ends at `5.366` -- which is where his
+corner clears the crate's edge by 1e-4 and the mask goes to zero. The same 1e-4
+is why the overlap test (above) must carry no tolerance: with slack the mask never
+clears and the push never stops.
+
+Found by putting a PCSX2 write breakpoint on entity `+0x20`
+(`0x0058beb0 + slot*0x1D8 + 0x20`) and reading the storing PC. Static reading had
+run out three times over; the breakpoint took one hit. Reach for it earlier.
+
+## Moving collision groups
+
+### A moving group's primitives need their plane rebuilt per query
+
+`FUN_00228090:11` checks the dynamic bit `0x10000` **before** the flat bit
+`0x200`, so a primitive owned by an animated group never answers with a
+constant. It goes through `FUN_002281a0`, which rebuilds the normal from the
+live vertices -- `(P1-P0) x (P2-P0)` over the same triple the static plane uses,
+triangle `(0,1,2)` anchored at 1, quad half 0 `(3,0,1)` anchored at 0, half 1
+`(1,2,3)` anchored at 2 -- and evaluates the plane normally. The stored plane is
+stale the moment the group moves.
+
+`heightOnPrimitive` used to return `bounds.max.z` for these, under a comment
+saying the port had no moving collision. That was accurate when written and
+stopped being accurate when `FUN_00208450` was ported; nothing rechecked it.
+Every door primitive was handing the ground scan its bounding-box lid as if it
+were floor.
+
+s01_e012, Volcan closing the door at (5.353, -2.019), r 0.15, feet -1.5:
+
+| corner | point | hardware | port (before) |
+|---|---|---|---|
+| 2 | (5.503, -1.869) | `128` (no ground) | `-1.5` |
+| 3 | (5.203, -1.869) | `-1.5` | `0` |
+
+mask 4 -> `(-0.18, -0.18)` -> 5.173 on hardware; mask 8 -> `(+0.18, -0.18)` ->
+5.533 in the port. Note that `128` is the no-ground sentinel and it *sets* the
+mask bit -- the test is `feet < corner`, so the push-out ejects an actor away
+from a hole as readily as out of geometry.
+
+s01_e024 is byte-identical across the fix; s01_e012 moves one line, the player's
+height on primitive 3248 (`leading=0x10804`, dynamic) going from the bounding
+box's -1.18997 to the plane's -1.194.
+
+### A ceiling-only collision group adopts the no-ground sentinel
+
+`FUN_00227840:176`'s merge is gated on the group's hit **count** alone
+(`+0x6E`), and that count is incremented for ceilings as well as floors. A group
+whose only overlapping primitive is a ceiling at or below the head therefore
+reaches the merge having recorded nothing, with its height still seeded to
+`0x43000000` = 128 -- and adopts it, overwriting whatever loop one found and
+resetting `+0x5C` to `0xFFFF`.
+
+That is not a curiosity. It is how a doorway reads as a **hole** while the door
+is swinging through it, and the embedded-corner push-out depends on it: the mask
+test is `feet < corner`, so a corner that finds no ground sets its bit and the
+actor is ejected out of the opening.
+
+The port had an extra `!groupHit.has_value()` guard on that merge, which skipped
+it whenever nothing had been recorded -- exactly the ceiling-only case. Removing
+it is the fix.
+
+Confirmed against `magnus_floor` and `volcan_bug`: the two door entities, slots
+18 and 19 at (5.50, +/-1.20), read `+0x0A = -1` and `+0x6C = +0x70 = 0` on
+hardware -- no primitive ever found. The port used to report a floor at -1.50
+there and now reports none. s01_e024 is byte-identical across the change.
+
+#### The door itself was never wrong
+
+Worth recording because two rounds were spent on it. The port's door leaf sits
+at the correct pivot with radii identical to hardware's to five decimals; the
+only difference was phase. `0x7D` writes an **absolute** angle, so there is no
+ramp to get wrong, and the logged sequence (`--push-probe` now prints every
+group rotation write) opens at 2 deg/frame to 90, jumps to 45, then closes at
+0.5 deg/frame. Hardware's push fires on the 45 deg frame; the port's fired eight
+frames later at 41 deg, because at 45 deg its mask was still 0 -- the missing
+ceiling merge, not the animation.
+
+### The push-out must not go through the "found" gate
+
+`FUN_00227070` returns the **max** of the four corners, so a single corner over
+a hole (128) makes the whole sample read as 128, and the runtime's
+`terrainSurface` lambda turns that into `nullopt`. The push-out's mask builder
+then saw no surface and produced mask 0 -- discarding four perfectly good corner
+heights because one of them was the sentinel.
+
+The original never asks that question. `FUN_002262c0:118-152` calls
+**`FUN_00227390`**, whose corner array at workspace `+0x34..+0x40` is always
+filled (128 for a miss), and tests each corner independently:
+`entity +0x28 < corner`. `-1.5 < 128` is true, so **a no-ground corner sets its
+bit** -- that is the entire point, and it is how an actor gets ejected from a
+doorway.
+
+Fixed by giving the push-out its own `FUN_00227390_corner_sample` callback: the
+same scan, without the `found` gate. `terrainSurface` keeps its old contract for
+every other consumer.
+
+This was the last of three separate faults stacked on one symptom in s01_e012's
+door close, all of which had to go before the next became visible:
+
+1. dynamic primitives answered with their bounding box instead of a rebuilt
+   plane (`FUN_002281a0`);
+2. a ceiling-only collision group never adopted the 128 sentinel, because of an
+   extra `!groupHit.has_value()` guard on `FUN_00227840`'s merge;
+3. the push-out read that sentinel through the `found` gate and lost it.
+
+## Slopes and steps: `+0x80` is a slope limit, and the wall test was invented
 
 Floor panel tile `0x80` arms stream `0xd5e0`, which walks a companion in on a
 spline and Orphen in with `0xF0` — **subproc 3670** at `0x93e4`:
@@ -63,12 +402,11 @@ reaches `(-0.50, 2.60)` — its authored target — at frame 13627, with the res
 the chain (`0x193`, `0x192`) following. `--frames 4000 --actor-report
 --scr-report` stays byte-identical on both scenes.
 
-**Still not ported**, and worth naming rather than inventing around: `FUN_00228cf0`
-(the dynamic-support pass `FUN_00227390` runs at `LAB_002276d8`, which can raise
-the answer and set `+0x0C` bit `0x100`), and the four entity-pool blocker helpers
-on the *player's* path — the actor loop has its clamp, the lead does not.
+The four entity-pool clamps are now on the lead's path as well as the actor
+loop's (`FUN_002262c0_clamp_step_against_entities`, run on every rung of the
+retry ladder). `FUN_00228cf0` is still not ported; see Known open below.
 
-### The jump: a landing state, and the moon jump
+## The jump: a landing state, and the moon jump
 
 `FUN_002534D8` is the whole airborne state, and the port had two things wrong
 in it.
@@ -126,339 +464,9 @@ Two details that are easy to get wrong:
 any of this headlessly; nothing in the jump, the landing or the moon jump was
 testable before.
 
-### Standing on things: the map ships the answer
+## Instruments: `--push-probe` and the push-out breakpoint
 
-An earlier pass here invented a "step-up bit" — `record78 +0x04` bit `0x100` —
-to decide which of two candidate surfaces an actor stands on. **It does not
-exist.** It was a rule fitted to two data points because the port had no way to
-break the tie. The engine does not break ties at all, and the reason is that the
-map file tells it the order outright. `analyzed/terrain_ground_query.c` is the
-full reading; the short version:
-
-**`FUN_00227840` is an ordered walk, not a search.** PSM2 header word 6 holds a
-64×64 grid of `int16` cell heads and a shared run list, and `FUN_0022b5a8`
-copies both out of the file computing nothing. The scan walks one cell's run in
-the authored order, keeps the first front-facing hit, and stops at the first hit
-at or below the head. That order *is* the tie-break. The port now loads the
-section (`loadCollisionGrid`) and walks it; every scoring heuristic it used
-before — nearest height, highest eligible, the step-up bit — is gone.
-
-Verified byte for byte rather than by eye: `out/mapbin/0001.psm2` reproduces the
-dump's grid 4096/4096 and its cell list 1022/1022. All 165 PSM2 maps carry the
-section, so the old unordered scan survives only as a fallback for a map that
-fails to parse.
-
-Three flags on `leadingWord` drive it, all read rather than guessed: `0x800`
-"participates in collision", `0x200` "flat, height is the constant at `+0x2C`"
-(which is the primitive's *maximum* corner z), and `0x100` "ceiling". A ceiling
-does **not** reject — on a hit it clears the have-recorded latch without writing
-a height, so a later front face below it replaces whatever was latched above.
-The reject mask is entity `+0x74`, per entity, not a constant.
-
-**And the lift is a landing snap, not a material gate.** `FUN_002262c0:41-85`'s
-resample block needs the cached primitive's `+0x13` to be non-zero, and that is
-`0` for every primitive in s01_e012 — it never fires there. What raises `+0x28`
-is `:502-520`: `pos <= +0x4C → pos = +0x4C`.
-
-The other half of that: **a stationary non-player actor never resamples the
-ground.** `FUN_00227390` is reached only from the velocity loop or from a branch
-gated on `DAT_003555d0 != 0`, and that global is `0` in the dump. Such an actor
-keeps the `+0x4C` its placement opcode gave it for the whole scene — `0x55`
-calls the query and gets a real height, `0x54` just mirrors the authored z. So
-Magnus's `0x55` writes `-1.200` (hidden flat quad #9 over the bed) while leaving
-him at the authored `-1.500`, and the snap lifts him. Slots 82 and 84 have
-`+0x0A = -1` and `+0x6C = 0` — never queried — and sampling them every frame is
-exactly what put them at the wrong height.
-
-**Checked against the dump, entity by entity: 80 of 82 positions match.** The
-two that do not are Volcan, whom the port moves when the original does not (his
-`+0x04` reads `0x21` against the dump's `0x23`), and one NPC mid-walk. Both
-predate this. `s01_e024` still runs all ten chest states with zero unimplemented
-opcodes, and s01_e012 stays deterministic over 20,000 frames with `0x515` at
-13122.
-
-**The collision groups, and four-corner sampling.** Two things this pass first
-listed as gaps and then closed, because a gap between the port and the
-decompilation is a bug, not a design choice.
-
-`FUN_00227840` has a **second loop** over the `0x74`-stride collision groups at
-`DAT_003556e0`. Those groups own a block of primitives at the top of the
-record78 array that the cell grid never indexes — in s01_e012 the grid stops
-near 2500 and the groups run 3131..3948 — so without the loop roughly 800
-primitives did not collide at all. It needs two more map sections: header word 1
-(descriptors, **file stride 24**, which is what makes `4 + count * 24` land
-exactly on the next section) and header word 7 (groups). The group's XY box is
-not in the file — `FUN_00208450` recomputes it per frame — but for a group that
-never moves it is exactly the union of its primitives' bounds, verified **20/20**
-against the dump. A group the port ever animates will need the live recompute.
-
-`FUN_00227070` samples **four corners**, at ±`entity+0x54`, and takes the
-maximum, unless `entity+0x04 & 2` selects a single point. Party members read
-`0xAF` (single); props, NPCs and the player (`0x312C`) are all four-corner, so
-the port's single point was wrong for nearly everything — that is why an actor
-would not stand on the edge of anything. The bookkeeping is not just a max:
-`+0x6C` takes the winning sample's flags and ORs in any that tie, `+0x70` takes
-the AND across all four, `+0x0A` only updates when the new sample found
-something, and `+0x84..+0x90` publish the four heights.
-
-Still missing, and named: `FUN_00228cf0` (riding another entity),
-`FUN_002281a0` (the dynamic `0x10000` plane resolve), and `FUN_00208450` itself.
-
-#### The frame's order: behaviours, then groups, then physics
-
-`FUN_002239c8:116-135` is explicit about this and the port had it wrong:
-
-```
-FUN_0025b778   script tick -- 0x55 placements, 0x7E collision-group moves
-FUN_00251ed8   lead player
-FUN_00239ce0   actor behaviours
-FUN_00208450   collision groups          -> sets DAT_003555d0
-FUN_002261e0   physics, FUN_002262c0     -> reads DAT_003555d0
-```
-
-Two separate walks of the pool, and `FUN_00208450` sits **between** them. The
-port fused physics into the behaviour loop (`FUN_00239ce0_update_actors` called
-`integrateNonPlayerMovement` at the bottom of each iteration) and ran the groups
-afterwards. That is wrong twice over: entity A's physics ran before entity B's
-behaviour, and `DAT_003555d0` was always a **frame stale**.
-
-The stale frame is what kept Magnus on the crates. A cutscene `0x55` that drops
-an actor inside scenery gets exactly one physics pass to push it out before the
-vertical settle stands it on top -- so the flag has to be readable on the same
-frame the script raised it, which is precisely why the original puts
-`FUN_00208450` immediately in front of `FUN_002261e0`. The port now has
-`FUN_002261e0_update_physics` as its own pass in that slot.
-
-Confirmed on hardware by forcing `DAT_003555d0` to 0 through the door-close
-animation: the game then leaves Magnus at `(5.546, 0.128, -0.500)` on primitive
-1114 -- the port's exact output, to the last decimal.
-
-**This moves both regression scenes, and two props get worse.** `s01_e024`'s type
-`0x62` enemies shift, because all behaviours now run before any physics. In
-`s01_e012`, slots 35 and 40 now settle onto a floor 0.04 and 0.25 above where
-hardware has them. That is not the reorder's fault -- their `+0x4C` was already
-wrong, and the reorder merely gives the landing snap a chance to act on it. The
-cause is the placement-grounding rule named below: `FUN_0025e7c0:115-120` grounds
-a placed record **only** when its `FUN_0025ba98` record carries `0x8000`, and the
-port grounds every one. Fixing that needs the `uGpffffadf4` archive, which the
-port does not load yet -- `FUN_0025ba98` fills the same 0x28-byte record as
-`FUN_0025bae8` but out of a different file. Against `eeMemory.bin` at frame 1091
-this is 2 position divergences in 84 slots, where before it was 0.
-
-**A diagnostic worth keeping.** Opcode `0x55` now prints when a placement lands
-inside geometry -- the query answered above the authored z -- along with
-`DAT_003555d0` as the script saw it:
-
-```
-[embed] frame 90 slot 81 placed at (5.546, 0.128, -1.5) but the floor there is -0.5 -- DAT_003555d0=0
-```
-
-That one line is what turned "the push never fires" into "the flag is one frame
-late", after three rounds of static reading had failed to.
-
-#### `DAT_003555d0` is not dead, it is transient
-
-Recorded here because it cost most of a session and the wrong conclusion was
-written down twice. `FUN_002262c0:112` has a branch that lets a **stationary**
-actor resample the floor, gated on `DAT_003555d0 != 0 && (entity +0x08 & 0x20)`.
-Three EE dumps all read `0` there, and that was taken as proof the branch never
-runs. It is a **per-frame flag**: `FUN_00208450` clears it at the top of every
-frame and raises it for any collision group with a live dirty byte -- so it is up
-only while a door is swinging or the sea is rolling, and a save state almost
-never lands on one of those frames.
-
-What the branch does is eject an actor from scenery it is standing inside.
-Sample the four footprint corners where the actor already is; set bit `n` when
-corner `n`'s ground is **above** `+0x28`; index `DAT_00318ad0`, sixteen `(x, z)`
-pairs of `0` and `±0.18`:
-
-```
-+0x30 = +0x30 * 0.5 + table[mask].x
-+0x34 = +0x34 * 0.5 + table[mask].z
-```
-
-It is a movement *request*, spent the same frame by the velocity section, so the
-ejection still obeys walls and step height. Mask `0xF` -- every corner buried, no
-"away" to push toward -- probes 0.5 back along the facing instead, rotating by
-`pi/2` up to four times. The lead additionally gets the same push every 64 frames
-(`DAT_003555b4 & 0x3F`) with no group needed.
-
-**It has exactly one frame to work.** A cutscene `0x55` leaves the actor's feet
-at the authored z with `+0x4C` up on the obstacle, and the vertical settle lifts
-him onto it that same frame. After that the corners are level with the feet, the
-mask reads 0, and he is standing on the crate for good.
-
-That is "Magnus stands on the crates". `0x55` puts him at `(5.546, 0.128)` with a
-`0.15` radius, burying corners 1 and 2 in crate primitive 1114 at `-0.5`. Mask 6,
-table entry `(-0.18, 0.00)`, and hardware ends at `5.366` -- which is where his
-corner clears the crate's edge by 1e-4 and the mask goes to zero. The same 1e-4
-is why the overlap test below must carry no tolerance: with slack the mask never
-clears and the push never stops.
-
-Found by putting a PCSX2 write breakpoint on entity `+0x20`
-(`0x0058beb0 + slot*0x1D8 + 0x20`) and reading the storing PC. Static reading had
-run out three times over; the breakpoint took one hit. Reach for it earlier.
-
-#### The overlap test has no tolerance, and inventing one moves people
-
-`FUN_00227d28` decides whether a query point is on a primitive, and the port had
-been answering that question with a winding-agnostic barycentric test carrying
-`-0.0005` of slack. Both halves of that were invented.
-
-The original is an ordered set of `FUN_00228058` edge functions with plain `<`
-and `>` against zero:
-
-- A **triangle** (corner 2 == corner 3) wants `(0,1)`, `(1,2)` and `(2,0)` all
-  `>= 0`.
-- A **quad** is split on the `1--3` diagonal, and `cross(v1, v3)` *selects* the
-  half rather than both being tried. On or left of it, test half 0 = `(3,0,1)`;
-  right of it, half 1 = `(1,2,3)`, which is also the only path that writes
-  `+0xD0 = 1`.
-- Every comparison **reverses** when `+0x22` is set, which `FUN_00227840` does
-  for `kCeilingBit` primitives. A primitive whose authored winding disagrees
-  with its ceiling bit therefore does not collide at all — that is the hardware
-  behaviour, not an omission to paper over.
-
-The slack is what put Magnus on the crates in the middle of `s01_e012`. He
-stands at `(5.366, 0.128)` with a `0.15` radius, and four-corner sampling asks
-at `(5.516, -0.022)` among others. Crate top 1114 is a quad whose `v1--v2` edge
-runs through `x = 5.5161` at that `y`: the corner is **outside it by 1e-4 of
-world space**, or `-0.00048` in barycentric units. That cleared `-0.0005` by a
-hair, so the corner "hit" the crate at `-0.500`, the four-corner max took it
-over the floor at `-1.500`, and `FUN_002262c0`'s landing snap stood him on top.
-
-With the edge functions the query returns `-1.500` on primitive `1734` —
-`eeMemory.bin`'s `+0x4C` and `+0x0A` for that slot, exactly. Twelve of the
-sixteen entities in the `magnus_floor` save state that carry a queried `+0x0A`
-now reproduce both fields; three of the other four are bandana rope nodes whose
-`+0x4C` is not a ground answer (their primitive index matches), and the fourth
-is the corridor chest sitting on group primitive `3292`, which carries the
-`0x10000` dynamic bit and needs `FUN_002281a0`.
-
-Both regression scenes are byte-identical over 3000 frames, so nothing in the
-opening of either was leaning on the tolerance.
-
-## A moving collision group's primitives need their plane rebuilt per query
-
-`FUN_00228090:11` checks the dynamic bit `0x10000` **before** the flat bit
-`0x200`, so a primitive owned by an animated group never answers with a
-constant. It goes through `FUN_002281a0`, which rebuilds the normal from the
-live vertices -- `(P1-P0) x (P2-P0)` over the same triple the static plane uses,
-triangle `(0,1,2)` anchored at 1, quad half 0 `(3,0,1)` anchored at 0, half 1
-`(1,2,3)` anchored at 2 -- and evaluates the plane normally. The stored plane is
-stale the moment the group moves.
-
-`heightOnPrimitive` used to return `bounds.max.z` for these, under a comment
-saying the port had no moving collision. That was accurate when written and
-stopped being accurate when `FUN_00208450` was ported; nothing rechecked it.
-Every door primitive was handing the ground scan its bounding-box lid as if it
-were floor.
-
-s01_e012, Volcan closing the door at (5.353, -2.019), r 0.15, feet -1.5:
-
-| corner | point | hardware | port (before) |
-|---|---|---|---|
-| 2 | (5.503, -1.869) | `128` (no ground) | `-1.5` |
-| 3 | (5.203, -1.869) | `-1.5` | `0` |
-
-mask 4 -> `(-0.18, -0.18)` -> 5.173 on hardware; mask 8 -> `(+0.18, -0.18)` ->
-5.533 in the port. Note that `128` is the no-ground sentinel and it *sets* the
-mask bit -- the test is `feet < corner`, so the push-out ejects an actor away
-from a hole as readily as out of geometry.
-
-s01_e024 is byte-identical across the fix; s01_e012 moves one line, the player's
-height on primitive 3248 (`leading=0x10804`, dynamic) going from the bounding
-box's -1.18997 to the plane's -1.194.
-
-### Two instruments worth reusing
-
-`--push-probe` logs every embedded-corner push: slot, position, feet, the four
-corner heights, the per-corner primitive, the mask and the table entry. Those
-are the same fields a PCSX2 **execute breakpoint at `0x002265E4`** shows, where
-`$v1` is the mask, `$s1` the entity (`0x0058BEB0 + slot*0x1D8`) and `$s0` the
-workspace.
-
-Better still: a PCSX2 save state taken at that breakpoint carries the live
-workspace in `Scratchpad.bin`. `DAT_70000000` (scratchpad +0) minus `0x170` is
-`FUN_002261e0`'s frame; `ws[0x4a]` names the entity, `ws+0x34..0x40` are the
-corner heights and `ws+0x162` is the mask. A save state at a breakpoint answers
-a register question without needing the registers.
-
-## Known open: placement records sit one ULP below the floor
-
-`DAT_003556e8`'s records author z as `0xBFC00001` where the floor plane is
-exactly `0xBFC00000` -- in the map file and in every dump. Hardware entities all
-read the exact `-1.5`; the port keeps the authored value, and `feet < corner`
-then reads all four corners as embedded (mask 15 on five s01_e012 NPCs at frame
-1). Not yet established as a bug: `FUN_002262c0:112`'s push test runs before the
-landing snap at `:502`, so hardware would see the same value if `DAT_003555d0`
-were raised that early. Needs a breakpoint hit at scene load to settle.
-
-## A ceiling-only collision group adopts the no-ground sentinel
-
-`FUN_00227840:176`'s merge is gated on the group's hit **count** alone
-(`+0x6E`), and that count is incremented for ceilings as well as floors. A group
-whose only overlapping primitive is a ceiling at or below the head therefore
-reaches the merge having recorded nothing, with its height still seeded to
-`0x43000000` = 128 -- and adopts it, overwriting whatever loop one found and
-resetting `+0x5C` to `0xFFFF`.
-
-That is not a curiosity. It is how a doorway reads as a **hole** while the door
-is swinging through it, and the embedded-corner push-out depends on it: the mask
-test is `feet < corner`, so a corner that finds no ground sets its bit and the
-actor is ejected out of the opening.
-
-The port had an extra `!groupHit.has_value()` guard on that merge, which skipped
-it whenever nothing had been recorded -- exactly the ceiling-only case. Removing
-it is the fix.
-
-Confirmed against `magnus_floor` and `volcan_bug`: the two door entities, slots
-18 and 19 at (5.50, +/-1.20), read `+0x0A = -1` and `+0x6C = +0x70 = 0` on
-hardware -- no primitive ever found. The port used to report a floor at -1.50
-there and now reports none. s01_e024 is byte-identical across the change.
-
-### The door itself was never wrong
-
-Worth recording because two rounds were spent on it. The port's door leaf sits
-at the correct pivot with radii identical to hardware's to five decimals; the
-only difference was phase. `0x7D` writes an **absolute** angle, so there is no
-ramp to get wrong, and the logged sequence (`--push-probe` now prints every
-group rotation write) opens at 2 deg/frame to 90, jumps to 45, then closes at
-0.5 deg/frame. Hardware's push fires on the 45 deg frame; the port's fired eight
-frames later at 41 deg, because at 45 deg its mask was still 0 -- the missing
-ceiling merge, not the animation.
-
-## The push-out must not go through the "found" gate
-
-`FUN_00227070` returns the **max** of the four corners, so a single corner over
-a hole (128) makes the whole sample read as 128, and the runtime's
-`terrainSurface` lambda turns that into `nullopt`. The push-out's mask builder
-then saw no surface and produced mask 0 -- discarding four perfectly good corner
-heights because one of them was the sentinel.
-
-The original never asks that question. `FUN_002262c0:118-152` calls
-**`FUN_00227390`**, whose corner array at workspace `+0x34..+0x40` is always
-filled (128 for a miss), and tests each corner independently:
-`entity +0x28 < corner`. `-1.5 < 128` is true, so **a no-ground corner sets its
-bit** -- that is the entire point, and it is how an actor gets ejected from a
-doorway.
-
-Fixed by giving the push-out its own `FUN_00227390_corner_sample` callback: the
-same scan, without the `found` gate. `terrainSurface` keeps its old contract for
-every other consumer.
-
-This was the last of three separate faults stacked on one symptom in s01_e012's
-door close, all of which had to go before the next became visible:
-
-1. dynamic primitives answered with their bounding box instead of a rebuilt
-   plane (`FUN_002281a0`);
-2. a ceiling-only collision group never adopted the 128 sentinel, because of an
-   extra `!groupHit.has_value()` guard on `FUN_00227840`'s merge;
-3. the push-out read that sentinel through the `found` gate and lost it.
-
-### `--push-probe`
-
-Kept, because all three faults above were invisible without it. It turns on:
+Kept, because all three faults in "The push-out must not go through the found gate" were invisible without it. It turns on:
 
 - `[push]` -- **every** gated push-out evaluation, including `mask 0`. Logging
   the zero case is what found the third fault: the interesting frame was the one
@@ -478,3 +486,28 @@ decimals at 45 degrees, so the animation was never the problem.
 Both regression scenes stay byte-identical with the probe compiled in -- it is
 inert unless the flag is passed.
 
+Better still: a PCSX2 save state taken at that breakpoint carries the live
+workspace in `Scratchpad.bin`. `DAT_70000000` (scratchpad +0) minus `0x170` is
+`FUN_002261e0`'s frame; `ws[0x4a]` names the entity, `ws+0x34..0x40` are the
+corner heights and `ws+0x162` is the mask. A save state at a breakpoint answers
+a register question without needing the registers.
+
+## Known open
+
+- **`FUN_00228cf0`**, the dynamic-support pass `FUN_00227390` runs at
+  `LAB_002276d8`. It can raise the ground answer and sets `+0x0C` bit `0x100`
+  when it does; it is how an actor rides another entity. Not modelled
+  (`src/runtime/psm2_ground_query.h`).
+- **The liquid splash.** `FUN_002262C0` raises `+0x0C` bit `0x400` when an actor
+  comes down on a liquid; that branch is unported, so the jump's splash arm
+  (above) never fires.
+
+### Placement records sit one ULP below the floor
+
+`DAT_003556e8`'s records author z as `0xBFC00001` where the floor plane is
+exactly `0xBFC00000` -- in the map file and in every dump. Hardware entities all
+read the exact `-1.5`; the port keeps the authored value, and `feet < corner`
+then reads all four corners as embedded (mask 15 on five s01_e012 NPCs at frame
+1). Not yet established as a bug: `FUN_002262c0:112`'s push test runs before the
+landing snap at `:502`, so hardware would see the same value if `DAT_003555d0`
+were raised that early. Needs a breakpoint hit at scene load to settle.

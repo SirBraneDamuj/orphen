@@ -8,7 +8,7 @@ spells. Event flags **850..860** (BFLG 50..60) pick which; the ladder is in the
 raised on frame 1 is already too late.
 
 ```
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s14_e031 \
+port\build\msvc-Release\orphen_port.exe --disc-root disc --scene s14_e031 \
   --no-audio --frames 4000 --set-event-flag 856:0 --battle-report --actor-report
 ```
 

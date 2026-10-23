@@ -110,7 +110,7 @@ dialogue lines: 42  (38 timed by their voice clip, 0 estimated, 4 empty)
 Checkable at any frame:
 
 ```
-orphen_port --disc-root . --scene s01_e012 --screenshot shot.png:700
+orphen_port --disc-root disc --scene s01_e012 --screenshot shot.png:700
 ```
 
 ### A record does not close the window, and that is where the speaker lives
@@ -165,7 +165,7 @@ Checkable without a window, and `--press-confirm` now works under
 `--screenshot` too:
 
 ```
-orphen_port --disc-root . --scene s01_e024 --frames 620 \
+orphen_port --disc-root disc --scene s01_e024 --frames 620 \
     --spawn -4.5,-10.5,0 --press-confirm 60,440 --actor-report
 ```
 

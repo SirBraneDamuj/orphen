@@ -91,7 +91,7 @@ the same frame still hash identically with it open. `--no-audio` turns it off.
 Headless runs never open a device. To hear one anyway:
 
 ```
-orphen_port --disc-root . --scene s01_e024 --frames 620     --spawn -4.5,-10.5,0 --press-confirm 60,440     --sound-dump out/sfx/chest_cutscene.wav --sound-report
+orphen_port --disc-root disc --scene s01_e024 --frames 620     --spawn -4.5,-10.5,0 --press-confirm 60,440     --sound-dump out/sfx/chest_cutscene.wav --sound-report
 ```
 
 `--hold-stick <angle>,<magnitude>` drives the analog stick for every headless
@@ -101,7 +101,7 @@ magnitude is the original's 0..128 and above 100 is a run. A third field,
 released outside them), which is how a menu gets a stick nudge after it opens:
 
 ```
-orphen_port --disc-root . --scene s01_e024 --frames 400 --spawn -4.5,-10.5,0 --hold-stick 1.0,60 --sound-dump out/sfx/walk_and_buzz.wav --sound-report
+orphen_port --disc-root disc --scene s01_e024 --frames 400 --spawn -4.5,-10.5,0 --hold-stick 1.0,60 --sound-dump out/sfx/walk_and_buzz.wav --sound-report
 ```
 
 `--sound-report` prints every cue with what it resolved to, which is how the
@@ -370,7 +370,7 @@ this, not a sequencer fault. The loop machinery was working the whole time (the
 wind takes 27 loops in a 13,000-frame run). Confirm with:
 
 ```
-orphen_port --disc-root . --scene s01_e012 --frames 600 --music-solo \
+orphen_port --disc-root disc --scene s01_e012 --frames 600 --music-solo \
     --sound-dump out/audio/wind.wav
 ```
 
@@ -459,8 +459,8 @@ thunder uses.
 ### Checking it
 
 ```
-orphen_port --disc-root . --scene s01_e012 --frames 20000 --sound-report
-orphen_port --disc-root . --scene s01_e012 --frames 600 --sound-dump out/audio/wind.wav
+orphen_port --disc-root disc --scene s01_e012 --frames 20000 --sound-report
+orphen_port --disc-root disc --scene s01_e012 --frames 600 --sound-dump out/audio/wind.wav
 ```
 
 The report's music section names every slot, what it resolved to, and every

@@ -246,7 +246,7 @@ bone modes live in `EntityBoneOverrides`, angles in `OriginalEntity`.
 ### Checking it
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
     --no-audio --spawn -2.5,-8,0 --press-magic 60 --screenshot shot.png:112
 ```
 
@@ -427,7 +427,7 @@ and the room, the other six chests and the scene's own lighting all back after
 `0x15`. Reproduce it with
 
 ```
-orphen_port --disc-root . --scene s01_e024 --spawn -4.5,-10.5,0 \
+orphen_port --disc-root disc --scene s01_e024 --spawn -4.5,-10.5,0 \
             --press-confirm 60,500 --screenshot out/c.ppm:680
 ```
 

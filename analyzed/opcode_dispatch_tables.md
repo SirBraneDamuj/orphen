@@ -185,9 +185,9 @@ Naming note: Until we confirm behavior, our "best-guess" name defaults to the cu
 0xD9 set_prop_break_table  # orig FUN_00264e30 — makes a streamed prop breakable; +0x1A8 is a breakage table read by FUN_002cfe08, not a callback. See [analyzed/ops/0xD9_register_entity_callback.c](../analyzed/ops/0xD9_register_entity_callback.c)
 0xDA set_global_byte_b6f0  # orig FUN_00264ea0 — see [analyzed/ops/0xDA_set_global_byte_b6f0.c](../analyzed/ops/0xDA_set_global_byte_b6f0.c)
 0xDB invoke_save_or_resource_op  # orig FUN_00264ec8 — see [analyzed/ops/0xDB_invoke_save_or_resource_op.c](../analyzed/ops/0xDB_invoke_save_or_resource_op.c)
-0xDC audio_dispatch_with_id  # orig FUN_00264ee8 — see [analyzed/ops/0xDC_audio_dispatch_with_id.c](../analyzed/ops/0xDC_audio_dispatch_with_id.c)
-0xDD audio_dispatch_with_two_params  # orig FUN_00264f18 — see [analyzed/ops/0xDD_audio_dispatch_with_two_params.c](../analyzed/ops/0xDD_audio_dispatch_with_two_params.c)
-0xDE set_audio_channel_parameter  # orig FUN_00264f50 — eval 2 exprs (value,channel), normalize value by fGpffff8d5c, call FUN_0023bbd8 to set audio channel state; see analyzed/ops/0xDE_set_audio_channel_parameter.c
+0xDC no_op_stub_one_param  # orig FUN_00264ee8 — evaluates 1 expr and calls FUN_0023baf8, which is an empty stub in retail (`jr $ra`); the opcode does nothing. Formerly named audio_dispatch_with_id; see analyzed/ops/0xDC_audio_dispatch_with_id.c
+0xDD no_op_stub_two_params  # orig FUN_00264f18 — evaluates 2 exprs and calls the empty stub FUN_0023baf8; does nothing in retail. Formerly named audio_dispatch_with_two_params; see analyzed/ops/0xDD_audio_dispatch_with_two_params.c
+0xDE start_pad_vibration  # orig FUN_00264f50 — eval 2 exprs (strength, pattern offset) into FUN_0023bbd8, which parks a vibration pattern in one of four channels at DAT_00571b50; FUN_0023bd00 feeds them to the pad actuator block DAT_00571a40 that FUN_0023af50 (the pad driver) sends. Not audio. Formerly named set_audio_channel_parameter; see port/docs/scene-script.md
 0xDF initialize_battle_logo  # orig FUN_00264fa0 — calls FUN_0025d5b8 to init battle logo entity at 0x58C7E8 (type 0x49); see analyzed/ops/0xDF_initialize_camera_entity.c
 0xE0 destroy_battle_logo  # orig FUN_00264fc0 — see [analyzed/ops/0xE0_destroy_battle_logo.c](../analyzed/ops/0xE0_destroy_battle_logo.c)
 0xE1 boot_party_for_battle  # orig FUN_00265000 — see [analyzed/ops/0xE1_boot_party_for_battle.c](../analyzed/ops/0xE1_boot_party_for_battle.c)

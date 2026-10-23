@@ -127,7 +127,7 @@ frames, the same shape as `--press-confirm`, so the swing is reachable from a
 headless or captured run:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
     --no-audio --frames 300 --press-attack 60,120,180,240 --actor-report --scr-report
 ```
 
@@ -142,7 +142,7 @@ arms the moon jump without starting a swing on every frame. Together they are
 the only way into `FUN_002534D8` from a headless run:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
     --no-audio --frames 60 --press-jump 15 --actor-report
 ```
 
@@ -270,7 +270,7 @@ from the nearest enemy, so the plain cast flies straight -- which is correct, an
 also not a test of anything. Move first:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 \
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 \
     --no-audio --frames 900 --spawn -2.5,-8,0 --press-magic 60,200,340,480 \
     --actor-report --scr-report
 ```
@@ -400,7 +400,7 @@ actually stand on, so they cannot be walked up to in the harness. `--place-slot
 scaffolding rather than anything the original does:
 
 ```bat
-orphen_port.exe --disc-root . --scene s01_e024 --frames 400 ^
+orphen_port.exe --disc-root disc --scene s01_e024 --frames 400 ^
   --spawn -2.5,-8,0 --place-slot 23,-2.15,-8.0,0.3 --press-attack 60 --actor-report
 ```
 

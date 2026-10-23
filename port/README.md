@@ -1,8 +1,17 @@
 # Orphen Native Port Harness
 
-This directory is the start of a native PC runtime for `Orphen: Scion of Sorcery`. The goal is not to run the original PS2 executable directly. The early goal is a host process that can load original game data, reproduce verified game systems one at a time, and compare behavior against PCSX2 traces.
+A native PC runtime for `Orphen: Scion of Sorcery`. It does not emulate the PS2
+executable: it loads the original disc data and runs hand-ported counterparts of
+the original functions, each checked against the disassembly, a PCSX2 save state
+or a GS dump. SDL2 is the platform layer and the renderer is fixed-function
+OpenGL.
 
-The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility context for simple diagnostic rendering.
+Run with no `--scene` and it boots the title screen (`s12_e010`); START starts a
+new game in `s01_e012`. From there the field, scene scripts and cutscenes, the
+party, doors and scene transitions, battles (including the crab and mast bosses),
+the field menu, equip and area map, music, sound effects, voice and FMV all run
+through ported code. What is and is not ported is recorded per subsystem in
+`docs/`.
 
 ## Layout
 
@@ -13,12 +22,11 @@ The first scaffold uses SDL2 for the platform layer and an OpenGL compatibility 
 - `src/runtime/ps2_memory.h` - a small fake EE RAM helper for systems that still depend on PS2-style absolute addresses.
 - `attic/` - written but deliberately disconnected from the build. Nothing in `src/` includes it and `CMakeLists.txt` does not reference it. See `attic/README.md`.
 - `docs/` - findings and write-ups, one file per subsystem. Index below.
+- `scenarios/` - timed battle tests for `--scenario`; see [s14_e004](docs/scenes/s14_e004-gear-room.md).
 
 ## Docs
 
-Split out of this README in pass 1 of a reorganisation: the text was moved
-verbatim, so cross-references like "see Camera below" may still point at
-sections that now live in another file. Pass 2 audits each file against the code.
+New findings go in the file for their subsystem, not in this README.
 
 - [Running the port](docs/running.md) - command-line flags, the fly camera, fast forward
 - [Debugging tools](docs/debugging-tools.md) - `G` snapshots, entity-pool diffs against EE dumps, POSITION_DISP, the debug HUD
@@ -41,27 +49,13 @@ sections that now live in another file. Pass 2 audits each file against the code
 - Battle: [overview](docs/battle/overview.md), [sword and guard](docs/battle/sword-and-guard.md), [spells](docs/battle/spells.md), [targeting](docs/battle/targeting.md), [enemies](docs/battle/enemies.md)
 - Scenes: [s01_e012 chest and flood](docs/scenes/s01_e012-chest-and-flood.md), [s03_e001](docs/scenes/s03_e001.md), [chapter 5 lifts and blocks](docs/scenes/s05-lifts-and-blocks.md), [s14_e001 crab](docs/scenes/s14_e001-crab.md), [s14_e002 mast boss](docs/scenes/s14_e002-mast-boss.md), [s14_e003](docs/scenes/s14_e003.md), [s14_e004 gear room](docs/scenes/s14_e004-gear-room.md), [s14_e031 spell reward](docs/scenes/s14_e031-spell-reward.md)
 
-## Current Milestone
-
-The current executable opens a resizable SDL window, creates an OpenGL context, and can load one map either from an already-decoded PSM2 file or directly from `MCB0.BIN`/`MCB1.BIN` in an extracted disc directory. PSM2 files still flow through the ported `loadDecodedPsm2` (`src/FUN_0022b5a8.c`) / `buildPsm2DerivedGeometry` (`src/FUN_0022c6e8.c`) path. Disc-loaded scenes flow through `SceneResourceProvider`, which owns the selected MCB scene bundle, indexes resource records by category/id, and lets the map loader decode the first PSM2 plus adjacent BMPA texture pages.
-
-Runtime update owns an original-shaped lead player entity that runs a ported slice of the native field movement/jump/collision path (`FUN_00225bf0`, `FUN_00252d88`, `FUN_00256bb8`, `FUN_002534d8`, `FUN_00253468`, `FUN_00253488`, `FUN_00256ab0`, `FUN_00227390`, `FUN_002262c0`). Collision samples the PSM2 `0x78` terrain records using the original `0x800` sample bit, terrain reject masks, required footprint flag overlap, four-corner radius sampling, step-height acceptance, and simple axis fallback for sliding.
-
-The sample is posed with the actor's body, which `FUN_00227390` stages at its workspace `+0x2C`/`+0x30` (entity `+0x28`, and that plus `+0x58`). Two things fall out of that and neither used to be modelled:
-
-- **Terrain above the head is not ground.** `FUN_00227840` will not settle on a surface above `+0x30`. Without the limit, a footprint corner over a hole in the floor picks the *storey overhead* as its ground and the move is refused as an impossible step. `s01_e024` has a 0.05-wide seam at `y = -4.475` where the room floor stops and the corridor floor starts, and walking north at `x = -1.13` stopped dead there while a jump crossed it, because a jump is ungrounded and skips the step test.
-- **`0x100` marks the ceilings.** `FUN_00227840` sets the workspace's `+0x22` winding selector for those records and `FUN_00227d28` then reverses every edge test, so they are the downward-facing surfaces -- in `s01_e024`, 427 of the 435 point straight down and no up-facing primitive carries the bit. The original never records one as ground; it only lets a ceiling at or below the head stop the scan, which returns "no ground". The port had been treating all of them as walkable floor.
-
-Together those give the head bump: `FUN_002262c0` at `0x00226cb4` treats an upward step as provisional, writing the raised height into entity `+0x28` in the delay slot of a `FUN_00227390` call so the query is posed from where the actor is trying to get to. A ceiling now inside the body means no ground, the rise is given back whole from workspace `+0x0C`, and `+0x44` is zeroed. It is the only place upward motion is cancelled. Player movement is now camera-relative using the `FUN_00256ab0` camera/input angle relationship, with grounded movement using the original normal run scalar (`fGpffff8a4c = 0.045` per nominal frame) and jump startup applying the original vertical seed (`DAT_00355000 = 0.053`) from airborne substate `0x0C`; the lead entity gravity field uses the debug `JUMP TEST` `G_FORCE 00075` value (`0.00075` at the menu's x100000 scale). The camera is now a port of the original driver rather than a harness approximation -- see Camera below.
-
-Scenes now bootstrap from their SCR script -- see Scene Script below. The previous PSC3 wireframe gallery is still gone; PSC3 records are visible in the resource tree but are not rendered, so script-spawned objects draw as labelled boxes rather than models.
-
 ## Timing Model
 
 The simulation runs on a fixed 60 Hz step, decoupled from the render rate. `main`
 accumulates wall-clock time and calls `PortRuntime::update` once per whole step,
 capping at 5 steps to skip rather than spiral after a stall. Edge-triggered input
-(jump, map cycle, wireframe) fires on exactly one step per render frame.
+(the newly-pressed pad word, `DAT_003555F6`) fires on exactly one step per render
+frame, as the original's once-per-tick `held & ~previous` does.
 
 This matters because every ported constant is per-frame, not per-second, and
 because state counters such as the entity `+0xA8` substate frame advance once per
@@ -131,23 +125,24 @@ the wrong one to judge the frame rate by. MSVC's debug runtime turns every
 `std::vector` index into a checked call and inlines nothing, and this renderer
 is a tight loop over `std::vector` doing per-vertex maths on the CPU.
 
-Measured on `s01_e024`, one simulation step and one render per frame:
+Measured on `s01_e024` on 2026-10-23 with `--frame-stats --render-bench 8`
+(per simulation step and per render):
 
 | | Debug | Release |
 |---|---|---|
-| simulation | 11.88 ms | 0.76 ms |
-| render | 28.60 ms | 4.16 ms |
-| **frame** | **40.5 ms (24 fps)** | **4.9 ms (203 fps)** |
+| simulation step | 7.4 ms | 0.29 ms |
+| render | 29.4 ms | 6.4 ms |
+| **one of each** | **36.8 ms (27 fps)** | **6.7 ms (149 fps)** |
 
 Debug is worse in practice than even that suggests. The fixed-timestep
 accumulator in `main()` runs up to `kMaxStepsPerFrame` simulation steps per
 rendered frame, so once a frame costs more than 16.6 ms it starts running
-several steps to catch up, which makes the frame cost more again. It settles
-against the cap at about 4.4 steps per frame and roughly 12 fps.
+several steps to catch up, which makes the frame cost more again. Without
+`--render-bench` it settles at about 3.1 steps per frame and roughly 19 fps.
 
 ```bat
 port\build-msvc.bat Release
-port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024
+port\build\msvc-Release\orphen_port.exe --disc-root disc --scene s01_e024
 ```
 
 ## Performance
@@ -155,11 +150,16 @@ port\build\msvc-Release\orphen_port.exe --disc-root . --scene s01_e024
 `--frame-stats` prints where a frame's time goes, once a second:
 
 ```
-[frame-stats] 64 renders / 8 frames | work 4.91 ms/frame (203.51 fps ceiling) | sim 0.76 render 4.16 swap-wait 0.17
-[frame-stats]   map      0.19 ms  407 prim  778 tri  101.62 batches  101.62 binds
-[frame-stats]   entities 2.92 ms  20 models  7023 prim  12871 tri  242 batches  3838.75 gleam-tri
-[frame-stats]   drain    0.98 ms  (driver/GPU catching up on queued immediate-mode calls)
+[frame-stats] 64 renders / 8 frames | work 7.33 ms/frame (136.48 fps ceiling) | sim 0.89 render 6.43 swap-wait 0.05
+[frame-stats]   map      0.27 ms  407.00 prim  778.00 tri  101.75 batches  101.75 binds
+[frame-stats]   entities 4.31 ms  21.00 models  7041.00 prim  13003.00 tri  299.00 batches  3851.25 gleam-tri
+[frame-stats]   drain    1.82 ms  (driver/GPU catching up on queued immediate-mode calls)
+[frame-stats]   prologue 0.00 ms  (of which matrix readback 0.00)  clear 0.00
+[frame-stats]   sort 0.00  overlay 0.00  hud 0.00  | lighting 50223.00/render  transforms 41015.00/render  sim-steps 3.38/frame
 ```
+
+`sim` is per displayed frame, so it includes every catch-up step; `sim-steps`
+says how many there were. The render phases are per render.
 
 Two things about measuring this are easy to get wrong, and both cost real time
 to rediscover:
@@ -208,25 +208,13 @@ Three things this bought, in the order they were worth finding:
   Roughly 43% of its triangles face away from the half-vector and add nothing,
   and they were being submitted at full vertex cost.
 
-## Suggested Next Slices
+## Open structural work
 
-1. Promote the provider-backed loaded scene into a runtime-owned `SceneState` rather than letting `MapViewer` own the active scene. Still outstanding.
-2. Replace keyboard-derived movement vectors with the original controller globals and analog smoothing path from `FUN_0023b5d8`/`FUN_00256ab0`.
-3. Port the directional entity/body blocker helpers (`FUN_00228380`, `FUN_002285d8`, `FUN_00228838`, `FUN_00228a90`) and dynamic entity support helper `FUN_00228cf0`.
-4. Rebuild camera behavior from the original camera state/update functions before adding a new follow camera.
-5. Keep widening SCR opcode coverage the same way: run a scene, read where it
-   halted, port that opcode from `src/`. `0xB7`, `0xBD`, `0xAC`, `0xE2`, `0xE5`
-   and `0x149` are the next ones the story maps hit.
-6. Render PSC3 models in place of the placeholder boxes, and resolve the
-   map-streamed descriptors (ids from `0x272`) so those objects get real sizes.
-7. Port `FUN_0025ab68` + `PTR_LAB_0031e1d0` (party members, 12 states) or
-   `FUN_002cd0a0` + `PTR_FUN_00326660` (the type `0x62` enemy, 20 states). These
-   are what `--actor-report` names on `s01_e024`, and they are what would make
-   anything in the scene move.
-8. Port the shared non-player physics step so slots 1..255 get gravity, ground
-   snapping and collision. Nothing a behavior does to an entity's movement
-   request is integrated today.
-9. Drive header word 3 from a player interaction probe (`FUN_00252828`), which is
-   what actually opens a chest and is the only thing that moves a type `0x3A`
-   past animation 4.
+Gaps that belong to no one subsystem. Per-subsystem gaps are in the docs.
 
+- The loaded scene is still owned by the harness: `MapViewer` holds the
+  `SceneResourceProvider` (`src/harness/map_viewer.h`), not a runtime-owned
+  scene state.
+- `FUN_00228cf0`, the pass after the ground sample that can raise the result and
+  set entity `+0x0C` bit `0x100`, is not modelled
+  (`src/runtime/psm2_ground_query.h`).

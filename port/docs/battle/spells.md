@@ -374,7 +374,7 @@ closes the gap between them, so a run where they stay apart while a target is
 held is that block failing.
 
 ```
-orphen_port.exe --disc-root . --scene s14_e012 --frames 700 --no-audio \
+orphen_port.exe --disc-root disc --scene s14_e012 --frames 700 --no-audio \
     --hold-circle 300-460 --battle-report
 ```
 

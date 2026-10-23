@@ -11,7 +11,7 @@ port/build/msvc-Release/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.
 Or load from extracted disc files in a directory containing `MCB0.BIN` and `MCB1.BIN`:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e012
 ```
 
 **A scene does carry its own spawn point**, and it is in the SCR. `FUN_0025b600`,
@@ -49,23 +49,23 @@ To validate the loader without opening a window:
 
 ```sh
 port/build/msvc-Release/orphen_port.exe --psm2 out/target_all/s01_e012/map_0002.psm2 --load-only
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012 --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e012 --load-only
 ```
 
 To inspect the resources loaded by a disc scene:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e012 --scene-tree --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e012 --scene-tree --load-only
 ```
 
 The scene tree currently groups MCB bundle records by category and prints record ids, bundle offsets, packed/decoded sizes, and known decoded signatures such as PSM2, BMPA, SCR, and PSC3. `s01_e024` is a useful early exploratory scene because it is much smaller than `s01_e012` and appears to be a debug scene:
 
 ```sh
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --frames 60
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only --scr-report
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --load-only --actor-report
-port/build/msvc-Release/orphen_port.exe --disc-root . --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load-only
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --frames 60
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load-only --scr-report
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --load-only --actor-report
+port/build/msvc-Release/orphen_port.exe --disc-root disc --scene s01_e024 --frames 120 --scr-tick --scr-report --actor-report
 ```
 
 `--scr-tick` runs the per-frame script entry and the object-script slots.
