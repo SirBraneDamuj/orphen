@@ -2720,21 +2720,8 @@ namespace orphen::harness
     drawDistance_ = drawDistance;
   }
 
-  void MapViewer::setGleamDirection(float yawRadians, float pitchRadians)
+  void MapViewer::setGleamDirection(const orphen::ported::psm2::Vec3 &forward)
   {
-    // FUN_00216aa0:436-449 builds DAT_0058bea0 as normalise(lookAtTarget - eye)
-    // and derives fGpffffb6d4 / fGpffffb6d8 from that same vector, so the
-    // angles reconstruct it -- checked against s01_e24.bin, which holds
-    // yaw 0, pitch -0.165120 and DAT_0058bea0 (0.986399, 0, -0.164370), and
-    // cos/sin of those angles reproduce it to six decimals. The pitch the EE
-    // feeds the camera matrix is eased toward the target angle while
-    // DAT_0058bea0 takes it raw, so the two differ slightly while the camera is
-    // still moving; for a specular highlight that is not worth modelling.
-    const float cosPitch = std::cos(pitchRadians);
-    const orphen::ported::psm2::Vec3 forward{std::cos(yawRadians) * cosPitch,
-                                             std::sin(yawRadians) * cosPitch,
-                                             std::sin(pitchRadians)};
-
     // lightDirection[0] already holds -DAT_003439c8, so the microprogram's
     // -(forward + DAT_003439c8) is lightDirection[0] - forward.
     const auto &lightDirection = sceneLighting_.lightDirection[0];

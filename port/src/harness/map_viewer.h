@@ -166,7 +166,8 @@ namespace orphen::harness
     const orphen::ported::render::SceneLighting &sceneLighting() const { return sceneLighting_; }
     // Rebuilds the specular half-vector, which moves with the camera and so has
     // to be refreshed every frame rather than only when the scene changes.
-    void setGleamDirection(float yawRadians, float pitchRadians);
+    // `forward` is DAT_0058bea0, the unit view direction.
+    void setGleamDirection(const orphen::ported::psm2::Vec3 &forward);
     // Non-null makes render() measure the specular pass into the sink, clearing
     // it each frame, whether or not the pass is drawing.
     void setGleamProbeSink(std::vector<GleamProbe> *sink) { gleamProbeSink_ = sink; }

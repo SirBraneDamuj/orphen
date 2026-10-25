@@ -9502,21 +9502,14 @@ namespace orphen::port
   {
     // FUN_00212F38, the first call in FUN_002192C0 and so the first of the
     // effect systems. The camera forward it wants is DAT_0058BEA0, which
-    // FUN_00216AA0:436-449 builds as normalise(lookAt - eye) -- rebuilt here
-    // rather than cached, since the port keeps the pair and not the vector.
+    // FUN_00216AA0:436-447 builds as normalise(lookAt - (eye + 0.4 up)) and
+    // publishOrientation keeps as the pose's forward. This used to rebuild it
+    // from lookAt - eye, without the 0.4, which tilts it up; the battle logo,
+    // six units out along the same vector, came out 0.48 too high against
+    // PCSX2 until it was switched over.
     {
       const auto &eye = fieldCamera_.DAT_0058c0a8_eye();
-      const auto &lookAt = fieldCamera_.DAT_0058be90_lookAt();
-      orphen::ported::psm2::Vec3 forward{lookAt.x - eye.x, lookAt.y - eye.y, lookAt.z - eye.z};
-      const float lengthSquared =
-          forward.x * forward.x + forward.y * forward.y + forward.z * forward.z;
-      if (lengthSquared > 0.0f)
-      {
-        const float scale = 1.0f / std::sqrt(lengthSquared);
-        forward.x *= scale;
-        forward.y *= scale;
-        forward.z *= scale;
-      }
+      const auto &forward = fieldCamera_.pose().forward;
       const auto &lead = entityPool_.leadPlayer();
       DAT_0054f080_smoke_.FUN_00212f38_step(
           eye, forward, {lead.positionX20, lead.positionZ24, lead.positionY28},
@@ -10681,7 +10674,12 @@ namespace orphen::port
       }
 
       mapViewer_.setRenderCamera(renderCamera_);
-      mapViewer_.setGleamDirection(renderCameraYaw_, areaMap_.DAT_00355a54_pitch());
+      // The area map's own orbit angles; this mode has not been checked for
+      // what DAT_0058bea0 holds, so the direction is rebuilt from them.
+      const float areaPitch = areaMap_.DAT_00355a54_pitch();
+      mapViewer_.setGleamDirection(orphen::ported::psm2::Vec3{
+          std::cos(renderCameraYaw_) * std::cos(areaPitch), std::sin(renderCameraYaw_) * std::cos(areaPitch),
+          std::sin(areaPitch)});
       mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
           map, renderCamera_, mapVisibility, &visibilityReport_));
       return;
@@ -10727,7 +10725,10 @@ namespace orphen::port
     mapViewer_.setRenderCamera(renderCamera_);
     // VU1 mem[0x18]: the specular half-vector. It depends on where the camera
     // is looking, so FUN_00200e38 rebuilds it every frame and so does this.
-    mapViewer_.setGleamDirection(cameraView.yawRadians, cameraView.pitchRadians);
+    // DAT_0058bea0 itself, not a rebuild from yaw and pitch: the pitch is
+    // eased toward the view while DAT_0058bea0 is not, so the two part
+    // whenever the camera moves.
+    mapViewer_.setGleamDirection(fieldCamera_.pose().forward);
     mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
         map, renderCamera_, visibilityInput, &visibilityReport_));
   }
