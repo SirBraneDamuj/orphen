@@ -10674,12 +10674,14 @@ namespace orphen::port
       }
 
       mapViewer_.setRenderCamera(renderCamera_);
-      // The area map's own orbit angles; this mode has not been checked for
-      // what DAT_0058bea0 holds, so the direction is rebuilt from them.
-      const float areaPitch = areaMap_.DAT_00355a54_pitch();
-      mapViewer_.setGleamDirection(orphen::ported::psm2::Vec3{
-          std::cos(renderCameraYaw_) * std::cos(areaPitch), std::sin(renderCameraYaw_) * std::cos(areaPitch),
-          std::sin(areaPitch)});
+      // Not the orbit's angles. FUN_00200E38 reads DAT_0058bea0 every frame
+      // in every mode, and nothing mode 12 runs writes it: its only writers
+      // are FUN_00216AA0, FUN_00217A70, FUN_00218270, FUN_002184E8 and
+      // FUN_00218710, none reachable from FUN_00224418, and FUN_00213EF0
+      // neither saves nor sets it. So the highlight keeps the field camera's
+      // view from the frame the map opened -- which is what the pose holds,
+      // since the field camera is not stepped on a UI frame.
+      mapViewer_.setGleamDirection(fieldCamera_.pose().forward);
       mapViewer_.setMapDrawList(orphen::ported::render::FUN_00209140_buildDrawList(
           map, renderCamera_, mapVisibility, &visibilityReport_));
       return;
