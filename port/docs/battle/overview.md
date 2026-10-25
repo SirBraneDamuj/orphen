@@ -375,9 +375,28 @@ The US scripts never reach `0xDF`. Diffing `scr_jp/` against the US disc with
 `tools/scrdis` (2026-10-25): JP calls it 120 times in 52 battle scenes, the US
 scripts keep 13 of those -- s14_e001..e004 and e024..e030 -- each inside
 `if (0 == 1)`, and deleted the other 85, along with the setup lines and the
-90-frame wait around them. `--battle-logo` turns the `==` of those 13 into `!=`
-at script load, after checking each site byte for byte. It is a port option,
-off by default; the deleted 85 would need code put back.
+90-frame wait around them. `--battle-logo` puts all 98 back at script load,
+after checking each site byte for byte. It is a port option, off by default.
+`python -m tools.scrdis.battle_logo` finds both kinds of site from the US disc
+and prints the port's two tables.
+
+- **The 13 wrapped calls**: the `==` of each `if (0 == 1)` becomes `!=`.
+- **84 deleted calls** are pairs in the battle intro's `switch (work[N])`, the
+  same in all 42 regular encounters. JP's case 10 opens with `0xDF` plus
+  `reg(5, 3) |= 0x4000; reg(5, 4) |= 1`, a hidden and suspended preload; case
+  40 with `destroy(5); 0xDF; reg(current, 8) = 1; ramp_start(0, 90, 1, 0)`;
+  and case 50 holds `player_lock(1)` until `ramp_step(0)`. The port appends
+  those lines, copied from the JP script, to the blob, and points the case
+  table's entries for 10, 40 and 50 at them; each copy ends in a `goto` to
+  where the US case starts, so no US byte moves.
+- **The last one** is an s14_e004 event body that JP has as
+  `destroy(5); 0xDF; reg(current, 8) = 1; retire(-1)` and US as a bare
+  `retire(-1)`. That instruction is five bytes, exactly a `goto`, which leads
+  to an appended copy of the JP body.
+
+Not checked against a JP console: there is no JP disc image here. The
+appended lines are the JP bytes, run by the same interpreter; the logo
+itself is the part checked against hardware, below.
 
 Checked against PCSX2 running `s14_e001_loaded.p2s` with the same byte poked at
 `0x1C4C412` (script base `0x1C4A4F8` in that state): at 24 and 69 frames after

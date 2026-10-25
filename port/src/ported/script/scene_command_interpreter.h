@@ -93,6 +93,10 @@ namespace orphen::ported::script
     std::uint32_t uGpffffb6fc_globalRgb = 0;
     std::uint32_t uGpffffb700_vectorRgb = 0;
     float DAT_003439c8_vector[3]{};
+    // DAT_00343A08..10, opcode 0x99's three values. FUN_002025E0 adds them to
+    // the lead's position (DAT_0058BED0) and projects the sum to the screen; the
+    // port has no FUN_002025E0 yet, so nothing reads this.
+    float DAT_00343a08_leadOffset[3]{};
 
     // DAT_00572078: the sixteen colour-ramp tracks opcodes 0x9A/0x9B/0x9C drive.
     // A global in the original, but nothing outside the script reads it and a
@@ -1257,6 +1261,7 @@ namespace orphen::ported::script
         const orphen::ported::resource::StatRecord &record);
     void FUN_002618c0_set_global_rgb();      // 0x96
     void FUN_00261910_set_vector_with_rgb(); // 0x97
+    void FUN_00261af0_set_lead_offset();     // 0x99
     void FUN_00261b80_arm_fade_track();      // 0x9A
     std::int32_t FUN_00263f28_allocate_light(); // 0xBF / 0xC0
     std::uint32_t FUN_0025d768_read_work_or_flag(); // 0x36, 0x38

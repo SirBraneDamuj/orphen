@@ -433,7 +433,7 @@ pushed. What it swaps out, and what for:
 | `0x00343888` +0x140 | every one of the sixteen point-light radii zeroed |
 | `0x0035566C` / `70` | ambient `0x404040`, key light `0xFFFFFF` |
 | `0x003439C8` +0x0C | the turning key light, below |
-| `0x00343A08` +0x0C | `DAT_00343A10` = -1000.0, the literal `FUN_002000C0:216` reads as "skip the fog pass" |
+| `0x00343A08` +0x0C | opcode 0x99's offset from the lead; `DAT_00343A10` = -1000.0, the literal `FUN_002000C0:216` reads as "skip `FUN_002025E0`" |
 | `0x00355674` / `78` | both 0 -- this is what makes the void around the level black |
 | `0x0035567C` / `80` | 500.0 and 600.0 |
 | `0x00355700` | 0, no global fade cap |

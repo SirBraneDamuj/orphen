@@ -25,7 +25,8 @@
 // actor handler run at all. JP's generic encounters also call it once early
 // with `reg(5, 4) |= 1` (+0x08 bit 0, hidden) and `reg(5, 3) |= 0x4000`
 // (+0x04, suspended): a preload, released by `destroy(5)` before the real one.
-// No script in either version uses 0xE0.
+// No script in either version uses 0xE0. --battle-logo puts all 98 back at
+// script load (PortRuntime::restoreDisabledBattleLogo).
 
 #include "ported/entity/original_entity.h"
 #include "ported/entity/original_smoke_cloud.h"

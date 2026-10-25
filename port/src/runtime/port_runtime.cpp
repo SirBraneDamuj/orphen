@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <span>
 
 namespace orphen::port
 {
@@ -4914,18 +4915,43 @@ namespace orphen::port
     std::cout << "  gen=" << slots.generation() << '\n';
   }
 
-  // --battle-logo. **Not original behaviour**: the US scripts wrap 13 of the
-  // JP version's battle-logo calls (opcode 0xDF) in `if (0 == 1)`, which is
+  // --battle-logo. **Not original behaviour**: it puts back the JP version's
+  // battle-logo calls (opcode 0xDF), which the US scripts disabled in two ways.
+  // `python -m tools.scrdis.battle_logo` finds both from the US disc and prints
+  // the two site tables below. Every site is checked byte for byte first, so a
+  // script that is not the one these were read from is left alone.
+  //
+  // 13 calls are wrapped in `if (0 == 1)`, which is
   //
   //     01  0E 00000000  0C 01  12  0B  <rel32>
   //     if  u32 0        u8 1   ==  end
   //
-  // and turning the `==` into `!=` makes the condition always true and runs the
-  // JP code again. The offsets are every such `if` tools/scrdis finds whose
-  // body calls 0xDF; the other 85 JP calls were deleted from the US scripts
-  // and need code put back, not a byte flipped. Each site is checked byte for
-  // byte first, so a script that is not the one these were read from is left
-  // alone.
+  // and turning the `==` into `!=` runs the JP code again.
+  //
+  // The other 85 were deleted, so the JP lines are appended to the blob and
+  // jumped to. 84 of them come in pairs in the battle intro's
+  // `switch (work[N])`, the same in all 42 regular encounters:
+  //
+  //     case 10: battle_logo_show(); reg(5, 3) |= 0x4000; reg(5, 4) |= 1;  <- cut
+  //              if (flag(0x81F)) ...
+  //     case 40: destroy(5); battle_logo_show(); reg(current, 8) = 1;      <- cut
+  //              ramp_start(0, 90, 1, 0);                                  <- cut
+  //              work[N] = 50
+  //     case 50: if (ramp_step(0)) {                                       <- cut
+  //                  player_lock(1); work[N] = 60 }
+  //
+  // Case 10 spawns the logo hidden and suspended, a preload; case 40 respawns
+  // it and starts it, and case 50 holds the player for the 90-frame ramp the
+  // logo plays over. The switch's case-table entries for 10, 40 and 50 are
+  // pointed at a copy of the cut lines that then jumps to where the case used
+  // to start, so no US byte moves. The last one is an event body in s14_e004
+  // that JP has as `destroy(5); battle_logo_show(); reg(current, 8) = 1;
+  // retire(-1)` and US as the bare `retire(-1)`: that five-byte instruction is
+  // exactly a `goto`, which leads to the full JP body. (0x9E only empties the
+  // slot; the body still runs on to its `end`, so the copy carries one.)
+  //
+  // The appended bytes sit past the last dialogue record, so FUN_0025ce30 never
+  // takes them for text.
   void PortRuntime::restoreDisabledBattleLogo(std::vector<std::uint8_t> &script) const
   {
     struct Site
@@ -4933,7 +4959,7 @@ namespace orphen::port
       std::uint16_t entry;
       std::uint32_t offset;
     };
-    static constexpr Site kSites[] = {
+    static constexpr Site kFlipSites[] = {
         {1, 0x1F12},  {2, 0x13C8},  {3, 0x33EA},  {3, 0x3B81},  {3, 0x3C62},
         {4, 0x4B33},  {24, 0x1BAA}, {25, 0x2F8D}, {26, 0x3710}, {27, 0x3201},
         {28, 0x336F}, {29, 0x5694}, {30, 0x1560},
@@ -4942,21 +4968,110 @@ namespace orphen::port
     constexpr std::size_t kOperator = 8;
     constexpr std::uint8_t kNotEqual = 0x13;
 
+    // The offset of each intro switch's first (key, rel32) pair.
+    static constexpr Site kIntroSwitches[] = {
+        {4, 0x0E00},  {5, 0x07B8},  {6, 0x07B8},  {7, 0x08EC},  {8, 0x07B8},
+        {9, 0x07B8},  {11, 0x07B8}, {12, 0x07B8}, {13, 0x16F0}, {14, 0x0B1C},
+        {16, 0x07B8}, {17, 0x07B8}, {19, 0x07B8}, {20, 0x09CC}, {21, 0x07B8},
+        {22, 0x07B8}, {23, 0x07B8}, {32, 0x07B8}, {33, 0x07B8}, {34, 0x08FC},
+        {35, 0x07F8}, {36, 0x07B8}, {37, 0x07B8}, {38, 0x07B8}, {39, 0x07B8},
+        {40, 0x07B8}, {41, 0x07B8}, {42, 0x0BE0}, {43, 0x07B8}, {44, 0x07B8},
+        {45, 0x0E9C}, {46, 0x0A4C}, {47, 0x07B8}, {48, 0x07B8}, {49, 0x0E8C},
+        {50, 0x07B8}, {51, 0x07B8}, {52, 0x07B8}, {53, 0x07B8}, {54, 0x0BD4},
+        {55, 0x09CC}, {56, 0x07B8},
+    };
+    static constexpr std::uint32_t kIntroKeys[] = {0, 10, 20, 30, 40, 50, 60};
+    constexpr std::size_t kCase0 = 0;
+    constexpr std::size_t kCase10 = 1;
+    constexpr std::size_t kCase40 = 4;
+    constexpr std::size_t kCase50 = 5;
+    constexpr Site kEventBody = {4, 0x0DD6};
+
+    // JP's lines, from scr_jp/scr113.out (the JP s14_e005) at 0x811 and 0x996;
+    // all 42 encounters have them byte for byte.
+    static constexpr std::uint8_t kJpCase10[] = {
+        0xDF,                                                 // battle_logo_show()
+        0x79, 0x0E, 0x05, 0x00, 0x00, 0x00, 0x0B,             // reg(5, 3) |= 0x4000
+        0x0E, 0x03, 0x00, 0x00, 0x00, 0x0B,
+        0x0E, 0x00, 0x40, 0x00, 0x00, 0x0B,
+        0x79, 0x0E, 0x05, 0x00, 0x00, 0x00, 0x0B,             // reg(5, 4) |= 1
+        0x0E, 0x04, 0x00, 0x00, 0x00, 0x0B,
+        0x0E, 0x01, 0x00, 0x00, 0x00, 0x0B,
+    };
+    static constexpr std::uint8_t kJpCase40[] = {
+        0x5C, 0x0E, 0x05, 0x00, 0x00, 0x00, 0x0B,             // destroy(5)
+        0xDF,                                                 // battle_logo_show()
+        0x77, 0x0E, 0x00, 0x01, 0x00, 0x00, 0x0B,             // reg(current, 8) = 1
+        0x0E, 0x08, 0x00, 0x00, 0x00, 0x0B,
+        0x0C, 0x01, 0x0B,
+        0x90, 0x0C, 0x00, 0x0B, 0x0C, 0x5A, 0x0B,             // ramp_start(0, 90, 1, 0)
+        0x0C, 0x01, 0x0B, 0x0C, 0x00, 0x0B,
+    };
+    // `if (ramp_step(0))` up to its rel32, which skips to the case's break.
+    static constexpr std::uint8_t kJpCase50Test[] = {0x01, 0x91, 0x0C, 0x00, 0x0B, 0x0B};
+    // s14_e004's body is case 40's first three lines: destroy(5),
+    // battle_logo_show(), reg(current, 8) = 1.
+    static constexpr std::size_t kJpEventBodyLength = 24;
+    static constexpr std::uint8_t kRetireSelfEnd[] = {0x9E, 0x0C, 0x01, 0x1E, 0x0B, 0x04}; // retire(-1); end
+
+    // What each US case starts with, to check before redirecting it.
+    static constexpr std::uint8_t kIfFlag81F[] = {0x01, 0x3D, 0x0E, 0x1F, 0x08, 0x00, 0x00, 0x0B, 0x0B};
+    static constexpr std::uint8_t kPlayerLock1[] = {0x6D, 0x01};
+    constexpr std::uint8_t kGoto = 0x03;
+    constexpr std::uint8_t kAssignWork = 0x37;
+
     const auto scene = mapViewer_.loadedDiscScene();
     if (!scene.has_value() || scene->section != kGroupEScene)
     {
       return;
     }
+
+    const auto readU32 = [&script](std::size_t at)
+    {
+      return static_cast<std::uint32_t>(script[at]) | (static_cast<std::uint32_t>(script[at + 1]) << 8) |
+             (static_cast<std::uint32_t>(script[at + 2]) << 16) | (static_cast<std::uint32_t>(script[at + 3]) << 24);
+    };
+    // FUN_0025c220's encoding: the target less the rel32's own position.
+    const auto writeRel = [&script](std::size_t at, std::size_t target)
+    {
+      const auto rel = static_cast<std::uint32_t>(static_cast<std::int64_t>(target) - static_cast<std::int64_t>(at));
+      for (std::size_t k = 0; k < 4; ++k)
+      {
+        script[at + k] = static_cast<std::uint8_t>(rel >> (8 * k));
+      }
+    };
+    const auto relTarget = [&](std::size_t at)
+    {
+      return static_cast<std::size_t>(static_cast<std::int64_t>(at) + static_cast<std::int32_t>(readU32(at)));
+    };
+    const auto startsWith = [&script](std::size_t at, std::span<const std::uint8_t> bytes)
+    {
+      return at + bytes.size() <= script.size() &&
+             std::equal(bytes.begin(), bytes.end(), script.begin() + static_cast<std::ptrdiff_t>(at));
+    };
+    const auto append = [&script](std::span<const std::uint8_t> bytes)
+    {
+      script.insert(script.end(), bytes.begin(), bytes.end());
+    };
+    // Appends `goto target` and returns where it starts.
+    const auto appendGoto = [&](std::size_t target)
+    {
+      const std::size_t at = script.size();
+      script.push_back(kGoto);
+      script.resize(script.size() + 4);
+      writeRel(at + 1, target);
+      return at;
+    };
+
     int restored = 0;
     int skipped = 0;
-    for (const Site &site : kSites)
+    for (const Site &site : kFlipSites)
     {
       if (site.entry != scene->entry)
       {
         continue;
       }
-      if (site.offset + sizeof(kDisabledIf) > script.size() ||
-          !std::equal(std::begin(kDisabledIf), std::end(kDisabledIf), script.begin() + site.offset))
+      if (!startsWith(site.offset, kDisabledIf))
       {
         ++skipped;
         continue;
@@ -4964,13 +5079,85 @@ namespace orphen::port
       script[site.offset + kOperator] = kNotEqual;
       ++restored;
     }
+
+    for (const Site &site : kIntroSwitches)
+    {
+      if (site.entry != scene->entry)
+      {
+        continue;
+      }
+      const auto pair = [&site](std::size_t index) { return site.offset + 8 * index; };
+      bool matches = pair(std::size(kIntroKeys)) <= script.size();
+      for (std::size_t index = 0; matches && index < std::size(kIntroKeys); ++index)
+      {
+        matches = readU32(pair(index)) == kIntroKeys[index] && relTarget(pair(index) + 4) < script.size();
+      }
+      std::size_t case0 = 0, case10 = 0, case40 = 0, case50 = 0;
+      if (matches)
+      {
+        case0 = relTarget(pair(kCase0) + 4);
+        case10 = relTarget(pair(kCase10) + 4);
+        case40 = relTarget(pair(kCase40) + 4);
+        case50 = relTarget(pair(kCase50) + 4);
+        // case 0 is a bare `break`, case 40 starts `work[N] = 50`.
+        matches = script[case0] == kGoto && startsWith(case10, kIfFlag81F) &&
+                  case40 + 10 <= script.size() && script[case40] == kAssignWork &&
+                  script[case40 + 7] == 0x0C && script[case40 + 8] == 50 &&
+                  startsWith(case50, kPlayerLock1);
+      }
+      if (!matches)
+      {
+        skipped += 2;
+        continue;
+      }
+
+      const std::size_t shim10 = script.size();
+      append(kJpCase10);
+      appendGoto(case10);
+
+      const std::size_t shim40 = script.size();
+      append(kJpCase40);
+      appendGoto(case40);
+
+      // if (ramp_step(0)) goto case50; else break -- JP's `else` lands on the
+      // case's break, and case 0's body is that same break.
+      const std::size_t shim50 = script.size();
+      append(kJpCase50Test);
+      const std::size_t elseRel = script.size();
+      script.resize(script.size() + 4);
+      appendGoto(case50);
+      writeRel(elseRel, appendGoto(case0));
+
+      writeRel(pair(kCase10) + 4, shim10);
+      writeRel(pair(kCase40) + 4, shim40);
+      writeRel(pair(kCase50) + 4, shim50);
+      restored += 2;
+    }
+
+    if (kEventBody.entry == scene->entry)
+    {
+      if (startsWith(kEventBody.offset, kRetireSelfEnd))
+      {
+        const std::size_t shim = script.size();
+        append(std::span<const std::uint8_t>(kJpCase40, kJpEventBodyLength));
+        append(kRetireSelfEnd);
+        script[kEventBody.offset] = kGoto;
+        writeRel(kEventBody.offset + 1, shim);
+        ++restored;
+      }
+      else
+      {
+        ++skipped;
+      }
+    }
+
     if (restored != 0 || skipped != 0)
     {
       std::cout << "[battle-logo] s14_e" << std::setw(3) << std::setfill('0') << scene->entry
-                << std::setfill(' ') << ": re-enabled " << restored << " logo call(s)";
+                << std::setfill(' ') << ": restored " << restored << " logo call(s)";
       if (skipped != 0)
       {
-        std::cout << ", " << skipped << " site(s) did not match and were left alone";
+        std::cout << ", " << skipped << " did not match and were left alone";
       }
       std::cout << '\n';
     }
@@ -11468,9 +11655,10 @@ namespace orphen::port
 
   // FUN_00213EF0. The original pushes fifteen regions onto the scratch stack at
   // 0x01949A10 and overwrites each; this saves and overwrites the ones the
-  // port has state for. The one it does not is the fog band at 0x00343A08,
-  // whose DAT_00343A10 goes to -1000.0 -- the literal FUN_002000C0:216 reads as
-  // "skip the fog pass" (FUN_002025E0), which the port does not draw at all.
+  // port has state for. The one it does not is opcode 0x99's lead offset at
+  // 0x00343A08, whose DAT_00343A10 goes to -1000.0 -- the literal
+  // FUN_002000C0:216 reads as "skip FUN_002025E0", which the port does not
+  // draw at all.
   void PortRuntime::FUN_00213ef0_open_area_map()
   {
     auto &lead = entityPool_.leadPlayer();

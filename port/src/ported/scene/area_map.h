@@ -31,9 +31,10 @@
 //   0x0035567C         \ the fade radii, 500.0 and 600.0
 //   0x00355680         /
 //   0x003439C8 +0x0C   the key light direction
-//   0x00343A08 +0x0C   the fog band, whose DAT_00343A10 is then set to -1000,
-//                      which is the literal FUN_002000C0:216 tests to decide
-//                      whether to run the fog pass at all
+//   0x00343A08 +0x0C   opcode 0x99's offset from the lead, which FUN_002025E0
+//                      projects to the screen; DAT_00343A10 is then set to
+//                      -1000, the literal FUN_002000C0:216 tests to decide
+//                      whether to run FUN_002025E0 at all
 //   0x00355700         DAT_00355700, the global fade cap, set to 0
 //   0x00355628         DAT_00355628, the draw distance, set to 500.0 -- this
 //   0x0035562C         is what makes the whole level visible at once

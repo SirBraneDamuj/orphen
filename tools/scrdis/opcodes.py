@@ -181,7 +181,7 @@ _TABLE: dict[int, tuple] = {
     0x96: (0x2618C0, "port", "set_global_rgb", "e:r e:g e:b"),
     0x97: (0x261910, "port", "set_light_direction", "e:x e:y e:z e:r e:g e:b"),
     0x98: (0x2619E0, "elf", "set_light_direction_polar", "e:angle e:magnitude e:z e:r e:g e:b"),
-    0x99: (0x261AF0, "elf", "set_vector_343a08", "e:x e:y e:z"),
+    0x99: (0x261AF0, "port", "set_lead_offset", "e:x e:y e:z"),
     0x9A: (0x261B80, "port", "colour_ramp_start", "e:track e:r1 e:g1 e:b1 e:r2 e:g2 e:b2 e:duration"),
     0x9B: (0x261C38, "port", "colour_ramp_step", "e:track", "returns whether it finished"),
     0x9C: (0x261C60, "port", "colour_ramp_channel", "e:track b:channel"),

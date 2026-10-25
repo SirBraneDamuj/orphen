@@ -17,6 +17,7 @@ Checks (run these after changing `opcodes.py`):
 python -m tools.scrdis.elfscan                  :: shapes vs the retail handlers
 python -m tools.scrdis.survey                   :: decode all 190 scripts; 0 errors expected
 python -m tools.scrdis.crosscheck s01_e012 report.txt   :: vs a port --scr-report
+python -m tools.scrdis.battle_logo            :: the US battle-logo sites, as the port's tables
 ```
 
 ## What it shows

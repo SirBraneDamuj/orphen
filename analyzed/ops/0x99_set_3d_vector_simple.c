@@ -3,17 +3,18 @@
 //
 // Summary:
 // - Reads 3 parameters from VM
-// - Normalizes as XYZ vector
+// - Divides each by fGpffff8cd8 (0x00352C48, 100000.0, the script coordinate
+//   scale). It does NOT normalise to unit length, unlike 0x97
 // - Stores to globals (no RGB, no function call)
 // - Returns 0
 //
 // Parameters:
-// - param0: X component (normalized by fGpffff8cd8)
-// - param1: Y component (normalized by fGpffff8cd8)
-// - param2: Z component (normalized by fGpffff8cd8)
+// - param0: X component (divided by fGpffff8cd8)
+// - param1: Y component (divided by fGpffff8cd8)
+// - param2: Z component (divided by fGpffff8cd8)
 //
 // Side effects:
-// - Stores normalized XYZ to DAT_00343a08/0c/10 (floats)
+// - Stores XYZ to DAT_00343a08/0c/10 (floats)
 // - Different storage address than 0x97/0x98 (0x343a08 vs 0x3439c8)
 // - No RGB packing
 // - No graphics function call
@@ -23,8 +24,9 @@
 // - 0x98: set_3d_vector_polar_with_rgb (polar input, includes RGB)
 //
 // Usage pattern:
-// Simpler than 0x97/0x98, likely sets secondary vector parameter
-// (camera target, offset, velocity, etc.) without color component.
+// An offset from the lead: FUN_002025E0 adds it to slot 0's position
+// (DAT_0058BED0) and projects the sum to the screen. FUN_002000C0:217 skips
+// FUN_002025E0 while DAT_00343a10 == -1000.0, which the area map sets.
 //
 // PS2-specific notes:
 // - Storage at different address suggests different purpose

@@ -1118,6 +1118,17 @@ namespace orphen::ported::script
     }
   }
 
+  // 0x99 (FUN_00261af0): three expressions over fGpffff8cd8 (0x00352C48,
+  // 100000.0, the coordinate scale) into DAT_00343A08..10. No normalising.
+  void SceneCommandInterpreter::FUN_00261af0_set_lead_offset()
+  {
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      environment_.state->DAT_00343a08_leadOffset[axis] =
+          static_cast<float>(static_cast<std::int32_t>(FUN_0025c258_evaluate())) / kScriptCoordinateScale;
+    }
+  }
+
   // 0x9A (FUN_00261b80): eight expressions in stream order -- track index, the
   // three channels of the start colour, the three of the end colour, then the
   // duration in frames. The original packs each triple as
@@ -4266,6 +4277,11 @@ namespace orphen::ported::script
     case 0x97:
       noteOpcode(opcode, OpcodeSupport::Modelled);
       FUN_00261910_set_vector_with_rgb();
+      return 0;
+
+    case 0x99:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      FUN_00261af0_set_lead_offset();
       return 0;
 
     // 0x33 (FUN_0025d6f8): inline dialogue. The operand layout is
