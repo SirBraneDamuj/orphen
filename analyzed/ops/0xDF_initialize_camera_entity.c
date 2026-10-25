@@ -5,7 +5,10 @@
 // Summary:
 // - Initializes the "SORCEROUS STABBER ORPHEN" battle logo entity at address 0x58C7E8.
 // - This logo appears before battles in the Japanese version.
-// - US version scripts skip this opcode to disable the logo.
+// - US scripts disable it two ways (tools/scrdis diff of scr_jp vs the US disc, 2026-10-25):
+//   13 calls in 11 story/boss battles (s14_e001-e004, e024-e030) are wrapped in
+//   `if (0 == 1)`; the other 85 calls, in 42 generic encounter scripts, were deleted
+//   along with their reg(5, ...) setup and 90-frame ramp wait.
 // - Sets up logo entity with type 0x49 and scale 12.0.
 //
 // Behavior:
@@ -18,9 +21,10 @@
 // - Type 0x48 also seen (alternate logo/splash screen?)
 //
 // Notes:
-// - Logo entity lives at fixed address 0x58C7E8 (not in main entity pool)
-// - US localization removed logo by skipping opcodes 0xDF/0xE0 in scripts
-// - Logo is a singleton entity separate from regular entity pool
+// - 0x58C7E8 is entity pool slot 5 (0x58BEB0 + 5 * 0x1D8), the same slot the
+//   title screen uses for type 0x48. FUN_0025d5b8 also selects it (DAT_00355044),
+//   sets +0x08 |= 0x40, and scales it by 12.0 via FUN_00229ef0. Scripts then address
+//   it as entity 5 or `current`.
 
 #include <stdint.h>
 

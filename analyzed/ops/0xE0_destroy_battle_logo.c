@@ -5,7 +5,8 @@
 // Summary:
 // - Destroys/removes the "SORCEROUS STABBER ORPHEN" battle logo entity at 0x58C7E8.
 // - Counterpart to opcode 0xDF which creates the logo.
-// - US version scripts skip both 0xDF and 0xE0 to disable logo system entirely.
+// - No scene script in either the US or the JP version uses 0xE0; scripts remove
+//   the logo with destroy(5) instead.
 // - Always returns 0.
 //
 // Behavior:
@@ -29,9 +30,8 @@
 //
 // Context:
 // - Found in opcode dispatch table at index 0xE0
-// - Logo entity at 0x58C7E8 is separate from main entity pool
+// - Logo entity at 0x58C7E8 is entity pool slot 5 (0x58BEB0 + 5 * 0x1D8)
 // - ID values: 0 = uninitialized, 0x49 = active logo, -2 = destroyed
-// - US localization removed logo by skipping opcodes in battle setup scripts
 //
 // Notes:
 // - Setting ID to -2 (not 0) prevents re-initialization checks from triggering
