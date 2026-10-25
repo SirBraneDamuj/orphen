@@ -1040,21 +1040,33 @@ namespace orphen::harness
         g_currentDrawProbe = &probe;
       }
 
-      // **Models are drawn double-sided.** The backface culling set up for the
-      // map does not belong to this path and produces holes here: it was
-      // derived from FUN_0022c6e8's corner order and the map VU1 program at
-      // 0xE0, and neither says anything about FUN_00212058's PSC3 path, whose
-      // VU1 program is not in the decompilation. The GS has no culling hardware
-      // to fall back on.
+      // **Backface culling is per primitive.** FUN_00212058:218 writes the
+      // primitive's flag bit 0 into draw header byte 9, and the shared VU1
+      // path culls by screen winding at 0x16f..0x18e unless that byte is set
+      // (docs/vu1_microprogram.md) -- the same test, and the same bit, the map
+      // path already applies. The party models lean on it: grp_0001 flags 294
+      // of its 940 primitives two-sided. A GS dump of s14_e001 bears it out:
+      // the battle logo (grp_0183, no two-sided primitives) reaches the GS
+      // 583:1 in one winding, and the party textures 3:1 to 10:1, where an
+      // unculled closed mesh would be near even.
       //
-      // The assets settle it. Every party model ships with a handful of
-      // primitives whose winding opposes their own stored normal -- 4 in
-      // grp_0001, 12 in grp_0003, 3 in grp_0006, 16 in grp_000a, out of ~700
-      // testable each. Culling turns each one into a hole that is visible from
-      // the front and absent from behind, which is exactly how this was
-      // reported. An asset that ships that way was never being culled.
+      // This path used to draw everything double-sided, because culling every
+      // primitive -- two-sided ones included -- punched holes in the party
+      // models. Unculled, a model drawn without a depth test (bucket 0x1005,
+      // the battle logo) shows its far walls through its front.
+      //
+      // Only when the world pass is culling, as the map path does, so the free
+      // viewer still shows both sides.
       const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+      const bool cullingAllowed = cullWasEnabled == GL_TRUE;
+      constexpr std::uint16_t kPrimitiveTwoSided = 0x0001;
+      bool cullActive = false;
       glDisable(GL_CULL_FACE);
+      if (cullingAllowed)
+      {
+        glCullFace(GL_BACK);
+        glFrontFace(GL_CCW);
+      }
 
       // **Discard fully transparent texels before the depth write.** Blending
       // alone makes them invisible but they still occlude: a cutout texel wrote
@@ -1236,6 +1248,22 @@ namespace orphen::harness
           {
             continue;
           }
+        }
+
+        // Header byte 9. Cull state cannot change inside a batch.
+        const bool wantCull = cullingAllowed && (primitive.flags & kPrimitiveTwoSided) == 0;
+        if (wantCull != cullActive)
+        {
+          batchFlush();
+          if (wantCull)
+          {
+            glEnable(GL_CULL_FACE);
+          }
+          else
+          {
+            glDisable(GL_CULL_FACE);
+          }
+          cullActive = wantCull;
         }
 
         // FUN_00212058 draws one pass per active subdraw index, in order, each
@@ -1595,6 +1623,9 @@ namespace orphen::harness
         }
       }
       batchFlush();
+      // The specular pass below has not been checked against the cull, so it
+      // stays double-sided as before.
+      glDisable(GL_CULL_FACE);
       glPopAttrib();
 
       // The specular pass, VU1 0x0200. FUN_00212058 appends a second GIF packet
@@ -5289,12 +5320,24 @@ namespace orphen::harness
           }
         };
         spritesInBuckets(0, kOverlay - 1);
+        // FUN_00200CE0, every frame from FUN_002000C0, links a TEST_1 = 0x3000d
+        // (ZTE off) and ZBUF_1 = 0x13a00008c packet at the head of bucket 0x1004
+        // and puts 0x5000d back at bucket 0x100A, so nothing in between is depth
+        // tested. A GS dump of the battle logo (type 0x49) shows its 315 draws
+        // under 0x3000d; drawn with the world's depth test, s14_e001's ceiling
+        // beams cut through the letters.
+        const GLboolean depthTestWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+        glDisable(GL_DEPTH_TEST);
         for (const auto &item : entityDrawList)
         {
           if (item.depthBucket == kOverlay)
           {
             drawObjectModel(sceneObjectViews_[item.viewIndex], slotTextureIds_);
           }
+        }
+        if (depthTestWasEnabled == GL_TRUE)
+        {
+          glEnable(GL_DEPTH_TEST);
         }
         spritesInBuckets(kOverlay, kOverlay);
       }

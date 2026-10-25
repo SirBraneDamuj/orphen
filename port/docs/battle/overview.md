@@ -357,3 +357,31 @@ reached whose handler is missing.
 `--hold-square 300-380` works under `--screenshot` as well as `--frames`; it did
 not at first, and a capture "during a guard" was quietly of a character standing
 still. Both loops now apply the same synthetic hold.
+
+## The battle logo, and `--battle-logo`
+
+The JP release puts up a "Sorcerous Stabber ORPHEN" cut-in at the start of a
+battle; the US release does not. Opcode `0xDF` (`FUN_00264FA0` ->
+`FUN_0025D5B8`) spawns it as entity type `0x49` in pool slot 5 at scale 12, sets
+`+0x08` bit `0x40`, and selects it. Its actor handler, `LAB_00239FB8`, sits where
+Ghidra has no function and was read off the ELF: idle until the script sets
+animation 1, then fade in from 3 by 8 a frame, hold until the timeline cursor
+`+0xA8` reaches `0x12`, fade out from `0x7F`, and release itself.
+`FUN_002255B8` drags it to the camera eye plus six units of `DAT_0058BEA0`
+every frame and turns it to the camera's yaw, pitch and roll. All of it is in
+`ported/entity/original_battle_logo.*`.
+
+The US scripts never reach `0xDF`. Diffing `scr_jp/` against the US disc with
+`tools/scrdis` (2026-10-25): JP calls it 120 times in 52 battle scenes, the US
+scripts keep 13 of those -- s14_e001..e004 and e024..e030 -- each inside
+`if (0 == 1)`, and deleted the other 85, along with the setup lines and the
+90-frame wait around them. `--battle-logo` turns the `==` of those 13 into `!=`
+at script load, after checking each site byte for byte. It is a port option,
+off by default; the deleted 85 would need code put back.
+
+Checked against PCSX2 running `s14_e001_loaded.p2s` with the same byte poked at
+`0x1C4C412` (script base `0x1C4A4F8` in that state): at 24 and 69 frames after
+the spawn the port and the hardware draw the same frames -- the giant
+fly-in slabs, then the settled logo -- and the entity sits at the same
+`(-0.30, -4.30, -0.49)`. Two renderer fixes were needed to get there; see
+[rendering](../rendering.md#overlay-models-are-not-depth-tested).

@@ -11,6 +11,7 @@
 
 #include "ported/camera/original_camera_path.h"
 #include "ported/entity/actor_frame_update.h"
+#include "ported/entity/original_battle_logo.h"
 #include "ported/entity/original_entity_sound.h"
 #include "ported/entity/original_hit_test.h"
 #include "ported/entity/original_smoke_cloud.h"
@@ -4988,6 +4989,39 @@ namespace orphen::ported::script
     case 0xDE:
       noteOpcode(opcode, OpcodeSupport::OperandsOnly);
       return consumeOnly(opcode, 2);
+
+    // 0xDF (FUN_00264fa0): FUN_0025d5b8, the battle logo into pool slot 5,
+    // which it also selects. The US scripts only reach it when
+    // --battle-logo has re-enabled a call; see original_battle_logo.h.
+    case 0xDF:
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      if (environment_.entityPool != nullptr && environment_.descriptors != nullptr)
+      {
+        currentEntity_ = orphen::ported::entity::FUN_0025d5b8_spawn_battle_logo(*environment_.entityPool,
+                                                                                *environment_.descriptors);
+      }
+      return 0;
+
+    // 0xE0 (FUN_00264fc0): release the logo and park its type word at -2. No
+    // script in either version calls it.
+    case 0xE0:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      if (environment_.entityPool == nullptr)
+      {
+        return 0;
+      }
+      auto &logo = environment_.entityPool->slot(orphen::ported::entity::kBattleLogoSlot);
+      if (logo.typeId00 > 0)
+      {
+        if (environment_.FUN_00265ec0_destroy_entity)
+        {
+          environment_.FUN_00265ec0_destroy_entity(orphen::ported::entity::kBattleLogoSlot);
+        }
+        logo.typeId00 = orphen::ported::entity::kBattleLogoReleased;
+      }
+      return 0;
+    }
 
     case 0x85:
     case 0x87:

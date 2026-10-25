@@ -435,7 +435,8 @@ coincidence of packing.
 
 - Half-Lambert against four directions, the byte-valued colours and ambient, the
   `/256` and the 255 clamp.
-- The two-sided flag and the screen-winding cull, on the map path.
+- The two-sided flag and the screen-winding cull, on the map path and (since
+  2026-10-25) the entity path, where the flag is primitive `+0x08` bit 0.
 - **Every subdraw pass, with its blend mode** taken from the `texFlags` nibble
   and mapped through the register blocks at `608 + mode*3`. Mode 1 at alpha
   `0x7F` folds back to opaque, per `FUN_00212058:141`. This is what makes

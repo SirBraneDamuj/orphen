@@ -60,6 +60,9 @@ namespace
                  "                  drawn is a renderer bug.\n"
                  "  --scr-dump <p>  write the decoded scene script blob out, exactly as\n"
                  "                  the interpreter sees it.\n"
+                 "  --battle-logo   bring back the JP battle logo where the US scripts\n"
+                 "                  only switched it off: 13 calls in 11 battles. Not\n"
+                 "                  original US behaviour; off by default.\n"
                  "  --no-scr-tick   stop running the scene script's per-frame entry\n"
                  "                  and its object-script slots. On by default.\n"
                  "  --actor-report  print which actor behavior each spawned entity\n"
@@ -409,6 +412,11 @@ namespace
       if (argument == "--entity-bound-texture")
       {
         config.entityBoundTextureOnly = true;
+        continue;
+      }
+      if (argument == "--battle-logo")
+      {
+        config.battleLogo = true;
         continue;
       }
       if (argument == "--scr-dump")

@@ -466,6 +466,31 @@ cutscene still runs its ten states.
 
 ## Entity models
 
+### Overlay models are not depth tested
+
+`FUN_00200CE0`, run every frame from `FUN_002000C0`, links a packet at the head
+of display-list bucket `0x1004` that sets `TEST_1 = 0x3000d` -- `ZTE` off -- and
+`ZBUF_1` with `ZMSK`, and another at `0x100A` that puts `0x5000d` back. So every
+model `+0x08` bit `0x40` sends to bucket `0x1005` draws over the scene, whatever
+is nearer. A GS dump of the battle logo shows all 315 of its draws under
+`0x3000d`. The port drew those models with the world's depth test, and
+s14_e001's ceiling beams cut through the logo.
+
+### Entity primitives are culled unless flagged two-sided
+
+`FUN_00212058:218` writes primitive flag bit 0 into draw header byte 9, and the
+shared VU1 path culls by screen winding unless it is set
+([docs/vu1_microprogram.md](../../docs/vu1_microprogram.md)) -- the same bit
+the map path already honoured. The entity path drew every primitive
+double-sided, on the strength of holes that culling *everything* had punched in
+the party models; those models flag a large share of their primitives
+two-sided (grp_0001: 294 of 940), so honouring the bit is what avoids the holes.
+In the same s14_e001 GS dump the logo (no two-sided primitives) reaches the GS
+583:1 in one winding and the party textures between 3:1 and 10:1, where an
+unculled closed mesh would be near even. Without a depth test the difference is
+visible: the logo's far walls showed through its letters. The specular pass is
+still drawn double-sided; it has not been checked.
+
 ### The shop's additive props: a bundle-lookup order bug
 
 s01_e012 drew white/pink sheets and a rope swirl above the shop counter that the

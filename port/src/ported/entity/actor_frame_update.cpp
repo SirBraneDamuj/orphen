@@ -8,6 +8,7 @@
 #include "ported/entity/original_bubble_effect.h"
 #include "ported/entity/original_water_splash.h"
 #include "ported/entity/original_enemy_attack.h"
+#include "ported/entity/original_battle_logo.h"
 #include "ported/entity/original_breakable_prop.h"
 #include "ported/entity/original_element_object.h"
 #include "ported/entity/original_ship_fire.h"
@@ -8835,6 +8836,7 @@ namespace orphen::ported::entity
     case kFUN_002cfe08_streamedProp: // every map-streamed type; states 4..9 are not
     case 0x002D04E0u: // FUN_002d04e0, type 0x45, what a broken prop leaves
     case 0x002D05C0u: // 0x002d05c0,   type 0x47, one piece of a broken prop
+    case 0x00239FB8u: // LAB_00239fb8, type 0x49, the battle logo
       return true;
     default:
       return false;
@@ -9021,6 +9023,8 @@ namespace orphen::ported::entity
       return "FUN_002d04e0 (break remnant 0x45)";
     case 0x002D05C0u:
       return "LAB_002d05c0 (break piece 0x47)";
+    case 0x00239FB8u:
+      return "LAB_00239fb8 (battle logo 0x49)";
     default:
       return nullptr;
     }
@@ -9274,6 +9278,9 @@ namespace orphen::ported::entity
         break;
       case 0x002D05C0u:
         LAB_002d05c0_break_piece(entity, slot, slotEnvironment);
+        break;
+      case 0x00239FB8u:
+        LAB_00239fb8_battle_logo(entity, slot, slotEnvironment);
         break;
       case 0x002D9C88u:
         FUN_002d9c88_cast_marker(entity, slot, slotEnvironment);

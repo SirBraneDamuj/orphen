@@ -10,6 +10,7 @@
 #include "ported/entity/entity_collision.h"
 #include "ported/entity/original_entity_sound.h"
 #include "ported/entity/original_hit_test.h"
+#include "ported/entity/original_battle_logo.h"
 #include "ported/entity/original_field_hp_gauge.h"
 #include "ported/entity/original_health_bar.h"
 #include "ported/entity/original_summon_stage.h"
@@ -384,6 +385,7 @@ namespace orphen::port
     suppressPointLights_ = config.suppressPointLights;
     poseReportSlot_ = config.poseReportSlot;
     scrDumpPath_ = config.scrDumpPath;
+    battleLogo_ = config.battleLogo;
     mapViewer_.setMapBlendDisabled(config.suppressMapBlend);
     mapViewer_.setScreenSmearDisabled(config.suppressScreenSmear);
     mapViewer_.setMapBaseSlotOnly(config.mapBaseSlotOnly);
@@ -4912,6 +4914,68 @@ namespace orphen::port
     std::cout << "  gen=" << slots.generation() << '\n';
   }
 
+  // --battle-logo. **Not original behaviour**: the US scripts wrap 13 of the
+  // JP version's battle-logo calls (opcode 0xDF) in `if (0 == 1)`, which is
+  //
+  //     01  0E 00000000  0C 01  12  0B  <rel32>
+  //     if  u32 0        u8 1   ==  end
+  //
+  // and turning the `==` into `!=` makes the condition always true and runs the
+  // JP code again. The offsets are every such `if` tools/scrdis finds whose
+  // body calls 0xDF; the other 85 JP calls were deleted from the US scripts
+  // and need code put back, not a byte flipped. Each site is checked byte for
+  // byte first, so a script that is not the one these were read from is left
+  // alone.
+  void PortRuntime::restoreDisabledBattleLogo(std::vector<std::uint8_t> &script) const
+  {
+    struct Site
+    {
+      std::uint16_t entry;
+      std::uint32_t offset;
+    };
+    static constexpr Site kSites[] = {
+        {1, 0x1F12},  {2, 0x13C8},  {3, 0x33EA},  {3, 0x3B81},  {3, 0x3C62},
+        {4, 0x4B33},  {24, 0x1BAA}, {25, 0x2F8D}, {26, 0x3710}, {27, 0x3201},
+        {28, 0x336F}, {29, 0x5694}, {30, 0x1560},
+    };
+    static constexpr std::uint8_t kDisabledIf[] = {0x01, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x01, 0x12, 0x0B};
+    constexpr std::size_t kOperator = 8;
+    constexpr std::uint8_t kNotEqual = 0x13;
+
+    const auto scene = mapViewer_.loadedDiscScene();
+    if (!scene.has_value() || scene->section != kGroupEScene)
+    {
+      return;
+    }
+    int restored = 0;
+    int skipped = 0;
+    for (const Site &site : kSites)
+    {
+      if (site.entry != scene->entry)
+      {
+        continue;
+      }
+      if (site.offset + sizeof(kDisabledIf) > script.size() ||
+          !std::equal(std::begin(kDisabledIf), std::end(kDisabledIf), script.begin() + site.offset))
+      {
+        ++skipped;
+        continue;
+      }
+      script[site.offset + kOperator] = kNotEqual;
+      ++restored;
+    }
+    if (restored != 0 || skipped != 0)
+    {
+      std::cout << "[battle-logo] s14_e" << std::setw(3) << std::setfill('0') << scene->entry
+                << std::setfill(' ') << ": re-enabled " << restored << " logo call(s)";
+      if (skipped != 0)
+      {
+        std::cout << ", " << skipped << " site(s) did not match and were left alone";
+      }
+      std::cout << '\n';
+    }
+  }
+
   void PortRuntime::runSceneScript()
   {
     scriptTrace_.reset();
@@ -4962,7 +5026,11 @@ namespace orphen::port
       return;
     }
 
-    const std::vector<std::uint8_t> decoded = resources->decodeRecord(*record);
+    std::vector<std::uint8_t> decoded = resources->decodeRecord(*record);
+    if (battleLogo_)
+    {
+      restoreDisabledBattleLogo(decoded);
+    }
     if (!scrDumpPath_.empty())
     {
       std::ofstream dump(scrDumpPath_, std::ios::binary);
@@ -10401,9 +10469,9 @@ namespace orphen::port
       // entity a scene module builds at 0x0058C7E8 -- pool slot 5 -- gets its
       // facing rewritten from the camera every frame, by type:
       //
-      //   0x49  facing = the camera yaw, and the entity is dragged to a point
-      //         6 units down the view vector. That is FUN_0025D5B8's cut-in,
-      //         which the port has no other half of, so it is left out.
+      //   0x49  the battle logo (opcode 0xDF): dragged six units down the
+      //         view forward and turned to the camera's yaw, pitch and roll.
+      //         See original_battle_logo.h.
       //   0x48  facing = wrap(camera yaw + pi), DAT_00352420 being that pi.
       //
       // Nothing else writes slot 5's +0x5C: the type's own actor handler is
@@ -10415,7 +10483,22 @@ namespace orphen::port
           entityPool_.status(orphen::ported::scene::kLogoSlot) !=
               orphen::ported::entity::SlotStatus::Free &&
           entityPool_.slot(orphen::ported::scene::kLogoSlot).typeId00 ==
-              orphen::ported::scene::kLogoTypeId)
+              orphen::ported::entity::kBattleLogoTypeId)
+      {
+        // DAT_0058bea0 is FUN_00216aa0:436-447's normalise(lookAt - (eye +
+        // 0.4 up)), which publishOrientation keeps as the pose's forward. The
+        // plain lookAt - eye put the logo 0.48 units above where PCSX2 has it.
+        const auto &eye = fieldCamera_.DAT_0058c0a8_eye();
+        const auto &forward = fieldCamera_.pose().forward;
+        orphen::ported::entity::FUN_002255b8_place_battle_logo(
+            entityPool_.slot(orphen::ported::entity::kBattleLogoSlot), eye.x, eye.y, eye.z, forward.x, forward.y,
+            forward.z, fieldCamera_.yawRadians(), fieldCamera_.pitchRadians(), fieldCamera_.uGpffffb6dc_roll());
+      }
+      else if (!uiFrame &&
+               entityPool_.status(orphen::ported::scene::kLogoSlot) !=
+                   orphen::ported::entity::SlotStatus::Free &&
+               entityPool_.slot(orphen::ported::scene::kLogoSlot).typeId00 ==
+                   orphen::ported::scene::kLogoTypeId)
       {
         entityPool_.slot(orphen::ported::scene::kLogoSlot).facingRadians5c =
             orphen::ported::model::FUN_00216690_wrap_angle(

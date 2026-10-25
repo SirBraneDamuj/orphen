@@ -193,6 +193,9 @@ namespace orphen::port
     // --scr-dump <path>: write the scene script blob out exactly as the
     // interpreter sees it, so its bytecode can be read outside the runtime.
     std::string scrDumpPath;
+    // --battle-logo: flip the `if (0 == 1)` around the 13 battle-logo calls
+    // the US scripts kept. A port option, not US behaviour.
+    bool battleLogo = false;
     // --dump-map-textures <dir>: write the decoded map texture pages out as PAM
     // and stop caring about them. Empty means no dump.
     std::string dumpMapTexturesPath;
@@ -597,6 +600,7 @@ namespace orphen::port
     bool suppressPointLights_ = false;
     int poseReportSlot_ = -1;
     std::string scrDumpPath_;
+    bool battleLogo_ = false;
 
     // DAT_00355038 and DAT_00355030: the follower navigation graph, and the
     // one-shot "no corner cut on this step" flag FUN_0025a500 raises around
@@ -790,6 +794,7 @@ namespace orphen::port
     // The whole per-scene load: model bindings, player reset, scene script.
     // Shared by initialize and the map-cycle path so they cannot drift.
     void loadSceneForCurrentMap();
+    void restoreDisabledBattleLogo(std::vector<std::uint8_t> &script) const;
     // FUN_0022a178's ten-entry table at DAT_00325394; the loop runs slots 0..9.
     static constexpr std::size_t kMapTextureSlotCount = 10;
     void FUN_0022a178_bind_map_textures();
