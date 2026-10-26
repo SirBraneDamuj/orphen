@@ -5,6 +5,7 @@ import html
 import re
 from collections import defaultdict
 
+from . import known as K
 from . import text as T
 from .decode import Expr, Program
 from .listing import statement
@@ -45,9 +46,10 @@ def _hex(data: bytes, begin: int, end: int) -> str:
 
 
 class Explorer:
-    def __init__(self, program: Program, title: str):
+    def __init__(self, program: Program, title: str, scene: tuple[int, int] | None = None):
         self.p = program
         self.title = title
+        self.scene = scene   # (section, entry) when read off the disc, for known.py
         self.n = HtmlNamer(program)
         self.r = Renderer(program, self.n)
         self.pseudo = Pseudo(program, self.n)
@@ -120,6 +122,8 @@ class Explorer:
         meta = ", ".join(tags)
         if sid is not None and sid < 0x10000 and not any(t in tags for t in ("init", "start", "tick", "interact", "teardown")):
             meta += f" &middot; subproc id {sid}"
+        known = K.lookup(self.scene, entry) if speculative else None
+        badge = f' <span class="badge">{html.escape(known.label)}</span>' if known else ""
         lines, ok = self.pseudo.routine(entry, routine)
         by_offset = {i.offset: i for i in routine.instrs}
         rows = []
@@ -158,13 +162,19 @@ class Explorer:
             rows.append(f'<div class="err">decode stopped: {html.escape(str(routine.error))}</div>')
         body = "\n".join(rows)
         cls = "routine speculative" if speculative else "routine"
-        return (f'<section class="{cls}" id="c-{entry:X}" data-name="{name} {meta}">'
-                f'<h3>{name}<span class="meta">{meta} &middot; 0x{entry:X}..0x{routine.instrs[-1].end if routine.instrs else entry:X}'
+        note = f'<div class="known">{known.note}</div>' if known else ""
+        return (f'<section class="{cls}" id="c-{entry:X}" data-name="{name} {meta}{" " + html.escape(known.label) if known else ""}">'
+                f'<h3>{name}{badge}<span class="meta">{meta} &middot; 0x{entry:X}..0x{routine.instrs[-1].end if routine.instrs else entry:X}'
                 f'{"" if ok else " &middot; flat"}</span>'
                 f'<button class="toggle" type="button">flat</button></h3>'
                 f'{self._backlinks("code", entry)}'
+                f'{note}'
                 f'<div class="lines structured">{body}</div>'
                 f'<div class="lines flat" hidden>{"".join(flat_rows)}</div></section>')
+
+    def _unref_tag(self, entry: int, routine) -> str:
+        known = K.lookup(self.scene, entry)
+        return html.escape(known.label) if known else str(len(routine.instrs))
 
     def _gate(self, gate: int) -> str:
         if gate == 0:
@@ -339,7 +349,8 @@ class Explorer:
             for o, m in sorted(self.messages.items())) + "</div>")
         if self.speculative:
             nav.append(f'<div class="navgroup"><h4>Unreferenced code? ({len(self.speculative)})</h4>' + "".join(
-                f'<a href="#c-{e:X}">unref_{e:04X}<small>{len(r.instrs)}</small></a>' for e, r in sorted(self.speculative.items())) + "</div>")
+                f'<a href="#c-{e:X}">unref_{e:04X}<small>{self._unref_tag(e, r)}</small></a>'
+                for e, r in sorted(self.speculative.items())) + "</div>")
         if p.point_lists:
             nav.append(f'<div class="navgroup"><h4>Paths ({len(p.point_lists)})</h4>' + "".join(
                 f'<a href="#p-{o:X}">path_{o:04X}<small>{len(pl.points)}</small></a>' for o, pl in sorted(p.point_lists.items())) + "</div>")
@@ -474,6 +485,8 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin: 0 3px; }}
 .err {{ color: var(--err); font-size: 12px; }}
 .note, .stats, .legend {{ color: var(--muted); font-size: 13px; }}
+.badge {{ font-size: 12px; font-weight: 600; color: var(--accent); margin-left: 6px; }}
+.known {{ margin: 6px 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--panel); font-size: 13px; max-width: 72ch; }}
 .bar {{ display: flex; height: 22px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }}
 .seg {{ display: block; height: 100%; }}
 .seg.code, .key.code {{ background: var(--c-code); }}

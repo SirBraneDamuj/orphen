@@ -37,7 +37,9 @@ python -m tools.scrdis.battle_logo            :: the US battle-logo sites, as th
 - **Unreferenced code (speculative)**: bodies a linear sweep of the gaps
   found that decode cleanly to an `end` but that nothing reachable names. They
   are probably started by engine code (an entity type's handler, the battle
-  VM), but treat them as candidates.
+  VM), but treat them as candidates. A body listed in `known.py` (keyed by
+  scene and offset) is badged with what it turned out to be and how that was
+  checked.
 
 ## Reading the pseudocode
 

@@ -26,11 +26,13 @@ def main(argv=None) -> int:
     ap.add_argument("--disc-root", default="disc")
     args = ap.parse_args(argv)
 
+    scene = None
     if Path(args.scene).is_file():
         data = Path(args.scene).read_bytes()
         name = Path(args.scene).stem
     else:
-        data = Disc(Path(args.disc_root)).script(*parse_scene_name(args.scene))
+        scene = parse_scene_name(args.scene)
+        data = Disc(Path(args.disc_root)).script(*scene)
         name = args.scene
         if data is None:
             print(f"{args.scene} has no script record", file=sys.stderr)
@@ -43,7 +45,7 @@ def main(argv=None) -> int:
             sys.stdout.write(output + "\n")
             return 0
     else:
-        output = Explorer(program, f"{name} scene script").page(fragment=args.artifact)
+        output = Explorer(program, f"{name} scene script", scene).page(fragment=args.artifact)
     out = args.out or Path("out/scrdis") / f"{name}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(output, encoding="utf-8")

@@ -46,12 +46,26 @@ class Message:
     error: str = ""
 
 
+def _glyph(data: bytes, at: int, limit: int) -> tuple[str, int]:
+    """One printable character and its width. The debug scenes' Japanese text
+    was never translated, so a Shift-JIS pair decodes as one character."""
+    b = data[at]
+    if 0x20 <= b < 0x7F:
+        return chr(b), 1
+    if (0x81 <= b <= 0x9F or 0xE0 <= b <= 0xEF) and at + 1 < limit:
+        try:
+            return data[at:at + 2].decode("cp932"), 2
+        except UnicodeDecodeError:
+            pass
+    return f"\\x{b:02X}", 1
+
+
 def _glyphs(data: bytes, at: int, limit: int) -> tuple[str, int]:
     out = []
     while at < limit and data[at] != 0:
-        b = data[at]
-        out.append(chr(b) if 0x20 <= b < 0x7F else f"\\x{b:02X}")
-        at += 1
+        glyph, width = _glyph(data, at, limit)
+        out.append(glyph)
+        at += width
     return "".join(out), at + 1
 
 
@@ -70,8 +84,9 @@ def parse(data: bytes, offset: int, limit: int | None = None) -> Message:
     while at < limit:
         b = data[at]
         if b >= 0x20:
-            run.append(chr(b) if b < 0x7F else f"\\x{b:02X}")
-            at += 1
+            glyph, width = _glyph(data, at, limit)
+            run.append(glyph)
+            at += width
             continue
         flush()
         if b == 0x00:
@@ -103,12 +118,15 @@ def parse(data: bytes, offset: int, limit: int | None = None) -> Message:
     return Message(offset, at, pieces, speaker)
 
 
-def plain(message: Message) -> str:
-    """The words only, with newlines, for a one-line summary."""
+def plain(message: Message, data: bytes | None = None, depth: int = 0) -> str:
+    """The words only, with newlines, for a one-line summary. With `data`, a
+    0x10 call is followed so the words it borrows are shown too."""
     out = []
     for piece in message.pieces:
         if piece.kind == "text":
             out.append(piece.text)
+        elif piece.kind == "call" and data is not None and depth < 4 and 0 <= piece.target < len(data):
+            out.append(plain(parse(data, piece.target), data, depth + 1))
         elif piece.kind == "code" and piece.code == 0x07:
             out.append(" / ")
         elif piece.kind == "choice":
@@ -135,4 +153,4 @@ def code_text(piece: Piece) -> str:
 
 def render_inline(program, begin: int, end: int, namer) -> str:
     message = parse(program.blob.data, begin, end)
-    return '"' + namer.esc(plain(message)) + '"'
+    return '"' + namer.esc(plain(message, program.blob.data)) + '"'
