@@ -3041,9 +3041,11 @@ namespace orphen::harness
     glMatrixMode(GL_MODELVIEW);
   }
 
-  void MapViewer::drawHudQuads(int framebufferWidth, int framebufferHeight) const
+  void MapViewer::drawHudQuads(const std::vector<orphen::ported::render::HudQuad> &quads,
+                               int framebufferWidth,
+                               int framebufferHeight) const
   {
-    if (hudQuads_.empty() || textureSlots_ == nullptr || framebufferWidth <= 0 ||
+    if (quads.empty() || textureSlots_ == nullptr || framebufferWidth <= 0 ||
         framebufferHeight <= 0)
     {
       return;
@@ -3070,7 +3072,7 @@ namespace orphen::harness
 
     unsigned int boundTexture = 0;
     int boundBlend = -1;
-    for (const auto &quad : hudQuads_)
+    for (const auto &quad : quads)
     {
       const unsigned int textureId =
           quad.clutBank >= 0
@@ -3096,10 +3098,15 @@ namespace orphen::harness
       {
         boundBlend = quad.blendMode;
         // FUN_00207de8's ladder. Mode 2 is the additive one; 1 and 3 both
-        // resolve to ordinary source-alpha blending on this path.
+        // resolve to ordinary source-alpha blending on this path, and 0 leaves
+        // ABE off, so the quad replaces what is under it.
         if (boundBlend == 2)
         {
           glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        }
+        else if (boundBlend == 0)
+        {
+          glBlendFunc(GL_ONE, GL_ZERO);
         }
         else
         {
@@ -5404,7 +5411,15 @@ namespace orphen::harness
     // (0x1009). The smear is submitted later in the frame and so drawn first.
     if (!hudQuads_.empty() && !flying)
     {
-      drawHudQuads(framebufferWidth, framebufferHeight);
+      drawHudQuads(hudQuads_, framebufferWidth, framebufferHeight);
+    }
+
+    // FUN_00202ff8's layers, bucket 0x1007. FUN_002239c8 has already put the
+    // fade and the bars in that bucket by the time FUN_002000c0 reaches these,
+    // and a bucket draws last-in first, so they go down before both.
+    if (!screenLayerQuads_.empty() && !flying)
+    {
+      drawHudQuads(screenLayerQuads_, framebufferWidth, framebufferHeight);
     }
 
     // FUN_0025cfb8's bars. They and the fade share GS sort bucket 0x1007, and

@@ -47,7 +47,7 @@ New findings go in the file for their subsystem, not in this README.
 - [Field combat](docs/field-combat.md) - the sword, the magic cast, contact and damage
 - [Field damage and death](docs/field-damage-and-death.md) - HP gauge, game over
 - Battle: [overview](docs/battle/overview.md), [sword and guard](docs/battle/sword-and-guard.md), [spells](docs/battle/spells.md), [targeting](docs/battle/targeting.md), [enemies](docs/battle/enemies.md)
-- Scenes: [s01_e012 chest and flood](docs/scenes/s01_e012-chest-and-flood.md), [s03_e001](docs/scenes/s03_e001.md), [chapter 5 lifts and blocks](docs/scenes/s05-lifts-and-blocks.md), [s14_e001 crab](docs/scenes/s14_e001-crab.md), [s14_e002 mast boss](docs/scenes/s14_e002-mast-boss.md), [s14_e003](docs/scenes/s14_e003.md), [s14_e004 gear room](docs/scenes/s14_e004-gear-room.md), [s14_e031 spell reward](docs/scenes/s14_e031-spell-reward.md)
+- Scenes: [s01_e012 chest and flood](docs/scenes/s01_e012-chest-and-flood.md), [s03_e001](docs/scenes/s03_e001.md), [chapter 5 lifts and blocks](docs/scenes/s05-lifts-and-blocks.md), [s05_e012 gear tower](docs/scenes/s05_e012-gear-tower.md), [s14_e001 crab](docs/scenes/s14_e001-crab.md), [s14_e002 mast boss](docs/scenes/s14_e002-mast-boss.md), [s14_e003](docs/scenes/s14_e003.md), [s14_e004 gear room](docs/scenes/s14_e004-gear-room.md), [s14_e031 spell reward](docs/scenes/s14_e031-spell-reward.md)
 
 ## Timing Model
 

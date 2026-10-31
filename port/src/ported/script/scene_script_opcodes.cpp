@@ -4914,6 +4914,29 @@ namespace orphen::ported::script
       return static_cast<std::uint32_t>(static_cast<std::int32_t>(angle * kScriptCoordinateScale));
     }
 
+    // 0x6F (FUN_0025ff58): the flat distance between (x1, y1) and (x2, y2).
+    // Same four-expression shape as 0x6E, each over fGpffff8c80 (0x00352BF0,
+    // 100000.0 -- a separate gp word from 0x6E's, same value), then
+    // sqrt(dx*dx + dy*dy) scaled back and truncated by FUN_0030bd20.
+    case 0x6F:
+    {
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::int32_t firstX = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t firstY = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t secondX = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      const std::int32_t secondY = static_cast<std::int32_t>(FUN_0025c258_evaluate());
+      if (halted_)
+      {
+        return 0;
+      }
+      const float deltaX = static_cast<float>(firstX) / kScriptCoordinateScale -
+                           static_cast<float>(secondX) / kScriptCoordinateScale;
+      const float deltaY = static_cast<float>(firstY) / kScriptCoordinateScale -
+                           static_cast<float>(secondY) / kScriptCoordinateScale;
+      const float distance = std::sqrt(deltaY * deltaY + deltaX * deltaX);
+      return static_cast<std::uint32_t>(static_cast<std::int32_t>(distance * kScriptCoordinateScale));
+    }
+
     // 0x72 (FUN_002600c8): ease an angle toward another, one frame's worth.
     // Three expressions -- from, to, rate -- and the result is the *step* to
     // apply, not the new angle: FUN_0023a320 returns the capped, dead-zoned
@@ -5683,10 +5706,18 @@ namespace orphen::ported::script
     // or clears the mask bits in the record's +0x04 itself.
     case 0xA5:
     {
-      noteOpcode(opcode, OpcodeSupport::OperandsOnly);
-      FUN_0025c258_evaluate();
-      readU8();
-      FUN_0025c258_evaluate();
+      noteOpcode(opcode, OpcodeSupport::Modelled);
+      const std::uint32_t groupMask = FUN_0025c258_evaluate();
+      const std::uint8_t on = readU8();
+      const std::uint32_t bits = FUN_0025c258_evaluate();
+      if (halted_)
+      {
+        return 0;
+      }
+      if (environment_.FUN_0022db50_mask_map_terrain)
+      {
+        environment_.FUN_0022db50_mask_map_terrain(groupMask, on != 0, bits);
+      }
       return 0;
     }
 
@@ -6592,6 +6623,42 @@ namespace orphen::ported::script
       return environment_.FUN_00206c28_voice_load_idle && environment_.FUN_00206c28_voice_load_idle()
                  ? 1u
                  : 0u;
+
+    // 0x138 (FUN_002652D0): eight expressions straight into FUN_00202F00 --
+    // slot, flags, texture slot, RGBA, U/V offset, U/V scroll per frame. See
+    // ported/render/original_screen_layers.h.
+    case 0x138:
+    {
+      note(OpcodeSupport::Modelled);
+      std::uint32_t operands[8]{};
+      for (std::uint32_t &operand : operands)
+      {
+        operand = FUN_0025c258_evaluate();
+      }
+      if (halted_ || environment_.DAT_00356100_screenLayers == nullptr)
+      {
+        return 0;
+      }
+      environment_.DAT_00356100_screenLayers->FUN_00202f00_set(
+          static_cast<std::int32_t>(operands[0]), static_cast<std::uint8_t>(operands[1]),
+          static_cast<std::uint16_t>(operands[2]), operands[3], static_cast<std::int32_t>(operands[4]),
+          static_cast<std::int32_t>(operands[5]), static_cast<std::int32_t>(operands[6]),
+          static_cast<std::int32_t>(operands[7]));
+      return 0;
+    }
+
+    // 0x139 (FUN_00265350): one expression, the slot FUN_00202F88 empties.
+    case 0x139:
+    {
+      note(OpcodeSupport::Modelled);
+      const std::uint32_t slot = FUN_0025c258_evaluate();
+      if (halted_ || environment_.DAT_00356100_screenLayers == nullptr)
+      {
+        return 0;
+      }
+      environment_.DAT_00356100_screenLayers->FUN_00202f88_clear(static_cast<std::int32_t>(slot));
+      return 0;
+    }
 
     // 0x13A (FUN_00265378): one expression into DAT_003555D2, the movie
     // request. The opcode does nothing else with it -- FUN_0022A418 is what

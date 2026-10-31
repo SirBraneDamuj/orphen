@@ -10,6 +10,7 @@
 #include "ported/render/original_frame_feedback.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
+#include "ported/render/original_screen_layers.h"
 #include "ported/entity/original_element_object.h"
 #include "ported/resource/character_stats.h"
 #include "ported/script/script_trace.h"
@@ -661,6 +662,10 @@ namespace orphen::ported::script
     // has to.
     orphen::ported::render::FrameFeedback *DAT_00343878_frameFeedback = nullptr;
 
+    // DAT_00356100, the eight full-screen texture layers. Opcodes 0x138 and
+    // 0x139 fill and empty them; FUN_002000c0 draws them every frame.
+    orphen::ported::render::ScreenLayers *DAT_00356100_screenLayers = nullptr;
+
     // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them
     // and FUN_0025b778 steps them at the end of every tick, so like the fade
     // this is one object the renderer also reads rather than a second copy.
@@ -1045,6 +1050,11 @@ namespace orphen::ported::script
     // the two bits is opposite: zero turns the group off, non-zero turns it on.
     std::function<void(std::uint32_t groupMask, bool visible)> FUN_0022dbc8_show_map_primitives;
     std::function<void(std::uint32_t groupMask, bool solid)> FUN_0022dc68_enable_map_terrain;
+    // Opcode 0xA5 (FUN_00262058 -> FUN_0022DB50): for every 0x78 record whose
+    // +0x04 terrain word meets the mask, set (on) or clear (off) `bits` in that
+    // same word. It rewrites what entity +0x74/+0x78 test, so it is how a
+    // script lets the party onto floor that was refused to them.
+    std::function<void(std::uint32_t groupMask, bool on, std::uint32_t bits)> FUN_0022db50_mask_map_terrain;
 
     // Opcodes 0x7D and 0x7E (FUN_00260738): a collision group index, an inline
     // channel byte (0..2) and a value. 0x7D writes a rotation channel, 0x7E a

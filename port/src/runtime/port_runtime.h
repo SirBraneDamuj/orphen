@@ -26,6 +26,7 @@
 #include "ported/resource/hit_parameter_table.h"
 #include "ported/resource/item_database.h"
 #include "ported/render/original_frame_feedback.h"
+#include "ported/render/original_screen_layers.h"
 #include "ported/render/original_letterbox.h"
 #include "ported/render/original_screen_fade.h"
 #include "ported/input/mapped_action_history.h"
@@ -914,6 +915,9 @@ namespace orphen::port
     // quad the step produced -- render() can run more than once per step
     // (--render-bench) and the ramp must not advance with it.
     orphen::ported::render::FrameFeedback DAT_00343878_frameFeedback_;
+    // DAT_00356100, opcode 0x138's full-screen layers. Stepped with the smear
+    // for the same reason; deliberately *not* cleared on a scene load.
+    orphen::ported::render::ScreenLayers DAT_00356100_screenLayers_;
     // DAT_00355054 / DAT_00355CFC, the cinematic bars. Opcode 0x6D arms them,
     // FUN_0025b778's tail steps them, the renderer draws them and the dialogue
     // window reads the mode to move its text clear -- one object, the way the

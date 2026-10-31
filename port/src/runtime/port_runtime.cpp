@@ -1953,6 +1953,7 @@ namespace orphen::port
     environment.uGpffffae14_backupEntry = DAT_00354d84_backupEntry_;
     environment.DAT_00571dc0_screenFade = &DAT_00571dc0_screenFade_;
     environment.DAT_00343878_frameFeedback = &DAT_00343878_frameFeedback_;
+    environment.DAT_00356100_screenLayers = &DAT_00356100_screenLayers_;
     environment.DAT_00355054_letterbox = &DAT_00355054_letterbox_;
     environment.map = mapViewer_.loadedMap();
 
@@ -2811,6 +2812,26 @@ namespace orphen::port
 
     environment.FUN_0022dc68_enable_map_terrain = [this](std::uint32_t groupMask, bool solid)
     { FUN_0022dc68_enable_map_terrain(groupMask, solid); };
+
+    // FUN_0022DB50 (opcode 0xA5). The test and the write are the same word, so
+    // a record whose only matching bit is the one being cleared drops out of
+    // the group.
+    environment.FUN_0022db50_mask_map_terrain = [this](std::uint32_t groupMask, bool on, std::uint32_t bits)
+    {
+      auto *map = mapViewer_.loadedMap();
+      if (map == nullptr)
+      {
+        return;
+      }
+      for (auto &record78 : map->DAT_003556b0_dRecords78)
+      {
+        if ((record78.terrainFlags & groupMask) == 0)
+        {
+          continue;
+        }
+        record78.terrainFlags = on ? (record78.terrainFlags | bits) : (record78.terrainFlags & ~bits);
+      }
+    };
 
     // FUN_00260738's two writes, opcodes 0x7D and 0x7E, and the same pair
     // FUN_002676d8 reaches through opcode 0xBE. The map has to be mutable
@@ -10805,6 +10826,18 @@ namespace orphen::port
     else
     {
       mapViewer_.setFrameFeedbackQuad(std::nullopt);
+    }
+    // FUN_002000c0:224-226, in the same not-the-area-map block as the smear.
+    // The scroll advances here, once per step, for the reason the smear's
+    // ramp does.
+    if (DAT_00356100_screenLayers_.liveCount() != 0 &&
+        DAT_00354d2c_gameMode_ != static_cast<std::uint32_t>(orphen::ported::scene::kAreaMapMode))
+    {
+      mapViewer_.setScreenLayerQuads(DAT_00356100_screenLayers_.FUN_00202ff8_step());
+    }
+    else
+    {
+      mapViewer_.setScreenLayerQuads({});
     }
 
     // FUN_00255CE8 is called once per frame by state 0x1B and by nothing else,

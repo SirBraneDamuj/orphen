@@ -304,6 +304,13 @@ namespace orphen::harness
     // dialogue path, and a CLUT bank that picks one of a 4-bit sheet's sixteen
     // palettes. Drawn with the captions, over the fade. Empty hides them.
     void setHudQuads(std::vector<orphen::ported::render::HudQuad> quads);
+    // FUN_00202ff8's full-screen layers: the same packet path, but bucket
+    // 0x1007 and submitted after the bars and the fade, so they draw over the
+    // pips and under the bars, the fade and the text.
+    void setScreenLayerQuads(std::vector<orphen::ported::render::HudQuad> quads)
+    {
+      screenLayerQuads_ = std::move(quads);
+    }
 
     // FUN_0020f3e0's output: the billboard quads of every entity the skeletal
     // pass refused. Already in the original's view space and already in draw
@@ -533,6 +540,7 @@ namespace orphen::harness
     std::uint8_t worldUnderlayAlpha_ = 0;
     std::vector<orphen::ported::text::DialogueSprite> dialogueSprites_;
     std::vector<orphen::ported::render::HudQuad> hudQuads_;
+    std::vector<orphen::ported::render::HudQuad> screenLayerQuads_;
     // One GL texture per (slot, CLUT bank) the frame actually asks for, keyed
     // `slot << 8 | bank`. Built on demand and thrown away with the slot
     // textures, because it is the same sheet read a different way.
@@ -620,7 +628,9 @@ namespace orphen::harness
                              int firstBucket,
                              int lastBucket) const;
     // FUN_00207de8's UI quads, in that same screen.
-    void drawHudQuads(int framebufferWidth, int framebufferHeight) const;
+    void drawHudQuads(const std::vector<orphen::ported::render::HudQuad> &quads,
+                      int framebufferWidth,
+                      int framebufferHeight) const;
     // FUN_00255CE8. Assumes the game viewport is already current.
     void drawWorldUnderlay() const;
     // The 4-bit read of a slot's sheet through one CLUT bank; 0 when the slot

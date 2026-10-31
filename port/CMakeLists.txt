@@ -194,6 +194,8 @@ target_sources(orphen_port
         src/ported/render/original_fade_track.h
         src/ported/render/original_frame_feedback.cpp
         src/ported/render/original_frame_feedback.h
+        src/ported/render/original_screen_layers.cpp
+        src/ported/render/original_screen_layers.h
         src/ported/render/original_light_table.cpp
         src/ported/render/original_light_table.h
         src/ported/render/original_sprite_pass.cpp

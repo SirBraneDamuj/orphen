@@ -101,6 +101,14 @@ namespace orphen::ported::script
     case 0x11: entity.byte95 = byte; return true;
 
     case 0x13: entity.groundHeight4c = toField(value); return true;
+    // FUN_00216140's hit outputs: +0xBE the damage, +0xBC the reaction, +0xC2
+    // the hit flags, +0xC0 the reaction length. s05_e012's gear pit writes
+    // 0x14/0x15/0x17 on the lead to knock it out of the centre, and lets
+    // FUN_00251ED8 spend them as it would a real hit.
+    case 0x14: entity.pendingDamageBe = halfword; return true;
+    case 0x15: entity.hitReactionBc = byte; return true;
+    case 0x16: entity.hitFlagsC2 = halfword; return true;
+    case 0x18: entity.hitSourceC0 = halfword; return true;
     // +0xC4, wrapped like 0x0D. s05_e011's hazards zero it on the lead after a
     // hit.
     case 0x17: entity.hitDirectionC4 = FUN_00216690_wrapAngle(toField(value)); return true;
@@ -186,7 +194,12 @@ namespace orphen::ported::script
     case 0x11: value = static_cast<std::uint32_t>(static_cast<std::int8_t>(entity.byte95)); return true;
 
     case 0x13: value = fromField(entity.groundHeight4c); return true;
+    // lh / lbu / lhu / lh at 0x0025C674..0x0025C6A8.
+    case 0x14: value = static_cast<std::uint32_t>(static_cast<std::int16_t>(entity.pendingDamageBe)); return true;
+    case 0x15: value = entity.hitReactionBc; return true;
+    case 0x16: value = entity.hitFlagsC2; return true;
     case 0x17: value = fromField(entity.hitDirectionC4); return true;
+    case 0x18: value = static_cast<std::uint32_t>(static_cast<std::int16_t>(entity.hitSourceC0)); return true;
     case 0x19: value = entity.state60; return true;
 
     case 0x1A: value = fromField(entity.desiredDeltaX30); return true;
