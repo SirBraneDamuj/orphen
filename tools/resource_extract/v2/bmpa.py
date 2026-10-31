@@ -61,6 +61,9 @@ def to_rgba(img: BmpaImage) -> bytes:
 
     Palette bytes are stored as B, G, R, A (PS2 GS-style), so we swap the
     first and third channels on the way out.
+
+    Alpha runs 0..0x80 with 0x80 fully opaque, so it is doubled and clamped,
+    the same as port/src/ported/resource/bmpa_texture_decoder.cpp.
     """
     out = bytearray(img.width * img.height * 4)
     pal = img.palette
@@ -71,7 +74,7 @@ def to_rgba(img: BmpaImage) -> bytes:
         out[o]     = pal[p + 2]  # R <- B
         out[o + 1] = pal[p + 1]  # G
         out[o + 2] = pal[p]      # B <- R
-        out[o + 3] = pal[p + 3]  # A
+        out[o + 3] = min(255, pal[p + 3] * 2)  # A: 0x80 -> opaque
     return bytes(out)
 
 
